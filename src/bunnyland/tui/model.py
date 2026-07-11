@@ -12,16 +12,36 @@ from dataclasses import dataclass, field
 from typing import Any
 
 KIND_ICON = {
-    "room": "🏠", "character": "🐰", "container": "📦", "item": "✦",
-    "door": "🚪", "food": "🍎", "water": "💧", "chair": "🪑", "table": "🪵",
-    "bed": "🛏", "art": "🖼", "window": "🪟", "other": "⬡",
+    "room": "🏠",
+    "character": "🐰",
+    "container": "📦",
+    "item": "✦",
+    "door": "🚪",
+    "food": "🍎",
+    "water": "💧",
+    "chair": "🪑",
+    "table": "🪵",
+    "bed": "🛏",
+    "art": "🖼",
+    "window": "🪟",
+    "other": "⬡",
 }
 
 # Compass direction → unit edge offset, used only to order/label doors in the list.
 DIR_LABEL = {
-    "north": "N", "south": "S", "east": "E", "west": "W",
-    "northeast": "NE", "northwest": "NW", "southeast": "SE", "southwest": "SW",
-    "up": "↑", "down": "↓", "fore": "fore", "aft": "aft", "port": "port",
+    "north": "N",
+    "south": "S",
+    "east": "E",
+    "west": "W",
+    "northeast": "NE",
+    "northwest": "NW",
+    "southeast": "SE",
+    "southwest": "SW",
+    "up": "↑",
+    "down": "↓",
+    "fore": "fore",
+    "aft": "aft",
+    "port": "port",
     "starboard": "starboard",
 }
 
@@ -60,8 +80,7 @@ class World:
             rels: dict[str, list[dict]] = {}
             for rtype, edges in (entity.get("relationships") or {}).items():
                 rels[rtype] = [
-                    {"target": edge["target_id"], "edge": edge.get("edge") or {}}
-                    for edge in edges
+                    {"target": edge["target_id"], "edge": edge.get("edge") or {}} for edge in edges
                 ]
             entities[entity["id"]] = {
                 "id": entity["id"],
@@ -128,8 +147,7 @@ class World:
             },
             "relationships": {
                 "Contains": [
-                    {"target": item["id"], "edge": {}}
-                    for item in data.get("inventory") or []
+                    {"target": item["id"], "edge": {}} for item in data.get("inventory") or []
                 ],
                 "ControlledBy": [
                     {
@@ -245,8 +263,10 @@ class World:
         fp = (player or {}).get("components", {}).get("FocusPointsComponent") or {}
         return {
             "has": player is not None,
-            "ap": ap.get("current", 0), "ap_max": ap.get("maximum", 0),
-            "fp": fp.get("current", 0), "fp_max": fp.get("maximum", 0),
+            "ap": ap.get("current", 0),
+            "ap_max": ap.get("maximum", 0),
+            "fp": fp.get("current", 0),
+            "fp_max": fp.get("maximum", 0),
         }
 
     def target_candidates(self, player_id: str, kind: str) -> list[Target]:
@@ -255,7 +275,8 @@ class World:
             return self.target_groups[kind]
         room_id = self.room_of(player_id)
         members = [
-            m for m in self.room_members(room_id)
+            m
+            for m in self.room_members(room_id)
             if m["id"] != player_id and not has(m, "RoomComponent")
         ]
         room_items = [m for m in members if not has(m, "CharacterComponent")]
@@ -283,8 +304,7 @@ class World:
         if not player_id:
             return []
         return [
-            command for command in self.queued_commands
-            if command.get("character_id") == player_id
+            command for command in self.queued_commands if command.get("character_id") == player_id
         ]
 
 
@@ -336,8 +356,7 @@ def _entity_from_view(entity: dict) -> dict:
         "components": components,
         "relationships": {
             "Contains": [
-                {"target": child["id"], "edge": {}}
-                for child in entity.get("contents") or []
+                {"target": child["id"], "edge": {}} for child in entity.get("contents") or []
             ]
         },
     }

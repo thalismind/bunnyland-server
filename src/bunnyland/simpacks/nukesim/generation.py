@@ -1,6 +1,6 @@
 """nukesim generation contribution compatibility surface."""
 
-from ...worldgen.enrichment import LegacyWorldgenEnricher, NukeWorldgenHook
+from ...worldgen.enrichment import ComponentPlanEnricher, NukeWorldgenHook
 
 CAPABILITIES = (
     "bunnyland.nukesim.beacon",
@@ -70,6 +70,6 @@ ALIASES = {
     "water-purifier": "bunnyland.nukesim.water-purifier",
     "water-purity": "bunnyland.nukesim.water-purity",
 }
-GENERATION_ENRICHER = LegacyWorldgenEnricher(NukeWorldgenHook, provided_capabilities=CAPABILITIES)
+GENERATION_ENRICHER = ComponentPlanEnricher(NukeWorldgenHook, provided_capabilities=CAPABILITIES)
 
 __all__ = ["GENERATION_ENRICHER", "NukeWorldgenHook"]

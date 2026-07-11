@@ -3,12 +3,14 @@ the Textual app (RichLog scrollback, clickable target links, Tab completion, his
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 from rich.style import Style
 
 from bunnyland.core.actions import ActionArgument, ActionDefinition, definitions_by_tool_name
+from bunnyland.plugins import PluginRegistry, bunnyland_plugins
 from bunnyland.repl import app as repl_app
 from bunnyland.repl.app import BunnylandReplApp, ReplInput
 from bunnyland.repl.client import (
@@ -34,7 +36,40 @@ KEY = "item:2"
 PARLOR = "room:1"
 HALL = "room:2"
 
-DEFS = definitions_by_tool_name()
+ALL_ACTION_DEFINITIONS = tuple(
+    definition for _owner, definition in PluginRegistry(bunnyland_plugins()).actions.values()
+)
+DEFS = definitions_by_tool_name(ALL_ACTION_DEFINITIONS)
+
+
+def _action_views() -> list[dict]:
+    return [
+        {
+            "command_type": definition.command_type,
+            "tool_name": definition.name,
+            "title": definition.title,
+            "description": definition.description,
+            "icon": definition.icon,
+            "arguments": [
+                {
+                    "key": key,
+                    "title": argument.title,
+                    "kind": argument.kind,
+                    "required": argument.required,
+                }
+                for key, argument in (definition.arguments or {}).items()
+            ],
+            "natural_patterns": [
+                {
+                    "text": pattern.text,
+                    "fixed_arguments": pattern.fixed_arguments,
+                    "argument_aliases": pattern.argument_aliases,
+                }
+                for pattern in definition.natural_patterns
+            ],
+        }
+        for definition in ALL_ACTION_DEFINITIONS
+    ]
 
 
 @pytest.fixture(autouse=True)
@@ -150,21 +185,27 @@ def _client_view_from_snapshot(snapshot: dict, character_id: str = PLAYER) -> di
             if target is None or link["target_id"] == character_id:
                 continue
             identity = target["components"].get("IdentityComponent", {})
-            room_entities.append({
-                "id": link["target_id"],
-                "name": identity.get("name", link["target_id"]),
-                "kind": identity.get("kind", "other"),
-                "is_character": "CharacterComponent" in target["components"],
-                "contents": [],
-            })
+            room_entities.append(
+                {
+                    "id": link["target_id"],
+                    "name": identity.get("name", link["target_id"]),
+                    "kind": identity.get("kind", "other"),
+                    "is_character": "CharacterComponent" in target["components"],
+                    "contents": [],
+                }
+            )
         for link in room["relationships"].get("ExitTo", []):
             direction = link["edge"].get("direction", "")
-            exits.append({
-                "id": link["target_id"],
-                "direction": direction,
-                "label": f"{direction}: {link['target_id']}" if direction else link["target_id"],
-                "locked": link["edge"].get("locked", False),
-            })
+            exits.append(
+                {
+                    "id": link["target_id"],
+                    "direction": direction,
+                    "label": f"{direction}: {link['target_id']}"
+                    if direction
+                    else link["target_id"],
+                    "locked": link["edge"].get("locked", False),
+                }
+            )
     inventory = []
     for relationship in ("Holding", "Wearing", "Contains"):
         for link in character["relationships"].get(relationship, []):
@@ -172,11 +213,13 @@ def _client_view_from_snapshot(snapshot: dict, character_id: str = PLAYER) -> di
             if target is None:
                 continue
             identity = target["components"].get("IdentityComponent", {})
-            inventory.append({
-                "id": link["target_id"],
-                "label": identity.get("name", link["target_id"]),
-                "kind": identity.get("kind", "item"),
-            })
+            inventory.append(
+                {
+                    "id": link["target_id"],
+                    "label": identity.get("name", link["target_id"]),
+                    "kind": identity.get("kind", "item"),
+                }
+            )
     ap = character["components"].get("ActionPointsComponent", {})
     fp = character["components"].get("FocusPointsComponent", {})
     controlled_by = character["relationships"].get("ControlledBy", [])
@@ -208,7 +251,7 @@ def _client_view_from_snapshot(snapshot: dict, character_id: str = PLAYER) -> di
         },
         "controller": controller,
         "target_groups": {},
-        "actions": [],
+        "actions": _action_views(),
     }
 
 
@@ -251,7 +294,7 @@ class RecordingBackend(Backend):
 
 
 def _repl(snapshot: dict | None = None, *, player: bool = True) -> BunnylandRepl:
-    repl = BunnylandRepl(RecordingBackend(snapshot))
+    repl = BunnylandRepl(RecordingBackend(snapshot), definitions=ALL_ACTION_DEFINITIONS)
     repl.world = World.parse(snapshot or _snapshot())
     repl.character_list = _character_list_from_snapshot(snapshot or _snapshot())
     if player:
@@ -322,7 +365,9 @@ def test_complete_entity_values_handle_spaces_and_prefix():
 
 def test_complete_second_parameter_name_after_a_value():
     matches = complete_line(
-        "use target_id=an apple tool_", definitions=DEFS, commands=tuple(DEFS),
+        "use target_id=an apple tool_",
+        definitions=DEFS,
+        commands=tuple(DEFS),
         entity_names=["an apple", "a brass key"],
     )
     assert matches == ["use target_id=an apple tool_id="]
@@ -391,8 +436,10 @@ async def test_drain_events_surfaces_scene_image_and_failure():
     repl = _repl()
 
     def completed(epoch, url):
-        return {"event_type": "ImageGenerationCompletedEvent",
-                "event": {"world_epoch": epoch, "purpose": "event", "url": url}}
+        return {
+            "event_type": "ImageGenerationCompletedEvent",
+            "event": {"world_epoch": epoch, "purpose": "event", "url": url},
+        }
 
     lines = repl.drain_events([completed(5, "/media/events/a.png")])
     assert any("scene image ready" in line.plain and "a.png" in line.plain for line in lines)
@@ -431,9 +478,13 @@ async def test_queued_lists_commands_and_cancel_removes_them():
             self.cancel_result = True
 
         async def fetch_queued_commands(self, character_id):
-            return {"character_id": character_id, "commands": [
-                {"command_id": "cmd-1", "command_type": "wait", "lane": "world"},
-                {"command_id": "cmd-2", "command_type": "reflect"}]}
+            return {
+                "character_id": character_id,
+                "commands": [
+                    {"command_id": "cmd-1", "command_type": "wait", "lane": "world"},
+                    {"command_id": "cmd-2", "command_type": "reflect"},
+                ],
+            }
 
         async def cancel_command(self, character_id, command_id, controller_id, generation):
             self.cancelled.append((character_id, command_id, controller_id, generation))
@@ -470,8 +521,9 @@ async def test_look_and_who_render_clickable_target_links():
     repl = _repl()
     room = await repl.dispatch("look")
     # The room, its occupants, and the exit are all clickable, keyed by entity id.
-    assert {PARLOR, MARLOW, APPLE, HALL} <= {m.split("(")[1].rstrip(")").strip("'") for m in
-                                             _click_metas(room)}
+    assert {PARLOR, MARLOW, APPLE, HALL} <= {
+        m.split("(")[1].rstrip(")").strip("'") for m in _click_metas(room)
+    }
     who = await repl.dispatch("who")
     assert any(MARLOW in meta for meta in _click_metas(who))
 
@@ -508,7 +560,7 @@ async def test_dispatch_action_reports_failed_lazy_claim():
         async def claim(self, player_id, world):
             return None
 
-    repl = BunnylandRepl(NoClaimBackend(_snapshot()))
+    repl = BunnylandRepl(NoClaimBackend(_snapshot()), definitions=ALL_ACTION_DEFINITIONS)
     repl.world = World.parse(_snapshot())
     repl.character_list = _character_list_from_snapshot(_snapshot())
     repl.player_id = PLAYER
@@ -526,7 +578,7 @@ async def test_dispatch_action_surfaces_submit_rejection_reason():
             self.commands.append(command)
             return SubmitResult(accepted=False, reason="character is asleep")
 
-    repl = BunnylandRepl(RejectingBackend(_snapshot()))
+    repl = BunnylandRepl(RejectingBackend(_snapshot()), definitions=ALL_ACTION_DEFINITIONS)
     repl.world = World.parse(_snapshot())
     repl.character_list = _character_list_from_snapshot(_snapshot())
     repl.player_id = PLAYER
@@ -553,9 +605,7 @@ def test_render_help_orders_available_first_and_dims_unavailable():
     # The gated verb is listed only on the dimmed "unavailable:" line; available verbs
     # (everything else, e.g. "wait") stay on the main command line.
     unavailable_line = next(line for line in lines if "unavailable:" in line)
-    available_line = next(
-        line for line in lines if "wait" in line and "unavailable:" not in line
-    )
+    available_line = next(line for line in lines if "wait" in line and "unavailable:" not in line)
     assert "pick_lock" in unavailable_line
     assert "pick_lock" not in available_line
 
@@ -608,8 +658,11 @@ async def test_inventory_command_groups_and_tags_items():
     player["relationships"]["Wearing"] = [{"target_id": APPLE, "edge": {}}]  # held KEY + worn APPLE
     player["relationships"]["Contains"] = [{"target_id": "item:3", "edge": {}}]  # kind-less item
     snapshot["entities"].append(
-        {"id": "item:3", "components": {"IdentityComponent": {"name": "a plain rock"}},
-         "relationships": {}}
+        {
+            "id": "item:3",
+            "components": {"IdentityComponent": {"name": "a plain rock"}},
+            "relationships": {},
+        }
     )
     repl = BunnylandRepl(RecordingBackend(snapshot))
     repl.world = World.parse(snapshot)
@@ -639,8 +692,10 @@ def test_inventory_is_completable():
 def _event(event_id, *, event_type="PingEvent", **fields):
     return {
         "type": "event",
-        "data": {"event_type": event_type, "event": {"event_id": event_id, "note": event_id,
-                                                      **fields}},
+        "data": {
+            "event_type": event_type,
+            "event": {"event_id": event_id, "note": event_id, **fields},
+        },
     }
 
 
@@ -679,14 +734,27 @@ def test_drain_events_skips_telemetry_noise():
 def test_drain_events_narrates_own_system_actions_uniformly():
     repl = _repl()  # player is in the Parlor
     messages = [
-        _event("m1", event_type="ActorMovedEvent", visibility="system", actor_id=PLAYER,
-               from_room_id=PARLOR, to_room_id=HALL,
-               arrival_summary="Hallway\nHere: Pib.\nExits: south."),
-        _event("t1", event_type="ItemTakenEvent", visibility="system", actor_id=PLAYER,
-               item_id=APPLE),
+        _event(
+            "m1",
+            event_type="ActorMovedEvent",
+            visibility="system",
+            actor_id=PLAYER,
+            from_room_id=PARLOR,
+            to_room_id=HALL,
+            arrival_summary="Hallway\nHere: Pib.\nExits: south.",
+        ),
+        _event(
+            "t1", event_type="ItemTakenEvent", visibility="system", actor_id=PLAYER, item_id=APPLE
+        ),
         _event("x1", event_type="CommandExecutedEvent", visibility="system", actor_id=PLAYER),
-        _event("m2", event_type="ActorMovedEvent", visibility="system", actor_id=MARLOW,
-               from_room_id=PARLOR, to_room_id=HALL),
+        _event(
+            "m2",
+            event_type="ActorMovedEvent",
+            visibility="system",
+            actor_id=MARLOW,
+            from_room_id=PARLOR,
+            to_room_id=HALL,
+        ),
     ]
     shown = " | ".join(text.plain for text in repl.drain_events(messages))
     assert "Hallway\nHere: Pib.\nExits: south." in shown  # your own move shows arrival room
@@ -699,10 +767,22 @@ def test_drain_events_narrates_own_system_actions_uniformly():
 def test_drain_events_surfaces_own_command_rejections():
     repl = _repl()
     messages = [
-        _event("r1", event_type="CommandRejectedEvent", visibility="system", actor_id=PLAYER,
-               command_type="take", reason="that item is not portable"),
-        _event("r2", event_type="CommandRejectedEvent", visibility="system", actor_id=MARLOW,
-               command_type="take", reason="secret"),
+        _event(
+            "r1",
+            event_type="CommandRejectedEvent",
+            visibility="system",
+            actor_id=PLAYER,
+            command_type="take",
+            reason="that item is not portable",
+        ),
+        _event(
+            "r2",
+            event_type="CommandRejectedEvent",
+            visibility="system",
+            actor_id=MARLOW,
+            command_type="take",
+            reason="secret",
+        ),
     ]
     rendered = repl.drain_events(messages)
     shown = " | ".join(text.plain for text in rendered)
@@ -727,11 +807,21 @@ def test_humanize_event_type_splits_camelcase_and_handles_bare():
 
 def test_render_event_humanizes_and_resolves_names():
     repl = _repl()
-    [text] = repl.drain_events([
-        _event("g1", event_type="GaveEvent", visibility="room", room_id=PARLOR,
-               actor_id=MARLOW, item_id=APPLE, tool_id="ghost", recipient_ids=[PLAYER],
-               witness_ids=["nobody1", "nobody2"]),
-    ])
+    [text] = repl.drain_events(
+        [
+            _event(
+                "g1",
+                event_type="GaveEvent",
+                visibility="room",
+                room_id=PARLOR,
+                actor_id=MARLOW,
+                item_id=APPLE,
+                tool_id="ghost",
+                recipient_ids=[PLAYER],
+                witness_ids=["nobody1", "nobody2"],
+            ),
+        ]
+    )
     assert text.plain.startswith("• Marlow: Gave")
     assert "an apple" in text.plain and "Pib" in text.plain  # item_id and _ids resolved to names
     assert "ghost" not in text.plain  # unresolvable id dropped
@@ -740,8 +830,10 @@ def test_render_event_humanizes_and_resolves_names():
 
 def test_render_event_without_details_is_just_a_label():
     repl = _repl()
-    bare = {"type": "event", "data": {"event_type": "WaitedEvent",
-                                      "event": {"event_id": "w1", "visibility": "public"}}}
+    bare = {
+        "type": "event",
+        "data": {"event_type": "WaitedEvent", "event": {"event_id": "w1", "visibility": "public"}},
+    }
     [text] = repl.drain_events([bare])
     assert text.plain == "• Waited"
 
@@ -797,6 +889,19 @@ async def test_refresh_resets_world_when_projection_id_mismatches():
     repl.player_id = PLAYER
     await repl.refresh()
     assert repl.world.get(PLAYER) is None
+
+
+async def test_refresh_accepts_projection_without_enabled_actions():
+    class NoActionsBackend(RecordingBackend):
+        async def fetch_character_projection(self, character_id: str) -> dict | None:
+            projection = _client_view_from_snapshot(await self.fetch_snapshot(), character_id)
+            projection["actions"] = []
+            return projection
+
+    repl = BunnylandRepl(NoActionsBackend())
+    repl.player_id = PLAYER
+    await repl.refresh()
+    assert repl.world.actions == []
 
 
 def test_render_room_omits_carrying_when_empty():
@@ -1046,7 +1151,7 @@ class NarratingBackend(RecordingBackend):
         super().__init__()
         self.events: list[dict] = []
 
-    async def recent_events(self) -> list[dict]:
+    async def recent_events(self, character_id: str = "") -> list[dict]:
         return self.events
 
 
@@ -1054,8 +1159,7 @@ async def test_app_narrates_new_perceived_events():
     app = BunnylandReplApp(NarratingBackend())
     async with app.run_test():
         app.repl.player_id = PLAYER  # in the Parlor
-        app.repl.backend.events = [_event("e1", visibility="room", room_id=PARLOR,
-                                          actor_id=MARLOW)]
+        app.repl.backend.events = [_event("e1", visibility="room", room_id=PARLOR, actor_id=MARLOW)]
         await app._safe_refresh()
         assert "note e1" in _log_text(app)
 
@@ -1101,6 +1205,7 @@ async def test_app_quit_exits():
 async def test_app_dispatch_errors_are_caught():
     app = BunnylandReplApp(RecordingBackend())
     async with app.run_test() as pilot:
+
         async def boom(_line):
             raise RuntimeError("kaboom")
 
@@ -1380,11 +1485,13 @@ def test_main_lists_generators_and_exits(monkeypatch, capsys):
 
     launched: list[bool] = []
     monkeypatch.setattr(
-        repl_app, "available_generators",
+        repl_app,
+        "available_generators",
         lambda: [SimpleNamespace(name="apartment-demo", uses_seed=False, description="a demo")],
     )
     monkeypatch.setattr(
-        repl_app, "BunnylandReplApp",
+        repl_app,
+        "BunnylandReplApp",
         lambda backend: launched.append(True),  # must not be constructed
     )
 
@@ -1416,11 +1523,19 @@ def test_main_runs_remote_backend(monkeypatch):
     monkeypatch.setattr(repl_app, "RemoteBackend", BackendStub)
     monkeypatch.setattr(repl_app, "BunnylandReplApp", AppStub)
 
-    assert repl_app.main([
-        "--server", "http://example.test",
-        "--claim-fallback", "llm",
-        "--claim-timeout-minutes", "10",
-    ]) == 0
+    assert (
+        repl_app.main(
+            [
+                "--server",
+                "http://example.test",
+                "--claim-fallback",
+                "llm",
+                "--claim-timeout-minutes",
+                "10",
+            ]
+        )
+        == 0
+    )
     assert [app.backend for app in runs] == backends
     assert backends[0].server == "http://example.test"
     assert backends[0].timeout_seconds == 600
@@ -1432,8 +1547,9 @@ def test_main_runs_local_backend(monkeypatch):
     apps = []
 
     class BackendStub:
-        def __init__(self, *, seed=None, generator=None, fallback_controller=None,
-                     timeout_seconds=None):
+        def __init__(
+            self, *, seed=None, generator=None, fallback_controller=None, timeout_seconds=None
+        ):
             self.seed = seed
             self.generator = generator
             backends.append(self)
@@ -1458,8 +1574,9 @@ def test_main_no_icons_disables_repl_icons(monkeypatch):
     apps = []
 
     class BackendStub:
-        def __init__(self, *, seed=None, generator=None, fallback_controller=None,
-                     timeout_seconds=None):
+        def __init__(
+            self, *, seed=None, generator=None, fallback_controller=None, timeout_seconds=None
+        ):
             del seed, generator, fallback_controller, timeout_seconds
 
     class AppStub:
@@ -1510,7 +1627,9 @@ async def test_dispatch_sheet_opens_current_and_named_character():
 
         async def open_character_sheet(self, character_id):
             self.opened.append(character_id)
-            return SheetOpenResult(ok=True, url=f"http://web.test/character-sheet.html#{character_id}")
+            return SheetOpenResult(
+                ok=True, url=f"http://web.test/character-sheet.html#{character_id}"
+            )
 
     repl = BunnylandRepl(_SheetBackend(_snapshot()))
     repl.world = World.parse(_snapshot())
@@ -1628,3 +1747,46 @@ def test_terminal_repl_meta_commands_follow_backend_capabilities():
     assert "image" in remote.meta_commands()
     assert "img" in remote.meta_commands()
     assert "open" not in remote.meta_commands()
+
+
+async def test_repl_live_update_worker_suppresses_polling_and_tracks_player_changes():
+    class LiveBackend(RecordingBackend):
+        def supports_live_updates(self) -> bool:
+            return True
+
+        async def watch_updates(self, character_id, control, on_message, on_state) -> None:
+            assert character_id == PLAYER
+            assert control == ("controller:1", 2)
+            await on_state("live")
+            await on_message({"type": "heartbeat", "data": {}})
+            await on_message({"type": "event", "data": {}})
+            await on_state("fallback")
+
+    app = BunnylandReplApp(LiveBackend(_snapshot()))
+    app.repl.player_id = PLAYER
+    app.repl.control = ("controller:1", 2)
+    refreshes = []
+
+    async def safe_refresh(*_args, **_kwargs):
+        refreshes.append(True)
+
+    app._safe_refresh = safe_refresh
+    app._sync_live_updates()
+    await app._live_task
+    assert refreshes == [True, True]
+    assert app._live_ready is False
+
+    app._sync_live_updates()
+    app._live_ready = True
+    await app._poll_refresh()
+    assert refreshes == [True, True]
+    app._live_ready = False
+    await app._poll_refresh()
+    assert refreshes == [True, True, True]
+
+    sleeping = asyncio.create_task(asyncio.sleep(60))
+    app._live_task = sleeping
+    app._stop_live_updates()
+    assert sleeping.cancelled() or sleeping.cancelling()
+    app.repl.player_id = ""
+    app._sync_live_updates()

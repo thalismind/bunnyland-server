@@ -11,7 +11,7 @@ observer system. The world actor is the single emitter, so ordering is determini
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -45,6 +45,36 @@ class DomainEvent(BaseModel):
 
     causation_id: str | None = None
     correlation_id: str | None = None
+
+
+def serialized_event_visible_to(
+    event: Mapping[str, Any],
+    *,
+    character_id: str,
+    room_of: Callable[[str], str | None],
+) -> bool:
+    """Return whether a serialized event is visible to one character.
+
+    This is the transport-safe counterpart to narration projection visibility.  It accepts
+    only the common serialized event fields so plugin events follow the same rules without
+    importing their concrete classes.
+    """
+    if not character_id:
+        return False
+    actor_id = event.get("actor_id")
+    targets = event.get("target_ids") or ()
+    if actor_id == character_id:
+        return True
+    if character_id in targets:
+        return True
+    visibility = event.get("visibility")
+    if visibility == EventVisibility.PUBLIC.value:
+        return True
+    if visibility == EventVisibility.ROOM.value:
+        return bool(event.get("room_id")) and event.get("room_id") == room_of(character_id)
+    if visibility == EventVisibility.DIRECTED.value:
+        return character_id in (event.get("overhearer_ids") or ())
+    return False
 
 
 def event_base(
@@ -708,9 +738,7 @@ class EventBus:
         self._subscriptions = [
             subscription
             for subscription in self._subscriptions
-            if not (
-                subscription.event_type is event_type and subscription.handler == handler
-            )
+            if not (subscription.event_type is event_type and subscription.handler == handler)
         ]
 
     def begin_transaction(self) -> None:

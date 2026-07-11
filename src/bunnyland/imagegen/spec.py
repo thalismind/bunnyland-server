@@ -90,9 +90,7 @@ class GeneratedPrompt(BaseModel):
     tags: tuple[str, ...] = ()
 
 
-def _values(
-    *, prompt: str, negative: str, seed: int, width: int, height: int
-) -> dict[str, Any]:
+def _values(*, prompt: str, negative: str, seed: int, width: int, height: int) -> dict[str, Any]:
     return {
         PROMPT_TOKEN: prompt,
         NEGATIVE_TOKEN: negative,
@@ -129,14 +127,10 @@ def _apply_slot(graph: dict[str, Any], slot: SubstitutionSlot, values: dict[str,
     *parents, last = slot.field_path
     for key in parents:
         if not isinstance(target, dict) or key not in target:
-            raise ValueError(
-                f"slot path {slot.field_path} is invalid for node {slot.node_id!r}"
-            )
+            raise ValueError(f"slot path {slot.field_path} is invalid for node {slot.node_id!r}")
         target = target[key]
     if not isinstance(target, dict) or last not in target:
-        raise ValueError(
-            f"slot path {slot.field_path} is invalid for node {slot.node_id!r}"
-        )
+        raise ValueError(f"slot path {slot.field_path} is invalid for node {slot.node_id!r}")
     target[last] = values[slot.token]
 
 

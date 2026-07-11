@@ -68,7 +68,6 @@ class WorldConfig:
 
 @dataclass(frozen=True)
 class PluginConfig:
-    modules: tuple[str, ...] = ()
     enabled: tuple[str, ...] | None = None
     config: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
@@ -258,7 +257,6 @@ class BunnylandConfig:
         plugins = self.plugins
         imagegen = self.imagegen
         return {
-            "module": list(plugins.modules),
             "plugin": list(plugins.enabled) if plugins.enabled is not None else None,
             "starter_pack": world.starter_pack or None,
             "seed": world.seed,

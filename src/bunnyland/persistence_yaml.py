@@ -59,11 +59,7 @@ def _plain(value: Any) -> Any:
         fields = getattr(value, "__pydantic_fields__", None) or getattr(
             value, "__dataclass_fields__", {}
         )
-        return {
-            name: _plain(getattr(value, name))
-            for name in fields
-            if not name.startswith("_")
-        }
+        return {name: _plain(getattr(value, name)) for name in fields if not name.startswith("_")}
     if isinstance(value, Mapping):
         return {str(key): _plain(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
@@ -112,8 +108,8 @@ def _snapshot_from_world(world: World, relic_name: str | None = None) -> dict[st
         for component_type, component in components.items():
             if is_temporary(component_type):
                 continue
-            components_data.setdefault(component_type.__name__, {})[str(entity_id)] = (
-                _plain(_component_to_dict(component))
+            components_data.setdefault(component_type.__name__, {})[str(entity_id)] = _plain(
+                _component_to_dict(component)
             )
 
     relationships: dict[str, dict[str, list[dict[str, Any]]]] = {}
@@ -253,9 +249,7 @@ class YAMLPersistenceDriver(PersistenceDriver):
                 wrote_subrecord = True
 
             for edge_name, edge_table in relationships.items():
-                edge_records = _mapping(edge_table, label=f"{edge_name} edges").get(
-                    entity_id, []
-                )
+                edge_records = _mapping(edge_table, label=f"{edge_name} edges").get(entity_id, [])
                 if not isinstance(edge_records, list):
                     raise ValueError(f"{edge_name} edges for {entity_id} must be a list")
                 for edge_record in edge_records:
@@ -290,9 +284,7 @@ class YAMLPersistenceDriver(PersistenceDriver):
                 "created_epoch": 0,
             }
 
-            for type_key, fields in _mapping(
-                subrecords, label=f"{entity_id} record"
-            ).items():
+            for type_key, fields in _mapping(subrecords, label=f"{entity_id} record").items():
                 fields = _mapping(fields, label=f"{entity_id}.{type_key}")
                 if " -> " not in type_key:
                     components.setdefault(type_key, {})[entity_id] = fields
@@ -423,9 +415,9 @@ class YAMLPersistenceDriver(PersistenceDriver):
                             _mapping(edge_info.get("edge", {}), label=edge_name),
                         ),
                     )
-                    world._relationships.setdefault(source_id, {}).setdefault(
-                        edge_type, {}
-                    )[target_id] = edge
+                    world._relationships.setdefault(source_id, {}).setdefault(edge_type, {})[
+                        target_id
+                    ] = edge
                     world._incoming_relationships.setdefault(target_id, {}).setdefault(
                         edge_type, {}
                     )[source_id] = edge

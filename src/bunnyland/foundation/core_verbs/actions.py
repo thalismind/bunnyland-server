@@ -133,6 +133,21 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ),
     ),
     define_action(
+        "identify",
+        ("target_id", "species_name"),
+        tool_name="identify",
+        patterns=("identify {target_id}",),
+    ),
+    define_action(
+        "harvest",
+        ("target_id", "product_type", "sample_type", "quantity"),
+        tool_name="harvest",
+        patterns=("harvest {target_id}", "harvest sample {sample_type}"),
+    ),
+    define_action("bribe", ("target_id",), tool_name="bribe", patterns=("bribe {target_id}",)),
+    define_action("sneak", tool_name="sneak", patterns=(ActionPattern("sneak", {}),)),
+    define_action("drink", ("source_id",), tool_name="drink", patterns=("drink {source_id}",)),
+    define_action(
         "write",
         ("target_id", "text"),
         tool_name="write",

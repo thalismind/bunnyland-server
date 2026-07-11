@@ -5,6 +5,7 @@ right, click to select, pick a target after the action — the toon client in a 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import time
 from dataclasses import dataclass
 
@@ -386,6 +387,8 @@ class BunnylandTUI(App[None]):
         self._event_image_url = ""
         self._event_image_failure_epoch = -1
         self._refresh_error: str | None = None
+        self._live_task: asyncio.Task | None = None
+        self._live_ready = False
         self.show_generator_selector = False
 
     def compose(self) -> ComposeResult:
@@ -460,10 +463,44 @@ class BunnylandTUI(App[None]):
     async def _start_backend(self) -> None:
         await self.backend.start()
         await self.refresh_world()
-        self.set_interval(REFRESH_SECONDS, self.refresh_world)
+        self.set_interval(REFRESH_SECONDS, self._poll_refresh_world)
 
     async def on_unmount(self) -> None:
+        self._stop_live_updates()
         await self.backend.close()
+
+    async def _poll_refresh_world(self) -> None:
+        if not self._live_ready:
+            await self.refresh_world()
+
+    def _stop_live_updates(self) -> None:
+        self._live_ready = False
+        if self._live_task is not None:
+            self._live_task.cancel()
+        self._live_task = None
+
+    def _restart_live_updates(self) -> None:
+        self._stop_live_updates()
+        if not self.player_id or not self.backend.supports_live_updates():
+            return
+
+        async def on_message(frame: dict) -> None:
+            if frame.get("type") != "heartbeat":
+                await self.refresh_world()
+
+        async def on_state(state: str) -> None:
+            self._live_ready = state == "live"
+            if state == "fallback":
+                await self.refresh_world()
+
+        self._live_task = asyncio.create_task(
+            self.backend.watch_updates(
+                self.player_id,
+                self.control,
+                on_message,
+                on_state,
+            )
+        )
 
     def _main_query_one(self, selector: str, expect_type=None):
         try:
@@ -487,7 +524,7 @@ class BunnylandTUI(App[None]):
                 if self.player_id
                 else None
             )
-            events = await self.backend.recent_events()
+            events = await self.backend.recent_events(self.player_id)
             status = self.backend.label
         except Exception as exc:  # network hiccup, server restart, …
             message = f"⚠ {self.backend.label} — {exc}"
@@ -874,6 +911,7 @@ class BunnylandTUI(App[None]):
         self.player_id = new_id
         self.selected_id = None
         self.control = await self.backend.claim(new_id, self.world) if new_id else None
+        self._restart_live_updates()
         await self.refresh_world()
 
     @on(Button.Pressed, "#character-release")
@@ -882,6 +920,7 @@ class BunnylandTUI(App[None]):
             return
         if self.control is None or not self.control.active:
             self.control = await self.backend.claim(self.player_id, self.world)
+            self._restart_live_updates()
             await self.refresh_world()
             return
         if not self.control.claim_id or not self.control.claim_secret:
@@ -906,6 +945,7 @@ class BunnylandTUI(App[None]):
         await self.refresh_world()
 
     def _drop_player(self) -> None:
+        self._stop_live_updates()
         self.player_id = ""
         self.control = None
         self.selected_id = None
@@ -1152,9 +1192,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bunnyland-tui", description=__doc__)
     parser.add_argument("--server", help="connect to a running server (e.g. http://localhost:8765)")
     parser.add_argument("--seed", default=None, help="seed for a locally hosted world")
-    parser.add_argument(
-        "--generator", default=None, help="generator for a locally hosted world"
-    )
+    parser.add_argument("--generator", default=None, help="generator for a locally hosted world")
     parser.add_argument(
         "--list-generators",
         action="store_true",

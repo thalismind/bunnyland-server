@@ -1,6 +1,6 @@
 """colonysim generation contribution compatibility surface."""
 
-from ...worldgen.enrichment import ColonyWorldgenHook, LegacyWorldgenEnricher
+from ...worldgen.enrichment import ColonyWorldgenHook, ComponentPlanEnricher
 
 CAPABILITIES = (
     "bunnyland.colonysim.allowed-area",
@@ -74,6 +74,6 @@ ALIASES = {
     "work-priority": "bunnyland.colonysim.work-priority",
     "workstation": "bunnyland.colonysim.workstation",
 }
-GENERATION_ENRICHER = LegacyWorldgenEnricher(ColonyWorldgenHook, provided_capabilities=CAPABILITIES)
+GENERATION_ENRICHER = ComponentPlanEnricher(ColonyWorldgenHook, provided_capabilities=CAPABILITIES)
 
 __all__ = ["GENERATION_ENRICHER", "ColonyWorldgenHook"]

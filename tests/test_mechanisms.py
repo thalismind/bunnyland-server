@@ -12,7 +12,7 @@ from bunnyland.core import (
     WorldActor,
     spawn_entity,
 )
-from bunnyland.mechanics.mechanisms import (
+from bunnyland.foundation.mechanisms.mechanics import (
     ButtonResetEvent,
     DoorAutoClosedEvent,
     install_mechanisms,

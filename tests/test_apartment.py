@@ -10,13 +10,13 @@ from bunnyland.core.components import (
     RoomComponent,
 )
 from bunnyland.core.edges import ContainmentMode, Contains, ExitTo
-from bunnyland.mechanics.lifesim import (
+from bunnyland.foundation.needs.mechanics import HungerComponent
+from bunnyland.plugins import bunnyland_plugins
+from bunnyland.simpacks.lifesim.mechanics import (
     CareerComponent,
     HomeComponent,
     RoutineComponent,
 )
-from bunnyland.mechanics.needs import HungerComponent
-from bunnyland.plugins.builtin import bunnyland_plugins
 from bunnyland.worldgen.apartment import APARTMENT_DEMO
 from bunnyland.worldgen.generators import GenOptions, collect_generators
 
@@ -66,7 +66,8 @@ async def test_has_a_hidden_passage_and_findable_secrets():
     assert hidden_exits, "the warren should be reachable only by a hidden passage"
 
     notes_with_text = [
-        e for e in _entities(actor, ReadableComponent)
+        e
+        for e in _entities(actor, ReadableComponent)
         if e.get_component(ReadableComponent).text.strip()
     ]
     assert len(notes_with_text) >= 5
@@ -75,9 +76,7 @@ async def test_has_a_hidden_passage_and_findable_secrets():
 async def test_building_sits_under_a_neighborhood_region():
     actor = await _build()
 
-    regions = {
-        r.get_component(RegionComponent).name: r for r in _entities(actor, RegionComponent)
-    }
+    regions = {r.get_component(RegionComponent).name: r for r in _entities(actor, RegionComponent)}
     assert {"The Mulberry Walk-up", "Greenwich Warren"} <= set(regions)
 
     building = regions["The Mulberry Walk-up"]
@@ -105,12 +104,10 @@ def test_apartment_demo_is_registered():
 async def test_residents_without_known_for_get_no_reputation(monkeypatch):
     # ``known_for`` is optional in a tenant dossier; a resident lacking it should
     # simply be left without a ReputationComponent (the false side of the guard).
-    from bunnyland.mechanics.lifesim import ReputationComponent
+    from bunnyland.simpacks.lifesim.mechanics import ReputationComponent
     from bunnyland.worldgen import apartment
 
-    stripped = tuple(
-        {k: v for k, v in r.items() if k != "known_for"} for r in apartment._RESIDENTS
-    )
+    stripped = tuple({k: v for k, v in r.items() if k != "known_for"} for r in apartment._RESIDENTS)
     monkeypatch.setattr(apartment, "_RESIDENTS", stripped)
 
     actor = await _build()

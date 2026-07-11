@@ -27,7 +27,6 @@ from relics import EntityId, World
 from .. import telemetry
 from .actions import (
     ActionDefinition,
-    inferred_action_definition,
 )
 from .availability import (
     affordable,
@@ -153,7 +152,6 @@ class WorldActor:
         self.persistence = WorldPersistenceContext()
         #: Populated by the plugin loader without making core import plugin modules.
         self.plugins: Any | None = None
-        self._worldgen_hooks: list[Any] = []
 
         self.world.register_system(WorldClockSystem())
         self.world.register_system(ActionFocusRegenSystem())
@@ -265,15 +263,12 @@ class WorldActor:
                 telemetry.mark_span_error(str(exc), span)
                 raise
 
-    def _definition_for(self, command_type: str) -> ActionDefinition:
+    def _definition_for(self, command_type: str) -> ActionDefinition | None:
         if self._definition_cache is None:
             self._definition_cache = {
-                definition.command_type: definition
-                for definition in self.action_definitions()
+                definition.command_type: definition for definition in self.action_definitions()
             }
-        return self._definition_cache.get(command_type) or inferred_action_definition(
-            command_type
-        )
+        return self._definition_cache.get(command_type)
 
     def _validate_submission(self, command: SubmittedCommand) -> str | None:
         """Return a rejection reason for an obviously-invalid command, else ``None``.
@@ -302,6 +297,8 @@ class WorldActor:
                 return reason or "not allowed by policy"
 
         definition = self._definition_for(command.command_type)
+        if definition is None:
+            return f"no action definition for {command.command_type}"
         if not meets_requirement(self.world, character, definition.requirement):
             return "missing a required skill or item"
         argument_reason = self._validate_arguments(definition, command.payload)
@@ -371,9 +368,12 @@ class WorldActor:
 
     async def tick(self, game_delta_seconds: float) -> None:
         """Run one deterministic world tick (spec 5.6)."""
-        with telemetry.record_duration(telemetry.record_tick), telemetry.span(
-            "game.tick", {"tick.game_delta_seconds": game_delta_seconds}
-        ) as tick_span:
+        with (
+            telemetry.record_duration(telemetry.record_tick),
+            telemetry.span(
+                "game.tick", {"tick.game_delta_seconds": game_delta_seconds}
+            ) as tick_span,
+        ):
             self.bus.begin_transaction()
             try:
                 async with self._lock:
@@ -602,17 +602,20 @@ class WorldActor:
             self.queues.pop(character_id, lane)
             await self._reject(command, f"no handler accepted {command.command_type}")
             return _LaneOutcome(executed=False, stop_lane=False)
-        with telemetry.record_duration(
-            telemetry.record_handler, {"command_type": command.command_type}
-        ), telemetry.span(
-            "handler.execute",
-            {
-                "command.type": command.command_type,
-                "command.id": command.command_id,
-                "character.id": character_id,
-                "handler.kind": type(handler).__name__,
-            },
-        ) as hspan:
+        with (
+            telemetry.record_duration(
+                telemetry.record_handler, {"command_type": command.command_type}
+            ),
+            telemetry.span(
+                "handler.execute",
+                {
+                    "command.type": command.command_type,
+                    "command.id": command.command_id,
+                    "character.id": character_id,
+                    "handler.kind": type(handler).__name__,
+                },
+            ) as hspan,
+        ):
             result = handler.execute(ctx, command)
             hspan.set_attribute("handler.ok", result.ok)
             if not result.ok and result.reason:

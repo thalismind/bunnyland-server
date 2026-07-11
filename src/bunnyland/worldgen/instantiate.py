@@ -15,6 +15,15 @@ from uuid import uuid4
 
 from relics import EntityId
 
+from bunnyland.foundation.consumables.components import (
+    ConsumableComponent,
+    DrinkableComponent,
+    FoodComponent,
+)
+from bunnyland.foundation.meters.mechanics import Meter
+from bunnyland.foundation.needs.mechanics import HungerComponent, ThirstComponent
+from bunnyland.foundation.persona.mechanics import GoalComponent, TraitSetComponent
+
 from ..core.components import (
     ActionPointsComponent,
     AffectComponent,
@@ -38,7 +47,7 @@ from ..core.controllers import (
     LLMControllerComponent,
     ScriptedControllerComponent,
 )
-from ..core.ecs import parse_entity_id, spawn_entity
+from ..core.ecs import parse_entity_id, replace_component, spawn_entity
 from ..core.edges import ContainmentMode, Contains, ExitTo
 from ..core.events import (
     CharacterGeneratedEvent,
@@ -48,6 +57,8 @@ from ..core.events import (
     WorldGeneratedEvent,
 )
 from ..core.generation import (
+    GenerationChild,
+    GenerationDelta,
     GenerationError,
     GenerationPipeline,
     GenerationPlan,
@@ -55,10 +66,6 @@ from ..core.generation import (
 )
 from ..llm_agents.behavior_tree import behavior_tree_names
 from ..llm_agents.scripts import script_names
-from ..mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
-from ..mechanics.meter import Meter
-from ..mechanics.needs import HungerComponent, ThirstComponent
-from ..mechanics.persona import GoalComponent, TraitSetComponent
 from .proposal import CharacterSpec, ObjectSpec, WorldProposal
 
 if TYPE_CHECKING:
@@ -72,6 +79,15 @@ class InstantiatedWorld:
     characters: dict[str, EntityId] = field(default_factory=dict)
     #: The literal DM system prompt that built the world ("" for deterministic builders).
     prompt: str = ""
+
+
+@dataclass(frozen=True)
+class _CompiledChild:
+    child: GenerationChild
+    components: tuple
+    generation: GenerationIntentComponent
+    plan: GenerationPlan
+    children: tuple[_CompiledChild, ...]
 
 
 def validate_proposal(proposal: WorldProposal) -> list[str]:
@@ -218,23 +234,132 @@ async def _cooperative_components(
     return [*plan.components, finalized], finalized, plan
 
 
-async def _finalize_legacy_hooks(actor: WorldActor, event: GeneratedEntityEvent) -> None:
-    method_name = {
-        RoomGeneratedEvent: "_on_room",
-        ObjectGeneratedEvent: "_on_object",
-        CharacterGeneratedEvent: "_on_character",
-    }.get(type(event))
-    for hook in actor._worldgen_hooks:
-        handler = getattr(hook, method_name, None) if method_name is not None else None
-        handler = handler or getattr(hook, "_on_entity", None)
-        if handler is None and isinstance(event, (RoomGeneratedEvent, ObjectGeneratedEvent)):
-            handler = getattr(hook, "_on_site", None)
-        if handler is None and callable(hook):
-            handler = hook
-        if handler is not None:
-            result = handler(event)
-            if inspect.isawaitable(result):
-                await result
+def _child_base_components(child: GenerationChild) -> list:
+    """Build plugin-neutral identity/state for a declarative child request."""
+
+    request = child.request
+    name = request.description.strip() or request.source_key or request.entity_kind
+    context = request.context
+    declared = list(child.components)
+    declared_types = {type(component) for component in declared}
+    if request.entity_kind == "room":
+        generated = [
+            RoomComponent(
+                title=name,
+                biome=str(context.get("biome", "")),
+                indoor=bool(context.get("indoor", False)),
+            )
+        ]
+    elif request.entity_kind == "character":
+        generated = [
+            IdentityComponent(name=name, kind="character"),
+            CharacterComponent(),
+            ActionPointsComponent(current=0, maximum=3),
+            FocusPointsComponent(current=0, maximum=2),
+        ]
+    else:
+        generated = [IdentityComponent(name=name, kind=request.entity_kind or "object")]
+        if bool(context.get("portable", False)):
+            generated.append(PortableComponent(can_pick_up=True))
+    return [
+        *declared,
+        *(component for component in generated if type(component) not in declared_types),
+    ]
+
+
+async def _compile_children(
+    actor: WorldActor,
+    plan: GenerationPlan,
+    *,
+    seen: frozenset[str] = frozenset(),
+) -> tuple[_CompiledChild, ...]:
+    if plan.request.request_id in seen:
+        raise GenerationError(f"recursive generation child request {plan.request.request_id!r}")
+    branch = seen | {plan.request.request_id}
+    compiled = []
+    for child in plan.children:
+        base_components = _child_base_components(child)
+        request = replace(
+            child.request,
+            context={**child.request.context, "base_components": tuple(base_components)},
+        )
+        child_plan = await GenerationPipeline(actor.plugins).compile(
+            request,
+            base_components=tuple(base_components),
+        )
+        generation = GenerationIntentComponent(
+            description=child_plan.request.description,
+            tags=child_plan.request.tags,
+            wants=child_plan.request.capabilities,
+            source_seed=child_plan.request.source_seed,
+            source_key=child_plan.request.source_key,
+            entity_kind=child_plan.request.entity_kind,
+            unmet_capabilities=child_plan.unmet_capabilities,
+        )
+        _validate_plan_edges(actor, child_plan)
+        compiled.append(
+            _CompiledChild(
+                child=replace(child, request=child_plan.request),
+                components=(*child_plan.components, generation),
+                generation=generation,
+                plan=child_plan,
+                children=await _compile_children(actor, child_plan, seen=branch),
+            )
+        )
+    return tuple(compiled)
+
+
+async def _finalize_generation(actor: WorldActor, event: GeneratedEntityEvent) -> None:
+    """Apply declarative final-stage deltas before publishing a generated event."""
+
+    if actor.plugins is None:
+        return
+    pending_components: dict[type, object] = {}
+    pending_edges = []
+    for plugin_id, enricher in actor.plugins.generation_enrichers:
+        finalize = getattr(enricher, "finalize", None)
+        if finalize is None:
+            continue
+        delta = finalize(actor, event)
+        if inspect.isawaitable(delta):
+            delta = await delta
+        if not isinstance(delta, GenerationDelta):
+            raise GenerationError(
+                f"generation finalizer from {plugin_id!r} returned "
+                f"{type(delta).__name__}, expected GenerationDelta"
+            )
+        for component in delta.components:
+            owner = actor.plugins.components.get(type(component).__name__)
+            if owner != (plugin_id, type(component)):
+                raise GenerationError(
+                    f"plugin {plugin_id!r} cannot finalize component {type(component).__name__!r}"
+                )
+            if type(component) in pending_components:
+                raise GenerationError(
+                    f"conflicting finalized component {type(component).__name__!r}"
+                )
+            pending_components[type(component)] = component
+        for edge_delta in delta.edges:
+            owner = actor.plugins.edges.get(type(edge_delta.edge).__name__)
+            if owner != (plugin_id, type(edge_delta.edge)):
+                raise GenerationError(
+                    f"plugin {plugin_id!r} cannot finalize edge {type(edge_delta.edge).__name__!r}"
+                )
+            target_id = edge_delta.target_id
+            if isinstance(target_id, str):
+                target_id = parse_entity_id(target_id)
+            if target_id is None or not actor.world.has_entity(target_id):
+                raise GenerationError(
+                    f"generation edge references missing entity {edge_delta.target_id!r}"
+                )
+            pending_edges.append((edge_delta.edge, target_id))
+
+    entity_id = parse_entity_id(event.entity_id)
+    entity = actor.world.get_entity(entity_id)
+    for component in pending_components.values():
+        replace_component(entity, component)
+    for edge, target_id in pending_edges:
+        entity.add_relationship(edge, target_id)
 
 
 def _validate_plan_edges(actor: WorldActor, plan: GenerationPlan) -> None:
@@ -256,6 +381,91 @@ def _apply_plan_edges(actor: WorldActor, entity, plan: GenerationPlan) -> None:
         entity.add_relationship(edge_delta.edge, target_id)
 
 
+async def _instantiate_children(
+    actor: WorldActor,
+    parent,
+    children: tuple[_CompiledChild, ...],
+    *,
+    room_id: EntityId | None,
+    spawned_singletons: dict[str, EntityId],
+) -> None:
+    """Instantiate one precompiled child tree, then publish fully finalized events."""
+
+    for compiled in children:
+        singleton_key = compiled.child.singleton_key
+        if singleton_key is not None and singleton_key in spawned_singletons:
+            entity_id = spawned_singletons[singleton_key]
+            parent.add_relationship(compiled.child.parent_edge, entity_id)
+            for parent_edge in compiled.child.additional_parent_edges:
+                parent.add_relationship(parent_edge, entity_id)
+            continue
+        request = compiled.plan.request
+        entity = spawn_entity(actor.world, compiled.components)
+        if singleton_key is not None:
+            spawned_singletons[singleton_key] = entity.id
+        parent.add_relationship(compiled.child.parent_edge, entity.id)
+        for parent_edge in compiled.child.additional_parent_edges:
+            parent.add_relationship(parent_edge, entity.id)
+        _apply_plan_edges(actor, entity, compiled.plan)
+        child_room_id = entity.id if request.entity_kind == "room" else room_id
+        if request.entity_kind == "character":
+            controller = spawn_entity(actor.world)
+            actor.suspend(entity.id, controller.id, reason="generated")
+
+        if request.entity_kind == "room":
+            event: GeneratedEntityEvent = RoomGeneratedEvent(
+                **actor._event_base(
+                    seed=request.source_seed,
+                    entity_id=str(entity.id),
+                    entity_key=request.source_key,
+                    entity_kind="room",
+                    room_id=str(entity.id),
+                    room_key=request.source_key,
+                    generation=compiled.generation,
+                    biome=str(request.context.get("biome", "")),
+                    indoor=bool(request.context.get("indoor", False)),
+                )
+            )
+        elif request.entity_kind == "character":
+            event = CharacterGeneratedEvent(
+                **actor._event_base(
+                    seed=request.source_seed,
+                    entity_id=str(entity.id),
+                    entity_key=request.source_key,
+                    entity_kind="character",
+                    character_key=request.source_key,
+                    room_id=str(child_room_id or ""),
+                    generation=compiled.generation,
+                    species=str(request.context.get("species", "")),
+                )
+            )
+        else:
+            event = ObjectGeneratedEvent(
+                **actor._event_base(
+                    seed=request.source_seed,
+                    entity_id=str(entity.id),
+                    entity_key=request.source_key,
+                    entity_kind=request.entity_kind,
+                    object_key=request.source_key,
+                    room_id=str(child_room_id or ""),
+                    container_id=str(parent.id),
+                    containment_mode=getattr(
+                        compiled.child.parent_edge, "mode", ContainmentMode.ROOM_CONTENT
+                    ).value,
+                    generation=compiled.generation,
+                )
+            )
+        await _finalize_generation(actor, event)
+        await _instantiate_children(
+            actor,
+            entity,
+            compiled.children,
+            room_id=child_room_id,
+            spawned_singletons=spawned_singletons,
+        )
+        await actor.bus.publish(event)
+
+
 async def instantiate(actor: WorldActor, proposal: WorldProposal) -> InstantiatedWorld:
     """Validate then build the proposed world. Raises ValueError on validation failure."""
     errors = validate_proposal(proposal)
@@ -267,6 +477,8 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
     room_plans: dict[str, tuple[list, GenerationIntentComponent, GenerationPlan]] = {}
     object_plans: dict[str, tuple[list, GenerationIntentComponent, GenerationPlan]] = {}
     character_plans: dict[str, tuple[list, GenerationIntentComponent, GenerationPlan]] = {}
+    child_plans: dict[str, tuple[_CompiledChild, ...]] = {}
+    spawned_child_singletons: dict[str, EntityId] = {}
 
     # Compile every declarative enrichment before mutating the ECS. A conflict or plugin
     # failure therefore aborts the proposal without leaving a partially generated world.
@@ -315,6 +527,7 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
         *character_plans.values(),
     ):
         _validate_plan_edges(actor, plan)
+        child_plans[plan.request.request_id] = await _compile_children(actor, plan)
 
     async with actor._lock:
         for room in proposal.rooms:
@@ -335,7 +548,14 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
                     indoor=room.indoor,
                 )
             )
-            await _finalize_legacy_hooks(actor, event)
+            await _finalize_generation(actor, event)
+            await _instantiate_children(
+                actor,
+                entity,
+                child_plans[plan.request.request_id],
+                room_id=entity.id,
+                spawned_singletons=spawned_child_singletons,
+            )
             await actor.bus.publish(event)
 
         for exit_ in proposal.exits:
@@ -365,7 +585,14 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
                     generation=generation,
                 )
             )
-            await _finalize_legacy_hooks(actor, event)
+            await _finalize_generation(actor, event)
+            await _instantiate_children(
+                actor,
+                entity,
+                child_plans[plan.request.request_id],
+                room_id=result.rooms[obj.room_key],
+                spawned_singletons=spawned_child_singletons,
+            )
             await actor.bus.publish(event)
 
         for character in proposal.characters:
@@ -389,7 +616,14 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
                     species=character.species,
                 )
             )
-            await _finalize_legacy_hooks(actor, event)
+            await _finalize_generation(actor, event)
+            await _instantiate_children(
+                actor,
+                entity,
+                child_plans[plan.request.request_id],
+                room_id=result.rooms[character.room_key],
+                spawned_singletons=spawned_child_singletons,
+            )
             await actor.bus.publish(event)
 
         await actor.bus.publish(

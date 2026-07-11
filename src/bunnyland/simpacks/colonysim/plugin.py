@@ -1,6 +1,6 @@
 """Canonical Colony Sim plugin entrypoint."""
 
-from ...mechanics.colonysim import (
+from bunnyland.simpacks.colonysim.mechanics import (
     AllowedAreaComponent,
     AllowItemHandler,
     AssignedTo,
@@ -82,6 +82,7 @@ from ...mechanics.colonysim import (
     colonysim_fragments,
     install_colonysim,
 )
+
 from ...plugins.ids import (
     COLONYSIM,
     CORE_VERBS,

@@ -48,7 +48,7 @@ from ..core.ecs import container_of, parse_entity_id
 from ..core.events import CharacterClaimedEvent, DomainEvent
 from ..core.world_actor import CONTROL_COMMANDS
 from ..llm_agents.specs import BehaviorTreeSpec, ScriptSpec
-from ..plugins.builtin import MCP
+from ..plugins.ids import MCP
 from ..prompts import PromptBuilder, render_prompt
 from ..server.admin import save_configured_world
 from ..server.client_ids import (
@@ -102,6 +102,7 @@ def _now_unix() -> int:
     from time import time
 
     return int(time())
+
 
 MCP_MOUNT_PATH = "/mcp"
 ADMIN_TOKEN_ENV = "BUNNYLAND_ADMIN_TOKEN"
@@ -545,8 +546,7 @@ def release_mcp_controller(
             [
                 LLMControllerComponent(
                     profile_name="default",
-                    model=model
-                    or os.environ.get("BUNNYLAND_CHARACTER_MODEL", "deepseek-v4-flash"),
+                    model=model or os.environ.get("BUNNYLAND_CHARACTER_MODEL", "deepseek-v4-flash"),
                     provider=provider,
                 )
             ],
@@ -701,24 +701,17 @@ def create_bunnyland_mcp_app(
     patch_world: Callable[[WorldPatchRequest], Awaitable[WorldPatchResponse]],
     generate_world: Callable[[WorldGenerateRequest], Awaitable[WorldGenerateResponse]],
     generation_status: Callable[[], Awaitable[WorldGenerationStatusResponse]],
-    generate_room: Callable[
-        [WorldRoomGenerationRequest], Awaitable[WorldRoomGenerationResponse]
-    ],
+    generate_room: Callable[[WorldRoomGenerationRequest], Awaitable[WorldRoomGenerationResponse]],
     generate_character: Callable[
         [WorldCharacterGenerationRequest], Awaitable[WorldCharacterGenerationResponse]
     ],
-    generate_item: Callable[
-        [WorldItemGenerationRequest], Awaitable[WorldItemGenerationResponse]
-    ],
+    generate_item: Callable[[WorldItemGenerationRequest], Awaitable[WorldItemGenerationResponse]],
     generate_event: Callable[
         [WorldEventGenerationRequest], Awaitable[WorldEventGenerationResponse]
     ],
-    generate_image: Callable[
-        [WorldImageGenerationRequest], Awaitable[WorldImageGenerationResponse]
-    ]
+    generate_image: Callable[[WorldImageGenerationRequest], Awaitable[WorldImageGenerationResponse]]
     | None = None,
-    scene_image: Callable[[str], Awaitable[WorldImageGenerationResponse | None]]
-    | None = None,
+    scene_image: Callable[[str], Awaitable[WorldImageGenerationResponse | None]] | None = None,
     register_script: Callable[[ScriptSpec], Awaitable[ControllerDefinitionListResponse]]
     | None = None,
     register_behavior: Callable[[BehaviorTreeSpec], Awaitable[ControllerDefinitionListResponse]]
@@ -840,9 +833,7 @@ def create_bunnyland_mcp_app(
 
     def player(client_id: str | None) -> str | None:
         try:
-            return require_allowed_client_id(
-                client_id, allowed_player_client_ids, "player"
-            )
+            return require_allowed_client_id(client_id, allowed_player_client_ids, "player")
         except PermissionError as exc:
             raise ToolError(str(exc)) from exc
 
@@ -1061,9 +1052,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
 
     @mcp.tool()
-    def search_actions(
-        query: str = "", limit: int = 30, mode: str = "substring"
-    ) -> dict[str, Any]:
+    def search_actions(query: str = "", limit: int = 30, mode: str = "substring") -> dict[str, Any]:
         """Search the action catalogue -- the MCP equivalent of the clients' action box.
 
         Matches ``query`` against each action's command_type, title, and tool name,
@@ -1079,9 +1068,7 @@ def create_bunnyland_mcp_app(
         """
 
         try:
-            return serialize_action_search(
-                actor, query=query, limit=limit, mode=mode
-            ).model_dump()
+            return serialize_action_search(actor, query=query, limit=limit, mode=mode).model_dump()
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
@@ -1176,9 +1163,7 @@ def create_bunnyland_mcp_app(
         schema = world_schema(actor)
         if types:
             wanted = set(types)
-            components = {
-                name: item for name, item in schema.components.items() if name in wanted
-            }
+            components = {name: item for name, item in schema.components.items() if name in wanted}
         else:
             components = dict(schema.components)
         return {

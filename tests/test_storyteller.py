@@ -20,22 +20,8 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent
-from bunnyland.mechanics import storyteller as story
-from bunnyland.mechanics.barbariansim import BarbarianSimPolicyComponent
-from bunnyland.mechanics.colonysim import ColonySimComponent, PrisonerComponent
-from bunnyland.mechanics.daggersim import GeneratedQuestComponent, PacifiedComponent
-from bunnyland.mechanics.dinosim import (
-    ApexPredatorComponent,
-    CompanionComponent,
-    DinosimPolicyComponent,
-    EnclosureComponent,
-    GateComponent,
-    KaijuComponent,
-    SettlementDamageComponent,
-    TamingComponent,
-)
-from bunnyland.mechanics.dragonsim import QuestComponent
-from bunnyland.mechanics.storyteller import (
+from bunnyland.foundation.storyteller import mechanics as story
+from bunnyland.foundation.storyteller.mechanics import (
     IncidentAutoResolutionConsequence,
     IncidentBudgetComponent,
     IncidentComponent,
@@ -55,7 +41,25 @@ from bunnyland.mechanics.storyteller import (
 )
 from bunnyland.prompts import ComponentPromptContext
 from bunnyland.simpacks.barbariansim.incidents import BARBARIAN_RAID
+from bunnyland.simpacks.barbariansim.mechanics import BarbarianSimPolicyComponent
+from bunnyland.simpacks.colonysim.mechanics import ColonySimComponent, PrisonerComponent
+from bunnyland.simpacks.daggersim.mechanics import PacifiedComponent
 from bunnyland.simpacks.dinosim.incidents import KAIJU_ATTACK
+from bunnyland.simpacks.dinosim.mechanics import (
+    ApexPredatorComponent,
+    CompanionComponent,
+    DinosimPolicyComponent,
+    EnclosureComponent,
+    GateComponent,
+    KaijuComponent,
+    SettlementDamageComponent,
+    TamingComponent,
+)
+from bunnyland.simpacks.dragonsim.mechanics import (
+    QuestComponent,
+    QuestProvenanceComponent,
+    QuestStateComponent,
+)
 
 HOUR = 3600.0
 
@@ -152,18 +156,14 @@ async def test_resolve_incident_requires_admin_character_or_controller():
         entity
         for entity in scenario.actor.world.query().with_all([IncidentComponent]).execute_entities()
     )
-    await scenario.actor.submit(
-        _cmd(scenario, "resolve-incident", incident_id=str(incident.id))
-    )
+    await scenario.actor.submit(_cmd(scenario, "resolve-incident", incident_id=str(incident.id)))
     await scenario.actor.tick(HOUR)
 
     assert rejects[-1].reason == "admin privileges required"
     assert resolved == []
 
     scenario.actor.world.get_entity(scenario.character).add_component(AdminComponent())
-    await scenario.actor.submit(
-        _cmd(scenario, "resolve-incident", incident_id=str(incident.id))
-    )
+    await scenario.actor.submit(_cmd(scenario, "resolve-incident", incident_id=str(incident.id)))
     await scenario.actor.tick(HOUR)
 
     assert incident.get_component(IncidentComponent).resolved_at_epoch == scenario.actor.epoch
@@ -255,12 +255,12 @@ def test_target_room_skips_inactive_characters_and_falls_back_to_rooms(scenario)
 
     dead = spawn_entity(
         world,
-            [
-                IdentityComponent(name="Gone", kind="character"),
-                CharacterComponent(species="bunny"),
-                DeadComponent(died_at_epoch=0, cause="test"),
-            ],
-        )
+        [
+            IdentityComponent(name="Gone", kind="character"),
+            CharacterComponent(species="bunny"),
+            DeadComponent(died_at_epoch=0, cause="test"),
+        ],
+    )
     suspended = spawn_entity(
         world,
         [
@@ -287,8 +287,7 @@ def test_target_room_skips_inactive_characters_and_falls_back_to_rooms(scenario)
 
 
 def test_storyteller_auto_resolution_predicates_cover_cross_pack_states(scenario):
-    from bunnyland.plugins import PluginRegistry
-    from bunnyland.plugins.builtin import bunnyland_plugins
+    from bunnyland.plugins import PluginRegistry, bunnyland_plugins
 
     world = scenario.actor.world
     room_id = str(scenario.room_a)
@@ -387,11 +386,18 @@ def test_storyteller_auto_resolution_predicates_cover_cross_pack_states(scenario
 
     dragon_quest = spawn_entity(
         world,
-        [QuestComponent(quest_id="dragon", title="Dragon Quest", status="completed")],
+        [
+            QuestComponent(quest_id="dragon", title="Dragon Quest"),
+            QuestStateComponent(status="completed"),
+        ],
     )
     dagger_quest = spawn_entity(
         world,
-        [GeneratedQuestComponent(title="Dagger Quest", objective="finish", status="completed")],
+        [
+            QuestComponent(quest_id="generated:dagger", title="Dagger Quest"),
+            QuestStateComponent(status="completed"),
+            QuestProvenanceComponent(generator="bunnyland.dragonsim"),
+        ],
     )
     for quest in (dragon_quest, dagger_quest):
         assert story._spawned_requirement_done(world, incident, "quest", quest.id, rules) is True
@@ -616,9 +622,7 @@ def test_plugin_incident_definitions_select_deterministically_and_fall_back(scen
 def test_storyteller_consequence_uses_plugin_incident_generation(scenario):
     _storyteller(scenario, points=4.0)
     plain = story.IncidentDefinition(id="rain", cost=1.0, priority=10)
-    events = story.StorytellerConsequence((plain,)).process(
-        scenario.actor.world, int(HOUR)
-    )
+    events = story.StorytellerConsequence((plain,)).process(scenario.actor.world, int(HOUR))
     generated = next(event for event in events if isinstance(event, IncidentGeneratedEvent))
     assert generated.kind == "rain"
     assert generated.intent == "a rain incident"
@@ -632,9 +636,7 @@ def test_storyteller_consequence_uses_plugin_incident_generation(scenario):
             description=f"custom storm {spent:g}", entity_kind="incident"
         ),
     )
-    events = story.StorytellerConsequence((custom,)).process(
-        scenario.actor.world, int(HOUR)
-    )
+    events = story.StorytellerConsequence((custom,)).process(scenario.actor.world, int(HOUR))
     generated = next(
         event
         for event in events

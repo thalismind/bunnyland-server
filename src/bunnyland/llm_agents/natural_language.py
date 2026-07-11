@@ -142,9 +142,7 @@ def _unquote(value: str) -> str:
     return value
 
 
-def _normalized_arguments(
-    compiled: _CompiledPattern, match: re.Match[str]
-) -> dict[str, Any]:
+def _normalized_arguments(compiled: _CompiledPattern, match: re.Match[str]) -> dict[str, Any]:
     args = dict(compiled.fixed_arguments)
     for key, value in match.groupdict().items():
         stripped = value.strip()

@@ -1,7 +1,7 @@
 """Storyteller resolution rules contributed by Colony Sim."""
 
-from ...mechanics.colonysim import PrisonerComponent
-from ...mechanics.storyteller import IncidentResolutionRule
+from bunnyland.foundation.storyteller.mechanics import IncidentResolutionRule
+from bunnyland.simpacks.colonysim.mechanics import PrisonerComponent
 
 
 def _prisoner(world, incident, entity) -> bool:

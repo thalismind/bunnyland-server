@@ -17,15 +17,14 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.handlers.base import HandlerContext
-from bunnyland.mechanics import install_needs
-from bunnyland.mechanics.consumables import (
+from bunnyland.foundation.consumables.actions import DrinkHandler, EatHandler, _consume_one_use
+from bunnyland.foundation.consumables.components import (
     ConsumableComponent,
     DrinkableComponent,
     FoodComponent,
 )
-from bunnyland.mechanics.eat_drink import DrinkHandler, EatHandler, _consume_one_use
-from bunnyland.mechanics.meter import Meter
-from bunnyland.mechanics.needs import (
+from bunnyland.foundation.meters.mechanics import Meter
+from bunnyland.foundation.needs.mechanics import (
     BatheHandler,
     ComfortNeedComponent,
     FatigueComponent,
@@ -38,6 +37,7 @@ from bunnyland.mechanics.needs import (
     SocialNeedComponent,
     ThirstComponent,
     hunger_band,
+    install_needs,
     need_fragments,
     recover_daily_need,
     thirst_band,

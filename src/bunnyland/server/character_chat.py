@@ -286,8 +286,10 @@ class CharacterChatService:
         for edge, controller_id in character.get_relationships(ControlledBy):
             controller = self.actor.world.get_entity(controller_id)
             if controller.has_component(LLMControllerComponent):
-                return controller_id, edge.generation, controller.get_component(
-                    LLMControllerComponent
+                return (
+                    controller_id,
+                    edge.generation,
+                    controller.get_component(LLMControllerComponent),
                 )
         return None
 

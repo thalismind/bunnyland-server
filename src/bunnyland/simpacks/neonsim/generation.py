@@ -1,6 +1,6 @@
 """neonsim generation contribution compatibility surface."""
 
-from ...worldgen.enrichment import LegacyWorldgenEnricher, NeonWorldgenHook
+from ...worldgen.enrichment import ComponentPlanEnricher, NeonWorldgenHook
 
 CAPABILITIES = (
     "bunnyland.neonsim.black-market",
@@ -26,6 +26,6 @@ ALIASES = {
     "safehouse": "bunnyland.neonsim.safehouse",
     "security-zone": "bunnyland.neonsim.security-zone",
 }
-GENERATION_ENRICHER = LegacyWorldgenEnricher(NeonWorldgenHook, provided_capabilities=CAPABILITIES)
+GENERATION_ENRICHER = ComponentPlanEnricher(NeonWorldgenHook, provided_capabilities=CAPABILITIES)
 
 __all__ = ["GENERATION_ENRICHER", "NeonWorldgenHook"]

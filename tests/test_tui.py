@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import json
 import sys
 from types import SimpleNamespace
 
@@ -25,6 +27,7 @@ from bunnyland.core import (
 from bunnyland.core.controllers import ClaimTimeoutComponent
 from bunnyland.core.world_actor import WorldActor
 from bunnyland.persistence import type_registries
+from bunnyland.plugins import PluginRegistry, bunnyland_plugins
 from bunnyland.tui import app as tui_app
 from bunnyland.tui import backend as tui_backend
 from bunnyland.tui.app import ActionForm, BunnylandTUI, FormField, HelpScreen
@@ -703,7 +706,7 @@ def test_queued_command_label_prefers_projected_action_title():
 
 # ── web controller ────────────────────────────────────────────────────────────
 def test_web_controller_registered_for_persistence():
-    components, _edges = type_registries()
+    components, _edges = type_registries(PluginRegistry(bunnyland_plugins()))
     assert components.get("WebControllerComponent") is WebControllerComponent
 
 
@@ -1488,17 +1491,143 @@ async def test_remote_backend_recent_events_reads_endpoint():
         def __init__(self) -> None:
             self.urls: list[str] = []
 
-        async def get(self, url: str):
+        async def get(self, url: str, **_kwargs):
             self.urls.append(url)
             return Response()
 
     backend = RemoteBackend("http://server.example")
     backend._client = Client()
 
-    events = await backend.recent_events()
+    events = await backend.recent_events("character:1")
 
     assert events == [{"type": "event", "data": {"event_type": "PingEvent"}}]
-    assert backend._client.urls == ["http://server.example/world/events/recent"]
+    assert backend._client.urls == [
+        "http://server.example/world/character/character:1/events/recent"
+    ]
+
+
+async def test_remote_backend_watches_authenticated_player_updates(monkeypatch):
+    sockets = []
+    states = []
+    frames = []
+
+    class Socket:
+        def __init__(self, url):
+            self.url = url
+            self.sent = []
+            self.messages = [
+                "not json",
+                json.dumps({"type": "mystery", "data": {}}),
+                json.dumps(
+                    {
+                        "type": "ready",
+                        "data": {"character_id": "character:1", "world_epoch": 1},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "event",
+                        "data": {"event_type": "MovedEvent", "event": {}},
+                    }
+                ),
+            ]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc_info):
+            return None
+
+        async def send(self, value):
+            self.sent.append(value)
+
+        async def recv(self):
+            return self.messages.pop(0)
+
+    def connect(url, **_kwargs):
+        socket = Socket(url)
+        sockets.append(socket)
+        return socket
+
+    monkeypatch.setitem(sys.modules, "websockets", SimpleNamespace(connect=connect))
+    backend = RemoteBackend("https://player:password@server.example/api")
+    control = ControlClaim(
+        controller_id="controller:1",
+        generation=2,
+        claim_id="claim-1",
+        claim_secret="top-secret",
+    )
+
+    async def on_message(frame):
+        frames.append(frame)
+        if frame["type"] == "event":
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await backend.watch_updates("character:1", control, on_message, states.append)
+
+    assert backend.supports_live_updates() is True
+    assert sockets[0].url == (
+        "wss://player:password@server.example/api/world/character/character%3A1/updates"
+    )
+    assert "top-secret" not in sockets[0].url
+    assert json.loads(sockets[0].sent[0]) == {
+        "type": "authenticate",
+        "data": {"claim_id": "claim-1", "claim_secret": "top-secret"},
+    }
+    assert states == ["connecting", "live"]
+    assert [frame["type"] for frame in frames] == ["ready", "event"]
+
+
+async def test_live_updates_are_optional_for_local_and_missing_dependency(monkeypatch):
+    local = RecordingBackend(_snapshot())
+    assert local.supports_live_updates() is False
+    assert (
+        await local.watch_updates("character:1", None, lambda _frame: None, lambda _state: None)
+        is None
+    )
+    monkeypatch.setitem(sys.modules, "websockets", None)
+    backend = RemoteBackend("http://server.example")
+    states = []
+
+    assert backend.supports_live_updates() is False
+    await backend.watch_updates("character:1", None, lambda _frame: None, states.append)
+    assert states == ["fallback"]
+    assert await RemoteBackend("http://server.example").recent_events() == []
+
+
+async def test_remote_backend_live_updates_reconnect_after_transport_failure(monkeypatch):
+    calls = []
+    states = []
+
+    class FailingSocket:
+        async def __aenter__(self):
+            raise OSError("offline")
+
+        async def __aexit__(self, *_exc_info):
+            return None
+
+    def connect(url, **_kwargs):
+        calls.append(url)
+        return FailingSocket()
+
+    async def stop_after_delay(delay):
+        calls.append(delay)
+        raise asyncio.CancelledError
+
+    monkeypatch.setitem(sys.modules, "websockets", SimpleNamespace(connect=connect))
+    monkeypatch.setattr(asyncio, "sleep", stop_after_delay)
+    monkeypatch.setattr("bunnyland.tui.backend.random.uniform", lambda _low, _high: 1.0)
+    backend = RemoteBackend("http://server.example")
+
+    with pytest.raises(asyncio.CancelledError):
+        await backend.watch_updates("character:1", None, lambda _frame: None, states.append)
+
+    assert calls == [
+        "ws://server.example/world/character/character%3A1/updates",
+        1.0,
+    ]
+    assert states == ["connecting", "fallback"]
 
 
 async def test_backend_recent_events_defaults_to_empty():
@@ -1786,7 +1915,7 @@ class RecordingBackend(Backend):
         )
         return True
 
-    async def recent_events(self) -> list[dict]:
+    async def recent_events(self, character_id: str = "") -> list[dict]:
         return copy.deepcopy(self.events)
 
     async def claim(self, player_id, world):
@@ -3242,14 +3371,18 @@ async def test_world_generator_selector_groups_generators_and_returns_seed(monke
         buttons_region = screen.query_one("#generator-buttons").region
         assert buttons_region.y + buttons_region.height <= picker_region.y + picker_region.height
 
-        screen._generator_selected(SimpleNamespace(option=SimpleNamespace(id="generator:fixed-demo")))
+        screen._generator_selected(
+            SimpleNamespace(option=SimpleNamespace(id="generator:fixed-demo"))
+        )
         assert seed.disabled
         assert screen.query_one("#seed-random", Button).disabled
         description = str(screen.query_one("#generator-description", Static).render())
         assert "fixed world" in description
         assert "ignores" not in description
 
-        screen._generator_highlighted(SimpleNamespace(option=SimpleNamespace(id="generator:recursive")))
+        screen._generator_highlighted(
+            SimpleNamespace(option=SimpleNamespace(id="generator:recursive"))
+        )
         assert screen.selected_generator.name == "recursive"
 
         monkeypatch.setattr(selector_module.secrets, "choice", lambda choices: choices[-1])
@@ -3848,3 +3981,45 @@ async def test_app_open_sheet_button_press():
         prompts = _activity_prompts(activity)
         assert any("Opened sheet" in p for p in prompts)
         assert backend.sheet_requests == [PLAYER]
+
+
+async def test_tui_live_update_worker_suppresses_polling_and_refreshes_events():
+    class LiveBackend(RecordingBackend):
+        def supports_live_updates(self) -> bool:
+            return True
+
+        async def watch_updates(self, character_id, control, on_message, on_state) -> None:
+            assert character_id == PLAYER
+            assert control == ControlClaim("controller:1", 3, "claim-1", "secret-1")
+            await on_state("live")
+            await on_message({"type": "heartbeat", "data": {}})
+            await on_message({"type": "event", "data": {}})
+            await on_state("fallback")
+
+    app = BunnylandTUI(LiveBackend(_snapshot()))
+    app.player_id = PLAYER
+    app.control = ControlClaim("controller:1", 3, "claim-1", "secret-1")
+    refreshes = []
+
+    async def refresh_world():
+        refreshes.append(True)
+
+    app.refresh_world = refresh_world
+    app._restart_live_updates()
+    await app._live_task
+    assert refreshes == [True, True]
+    assert app._live_ready is False
+
+    app._live_ready = True
+    await app._poll_refresh_world()
+    assert refreshes == [True, True]
+    app._live_ready = False
+    await app._poll_refresh_world()
+    assert refreshes == [True, True, True]
+
+    sleeping = asyncio.create_task(asyncio.sleep(60))
+    app._live_task = sleeping
+    app._stop_live_updates()
+    assert sleeping.cancelled() or sleeping.cancelling()
+    app.player_id = ""
+    app._restart_live_updates()

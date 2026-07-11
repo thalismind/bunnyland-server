@@ -47,9 +47,13 @@ The API exposes:
 
 - `GET /health` for liveness and current world epoch.
 - `GET /world/snapshot` for the initial ECS snapshot and world metadata.
-- `GET /world/events/recent` for recently published domain events.
+- `GET /world/events/recent` for the admin-authenticated global event history.
+- `GET /world/character/{id}/events/recent` for a claim-authenticated, visibility-filtered
+  player fallback feed.
 - `POST /world/commands` to submit a command envelope into the world actor.
 - `WS /world/updates` for an initial snapshot followed by typed domain events.
+- `WS /world/character/{id}/updates` for claim-authenticated player invalidations and visible
+  events; clients send the claim id and secret in the first frame, never in the URL.
 - `GET /admin/runtime`, `POST /admin/pause`, and `POST /admin/resume` for
   server-level tick control.
 - `GET /admin/world/generators`, `POST /admin/world/generate`, and

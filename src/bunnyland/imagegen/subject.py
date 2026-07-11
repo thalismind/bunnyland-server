@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from relics import Entity, World
 
+from bunnyland.foundation.history.mechanics import WorldHistoryRecordComponent
+
 from ..core.components import DescriptionComponent, IdentityComponent, RoomComponent
 from ..core.ecs import container_of, entity_name, parse_entity_id
-from ..mechanics.history import WorldHistoryRecordComponent
 
 
 def subject_for_entity(entity: Entity) -> str:

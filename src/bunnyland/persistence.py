@@ -16,43 +16,26 @@ resumes with empty queues.
 from __future__ import annotations
 
 import asyncio
-import importlib
-import inspect
 import json
-from collections.abc import Sequence
 from dataclasses import is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
-import relics
 from pydantic import BaseModel
-from relics import Component, Edge
 
 from . import telemetry
 from .core.queue import CommandQueues
 from .core.world_actor import WorldActor
+from .migrations import CURRENT_SCHEMA_VERSION, migrate_snapshot
 from .persistence_yaml import YAMLPersistenceDriver
-from .plugins.contributions import collect_ecs_types
 from .plugins.loader import PluginError, apply_plugins
 from .plugins.model import PluginRuntimeContext
 from .plugins.registry import PluginRegistry
 
-if TYPE_CHECKING:
-    from .plugins.model import Plugin
-
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
 PersistenceFormat = Literal["json", "yaml"]
-
-# Only always-on core types are discovered locally. Every optional persisted type comes
-# from the resolved plugin registry rather than a second mechanics-module catalogue.
-_CORE_TYPE_MODULES = (
-    "bunnyland.core.components",
-    "bunnyland.core.edges",
-    "bunnyland.core.controllers",
-    "bunnyland.discord.components",
-)
 
 
 class WorldMeta(BaseModel):
@@ -78,9 +61,7 @@ def _jsonable(value: Any) -> Any:
             value, "__dataclass_fields__", {}
         )
         return {
-            name: _jsonable(getattr(value, name))
-            for name in fields
-            if not name.startswith("_")
+            name: _jsonable(getattr(value, name)) for name in fields if not name.startswith("_")
         }
     if isinstance(value, dict):
         return {key: _jsonable(item) for key, item in value.items()}
@@ -90,46 +71,13 @@ def _jsonable(value: Any) -> Any:
 
 
 def type_registries(
-    plugins: Sequence[Plugin] | None = None,
+    registry: PluginRegistry,
 ) -> tuple[dict[str, type], dict[str, type]]:
     """Build ``(component_registry, edge_registry)`` keyed by class name for ``relics.load``."""
-    components: dict[str, type] = {}
-    edges: dict[str, type] = {}
-    for module_name in _CORE_TYPE_MODULES:
-        module = importlib.import_module(module_name)
-        for _name, obj in inspect.getmembers(module, inspect.isclass):
-            if issubclass(obj, Edge) and obj is not Edge:
-                edges[obj.__name__] = obj
-            elif issubclass(obj, Component) and obj is not Component:
-                components[obj.__name__] = obj
-    if plugins is None:
-        def subclasses(base):
-            found = []
-            for subclass in base.__subclasses__():
-                found.append(subclass)
-                found.extend(subclasses(subclass))
-            return found
-
-        plugin_components = tuple(
-            type_ for type_ in subclasses(Component) if type_.__module__.startswith("bunnyland.")
-        )
-        plugin_edges = tuple(
-            type_ for type_ in subclasses(Edge) if type_.__module__.startswith("bunnyland.")
-        )
-    else:
-        registry = PluginRegistry(plugins)
-        plugin_components, plugin_edges = collect_ecs_types(registry.plugins.values())
-    for component in plugin_components:
-        previous = components.get(component.__name__)
-        if previous is not None and previous is not component:
-            raise PluginError(f"duplicate persisted component name {component.__name__!r}")
-        components[component.__name__] = component
-    for edge in plugin_edges:
-        previous = edges.get(edge.__name__)
-        if previous is not None and previous is not edge:
-            raise PluginError(f"duplicate persisted edge name {edge.__name__!r}")
-        edges[edge.__name__] = edge
-    return components, edges
+    return (
+        {name: component for name, (_owner, component) in registry.components.items()},
+        {name: edge for name, (_owner, edge) in registry.edges.items()},
+    )
 
 
 def _snapshot(actor: WorldActor, meta: WorldMeta) -> dict[str, Any]:
@@ -181,9 +129,10 @@ def save_world(
     path = Path(path)
     resolved_format = _format_for_path(path, format)
     attrs = {"operation": "save", "format": resolved_format}
-    with telemetry.record_duration(
-        telemetry.record_persist, attrs
-    ), telemetry.span("world.save", {**attrs, "path": str(path)}) as save_span:
+    with (
+        telemetry.record_duration(telemetry.record_persist, attrs),
+        telemetry.span("world.save", {**attrs, "path": str(path)}) as save_span,
+    ):
         try:
             stamped = meta.model_copy(
                 update={"saved_at_epoch": actor.epoch, "saved_at": datetime.now(UTC)}
@@ -209,7 +158,7 @@ def save_world(
 def load_world(
     path: str | Path,
     *,
-    plugins: Sequence[Plugin] | None = None,
+    registry: PluginRegistry,
     plugin_context: PluginRuntimeContext | None = None,
     format: PersistenceFormat | None = None,
 ) -> tuple[WorldActor, WorldMeta]:
@@ -217,9 +166,10 @@ def load_world(
     path = Path(path)
     selected_format = _format_for_path(path, format)
     attrs = {"operation": "load", "format": selected_format}
-    with telemetry.record_duration(
-        telemetry.record_persist, attrs
-    ), telemetry.span("world.load", {**attrs, "path": str(path)}) as load_span:
+    with (
+        telemetry.record_duration(telemetry.record_persist, attrs),
+        telemetry.span("world.load", {**attrs, "path": str(path)}) as load_span,
+    ):
         try:
             yaml_driver = YAMLPersistenceDriver() if selected_format == "yaml" else None
             data = (
@@ -227,29 +177,25 @@ def load_world(
                 if yaml_driver is not None
                 else json.loads(path.read_text())
             )
+            data = migrate_snapshot(data)
             meta = WorldMeta.model_validate(data.get("bunnyland", {}))
 
             actor = WorldActor()
-            if plugins is not None:
-                available = {plugin.id for plugin in plugins}
-                missing = tuple(
-                    plugin_id for plugin_id in meta.plugins if plugin_id not in available
-                )
-                if missing:
-                    names = ", ".join(repr(plugin_id) for plugin_id in missing)
-                    raise PluginError(f"saved world depends on missing plugin(s): {names}")
-                apply_plugins(plugins, actor, plugin_context)
+            available = set(registry.plugins)
+            missing = tuple(plugin_id for plugin_id in meta.plugins if plugin_id not in available)
+            if missing:
+                names = ", ".join(repr(plugin_id) for plugin_id in missing)
+                raise PluginError(f"saved world depends on missing plugin(s): {names}")
+            plugins = tuple(registry.plugins.values())
+            apply_plugins(plugins, actor, plugin_context)
 
-            component_registry, edge_registry = type_registries(plugins)
-            if yaml_driver is not None:
-                yaml_driver.load_snapshot(actor.world, data, component_registry, edge_registry)
-            else:
-                relics.load(
-                    actor.world,
-                    path,
-                    component_registry=component_registry,
-                    edge_registry=edge_registry,
-                )
+            component_registry, edge_registry = type_registries(registry)
+            (yaml_driver or YAMLPersistenceDriver()).load_snapshot(
+                actor.world,
+                data,
+                component_registry,
+                edge_registry,
+            )
             actor.bind_clock()  # the __init__ clock was cleared by load; rebind to the saved one
             if telemetry.enabled():
                 load_span.set_attribute(
@@ -268,7 +214,7 @@ def reload_world(
     path: str | Path,
     *,
     meta: WorldMeta,
-    plugins: Sequence[Plugin] | None = None,
+    registry: PluginRegistry,
     plugin_context: PluginRuntimeContext | None = None,
     format: PersistenceFormat | None = None,
 ) -> WorldMeta:
@@ -280,7 +226,7 @@ def reload_world(
 
     replacement, loaded_meta = load_world(
         path,
-        plugins=plugins,
+        registry=registry,
         plugin_context=plugin_context,
         format=format,
     )
@@ -295,7 +241,7 @@ def reload_world(
     actor.configure_persistence(
         save_path=path,
         meta=meta,
-        plugins=tuple(plugins or ()),
+        plugins=tuple(registry.plugins.values()),
         plugin_context=plugin_context,
     )
     return meta

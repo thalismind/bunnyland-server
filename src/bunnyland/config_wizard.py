@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import pkgutil
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -27,7 +26,7 @@ from .config import (
     WebTheme,
     WorldConfig,
 )
-from .plugins import Plugin, PluginError, load_modules
+from .plugins import Plugin, PluginError
 from .worldgen import collect_generators
 
 WORLD_PROMPT_PRESETS = (
@@ -46,77 +45,11 @@ WORLD_PROMPT_PRESETS = (
 )
 
 
-def available_plugins_for_wizard(
-    modules: Sequence[str] = (),
-) -> tuple[tuple[Plugin, ...], tuple[str, ...]]:
+def available_plugins_for_wizard() -> tuple[tuple[Plugin, ...], tuple[str, ...]]:
     from .plugins import bunnyland_plugins
 
-    module_names = tuple(modules)
-    plugins = [*bunnyland_plugins(), *load_modules(module_names)]
-    loaded_module_names = _loaded_plugin_module_names(exclude=module_names)
-    plugins.extend(_plugins_from_loaded_modules(loaded_module_names))
-    deduped = {plugin.id: plugin for plugin in plugins}
-    return tuple(deduped.values()), (*module_names, *loaded_module_names)
-
-
-def _loaded_plugin_module_names(*, exclude: Sequence[str] = ()) -> tuple[str, ...]:
-    excluded = {
-        "bunnyland.plugins",
-        "bunnyland.plugins.builtin",
-        *exclude,
-    }
-    names = []
-    for name, module in list(sys.modules.items()):
-        if (
-            name in excluded
-            or name == "bunnyland"
-            or name.startswith("bunnyland.")
-            or not _module_declares_plugin_entrypoint(name, module)
-        ):
-            continue
-        names.append(name)
-    return tuple(sorted(names))
-
-
-def _module_declares_plugin_entrypoint(name: str, module) -> bool:
-    entry = getattr(module, "bunnyland_plugins", None)
-    return callable(entry) and getattr(entry, "__module__", None) == name
-
-
-def _plugins_from_loaded_modules(module_names: Sequence[str]) -> list[Plugin]:
-    plugins: list[Plugin] = []
-    for name in module_names:
-        module = sys.modules[name]
-        result = module.bunnyland_plugins()
-        plugins.extend(_qualify_loaded_plugin(name, plugin) for plugin in result)
-    return plugins
-
-
-def _qualify_loaded_plugin(module_name: str, plugin: Plugin) -> Plugin:
-    def qualify(value: str) -> str:
-        return value if "." in value else f"{module_name}.{value}"
-
-    dependencies = plugin.dependencies.model_copy(
-        update={
-            "requires": tuple(qualify(dep) for dep in plugin.dependencies.requires),
-            "recommends": tuple(qualify(dep) for dep in plugin.dependencies.recommends),
-        }
-    )
-    return plugin.model_copy(update={"id": qualify(plugin.id), "dependencies": dependencies})
-
-
-def unloaded_plugin_module_candidates(
-    *,
-    exclude: Sequence[str] = (),
-) -> tuple[str, ...]:
-    excluded = set(exclude)
-    names = []
-    for module_info in pkgutil.iter_modules():
-        name = module_info.name
-        if name in excluded or name in sys.modules or "bunnyland" not in name:
-            continue
-        names.append(name)
-    return tuple(sorted(set(names)))
+    plugins = tuple(bunnyland_plugins())
+    return plugins, ()
 
 
 def _resolve_enabled_plugin_ids(
@@ -353,7 +286,7 @@ FIELD_HELP_TEXT = {
     "discord-channel-ids": "Allowed Discord channel IDs, comma-separated. Examples: 333,444.",
     "discord-dm-user-ids": "Users allowed to DM the bot, comma-separated. Examples: 123,456.",
     "plugin-search": "Filter the plugin checklist. Examples: memory, lifesim.",
-    "plugin-suggestions": "Unloaded modules found. Examples: --import bunnyland_extra_pack.",
+    "plugin-suggestions": "Install addon packages to make their entry-point plugins available.",
     "mcp-enabled": "Enable HTTP MCP endpoint. Examples: enabled for admin agents.",
     "imagegen-enabled": "Enable ComfyUI image generation. Examples: enabled with ComfyUI.",
     "comfy-url": "ComfyUI server URL reachable by the server container. Examples: http://comfy:8188.",
@@ -371,9 +304,7 @@ FIELD_HELP_TEXT = {
     "show-advanced": "Reveal low-frequency deployment/runtime fields. Examples: custom ports.",
 }
 
-FIELD_HELP = {
-    key: _split_field_help(value) for key, value in FIELD_HELP_TEXT.items()
-}
+FIELD_HELP = {key: _split_field_help(value) for key, value in FIELD_HELP_TEXT.items()}
 
 
 def prompt_for_config() -> BunnylandConfig:
@@ -408,9 +339,7 @@ def prompt_for_config() -> BunnylandConfig:
             home_cert_name=_prompt("Homepage certificate name", web.home_domain),
         )
 
-    live_services = _confirm(
-        "Set up live services with an LLM provider and Discord now?", True
-    )
+    live_services = _confirm("Set up live services with an LLM provider and Discord now?", True)
     llm = LlmConfig(enabled=False)
     discord = DiscordConfig(enabled=False, public_url=_prompt_discord_url())
     server_character_chat = False
@@ -483,6 +412,7 @@ def prompt_for_config() -> BunnylandConfig:
         imagegen=imagegen,
     )
 
+
 def review_lines(config: BunnylandConfig) -> list[str]:
     services = (
         "live services" if config.llm.enabled or config.discord.enabled else "offline smoke test"
@@ -539,7 +469,6 @@ def load_or_prompt_config(path: Path, *, non_interactive: bool) -> BunnylandConf
 def build_textual_wizard_app(
     initial: BunnylandConfig | None = None,
     *,
-    modules: Sequence[str] = (),
     enabled_plugins: Sequence[str] | None = None,
 ):
     from textual import on
@@ -550,22 +479,17 @@ def build_textual_wizard_app(
     from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, Select, Static
 
     initial = initial or default_wizard_config()
-    plugin_modules = tuple(dict.fromkeys([*initial.plugins.modules, *modules]))
-    plugin_options, discovered_modules = available_plugins_for_wizard(plugin_modules)
+    plugin_options, _discovered_modules = available_plugins_for_wizard()
     world_generators = sorted(
         collect_generators(plugin_options).values(), key=lambda generator: generator.name
     )
     world_generator_uses_seed = {
         generator.name: generator.uses_seed for generator in world_generators
     }
-    world_generator_options = [
-        (generator.name, generator.name)
-        for generator in world_generators
-    ]
+    world_generator_options = [(generator.name, generator.name) for generator in world_generators]
     if initial.world.generator and initial.world.generator not in world_generator_uses_seed:
         world_generator_options.append((initial.world.generator, initial.world.generator))
         world_generator_uses_seed[initial.world.generator] = True
-    suggested_modules = unloaded_plugin_module_candidates(exclude=discovered_modules)
     explicit_plugin_ids = _resolve_enabled_plugin_ids(plugin_options, enabled_plugins)
     initial_plugin_ids = (
         frozenset(initial.plugins.enabled) | (explicit_plugin_ids or frozenset())
@@ -1246,17 +1170,7 @@ def build_textual_wizard_app(
                                     id=f"plugin-{index}",
                                     classes="plugin-option",
                                 )
-                        if suggested_modules:
-                            yield field_label("Unloaded matching modules", "plugin-suggestions")
-                            yield Static(
-                                "\n".join(
-                                    f"{name} (rerun with --import {name})"
-                                    for name in suggested_modules
-                                ),
-                                id="plugin-suggestions",
-                            )
-                        else:
-                            yield Static("", id="plugin-suggestions")
+                        yield Static("", id="plugin-suggestions")
                     with Vertical(id="page-mcp", classes="page"):
                         yield Label("MCP", classes="page-title")
                         yield field_label("HTTP MCP endpoint", "mcp-enabled")
@@ -1411,21 +1325,6 @@ def build_textual_wizard_app(
                 return None
             return selected
 
-        def _enabled_plugin_modules(self) -> tuple[str, ...]:
-            selected_ids = self._selected_plugin_ids()
-            selected_modules = [
-                module
-                for plugin_id in selected_ids
-                if (module := self._module_for_plugin(plugin_id))
-            ]
-            return tuple(dict.fromkeys(selected_modules))
-
-        def _module_for_plugin(self, plugin_id: str) -> str:
-            for module in sorted(discovered_modules, key=len, reverse=True):
-                if plugin_id.startswith(f"{module}."):
-                    return module
-            return ""
-
         def _filter_plugins(self) -> None:
             query = self._input("#plugin-search").casefold()
             for index, plugin in enumerate(plugin_options):
@@ -1497,14 +1396,18 @@ def build_textual_wizard_app(
                 provider = self._select("#llm-provider")
                 worldgen_provider = self._select("#worldgen-provider") or provider
                 character_chat = self._enabled("#character-chat")
-                if (llm_enabled or character_chat) and (
-                    provider == "ollama" or worldgen_provider == "ollama"
-                ) and not self._input("#ollama-api-key"):
+                if (
+                    (llm_enabled or character_chat)
+                    and (provider == "ollama" or worldgen_provider == "ollama")
+                    and not self._input("#ollama-api-key")
+                ):
                     self._fail("Ollama API key is required for Ollama-backed services.")
                     return None
-                if (llm_enabled or character_chat) and (
-                    provider == "openrouter" or worldgen_provider == "openrouter"
-                ) and not self._input("#openrouter-api-key"):
+                if (
+                    (llm_enabled or character_chat)
+                    and (provider == "openrouter" or worldgen_provider == "openrouter")
+                    and not self._input("#openrouter-api-key")
+                ):
                     self._fail("OpenRouter API key is required for OpenRouter services.")
                     return None
                 if discord_enabled and not self._input("#discord-token"):
@@ -1558,15 +1461,11 @@ def build_textual_wizard_app(
                     memory_backend=self._select("#memory-backend"),
                     memory_path=self._input("#memory-path"),
                     controller_definitions=self._input("#controller-definitions"),
-                    claim_timeout_seconds=self._optional_int_input(
-                        "#claim-timeout-seconds"
-                    ),
+                    claim_timeout_seconds=self._optional_int_input("#claim-timeout-seconds"),
                     claim_timeout_controllers=_csv_values(
                         self._input("#claim-timeout-controllers")
                     ),
-                    lifesim_natural_aging=_optional_bool(
-                        self._select("#lifesim-natural-aging")
-                    ),
+                    lifesim_natural_aging=_optional_bool(self._select("#lifesim-natural-aging")),
                 )
                 web = WebConfig(
                     theme=self._input("#web-theme"),
@@ -1633,7 +1532,6 @@ def build_textual_wizard_app(
                 world=world,
                 web=web,
                 plugins=PluginConfig(
-                    modules=self._enabled_plugin_modules(),
                     enabled=self._enabled_plugin_ids(),
                     config=dict(initial.plugins.config),
                 ),
@@ -1688,9 +1586,7 @@ def build_textual_wizard_app(
             self.query_one("#seed", Input).value = choice(WORLD_PROMPT_PRESETS)
 
         @on(Button.Pressed, "#copy-admin-password-to-token")
-        def copy_admin_password_to_token_pressed(
-            self, _event: Button.Pressed
-        ) -> None:
+        def copy_admin_password_to_token_pressed(self, _event: Button.Pressed) -> None:
             self.query_one("#admin-token", Input).value = self._input("#admin-password")
             self._update_save_state()
 
@@ -1748,13 +1644,11 @@ def build_textual_wizard_app(
 def run_textual_wizard(
     path: Path,
     *,
-    modules: Sequence[str] = (),
     enabled_plugins: Sequence[str] | None = None,
 ) -> BunnylandConfig | None:
     initial = BunnylandConfig.load(path) if path.exists() else default_wizard_config()
     app = build_textual_wizard_app(
         initial,
-        modules=modules,
         enabled_plugins=enabled_plugins,
     )
     return app.run()
@@ -1769,14 +1663,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--non-interactive", action="store_true")
     parser.add_argument("--cli", action="store_true", help="use prompt mode instead of Textual")
     parser.add_argument(
-        "--module",
-        "--import",
-        dest="module",
-        action="append",
-        default=[],
-        help="import a plugin module for the Textual checklist",
-    )
-    parser.add_argument(
         "--plugin",
         action="append",
         default=None,
@@ -1785,16 +1671,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config_path = Path(args.config)
-    if (
-        not args.non_interactive
-        and not args.cli
-        and sys.stdin.isatty()
-        and sys.stdout.isatty()
-    ):
+    if not args.non_interactive and not args.cli and sys.stdin.isatty() and sys.stdout.isatty():
         try:
             config = run_textual_wizard(
                 config_path,
-                modules=args.module,
                 enabled_plugins=args.plugin,
             )
         except ImportError:

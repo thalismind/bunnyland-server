@@ -7,22 +7,39 @@ from collections.abc import Callable
 from rich.text import Text
 
 from ..core.actions import action_icon_for
+from ..core.events import serialized_event_visible_to
 
 # Events that would drown out narration rather than describe activity: command lifecycle,
 # continuous point/need/affect telemetry, and perception bookkeeping.
-_UNNARRATED_EVENT_TYPES = frozenset({
-    "CommandSubmittedEvent", "CommandAcceptedEvent", "CommandQueuedEvent",
-    "CommandExecutedEvent", "CommandExpiredEvent",
-    "ActionPointsChangedEvent", "FocusPointsChangedEvent", "EncumbranceChangedEvent",
-    "PainChangedEvent", "BleedingChangedEvent", "AttentionShiftedEvent", "AffectChangedEvent",
-    "EntitySeenEvent", "RoomQualityUpdatedEvent", "HungerChangedEvent",
-    "ThirstChangedEvent", "DailyNeedChangedEvent", "SkillXPChangedEvent",
-})
+_UNNARRATED_EVENT_TYPES = frozenset(
+    {
+        "CommandSubmittedEvent",
+        "CommandAcceptedEvent",
+        "CommandQueuedEvent",
+        "CommandExecutedEvent",
+        "CommandExpiredEvent",
+        "ActionPointsChangedEvent",
+        "FocusPointsChangedEvent",
+        "EncumbranceChangedEvent",
+        "PainChangedEvent",
+        "BleedingChangedEvent",
+        "AttentionShiftedEvent",
+        "AffectChangedEvent",
+        "EntitySeenEvent",
+        "RoomQualityUpdatedEvent",
+        "HungerChangedEvent",
+        "ThirstChangedEvent",
+        "DailyNeedChangedEvent",
+        "SkillXPChangedEvent",
+    }
+)
 
-_SYSTEM_EVENT_TYPES = frozenset({
-    "ControllerChangedEvent",
-    "WorldPauseStatusChangedEvent",
-})
+_SYSTEM_EVENT_TYPES = frozenset(
+    {
+        "ControllerChangedEvent",
+        "WorldPauseStatusChangedEvent",
+    }
+)
 
 EVENT_ICON_BY_TYPE: dict[str, str] = {
     "ActorMovedEvent": "➡️",
@@ -34,10 +51,20 @@ EVENT_ICON_BY_TYPE: dict[str, str] = {
 }
 
 # Fields on every ``DomainEvent``; the rest of a serialized event is its specific payload.
-_EVENT_BASE_KEYS = frozenset({
-    "event_id", "world_epoch", "created_at", "visibility", "actor_id", "room_id",
-    "target_ids", "causation_id", "correlation_id", "arrival_summary",
-})
+_EVENT_BASE_KEYS = frozenset(
+    {
+        "event_id",
+        "world_epoch",
+        "created_at",
+        "visibility",
+        "actor_id",
+        "room_id",
+        "target_ids",
+        "causation_id",
+        "correlation_id",
+        "arrival_summary",
+    }
+)
 
 
 def _humanize_event_type(event_type: str) -> str:
@@ -105,19 +132,11 @@ class EventNarrator:
         player_id: str,
         room_of: Callable[[str | None], str | None],
     ) -> bool:
-        visibility = event.get("visibility")
-        if visibility == "public":
-            return True
-        if visibility == "room":
-            return bool(player_id) and event.get("room_id") == room_of(player_id)
-        if visibility == "directed":
-            return bool(player_id) and (
-                player_id == event.get("actor_id")
-                or player_id in (event.get("target_ids") or ())
-            )
-        if visibility == "private":
-            return bool(player_id) and player_id == event.get("actor_id")
-        return False
+        return serialized_event_visible_to(
+            event,
+            character_id=player_id,
+            room_of=lambda character_id: room_of(character_id),
+        )
 
     def _render_event(
         self,

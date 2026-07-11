@@ -10,10 +10,12 @@ import asyncio
 import json
 import logging
 import os
+import random
 import time
 import urllib.parse
 import webbrowser
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -52,6 +54,12 @@ logger = logging.getLogger("bunnyland.tui")
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "bunnyland"
 CLIENT_ID_PATH = CONFIG_DIR / "client-id"
+
+
+async def _call_update_callback(callback: Callable, value) -> None:
+    result = callback(value)
+    if hasattr(result, "__await__"):
+        await result
 
 
 @dataclass(frozen=True)
@@ -266,10 +274,23 @@ class Backend(ABC):
     async def release_claim(self, player_id: str, control: ControlClaim) -> bool:
         return False
 
-    async def recent_events(self) -> list[dict]:
+    async def recent_events(self, character_id: str = "") -> list[dict]:
         """Recent domain-event messages (``{"type": "event", "data": {...}}``) for clients
         that narrate perceived activity. Backends without an event feed return nothing."""
         return []
+
+    def supports_live_updates(self) -> bool:
+        return False
+
+    async def watch_updates(
+        self,
+        character_id: str,
+        control: ControlClaim | None,
+        on_message: Callable[[dict], object],
+        on_state: Callable[[str], object],
+    ) -> None:
+        """Watch player updates until cancelled. Local backends remain polling-only."""
+        return None
 
     async def request_image(self, character_id: str) -> ImageRequestResult:
         """Request an image of the character's current scene (the 📷 camera affordance)."""
@@ -471,7 +492,7 @@ class LocalBackend(Backend):
         )
         return SubmitResult(accepted=outcome.accepted, reason=outcome.reason)
 
-    async def recent_events(self) -> list[dict]:
+    async def recent_events(self, character_id: str = "") -> list[dict]:
         return self._events.recent_messages() if self._events is not None else []
 
     async def request_image(self, character_id: str) -> ImageRequestResult:
@@ -495,8 +516,7 @@ class LocalBackend(Backend):
             stored = load_claim_control(self.client_id, player_id)
             stored_valid = (
                 stored
-                if stored
-                and self._claim_secrets.validate(stored.claim_id, stored.claim_secret)
+                if stored and self._claim_secrets.validate(stored.claim_id, stored.claim_secret)
                 else None
             )
             if self._controller is None:
@@ -637,9 +657,7 @@ class RemoteBackend(Backend):
     def _claim_headers(self, character_id: str) -> dict[str, str]:
         claim = self._claim_for(character_id)
         return (
-            {"X-Bunnyland-Claim-Secret": claim.claim_secret}
-            if claim and claim.claim_secret
-            else {}
+            {"X-Bunnyland-Claim-Secret": claim.claim_secret} if claim and claim.claim_secret else {}
         )
 
     def _claim_params(self, character_id: str) -> dict[str, str]:
@@ -731,18 +749,98 @@ class RemoteBackend(Backend):
             body = {}
         if not res.is_success:
             reason = str(
-                body.get("reason")
-                or f"request failed ({getattr(res, 'status_code', '?')})"
+                body.get("reason") or f"request failed ({getattr(res, 'status_code', '?')})"
             )
             return SubmitResult(accepted=False, reason=reason)
         return SubmitResult(
             accepted=bool(body.get("queued", True)), reason=str(body.get("reason", ""))
         )
 
-    async def recent_events(self) -> list[dict]:
-        res = await self._client.get(f"{self.base}/world/events/recent")
+    async def recent_events(self, character_id: str = "") -> list[dict]:
+        if not character_id:
+            return []
+        res = await self._client.get(
+            f"{self.base}/world/character/{character_id}/events/recent",
+            **self._claim_request_kwargs(character_id, params=True),
+        )
         res.raise_for_status()
         return res.json().get("events", [])
+
+    def supports_live_updates(self) -> bool:
+        try:
+            import websockets  # noqa: F401
+        except ImportError:
+            return False
+        return True
+
+    async def watch_updates(
+        self,
+        character_id: str,
+        control: ControlClaim | None,
+        on_message: Callable[[dict], object],
+        on_state: Callable[[str], object],
+    ) -> None:
+        try:
+            import websockets
+        except ImportError:
+            await _call_update_callback(on_state, "fallback")
+            return
+        parsed = urllib.parse.urlparse(self.base)
+        encoded_character = urllib.parse.quote(character_id, safe="")
+        path = f"{parsed.path.rstrip('/')}/world/character/{encoded_character}/updates"
+        url = urllib.parse.urlunparse(
+            parsed._replace(
+                scheme="wss" if parsed.scheme == "https" else "ws",
+                path=path,
+                params="",
+                query="",
+                fragment="",
+            )
+        )
+        attempt = 0
+        while True:
+            await _call_update_callback(on_state, "connecting")
+            ready = False
+            try:
+                async with websockets.connect(url, open_timeout=10) as socket:
+                    await socket.send(
+                        json.dumps(
+                            {
+                                "type": "authenticate",
+                                "data": {
+                                    "claim_id": control.claim_id if control else None,
+                                    "claim_secret": control.claim_secret if control else None,
+                                },
+                            }
+                        )
+                    )
+                    while True:
+                        raw = await asyncio.wait_for(socket.recv(), timeout=70.0)
+                        try:
+                            frame = json.loads(raw)
+                        except (TypeError, json.JSONDecodeError):
+                            continue
+                        if not isinstance(frame, dict) or frame.get("type") not in {
+                            "ready",
+                            "event",
+                            "invalidate",
+                            "resync",
+                            "heartbeat",
+                        }:
+                            continue
+                        if frame["type"] == "ready":
+                            ready = True
+                            attempt = 0
+                            await _call_update_callback(on_state, "live")
+                        await _call_update_callback(on_message, frame)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("Remote player update stream disconnected", exc_info=True)
+            await _call_update_callback(on_state, "fallback")
+            delay = (1, 2, 4, 8, 16, 30)[min(attempt, 5)]
+            attempt = 0 if ready else attempt + 1
+            await asyncio.sleep(delay * random.uniform(0.8, 1.2))
 
     async def request_image(self, character_id: str) -> ImageRequestResult:
         res = await self._client.post(

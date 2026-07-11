@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import pytest
+from relics import Component, Edge
 
 from bunnyland.core import (
     CharacterComponent,
@@ -15,9 +16,12 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     ControlledBy,
-    EditorDisplayComponent,
     ExitTo,
+    GenerationChild,
+    GenerationDelta,
+    GenerationError,
     GenerationIntentComponent,
+    GenerationRequest,
     IdentityComponent,
     Lane,
     LightComponent,
@@ -40,17 +44,27 @@ from bunnyland.core.events import (
     RoomGeneratedEvent,
     WorldGeneratedEvent,
 )
-from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
-from bunnyland.mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
-from bunnyland.mechanics.meter import Meter, with_value
-from bunnyland.mechanics.needs import HungerComponent
-from bunnyland.mechanics.persona import GoalComponent
-from bunnyland.mechanics.tutorial import (
+from bunnyland.foundation.consumables.components import (
+    ConsumableComponent,
+    DrinkableComponent,
+    FoodComponent,
+)
+from bunnyland.foundation.meters.mechanics import Meter, with_value
+from bunnyland.foundation.needs.mechanics import HungerComponent
+from bunnyland.foundation.persona.mechanics import GoalComponent
+from bunnyland.foundation.tutorial.mechanics import (
     DELIVERY_MARK,
     HungryCourierAgent,
     HungryCourierControllerComponent,
 )
-from bunnyland.plugins import ContentContribution, Plugin, apply_plugins, bunnyland_plugins
+from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
+from bunnyland.plugins import (
+    ContentContribution,
+    EcsContribution,
+    Plugin,
+    apply_plugins,
+    bunnyland_plugins,
+)
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server import serialize_character_projection
 from bunnyland.server.models import ClientRoomView
@@ -237,9 +251,7 @@ async def test_hungry_courier_agent_branches_on_real_world_state():
     assert take_letter is not None
     assert take_letter.name == "take"
 
-    actor.world.get_entity(world.rooms["crossing"]).remove_relationship(
-        Contains, letter.id
-    )
+    actor.world.get_entity(world.rooms["crossing"]).remove_relationship(Contains, letter.id)
     courier.add_relationship(Contains(mode=ContainmentMode.INVENTORY), letter.id)
     _move_entity(actor, courier.id, world.rooms["crossing"])
 
@@ -255,9 +267,7 @@ async def test_hungry_courier_agent_branches_on_real_world_state():
     assert drop.name == "drop"
 
     _move_entity(actor, courier.id, world.rooms["apple_hedge"])
-    actor.world.get_entity(world.rooms["apple_hedge"]).remove_relationship(
-        Contains, courier.id
-    )
+    actor.world.get_entity(world.rooms["apple_hedge"]).remove_relationship(Contains, courier.id)
     no_room = agent._room(courier)
     assert no_room is None
     assert agent._route_direction(no_room) is None
@@ -305,9 +315,7 @@ async def test_hungry_courier_agent_finds_food_by_state_not_script():
     crossing.remove_relationship(Contains, apple_slice.id)
 
     agent.component = HungryCourierControllerComponent(food_query="apple")
-    apple_sign = spawn_entity(
-        actor.world, [IdentityComponent(name="apple sign", kind="sign")]
-    )
+    apple_sign = spawn_entity(actor.world, [IdentityComponent(name="apple sign", kind="sign")])
     crossing.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), apple_sign.id)
     assert agent._reachable_food(courier) == cracker
 
@@ -321,9 +329,7 @@ async def test_hungry_courier_agent_finds_food_by_state_not_script():
     courier.add_relationship(Contains(mode=ContainmentMode.INVENTORY), stale_item.id)
     courier.add_relationship(Contains(mode=ContainmentMode.INVENTORY), decoy_item.id)
 
-    fake_actor = SimpleNamespace(
-        world=_WorldWithMissingEntities(actor.world, {stale_item.id})
-    )
+    fake_actor = SimpleNamespace(world=_WorldWithMissingEntities(actor.world, {stale_item.id}))
     fake_agent = HungryCourierAgent(
         SimpleNamespace(actor=fake_actor), HungryCourierControllerComponent()
     )
@@ -348,9 +354,7 @@ async def test_first_run_suggestions_cover_courier_states():
 
     stale_item = spawn_entity(actor.world, [IdentityComponent(name="stale", kind="prop")])
     crossing.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), stale_item.id)
-    fake_actor = SimpleNamespace(
-        world=_WorldWithMissingEntities(actor.world, {stale_item.id})
-    )
+    fake_actor = SimpleNamespace(world=_WorldWithMissingEntities(actor.world, {stale_item.id}))
     assert _room_has_named_entity(fake_actor, crossing.id, "missing") is False
 
     assert "Go east" in _first_run_suggestions(actor, player, crossing_view)[0]
@@ -363,9 +367,7 @@ async def test_first_run_suggestions_cover_courier_states():
     stale_inventory_item = spawn_entity(
         actor.world, [IdentityComponent(name="stale inventory", kind="prop")]
     )
-    player.add_relationship(
-        Contains(mode=ContainmentMode.INVENTORY), stale_inventory_item.id
-    )
+    player.add_relationship(Contains(mode=ContainmentMode.INVENTORY), stale_inventory_item.id)
     fake_actor = SimpleNamespace(
         world=_WorldWithMissingEntities(actor.world, {stale_inventory_item.id})
     )
@@ -373,15 +375,11 @@ async def test_first_run_suggestions_cover_courier_states():
 
     player.remove_relationship(Contains, apple.id)
     hedge.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), apple.id)
-    assert "Take the red crossing apple" in _first_run_suggestions(
-        actor, player, hedge_view
-    )[0]
+    assert "Take the red crossing apple" in _first_run_suggestions(actor, player, hedge_view)[0]
 
     hedge.remove_relationship(Contains, apple.id)
     assert "apple is gone" in _first_run_suggestions(actor, player, hedge_view)[0]
-    assert "Inspect the delivery ledger" in _first_run_suggestions(
-        actor, player, cottage_view
-    )[0]
+    assert "Inspect the delivery ledger" in _first_run_suggestions(actor, player, cottage_view)[0]
     assert "Watch Pip choose" in _first_run_suggestions(actor, player, unknown_view)[0]
 
     replace_component(player, GoalComponent(active_goals=()))
@@ -434,7 +432,7 @@ async def test_bell_green_generator_builds_online_sandbox_shape():
 
 
 async def test_clover_city_generator_builds_dense_world_shape():
-    from bunnyland.mechanics.lifesim import RoutineComponent
+    from bunnyland.simpacks.lifesim.mechanics import RoutineComponent
 
     actor = WorldActor()
     world = await CLOVER_CITY_DEMO.generate(actor, "clover-city", GenOptions())
@@ -819,9 +817,7 @@ def test_repair_world_proposal_keeps_valid_references_without_warning(caplog):
                 {"key": "burrow", "title": "Burrow"},
             ],
             "exits": [{"from_key": "meadow", "direction": "east", "to_key": "burrow"}],
-            "objects": [
-                {"key": "apple", "room_key": "meadow", "name": "an apple", "kind": "food"}
-            ],
+            "objects": [{"key": "apple", "room_key": "meadow", "name": "an apple", "kind": "food"}],
             "characters": [{"key": "helper", "name": "Helper", "room_key": "burrow"}],
         }
     )
@@ -867,7 +863,7 @@ async def test_waiting_room_generator_builds_single_white_room_with_red_chair():
 
 
 async def test_instantiate_builds_water_container_and_writable_paper_objects():
-    from bunnyland.mechanics.needs import HungerComponent, ThirstComponent
+    from bunnyland.foundation.needs.mechanics import HungerComponent, ThirstComponent
 
     actor = WorldActor()
     proposal = WorldProposal(
@@ -1011,8 +1007,7 @@ async def test_tower_debate_generator_builds_locked_philosophy_room():
     assert room_component.title == "Locked Tower Room"
     assert room_component.indoor is True
     exits = {
-        edge.direction: (edge, target)
-        for edge, target in tower_room.get_relationships(ExitTo)
+        edge.direction: (edge, target) for edge, target in tower_room.get_relationships(ExitTo)
     }
     down_edge, down_target = exits["down"]
     assert down_edge.locked is True
@@ -1151,19 +1146,18 @@ async def test_instantiate_emits_typed_generation_events_with_intent_tags_and_wa
     assert characters[0].generation.wants == ("faction-allegiance",)
 
 
-async def test_plugin_worldgen_hook_can_enrich_generated_entities():
-    class RoomEmojiHook:
-        def subscribe(self, actor: WorldActor) -> None:
-            self.actor = actor
-            actor.bus.subscribe(RoomGeneratedEvent, self.on_room)
+async def test_plugin_generation_enricher_can_add_owned_components():
+    @dataclass(frozen=True)
+    class HumidityComponent(Component):
+        level: str = "damp"
 
-        def on_room(self, event: RoomGeneratedEvent) -> None:
-            if "humidity" not in event.wants:
-                return
-            entity_id = parse_entity_id(event.entity_id)
-            assert entity_id is not None
-            self.actor.world.get_entity(entity_id).add_component(
-                EditorDisplayComponent(emoji="~")
+    class HumidityEnricher:
+        capabilities = ("humidity.room",)
+
+        def enrich(self, request):
+            return GenerationDelta(
+                components=(HumidityComponent(),),
+                satisfies=("humidity.room",),
             )
 
     actor = WorldActor()
@@ -1172,7 +1166,12 @@ async def test_plugin_worldgen_hook_can_enrich_generated_entities():
             Plugin(
                 id="humidity",
                 name="Humidity",
-                content=ContentContribution(worldgen_hooks=(RoomEmojiHook,)),
+                ecs=EcsContribution(components=(HumidityComponent,)),
+                content=ContentContribution(
+                    generation_capabilities=("humidity.room",),
+                    generation_aliases={"humidity": "humidity.room"},
+                    generation_enrichers=(HumidityEnricher(),),
+                ),
             )
         ],
         actor,
@@ -1192,12 +1191,253 @@ async def test_plugin_worldgen_hook_can_enrich_generated_entities():
     result = await instantiate(actor, proposal)
 
     room = actor.world.get_entity(result.rooms["room"])
-    assert room.get_component(EditorDisplayComponent).emoji == "~"
+    assert room.get_component(HumidityComponent).level == "damp"
 
 
-async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
-    from bunnyland.mechanics.barbariansim import StaminaComponent, WeaponComponent
-    from bunnyland.mechanics.colonysim import (
+async def test_generation_children_are_compiled_linked_and_published_after_creation():
+    @dataclass(frozen=True)
+    class ChildMarkerComponent(Component):
+        label: str = "mailbox"
+
+    class ChildEnricher:
+        capabilities = ()
+
+        def enrich(self, request):
+            if request.entity_kind == "room":
+                return GenerationDelta(
+                    children=(
+                        GenerationChild(
+                            request=GenerationRequest(
+                                entity_kind="object",
+                                description="mailbox",
+                                source_seed=request.source_seed,
+                                source_key=f"{request.source_key}:mailbox",
+                                tags=("child-marker",),
+                            ),
+                            parent_edge=Contains(mode=ContainmentMode.ROOM_CONTENT),
+                        ),
+                    )
+                )
+            if "child-marker" in request.tags:
+                return GenerationDelta(components=(ChildMarkerComponent(),))
+            return GenerationDelta()
+
+    actor = WorldActor()
+    apply_plugins(
+        [
+            Plugin(
+                id="children",
+                name="Children",
+                ecs=EcsContribution(components=(ChildMarkerComponent,)),
+                content=ContentContribution(generation_enrichers=(ChildEnricher(),)),
+            )
+        ],
+        actor,
+    )
+    published = []
+    actor.bus.subscribe(ObjectGeneratedEvent, published.append)
+
+    result = await instantiate(
+        actor,
+        WorldProposal(seed="stable", rooms=[RoomSpec(key="room", title="Room")]),
+    )
+
+    room = actor.world.get_entity(result.rooms["room"])
+    children = [
+        actor.world.get_entity(target) for _edge, target in room.get_relationships(Contains)
+    ]
+    assert len(children) == 1
+    assert children[0].get_component(ChildMarkerComponent).label == "mailbox"
+    assert published[0].entity_id == str(children[0].id)
+    assert published[0].entity_key == "room:mailbox"
+
+
+async def test_generation_singleton_child_is_shared_and_linked_to_each_parent():
+    @dataclass(frozen=True)
+    class SingletonLink(Edge):
+        pass
+
+    class SingletonChildEnricher:
+        capabilities = ()
+
+        def enrich(self, request):
+            if request.entity_kind != "room":
+                return GenerationDelta()
+            return GenerationDelta(
+                children=(
+                    GenerationChild(
+                        request=GenerationRequest(
+                            entity_kind="region",
+                            description="Shared Region",
+                            source_seed=request.source_seed,
+                            source_key="shared-region",
+                        ),
+                        parent_edge=Contains(mode=ContainmentMode.REGION),
+                        additional_parent_edges=(SingletonLink(),),
+                        singleton_key="shared-region",
+                    ),
+                )
+            )
+
+    actor = WorldActor()
+    apply_plugins(
+        [
+            Plugin(
+                id="singleton-children",
+                name="Singleton Children",
+                ecs=EcsContribution(edges=(SingletonLink,)),
+                content=ContentContribution(generation_enrichers=(SingletonChildEnricher(),)),
+            )
+        ],
+        actor,
+    )
+    result = await instantiate(
+        actor,
+        WorldProposal(
+            seed="stable",
+            rooms=[
+                RoomSpec(key="one", title="One"),
+                RoomSpec(key="two", title="Two"),
+            ],
+        ),
+    )
+
+    one = actor.world.get_entity(result.rooms["one"])
+    two = actor.world.get_entity(result.rooms["two"])
+    assert one.get_relationships(Contains)[0][1] == two.get_relationships(Contains)[0][1]
+    assert one.get_relationships(SingletonLink)[0][1] == two.get_relationships(SingletonLink)[0][1]
+
+
+async def test_generation_children_cover_room_character_portable_and_nested_plans():
+    @dataclass(frozen=True)
+    class ChildMarker(Component):
+        value: str = "child"
+
+    @dataclass(frozen=True)
+    class ChildLink(Edge):
+        label: str = "linked"
+
+    class MixedChildrenEnricher:
+        capabilities = ()
+
+        def enrich(self, request):
+            if request.entity_kind == "room" and request.parent_request_id is None:
+                return GenerationDelta(
+                    children=(
+                        GenerationChild(
+                            request=GenerationRequest(
+                                entity_kind="room",
+                                description="Side Room",
+                                source_seed=request.source_seed,
+                                source_key="side-room",
+                                context={"biome": "cave", "indoor": True},
+                            ),
+                            parent_edge=Contains(mode=ContainmentMode.REGION),
+                        ),
+                        GenerationChild(
+                            request=GenerationRequest(
+                                entity_kind="character",
+                                description="Guide",
+                                source_seed=request.source_seed,
+                                source_key="guide",
+                                context={"species": "bunny"},
+                            ),
+                            parent_edge=Contains(mode=ContainmentMode.ROOM_CONTENT),
+                            additional_parent_edges=(ChildLink(),),
+                        ),
+                        GenerationChild(
+                            request=GenerationRequest(
+                                entity_kind="item",
+                                source_seed=request.source_seed,
+                                source_key="portable-child",
+                                context={"portable": True},
+                            ),
+                            parent_edge=Contains(mode=ContainmentMode.ROOM_CONTENT),
+                            components=(ChildMarker(),),
+                        ),
+                    )
+                )
+            return GenerationDelta()
+
+    actor = WorldActor()
+    apply_plugins(
+        [
+            Plugin(
+                id="mixed-children",
+                name="Mixed Children",
+                ecs=EcsContribution(components=(ChildMarker,), edges=(ChildLink,)),
+                content=ContentContribution(generation_enrichers=(MixedChildrenEnricher(),)),
+            )
+        ],
+        actor,
+    )
+    events = []
+    actor.bus.subscribe(RoomGeneratedEvent, events.append)
+    actor.bus.subscribe(CharacterGeneratedEvent, events.append)
+    result = await instantiate(
+        actor,
+        WorldProposal(seed="mixed", rooms=[RoomSpec(key="root", title="Root")]),
+    )
+
+    root = actor.world.get_entity(result.rooms["root"])
+    region_child = actor.world.get_entity(root.get_relationships(Contains)[0][1])
+    assert region_child.get_component(RoomComponent).indoor
+    character_id = root.get_relationships(ChildLink)[0][1]
+    character = actor.world.get_entity(character_id)
+    assert character.has_component(CharacterComponent)
+    assert character.has_component(SuspendedComponent)
+    assert character.get_relationships(ControlledBy)
+    portable = next(
+        actor.world.get_entity(target)
+        for _edge, target in root.get_relationships(Contains)
+        if actor.world.get_entity(target).has_component(ChildMarker)
+    )
+    assert portable.has_component(PortableComponent)
+    assert {event.entity_key for event in events} >= {"side-room", "guide"}
+
+
+async def test_generation_rejects_recursive_child_request_identity():
+    class RecursiveChildEnricher:
+        capabilities = ()
+
+        def enrich(self, request):
+            if request.parent_request_id is not None:
+                return GenerationDelta()
+            return GenerationDelta(
+                children=(
+                    GenerationChild(
+                        request=GenerationRequest(
+                            entity_kind="item",
+                            request_id=request.request_id,
+                            source_key="recursive",
+                        ),
+                        parent_edge=Contains(),
+                    ),
+                )
+            )
+
+    actor = WorldActor()
+    apply_plugins(
+        [
+            Plugin(
+                id="recursive-child",
+                name="Recursive Child",
+                content=ContentContribution(generation_enrichers=(RecursiveChildEnricher(),)),
+            )
+        ],
+        actor,
+    )
+    with pytest.raises(GenerationError, match="recursive generation child request"):
+        await instantiate(
+            actor,
+            WorldProposal(seed="loop", rooms=[RoomSpec(key="root", title="Root")]),
+        )
+
+
+async def test_builtin_generation_enrichers_enrich_from_generation_intent():
+    from bunnyland.foundation.environment.mechanics import FlammableComponent
+    from bunnyland.simpacks.barbariansim.mechanics import StaminaComponent, WeaponComponent
+    from bunnyland.simpacks.colonysim.mechanics import (
         BodyPartHealthComponent,
         ColonyIncidentComponent,
         JobBillComponent,
@@ -1210,11 +1450,13 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
         SurgeryBillComponent,
         TradeOfferComponent,
     )
-    from bunnyland.mechanics.daggersim import DungeonComponent
-    from bunnyland.mechanics.dinosim import DinosaurComponent, EnclosureComponent
-    from bunnyland.mechanics.dragonsim import FactionReputationComponent, PointOfInterestComponent
-    from bunnyland.mechanics.environment import FlammableComponent
-    from bunnyland.mechanics.gardensim import (
+    from bunnyland.simpacks.daggersim.mechanics import DungeonComponent
+    from bunnyland.simpacks.dinosim.mechanics import DinosaurComponent, EnclosureComponent
+    from bunnyland.simpacks.dragonsim.mechanics import (
+        FactionReputationComponent,
+        PointOfInterestComponent,
+    )
+    from bunnyland.simpacks.gardensim.mechanics import (
         CropQualityComponent,
         FarmQuestComponent,
         GeodeComponent,
@@ -1230,13 +1472,16 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
         SoilComponent,
         WeedComponent,
     )
-    from bunnyland.mechanics.lifesim import (
+    from bunnyland.simpacks.lifesim.mechanics import (
         CharacterProfileComponent,
         HomeObjectComponent,
         WhimComponent,
     )
-    from bunnyland.mechanics.nukesim import MutationThresholdComponent, RadiationSourceComponent
-    from bunnyland.mechanics.voidsim import (
+    from bunnyland.simpacks.nukesim.mechanics import (
+        MutationThresholdComponent,
+        RadiationSourceComponent,
+    )
+    from bunnyland.simpacks.voidsim.mechanics import (
         HabitatModuleComponent,
         ShipComponent,
         ShipSystemComponent,
@@ -1482,8 +1727,8 @@ async def test_builtin_worldgen_hooks_enrich_from_generation_intent():
     assert raptor.has_component(FactionReputationComponent)
 
 
-async def test_builtin_worldgen_hooks_enrich_from_descriptive_mentions():
-    from bunnyland.mechanics.colonysim import (
+async def test_builtin_generation_enrichers_enrich_from_descriptive_mentions():
+    from bunnyland.simpacks.colonysim.mechanics import (
         ColonyIncidentComponent,
         JobBillComponent,
         PawnProfileComponent,
@@ -1495,7 +1740,7 @@ async def test_builtin_worldgen_hooks_enrich_from_descriptive_mentions():
         TradeOfferComponent,
         WorkstationComponent,
     )
-    from bunnyland.mechanics.gardensim import (
+    from bunnyland.simpacks.gardensim.mechanics import (
         CropQualityComponent,
         FarmQuestComponent,
         FertilizerComponent,
@@ -1510,7 +1755,7 @@ async def test_builtin_worldgen_hooks_enrich_from_descriptive_mentions():
         TreeComponent,
         WeedComponent,
     )
-    from bunnyland.mechanics.lifesim import (
+    from bunnyland.simpacks.lifesim.mechanics import (
         CharacterProfileComponent,
         HomeObjectComponent,
         WhimComponent,
@@ -1626,8 +1871,8 @@ async def test_builtin_worldgen_hooks_enrich_from_descriptive_mentions():
     assert actor.world.get_entity(result.objects["quest"]).has_component(FarmQuestComponent)
 
 
-async def test_builtin_worldgen_hooks_cover_core_sim_pack_wants():
-    from bunnyland.mechanics.colonysim import (
+async def test_builtin_generation_enrichers_cover_core_sim_pack_wants():
+    from bunnyland.simpacks.colonysim.mechanics import (
         AllowedAreaComponent,
         BedRestComponent,
         CaravanComponent,
@@ -1649,7 +1894,7 @@ async def test_builtin_worldgen_hooks_cover_core_sim_pack_wants():
         WorkCapabilityComponent,
         WorkPriorityComponent,
     )
-    from bunnyland.mechanics.gardensim import (
+    from bunnyland.simpacks.gardensim.mechanics import (
         AnimalBreedingComponent,
         AnimalHomeComponent,
         AnimalProductComponent,
@@ -1675,7 +1920,7 @@ async def test_builtin_worldgen_hooks_cover_core_sim_pack_wants():
         TreeTapComponent,
         WateredComponent,
     )
-    from bunnyland.mechanics.lifesim import (
+    from bunnyland.simpacks.lifesim.mechanics import (
         AspirationComponent,
         BillComponent,
         BusinessOwnerComponent,
@@ -1908,8 +2153,8 @@ async def test_builtin_worldgen_hooks_cover_core_sim_pack_wants():
         assert colony_cache.has_component(component_type)
 
 
-async def test_builtin_worldgen_hooks_cover_tier_2_sim_pack_wants():
-    from bunnyland.mechanics.barbariansim import (
+async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
+    from bunnyland.simpacks.barbariansim.mechanics import (
         ArmorComponent,
         BaseClaimComponent,
         BlessingComponent,
@@ -1937,7 +2182,7 @@ async def test_builtin_worldgen_hooks_cover_tier_2_sim_pack_wants():
         TreasureComponent,
         WeaponComponent,
     )
-    from bunnyland.mechanics.daggersim import (
+    from bunnyland.simpacks.daggersim.mechanics import (
         AfflictionStigmaComponent,
         AutomapComponent,
         BankComponent,
@@ -1949,13 +2194,11 @@ async def test_builtin_worldgen_hooks_cover_tier_2_sim_pack_wants():
         CureQuestHookComponent,
         CustomClassComponent,
         CustomSpellComponent,
-        DaggerQuestRewardComponent,
         DialogueApproachComponent,
         DungeonObjectiveComponent,
         EnchantedItemComponent,
         EtiquetteSkillComponent,
         FeedingNeedComponent,
-        GeneratedQuestComponent,
         HostilityComponent,
         IngredientComponent,
         InstitutionComponent,
@@ -1969,7 +2212,6 @@ async def test_builtin_worldgen_hooks_cover_tier_2_sim_pack_wants():
         PotionMakerComponent,
         ProceduralSiteComponent,
         PropertyDeedComponent,
-        QuestDeadlineComponent,
         QuestTemplateComponent,
         RecallAnchorComponent,
         RechargeServiceComponent,
@@ -1991,7 +2233,7 @@ async def test_builtin_worldgen_hooks_cover_tier_2_sim_pack_wants():
         TravelSupplyComponent,
         UnrealizedLocationComponent,
     )
-    from bunnyland.mechanics.dragonsim import (
+    from bunnyland.simpacks.dragonsim.mechanics import (
         AncientBeastComponent,
         ArtifactComponent,
         CarvableComponent,
@@ -2013,8 +2255,9 @@ async def test_builtin_worldgen_hooks_cover_tier_2_sim_pack_wants():
         PotionRecipeComponent,
         QuestComponent,
         QuestObjectiveComponent,
+        QuestProvenanceComponent,
         QuestRewardComponent,
-        QuestStageComponent,
+        QuestStateComponent,
         SpellComponent,
         SpellCooldownComponent,
         StealthComponent,
@@ -2291,9 +2534,10 @@ async def test_builtin_worldgen_hooks_cover_tier_2_sim_pack_wants():
         RumorReliabilityComponent,
         RumorTargetComponent,
         QuestTemplateComponent,
-        GeneratedQuestComponent,
-        QuestDeadlineComponent,
-        DaggerQuestRewardComponent,
+        QuestComponent,
+        QuestStateComponent,
+        QuestProvenanceComponent,
+        QuestRewardComponent,
         SpellTemplateComponent,
         CustomSpellComponent,
         EnchantedItemComponent,
@@ -2339,7 +2583,7 @@ async def test_builtin_worldgen_hooks_cover_tier_2_sim_pack_wants():
         EncounterZoneComponent,
         FactionComponent,
         QuestComponent,
-        QuestStageComponent,
+        QuestStateComponent,
         QuestObjectiveComponent,
         QuestRewardComponent,
         GuardComponent,
@@ -2375,14 +2619,15 @@ async def test_builtin_worldgen_hooks_cover_tier_2_sim_pack_wants():
         assert dragon_mage.has_component(component_type)
 
 
-async def test_builtin_worldgen_hooks_cover_cross_package_mention_branches():
-    from bunnyland.mechanics.barbariansim import (
+async def test_builtin_generation_enrichers_cover_cross_package_mention_branches():
+    from bunnyland.foundation.environment.mechanics import FireComponent, FlammableComponent
+    from bunnyland.simpacks.barbariansim.mechanics import (
         ArmorComponent,
         FortificationComponent,
         ShelterComponent,
         StaminaComponent,
     )
-    from bunnyland.mechanics.daggersim import (
+    from bunnyland.simpacks.daggersim.mechanics import (
         DungeonComponent,
         DungeonRoomComponent,
         InstitutionComponent,
@@ -2391,21 +2636,20 @@ async def test_builtin_worldgen_hooks_cover_cross_package_mention_branches():
         RumorComponent,
         TravelHubComponent,
     )
-    from bunnyland.mechanics.dinosim import (
+    from bunnyland.simpacks.dinosim.mechanics import (
         DinosaurComponent,
         EggComponent,
         FertilityComponent,
         FossilFragmentComponent,
         SpeciesComponent,
     )
-    from bunnyland.mechanics.dragonsim import (
+    from bunnyland.simpacks.dragonsim.mechanics import (
         FactionComponent,
         FactionReputationComponent,
         PointOfInterestComponent,
         QuestComponent,
     )
-    from bunnyland.mechanics.environment import FireComponent, FlammableComponent
-    from bunnyland.mechanics.nukesim import (
+    from bunnyland.simpacks.nukesim.mechanics import (
         DecontaminationComponent,
         JunkComponent,
         LootTableComponent,
@@ -2416,7 +2660,7 @@ async def test_builtin_worldgen_hooks_cover_cross_package_mention_branches():
         RadProtectionComponent,
         ScavengeSiteComponent,
     )
-    from bunnyland.mechanics.voidsim import (
+    from bunnyland.simpacks.voidsim.mechanics import (
         AirlockComponent,
         DistressSignalComponent,
         FuelComponent,
@@ -2574,13 +2818,13 @@ async def test_builtin_worldgen_hooks_cover_cross_package_mention_branches():
     assert fighter.has_component(FactionReputationComponent)
 
 
-async def test_builtin_worldgen_hooks_cover_sim_pack_expansion_wants():
-    from bunnyland.mechanics.daggersim import (
+async def test_builtin_generation_enrichers_cover_sim_pack_expansion_wants():
+    from bunnyland.simpacks.daggersim.mechanics import (
         ExpansionHookComponent,
         ProceduralSiteComponent,
         UnrealizedLocationComponent,
     )
-    from bunnyland.mechanics.dinosim import (
+    from bunnyland.simpacks.dinosim.mechanics import (
         AncientSampleComponent,
         ApexPredatorComponent,
         ArmorPlateComponent,
@@ -2610,7 +2854,7 @@ async def test_builtin_worldgen_hooks_cover_sim_pack_expansion_wants():
         WaterCreatureComponent,
         WeakPointComponent,
     )
-    from bunnyland.mechanics.nukesim import (
+    from bunnyland.simpacks.nukesim.mechanics import (
         BeaconComponent,
         ChemComponent,
         ChemRecipeComponent,
@@ -2636,7 +2880,7 @@ async def test_builtin_worldgen_hooks_cover_sim_pack_expansion_wants():
         WaterPurifierComponent,
         WaterPurityComponent,
     )
-    from bunnyland.mechanics.voidsim import (
+    from bunnyland.simpacks.voidsim.mechanics import (
         AlienArtifactComponent,
         AlienSpeciesComponent,
         AstrogationComponent,
@@ -2946,7 +3190,7 @@ async def test_builtin_worldgen_hooks_cover_sim_pack_expansion_wants():
         assert kaiju.has_component(component_type)
 
 
-def test_builtin_worldgen_hooks_ignore_missing_generated_entities():
+def test_builtin_generation_enrichers_ignore_missing_generated_entities():
     from bunnyland.worldgen.enrichment import (
         BarbarianWorldgenHook,
         ColonyWorldgenHook,
@@ -3098,7 +3342,7 @@ def _has_component(actor, component_type) -> bool:
 
 
 async def test_neon_worldgen_hook_enriches_from_intent():
-    from bunnyland.mechanics.neonsim import (
+    from bunnyland.simpacks.neonsim.mechanics import (
         AccessLevelComponent,
         BlackMarketComponent,
         CameraComponent,
@@ -3129,27 +3373,49 @@ async def test_neon_worldgen_hook_enriches_from_intent():
             )
         ],
         objects=[
-            ObjectSpec(key="gate", room_key="strip", name="a turnstile", kind="checkpoint",
-                       wants=("checkpoint",)),
-            ObjectSpec(key="flop", room_key="strip", name="a flop", kind="safehouse",
-                       wants=("safehouse",)),
-            ObjectSpec(key="cam", room_key="strip", name="a dome", kind="device",
-                       wants=("camera",)),
-            ObjectSpec(key="term", room_key="strip", name="a console", kind="device",
-                       wants=("terminal",)),
-            ObjectSpec(key="stall", room_key="strip", name="a stall", kind="vendor",
-                       wants=("black-market",)),
-            ObjectSpec(key="fence", room_key="strip", name="a fence", kind="vendor",
-                       wants=("data-broker",)),
-            ObjectSpec(key="doc", room_key="strip", name="a booth", kind="clinic",
-                       wants=("clinic",)),
-            ObjectSpec(key="gig", room_key="strip", name="a job", kind="contract",
-                       wants=("contract",)),
+            ObjectSpec(
+                key="gate",
+                room_key="strip",
+                name="a turnstile",
+                kind="checkpoint",
+                wants=("checkpoint",),
+            ),
+            ObjectSpec(
+                key="flop", room_key="strip", name="a flop", kind="safehouse", wants=("safehouse",)
+            ),
+            ObjectSpec(
+                key="cam", room_key="strip", name="a dome", kind="device", wants=("camera",)
+            ),
+            ObjectSpec(
+                key="term", room_key="strip", name="a console", kind="device", wants=("terminal",)
+            ),
+            ObjectSpec(
+                key="stall",
+                room_key="strip",
+                name="a stall",
+                kind="vendor",
+                wants=("black-market",),
+            ),
+            ObjectSpec(
+                key="fence", room_key="strip", name="a fence", kind="vendor", wants=("data-broker",)
+            ),
+            ObjectSpec(
+                key="doc", room_key="strip", name="a booth", kind="clinic", wants=("clinic",)
+            ),
+            ObjectSpec(
+                key="gig", room_key="strip", name="a job", kind="contract", wants=("contract",)
+            ),
         ],
         characters=[
-            CharacterSpec(key="padre", name="Padre", room_key="strip", controller="suspended",
-                          generation=GenerationIntentComponent(
-                              description="a fixer and netrunner", wants=("fixer", "netrunner"))),
+            CharacterSpec(
+                key="padre",
+                name="Padre",
+                room_key="strip",
+                controller="suspended",
+                generation=GenerationIntentComponent(
+                    description="a fixer and netrunner", wants=("fixer", "netrunner")
+                ),
+            ),
         ],
     )
     await instantiate(actor, proposal)
@@ -3172,7 +3438,7 @@ async def test_neon_worldgen_hook_enriches_from_intent():
 
 
 async def test_neon_worldgen_hook_enriches_from_mentions():
-    from bunnyland.mechanics.neonsim import (
+    from bunnyland.simpacks.neonsim.mechanics import (
         BlackMarketComponent,
         CameraComponent,
         CheckpointComponent,
@@ -3197,8 +3463,7 @@ async def test_neon_worldgen_hook_enriches_from_mentions():
             ObjectSpec(key="doc", room_key="corp", name="a ripperdoc surgeon", kind="npc"),
         ],
         characters=[
-            CharacterSpec(key="rk", name="a street fixer", room_key="corp",
-                          controller="suspended"),
+            CharacterSpec(key="rk", name="a street fixer", room_key="corp", controller="suspended"),
         ],
     )
     await instantiate(actor, proposal)
@@ -3216,8 +3481,18 @@ async def test_neon_worldgen_hook_enriches_from_mentions():
         assert _has_component(actor, component), component.__name__
 
 
-def _gen_event(event_cls, *, entity_id, wants=(), needs=(), description="", tags=(),
-               entity_kind="object", world_epoch=0, **extra):
+def _gen_event(
+    event_cls,
+    *,
+    entity_id,
+    wants=(),
+    needs=(),
+    description="",
+    tags=(),
+    entity_kind="object",
+    world_epoch=0,
+    **extra,
+):
     """Build a *GeneratedEvent for direct enrichment-hook unit tests."""
     from datetime import UTC, datetime
     from uuid import uuid4
@@ -3255,49 +3530,109 @@ def test_enrichment_helper_fallbacks():
     obj = ObjectGeneratedEvent
 
     # _expansion_trigger: quest branch (rumor not present, quest present)
-    assert _expansion_trigger(_gen_event(obj, entity_id="x_1", wants=("quest",),
-                                         object_key="o")) == "quest"
-    assert _expansion_trigger(_gen_event(obj, entity_id="x_1", wants=("rumor",),
-                                         object_key="o")) == "rumor"
+    assert (
+        _expansion_trigger(_gen_event(obj, entity_id="x_1", wants=("quest",), object_key="o"))
+        == "quest"
+    )
+    assert (
+        _expansion_trigger(_gen_event(obj, entity_id="x_1", wants=("rumor",), object_key="o"))
+        == "rumor"
+    )
     assert _expansion_trigger(_gen_event(obj, entity_id="x_1", object_key="o")) == "worldgen"
 
     # _orbital_body_type: moon / station / planet (asteroid covered elsewhere)
-    assert _orbital_body_type(_gen_event(obj, entity_id="x_1", description="a pale moon",
-                                         object_key="o")) == "moon"
-    assert _orbital_body_type(_gen_event(obj, entity_id="x_1", description="a docking station",
-                                         object_key="o")) == "station"
-    assert _orbital_body_type(_gen_event(obj, entity_id="x_1", description="a green planet",
-                                         object_key="o")) == "planet"
-    assert _orbital_body_type(_gen_event(obj, entity_id="x_1", description="an asteroid",
-                                         object_key="o")) == "asteroid-belt"
+    assert (
+        _orbital_body_type(
+            _gen_event(obj, entity_id="x_1", description="a pale moon", object_key="o")
+        )
+        == "moon"
+    )
+    assert (
+        _orbital_body_type(
+            _gen_event(obj, entity_id="x_1", description="a docking station", object_key="o")
+        )
+        == "station"
+    )
+    assert (
+        _orbital_body_type(
+            _gen_event(obj, entity_id="x_1", description="a green planet", object_key="o")
+        )
+        == "planet"
+    )
+    assert (
+        _orbital_body_type(
+            _gen_event(obj, entity_id="x_1", description="an asteroid", object_key="o")
+        )
+        == "asteroid-belt"
+    )
 
     # _trade_faction: trader / faction / colony fallback
-    assert _trade_faction(_gen_event(obj, entity_id="x_1", description="a trader caravan",
-                                     object_key="o")) == "generated-trader"
-    assert _trade_faction(_gen_event(obj, entity_id="x_1", description="a rival faction",
-                                     object_key="o")) == "generated-faction"
-    assert _trade_faction(_gen_event(obj, entity_id="x_1", description="a quiet hut",
-                                     object_key="o")) == "generated-colony"
+    assert (
+        _trade_faction(
+            _gen_event(obj, entity_id="x_1", description="a trader caravan", object_key="o")
+        )
+        == "generated-trader"
+    )
+    assert (
+        _trade_faction(
+            _gen_event(obj, entity_id="x_1", description="a rival faction", object_key="o")
+        )
+        == "generated-faction"
+    )
+    assert (
+        _trade_faction(_gen_event(obj, entity_id="x_1", description="a quiet hut", object_key="o"))
+        == "generated-colony"
+    )
 
     # _animal_species: match, kind fallback, and generic "animal" fallback
-    assert _animal_species(_gen_event(obj, entity_id="x_1", description="a brown cow",
-                                      object_key="o")) == "cow"
-    assert _animal_species(_gen_event(obj, entity_id="x_1", description="a strange critter",
-                                      entity_kind="object", object_key="o")) == "animal"
-    assert _animal_species(_gen_event(obj, entity_id="x_1", description="a strange critter",
-                                      entity_kind="beast", object_key="o")) == "beast"
+    assert (
+        _animal_species(_gen_event(obj, entity_id="x_1", description="a brown cow", object_key="o"))
+        == "cow"
+    )
+    assert (
+        _animal_species(
+            _gen_event(
+                obj,
+                entity_id="x_1",
+                description="a strange critter",
+                entity_kind="object",
+                object_key="o",
+            )
+        )
+        == "animal"
+    )
+    assert (
+        _animal_species(
+            _gen_event(
+                obj,
+                entity_id="x_1",
+                description="a strange critter",
+                entity_kind="beast",
+                object_key="o",
+            )
+        )
+        == "beast"
+    )
 
     # _fish_type: match and trout fallback
-    assert _fish_type(_gen_event(obj, entity_id="x_1", description="a fat bass",
-                                 object_key="o")) == "bass"
-    assert _fish_type(_gen_event(obj, entity_id="x_1", description="a fish",
-                                 object_key="o")) == "trout"
+    assert (
+        _fish_type(_gen_event(obj, entity_id="x_1", description="a fat bass", object_key="o"))
+        == "bass"
+    )
+    assert (
+        _fish_type(_gen_event(obj, entity_id="x_1", description="a fish", object_key="o"))
+        == "trout"
+    )
 
     # _season: match and spring fallback
-    assert _season(_gen_event(obj, entity_id="x_1", description="a winter scene",
-                              object_key="o")) == "winter"
-    assert _season(_gen_event(obj, entity_id="x_1", description="a timeless place",
-                              object_key="o")) == "spring"
+    assert (
+        _season(_gen_event(obj, entity_id="x_1", description="a winter scene", object_key="o"))
+        == "winter"
+    )
+    assert (
+        _season(_gen_event(obj, entity_id="x_1", description="a timeless place", object_key="o"))
+        == "spring"
+    )
 
 
 def test_enrichment_hooks_skip_missing_entities():
@@ -3316,36 +3651,40 @@ def test_enrichment_hooks_skip_missing_entities():
     life = LifeWorldgenHook()
     life.actor = actor
     life._on_room(_gen_event(RoomGeneratedEvent, entity_id=bogus, room_key="r"))
-    life._on_character(_gen_event(CharacterGeneratedEvent, entity_id=bogus,
-                                  character_key="c", room_id="r_1"))
+    life._on_character(
+        _gen_event(CharacterGeneratedEvent, entity_id=bogus, character_key="c", room_id="r_1")
+    )
 
     # GardenWorldgenHook._on_character None-guard.
     garden = GardenWorldgenHook()
     garden.actor = actor
-    garden._on_character(_gen_event(CharacterGeneratedEvent, entity_id=bogus,
-                                    character_key="c", room_id="r_1"))
+    garden._on_character(
+        _gen_event(CharacterGeneratedEvent, entity_id=bogus, character_key="c", room_id="r_1")
+    )
 
     # DaggerWorldgenHook._on_character None-guard.
     dagger = DaggerWorldgenHook()
     dagger.actor = actor
-    dagger._on_character(_gen_event(CharacterGeneratedEvent, entity_id=bogus,
-                                    character_key="c", room_id="r_1"))
+    dagger._on_character(
+        _gen_event(CharacterGeneratedEvent, entity_id=bogus, character_key="c", room_id="r_1")
+    )
 
     # NeonWorldgenHook._on_entity and _on_character None-guards.
     neon = NeonWorldgenHook()
     neon.actor = actor
     neon._on_entity(_gen_event(ObjectGeneratedEvent, entity_id=bogus, object_key="o"))
-    neon._on_character(_gen_event(CharacterGeneratedEvent, entity_id=bogus,
-                                  character_key="c", room_id="r_1"))
+    neon._on_character(
+        _gen_event(CharacterGeneratedEvent, entity_id=bogus, character_key="c", room_id="r_1")
+    )
 
 
 def test_enrichment_object_only_component_branches():
     """Cover wants-branches that only fire on objects/sites, not the rooms in the demo."""
     from bunnyland.core.ecs import spawn_entity
-    from bunnyland.mechanics.daggersim import BankComponent
-    from bunnyland.mechanics.dragonsim import AncientBeastComponent
-    from bunnyland.mechanics.nukesim import MutationResistanceComponent
-    from bunnyland.mechanics.voidsim import (
+    from bunnyland.simpacks.daggersim.mechanics import BankComponent
+    from bunnyland.simpacks.dragonsim.mechanics import AncientBeastComponent
+    from bunnyland.simpacks.nukesim.mechanics import MutationResistanceComponent
+    from bunnyland.simpacks.voidsim.mechanics import (
         EmergencyComponent,
         GravityComponent,
         MiningSiteComponent,
@@ -3374,9 +3713,20 @@ def test_enrichment_object_only_component_branches():
     # VoidWorldgenHook._on_object: salvage-claim, emergency, gravity, survey-site,
     # mining-site, orbital-body (these live on the room in the demo world).
     void = VoidWorldgenHook()
-    obj = fire(void, "_on_object", ObjectGeneratedEvent, object_key="o",
-               wants=("salvage-claim", "emergency", "gravity", "survey-site",
-                      "mining-site", "orbital-body"))
+    obj = fire(
+        void,
+        "_on_object",
+        ObjectGeneratedEvent,
+        object_key="o",
+        wants=(
+            "salvage-claim",
+            "emergency",
+            "gravity",
+            "survey-site",
+            "mining-site",
+            "orbital-body",
+        ),
+    )
     assert obj.has_component(SalvageClaimComponent)
     assert obj.has_component(EmergencyComponent)
     assert obj.has_component(GravityComponent)
@@ -3386,19 +3736,25 @@ def test_enrichment_object_only_component_branches():
 
     # DragonWorldgenHook._on_site: ancient-beast.
     dragon = DragonWorldgenHook()
-    beast = fire(dragon, "_on_site", ObjectGeneratedEvent, object_key="o",
-                 wants=("ancient-beast",))
+    beast = fire(dragon, "_on_site", ObjectGeneratedEvent, object_key="o", wants=("ancient-beast",))
     assert beast.has_component(AncientBeastComponent)
 
     # DaggerWorldgenHook._on_object: expansion-hook and bank.
     dagger = DaggerWorldgenHook()
-    dobj = fire(dagger, "_on_object", ObjectGeneratedEvent, object_key="o",
-                wants=("expansion-hook", "bank"))
+    dobj = fire(
+        dagger, "_on_object", ObjectGeneratedEvent, object_key="o", wants=("expansion-hook", "bank")
+    )
     assert dobj.has_component(ExpansionHookComponent)
     assert dobj.has_component(BankComponent)
 
     # NukeWorldgenHook._on_character: mutation-resistance.
     nuke = NukeWorldgenHook()
-    mut = fire(nuke, "_on_character", CharacterGeneratedEvent, character_key="c",
-               room_id="r_1", wants=("mutation-resistance",))
+    mut = fire(
+        nuke,
+        "_on_character",
+        CharacterGeneratedEvent,
+        character_key="c",
+        room_id="r_1",
+        wants=("mutation-resistance",),
+    )
     assert mut.has_component(MutationResistanceComponent)

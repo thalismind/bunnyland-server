@@ -17,6 +17,7 @@ from conftest import build_scenario
 
 from bunnyland.core import container_of
 from bunnyland.core.ecs import parse_entity_id
+from bunnyland.foundation.history.mechanics import record_world_history
 from bunnyland.imagegen.client import HttpComfyClient, build_comfy_client
 from bunnyland.imagegen.components import EventImageComponent
 from bunnyland.imagegen.config import ImageGenConfig
@@ -35,7 +36,6 @@ from bunnyland.imagegen.store import (
     available_families,
     default_templates,
 )
-from bunnyland.mechanics.history import record_world_history
 
 pytestmark = pytest.mark.live_generation
 
@@ -193,9 +193,7 @@ async def test_live_scene_end_to_end(tmp_path):
         scenario.actor,
         config,
         client=build_comfy_client(config),
-        templates=WorkflowTemplateStore(
-            defaults=[_live_template(checkpoint, ImagePurpose.EVENT)]
-        ),
+        templates=WorkflowTemplateStore(defaults=[_live_template(checkpoint, ImagePurpose.EVENT)]),
         enhancer=StubPromptEnhancer(),
         examples=CatalogExampleSource(),
         media=MediaStore(tmp_path),

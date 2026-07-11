@@ -11,9 +11,7 @@ from .ecs import replace_component
 
 CLAIM_FALLBACK_SUSPEND = "suspend"
 CLAIM_FALLBACK_LLM = "llm"
-VALID_CLAIM_FALLBACK_CONTROLLERS = frozenset(
-    {CLAIM_FALLBACK_SUSPEND, CLAIM_FALLBACK_LLM}
-)
+VALID_CLAIM_FALLBACK_CONTROLLERS = frozenset({CLAIM_FALLBACK_SUSPEND, CLAIM_FALLBACK_LLM})
 CLAIM_TIMEOUT_MIN_SECONDS = 5 * 60
 CLAIM_TIMEOUT_MAX_SECONDS = 60 * 60
 CLAIM_TIMEOUT_DEFAULT_SECONDS = 30 * 60
@@ -61,11 +59,7 @@ def apply_claim_timeout_settings(
         else None
     )
     if fallback_controller is None:
-        fallback = (
-            existing.fallback_controller
-            if existing is not None
-            else CLAIM_FALLBACK_SUSPEND
-        )
+        fallback = existing.fallback_controller if existing is not None else CLAIM_FALLBACK_SUSPEND
     else:
         fallback = normalize_claim_fallback(fallback_controller)
 
@@ -74,20 +68,12 @@ def apply_claim_timeout_settings(
         fallback_reason=(
             fallback_reason.strip()
             if fallback_reason and fallback_reason.strip()
-            else (
-                existing.fallback_reason
-                if existing is not None
-                else "claim timed out"
-            )
+            else (existing.fallback_reason if existing is not None else "claim timed out")
         ),
         llm_profile_name=(
             llm_profile_name.strip()
             if llm_profile_name and llm_profile_name.strip()
-            else (
-                existing.llm_profile_name
-                if existing is not None
-                else "default"
-            )
+            else (existing.llm_profile_name if existing is not None else "default")
         ),
         llm_model=(
             llm_model.strip()

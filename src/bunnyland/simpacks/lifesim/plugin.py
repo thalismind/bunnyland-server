@@ -1,16 +1,46 @@
 """Canonical Life Sim plugin entrypoint."""
 
-from ...mechanics.affect import AffectAggregation, AffectReactor
-from ...mechanics.consumables import (
+from bunnyland.foundation.affect.mechanics import AffectAggregation, AffectReactor
+from bunnyland.foundation.consumables.actions import (
+    DrinkHandler,
+    EatHandler,
+)
+from bunnyland.foundation.consumables.components import (
     ConsumableComponent,
     DrinkableComponent,
     FoodComponent,
 )
-from ...mechanics.eat_drink import (
-    DrinkHandler,
-    EatHandler,
+from bunnyland.foundation.needs.mechanics import (
+    BatheHandler,
+    CleanSelfHandler,
+    ComfortNeedComponent,
+    ComfortNeedSystem,
+    DailyNeedChangedEvent,
+    DailyNeedRecoveredEvent,
+    FatigueComponent,
+    FatigueSystem,
+    FunNeedComponent,
+    FunNeedSystem,
+    HungerComponent,
+    HungerSystem,
+    HygieneComponent,
+    HygieneSystem,
+    NeedAffordanceComponent,
+    PlayHandler,
+    PrivacyNeedComponent,
+    PrivacyNeedSystem,
+    RelaxHandler,
+    SafetyNeedComponent,
+    SafetyNeedSystem,
+    SeekPrivacyHandler,
+    SeekSafetyHandler,
+    SocialNeedComponent,
+    SocialNeedSystem,
+    ThirstComponent,
+    ThirstSystem,
+    need_fragments,
 )
-from ...mechanics.lifesim import (
+from bunnyland.simpacks.lifesim.mechanics import (
     AddWhimHandler,
     AdoptChildHandler,
     AgeComponent,
@@ -117,36 +147,7 @@ from ...mechanics.lifesim import (
     install_lifesim,
     lifesim_fragments,
 )
-from ...mechanics.needs import (
-    BatheHandler,
-    CleanSelfHandler,
-    ComfortNeedComponent,
-    ComfortNeedSystem,
-    DailyNeedChangedEvent,
-    DailyNeedRecoveredEvent,
-    FatigueComponent,
-    FatigueSystem,
-    FunNeedComponent,
-    FunNeedSystem,
-    HungerComponent,
-    HungerSystem,
-    HygieneComponent,
-    HygieneSystem,
-    NeedAffordanceComponent,
-    PlayHandler,
-    PrivacyNeedComponent,
-    PrivacyNeedSystem,
-    RelaxHandler,
-    SafetyNeedComponent,
-    SafetyNeedSystem,
-    SeekPrivacyHandler,
-    SeekSafetyHandler,
-    SocialNeedComponent,
-    SocialNeedSystem,
-    ThirstComponent,
-    ThirstSystem,
-    need_fragments,
-)
+
 from ...plugins.ids import (
     CORE_VERBS,
     LIFESIM,

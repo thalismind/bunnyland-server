@@ -96,7 +96,7 @@ def test_build_room_facts_reflects_occupants_objects_exits_and_bands():
     facts = build_room_facts(world, scenario.room_a)
 
     assert facts.title == "Mosslit Burrow"
-    assert ("entity_" not in facts.title)
+    assert "entity_" not in facts.title
     assert any(name == "Juniper" for _id, name in facts.occupants)
     assert any(o.name == "oak chest" and "closed" in o.states for o in facts.objects)
     assert [e.direction for e in facts.exits] == ["north"]
@@ -123,8 +123,7 @@ def test_room_fact_bands_and_object_states_cover_thresholds():
 
     assert facts.bands == {"light": "bright", "temperature": "cold"}
     assert any(
-        obj.name == "locked door" and obj.states == ("closed", "locked")
-        for obj in facts.objects
+        obj.name == "locked door" and obj.states == ("closed", "locked") for obj in facts.objects
     )
 
     for light, expected in [(0.05, "dark"), (0.2, "dim"), (0.7, "lit")]:
@@ -175,9 +174,10 @@ def test_room_summary_projection_dirty_edge_cases():
         item.id,
     )
     projection._dirty(item)
-    assert scenario.actor.world.get_entity(scenario.room_a).get_component(
-        RoomSummaryComponent
-    ).dirty is True
+    assert (
+        scenario.actor.world.get_entity(scenario.room_a).get_component(RoomSummaryComponent).dirty
+        is True
+    )
 
     # An item whose container parent is NOT a room: _dirty walks to the parent, finds
     # it has no RoomComponent, and falls through without marking anything (260->exit).
@@ -185,9 +185,7 @@ def test_room_summary_projection_dirty_edge_cases():
         scenario.actor.world,
         [IdentityComponent(name="chest", kind="container"), ContainerComponent(open=True)],
     )
-    trinket = spawn_entity(
-        scenario.actor.world, [IdentityComponent(name="trinket", kind="item")]
-    )
+    trinket = spawn_entity(scenario.actor.world, [IdentityComponent(name="trinket", kind="item")])
     chest.add_relationship(Contains(mode=ContainmentMode.CONTAINER), trinket.id)
     projection._dirty(trinket)
     assert not chest.has_component(RoomSummaryComponent)
@@ -540,7 +538,7 @@ def test_recent_context_handles_unnamed_actors_and_roomless_lifecycle_events():
 
 
 def test_recent_context_records_eating_and_drinking():
-    from bunnyland.mechanics.needs import DrinkConsumedEvent, FoodEatenEvent
+    from bunnyland.foundation.needs.mechanics import DrinkConsumedEvent, FoodEatenEvent
 
     scenario = build_scenario()
     recent = RecentContextProjection(scenario.actor.world)

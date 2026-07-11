@@ -4,10 +4,11 @@ from functools import partial
 
 from relics import World
 
+from bunnyland.foundation.storyteller.mechanics import IncidentDefinition
+from bunnyland.simpacks.colonysim.mechanics import ColonySimComponent
+from bunnyland.simpacks.dinosim.mechanics import DinosimPolicyComponent
+
 from ...core.components import GenerationIntentComponent
-from ...mechanics.colonysim import ColonySimComponent
-from ...mechanics.dinosim import DinosimPolicyComponent
-from ...mechanics.storyteller import IncidentDefinition
 
 
 def _enabled(world: World) -> bool:

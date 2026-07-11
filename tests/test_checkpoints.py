@@ -17,7 +17,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent
-from bunnyland.mechanics.checkpoints import (
+from bunnyland.foundation.checkpoints.mechanics import (
     CheckpointReloadedEvent,
     CheckpointReloadService,
     CheckpointSavedEvent,
@@ -27,9 +27,11 @@ from bunnyland.mechanics.checkpoints import (
     _PendingReload,
     checkpoint_action_definitions,
 )
+from bunnyland.foundation.checkpoints.plugin import plugin as checkpoints_plugin
+from bunnyland.foundation.core_verbs.plugin import plugin as core_verbs_plugin
 from bunnyland.persistence import WorldMeta, load_world
-from bunnyland.plugins import PluginError, apply_plugins
-from bunnyland.plugins.builtin import CHECKPOINTS, CORE_VERBS, checkpoints_plugin, core_verbs_plugin
+from bunnyland.plugins import PluginError, PluginRegistry, apply_plugins
+from bunnyland.plugins.ids import CHECKPOINTS, CORE_VERBS
 from bunnyland.prompts import ComponentPromptContext
 
 
@@ -91,7 +93,7 @@ async def test_save_checkpoint_writes_configured_save(tmp_path):
 
     assert save_path.exists()
     assert [event.checkpoint_id for event in events] == [str(checkpoint_id)]
-    loaded, loaded_meta = load_world(save_path, plugins=plugins)
+    loaded, loaded_meta = load_world(save_path, registry=PluginRegistry(plugins))
     assert loaded_meta.plugins == (CORE_VERBS, CHECKPOINTS)
     assert loaded.world.has_entity(checkpoint_id)
 
@@ -213,9 +215,7 @@ def test_checkpoint_handlers_reject_invalid_missing_and_unreachable_targets(tmp_
         ],
     )
     scenario.actor.world.remove(removed_checkpoint.id)
-    missing_target = _command(
-        scenario, "save-checkpoint", removed_checkpoint.id
-    )
+    missing_target = _command(scenario, "save-checkpoint", removed_checkpoint.id)
     unreachable = _command(scenario, "save-checkpoint", remote_checkpoint.id)
 
     assert save_handler.execute(ctx, invalid_character).reason == "invalid character id"
@@ -312,4 +312,4 @@ async def test_checkpoint_save_requires_plugin_on_reload(tmp_path):
     await scenario.actor.tick(0)
 
     with pytest.raises(PluginError, match="saved world depends on missing plugin"):
-        load_world(save_path, plugins=[core_verbs_plugin()])
+        load_world(save_path, registry=PluginRegistry([core_verbs_plugin()]))

@@ -22,12 +22,13 @@ from uuid import uuid4
 
 from relics import Entity
 
+from bunnyland.foundation.history.mechanics import WorldHistoryRecordComponent
+from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
+
 from ..core.components import CharacterComponent
 from ..core.ecs import parse_entity_id, replace_component
-from ..core.events import event_base
+from ..core.events import EventVisibility, event_base
 from ..core.world_actor import WorldActor
-from ..mechanics.history import WorldHistoryRecordComponent
-from ..mechanics.toonsim import SpriteImageComponent
 from .client import ComfyClient
 from .components import (
     EventImageComponent,
@@ -76,6 +77,7 @@ class ImageGenJob:
     purpose: ImagePurpose
     template_name: str = ""
     requested_by: str = ""
+    target_id: str = ""
     status: str = "queued"
     url: str = ""
     alpha_url: str = ""
@@ -149,6 +151,7 @@ class ImageGenService:
         *,
         template_name: str = "",
         requested_by: str = "",
+        target_id: str = "",
         extra: str = "",
         alpha: bool = False,
         force: bool = False,
@@ -161,6 +164,7 @@ class ImageGenService:
             purpose=purpose,
             template_name=template_name,
             requested_by=requested_by,
+            target_id=target_id,
         )
         async with self._actor._lock:
             if parsed is None or not self._actor.world.has_entity(parsed):
@@ -403,7 +407,7 @@ class ImageGenService:
     async def _publish_started(self, job: ImageGenJob) -> None:
         await self._actor.bus.publish(
             ImageGenerationStartedEvent(
-                **event_base(self._actor.epoch),
+                **self._event_base(job),
                 entity_id=job.entity_id,
                 purpose=job.purpose.value,
                 template=job.template_name,
@@ -413,7 +417,7 @@ class ImageGenService:
     async def _publish_completed(self, job: ImageGenJob, template_name: str) -> None:
         await self._actor.bus.publish(
             ImageGenerationCompletedEvent(
-                **event_base(self._actor.epoch),
+                **self._event_base(job),
                 entity_id=job.entity_id,
                 purpose=job.purpose.value,
                 url=job.url,
@@ -425,12 +429,21 @@ class ImageGenService:
     async def _publish_failed(self, job: ImageGenJob) -> None:
         await self._actor.bus.publish(
             ImageGenerationFailedEvent(
-                **event_base(self._actor.epoch),
+                **self._event_base(job),
                 entity_id=job.entity_id,
                 purpose=job.purpose.value,
                 reason=job.error or "unknown error",
             )
         )
+
+    def _event_base(self, job: ImageGenJob) -> dict:
+        if job.target_id:
+            return event_base(
+                self._actor.epoch,
+                default_visibility=EventVisibility.DIRECTED,
+                target_ids=(job.target_id,),
+            )
+        return event_base(self._actor.epoch)
 
 
 class ImageGenError(RuntimeError):

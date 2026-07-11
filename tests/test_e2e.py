@@ -60,6 +60,9 @@ from bunnyland.discord import (
     suspend_discord_character,
 )
 from bunnyland.engine import GameLoop
+from bunnyland.foundation.consumables.components import DrinkableComponent, FoodComponent
+from bunnyland.foundation.needs.mechanics import DrinkConsumedEvent, FoodEatenEvent
+from bunnyland.foundation.persona.mechanics import GoalComponent
 from bunnyland.llm_agents import (
     ControllerDispatch,
     GoalDirectedAgent,
@@ -67,23 +70,34 @@ from bunnyland.llm_agents import (
     ToolCall,
     command_from_tool_call,
 )
-from bunnyland.mechanics.colonysim import Owns
-from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
-from bunnyland.mechanics.daggersim import (
+from bunnyland.memory import InMemoryStore, install_memory
+from bunnyland.memory.chroma import ChromaMemoryStore
+from bunnyland.narration import NarrationProjection, check_grounding
+from bunnyland.persistence import WorldMeta, load_world, save_world
+from bunnyland.plugins import (
+    PluginRegistry,
+    apply_plugins,
+    bunnyland_plugins,
+    collect_persona_fragments,
+    collect_prompt_fragments,
+)
+from bunnyland.prompts.builder import PromptBuilder, render_prompt
+from bunnyland.simpacks.colonysim.mechanics import Owns
+from bunnyland.simpacks.daggersim.mechanics import (
     EnchantedItemComponent,
     ItemEnchantedEvent,
     SpellCastEvent,
     SpellCreatedEvent,
     SpellTemplateComponent,
 )
-from bunnyland.mechanics.dinosim import (
+from bunnyland.simpacks.dinosim.mechanics import (
     DinosaurComponent,
     EggComponent,
     EggHatchedEvent,
     FossilFragmentComponent,
     SpeciesIdentificationComponent,
 )
-from bunnyland.mechanics.gardensim import (
+from bunnyland.simpacks.gardensim.mechanics import (
     CropComponent,
     CropHarvestedEvent,
     CropReadyEvent,
@@ -91,7 +105,7 @@ from bunnyland.mechanics.gardensim import (
     SeedComponent,
     SoilComponent,
 )
-from bunnyland.mechanics.lifesim import (
+from bunnyland.simpacks.lifesim.mechanics import (
     BillComponent,
     BillPaidEvent,
     BusinessOwnerComponent,
@@ -108,26 +122,13 @@ from bunnyland.mechanics.lifesim import (
     RoomClaimComponent,
     lifesim_fragments,
 )
-from bunnyland.mechanics.needs import DrinkConsumedEvent, FoodEatenEvent
-from bunnyland.mechanics.nukesim import (
+from bunnyland.simpacks.nukesim.mechanics import (
     DecontaminationComponent,
     JunkComponent,
     RadiationSourceComponent,
     ScavengeSiteComponent,
     nukesim_fragments,
 )
-from bunnyland.mechanics.persona import GoalComponent
-from bunnyland.memory import InMemoryStore, install_memory
-from bunnyland.memory.chroma import ChromaMemoryStore
-from bunnyland.narration import NarrationProjection, check_grounding
-from bunnyland.persistence import WorldMeta, load_world, save_world
-from bunnyland.plugins import (
-    apply_plugins,
-    bunnyland_plugins,
-    collect_persona_fragments,
-    collect_prompt_fragments,
-)
-from bunnyland.prompts.builder import PromptBuilder, render_prompt
 from bunnyland.worldgen import GenOptions, StubWorldBuilder, collect_generators, instantiate
 
 KIND_COMPONENT = {
@@ -264,8 +265,7 @@ async def test_generated_world_matches_its_proposal():
             assert entity.has_component(SuspendedComponent)
         else:
             controllers = [
-                world.get_entity(target)
-                for _edge, target in entity.get_relationships(ControlledBy)
+                world.get_entity(target) for _edge, target in entity.get_relationships(ControlledBy)
             ]
             assert any(c.has_component(LLMControllerComponent) for c in controllers)
 
@@ -461,7 +461,7 @@ async def test_cross_player_persisted_mark_visible_after_reload_e2e(tmp_path):
 
     path = tmp_path / "cross-player.json"
     save_world(actor, path, meta=WorldMeta(seed="cross-player"))
-    loaded, _meta = load_world(path, plugins=plugins)
+    loaded, _meta = load_world(path, registry=PluginRegistry(plugins))
     prompt = PromptBuilder(
         loaded.world, fragment_providers=collect_prompt_fragments(plugins)
     ).build(clover.id)
@@ -684,9 +684,7 @@ async def test_character_controller_lifecycle_e2e():
     await actor.tick(0.0)
     assert executed[-1].command_type == "wait"
 
-    llm_suspender = spawn_entity(
-        world, [SuspendedControllerComponent(reason="llm suspended")]
-    )
+    llm_suspender = spawn_entity(world, [SuspendedControllerComponent(reason="llm suspended")])
     await apply_control("suspend", llm_suspender.id, reason="llm suspended")
     edge, controller_id, controller = current_controller()
     assert controller_id == llm_suspender.id
@@ -955,6 +953,7 @@ async def test_scripted_agent_claims_home_and_pays_rent_bill():
             character_id=str(landlord.id),
             controller_id=str(landlord_controller.id),
             controller_generation=landlord_generation,
+            definitions=actor.action_definitions(),
         )
     )
     await actor.tick(60 * 60)
@@ -974,6 +973,7 @@ async def test_scripted_agent_claims_home_and_pays_rent_bill():
             character_id=str(hazel),
             controller_id=str(hazel_controller),
             controller_generation=hazel_generation,
+            definitions=actor.action_definitions(),
         )
     )
     await actor.tick(60 * 60)

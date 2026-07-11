@@ -24,7 +24,9 @@ from bunnyland.core import (
 from bunnyland.core.components import CharacterComponent, HealthComponent
 from bunnyland.core.events import CommandRejectedEvent, SpeechSaidEvent
 from bunnyland.core.handlers import HandlerContext, SayHandler, TellHandler
-from bunnyland.mechanics.daggersim import (
+from bunnyland.foundation.history.mechanics import DeedReputationComponent
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
+from bunnyland.simpacks.daggersim.mechanics import (
     AbandonGeneratedQuestHandler,
     AcceptGeneratedQuestHandler,
     AccountOpenedEvent,
@@ -64,7 +66,6 @@ from bunnyland.mechanics.daggersim import (
     CustomClassComponent,
     CustomClassCreatedEvent,
     CustomSpellComponent,
-    DaggerQuestRewardComponent,
     DebtCollectorComponent,
     DebtCollectorSentEvent,
     DebtComponent,
@@ -94,7 +95,6 @@ from bunnyland.mechanics.daggersim import (
     FeedingNeedConsequence,
     FeedOnHandler,
     FinePaidEvent,
-    GeneratedQuestComponent,
     GeneratedSiteInstantiatedEvent,
     HostilityComponent,
     IdentifyIngredientHandler,
@@ -150,7 +150,6 @@ from bunnyland.mechanics.daggersim import (
     QuestAbandonedEvent,
     QuestAcceptedEvent,
     QuestCompletedEvent,
-    QuestDeadlineComponent,
     QuestDeadlineConsequence,
     QuestExtendedEvent,
     QuestFailedEvent,
@@ -229,8 +228,14 @@ from bunnyland.mechanics.daggersim import (
     daggersim_fragments,
     install_daggersim,
 )
-from bunnyland.mechanics.history import DeedReputationComponent
-from bunnyland.prompts import ComponentPromptContext, PromptPerspective
+from bunnyland.simpacks.dragonsim.mechanics import (
+    QuestAcceptedBy,
+    QuestComponent,
+    QuestHasReward,
+    QuestProvenanceComponent,
+    QuestRewardComponent,
+    QuestStateComponent,
+)
 
 HOUR = 60 * 60
 
@@ -314,6 +319,33 @@ def _dagger_room_entity(scenario, name, kind, components):
     return entity
 
 
+def _spawn_generated_quest(
+    world,
+    *,
+    title: str,
+    objective: str,
+    status: str = "offered",
+    accepted_by=None,
+    due_at_epoch: int | None = None,
+    reward_name: str | None = None,
+):
+    quest = spawn_entity(
+        world,
+        [
+            IdentityComponent(name=title, kind="quest"),
+            QuestComponent(quest_id=f"generated:{title}", title=title, description=objective),
+            QuestStateComponent(status=status, due_at_epoch=due_at_epoch),
+            QuestProvenanceComponent(generator="bunnyland.dragonsim"),
+        ],
+    )
+    if accepted_by is not None:
+        quest.add_relationship(QuestAcceptedBy(), accepted_by)
+    if reward_name is not None:
+        reward = spawn_entity(world, [QuestRewardComponent(description=reward_name)])
+        quest.add_relationship(QuestHasReward(), reward.id)
+    return quest
+
+
 def _site(scenario):
     site = spawn_entity(
         scenario.actor.world,
@@ -349,40 +381,33 @@ def test_daggersim_parity_handlers_mutate_state_directly():
         ],
     )
     character.add_relationship(MemberOfInstitution(rank="member"), institution.id)
-    refuse_quest = _dagger_room_entity(
-        scenario,
-        "rat cellar job",
-        "quest",
-        [GeneratedQuestComponent(title="rat cellar job", objective="clear rats")],
+    refuse_quest = _spawn_generated_quest(
+        scenario.actor.world,
+        title="rat cellar job",
+        objective="clear rats",
     )
-    abandon_quest = _dagger_room_entity(
-        scenario,
-        "active job",
-        "quest",
-        [
-            GeneratedQuestComponent(
-                title="active job",
-                objective="deliver",
-                status="active",
-                accepted_by=str(scenario.character),
-            )
-        ],
+    abandon_quest = _spawn_generated_quest(
+        scenario.actor.world,
+        title="active job",
+        objective="deliver",
+        status="active",
+        accepted_by=scenario.character,
     )
-    extend_quest = _dagger_room_entity(
-        scenario,
-        "timed job",
-        "quest",
-        [
-            GeneratedQuestComponent(title="timed job", objective="return"),
-            QuestDeadlineComponent(due_at_epoch=100),
-        ],
+    extend_quest = _spawn_generated_quest(
+        scenario.actor.world,
+        title="timed job",
+        objective="return",
+        due_at_epoch=100,
     )
-    lie_quest = _dagger_room_entity(
-        scenario,
-        "lie job",
-        "quest",
-        [GeneratedQuestComponent(title="lie job", objective="talk")],
+    lie_quest = _spawn_generated_quest(
+        scenario.actor.world,
+        title="lie job",
+        objective="talk",
     )
+    for quest in (refuse_quest, abandon_quest, extend_quest, lie_quest):
+        scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+            Contains(mode=ContainmentMode.ROOM_CONTENT), quest.id
+        )
     bank = _dagger_room_entity(
         scenario,
         "Carrot Factors Bank",
@@ -592,10 +617,10 @@ def test_daggersim_parity_handlers_mutate_state_directly():
 
     assert _institution_membership(character, institution.id).rank == "adept"
     assert str(scenario.character) in institution.get_component(InstitutionDuesComponent).paid_by
-    assert refuse_quest.get_component(GeneratedQuestComponent).status == "refused"
-    assert abandon_quest.get_component(GeneratedQuestComponent).status == "abandoned"
-    assert extend_quest.get_component(QuestDeadlineComponent).due_at_epoch == 150
-    assert lie_quest.get_component(GeneratedQuestComponent).status == "lied"
+    assert refuse_quest.get_component(QuestStateComponent).status == "refused"
+    assert abandon_quest.get_component(QuestStateComponent).status == "abandoned"
+    assert extend_quest.get_component(QuestStateComponent).due_at_epoch == 150
+    assert lie_quest.get_component(QuestStateComponent).status == "lied"
     assert account.get_component(BankAccountComponent).balance == 70
     assert storage.get_component(SafeStorageComponent).item_ids == ()
     assert crime.get_component(CrimeRecordComponent).status == "sentenced:fine"
@@ -841,32 +866,23 @@ def test_daggersim_parity_handlers_reject_wrong_kind_and_state_directly():
         MemberOfInstitution(rank="member", since_epoch=0), no_dues_institution.id
     )
 
-    offered_quest = spawn_entity(
+    offered_quest = _spawn_generated_quest(
         world,
-        [
-            IdentityComponent(name="offered job", kind="quest"),
-            GeneratedQuestComponent(title="job", objective="work"),
-        ],
+        title="job",
+        objective="work",
     )
-    active_quest = spawn_entity(
+    active_quest = _spawn_generated_quest(
         world,
-        [
-            IdentityComponent(name="active job", kind="quest"),
-            GeneratedQuestComponent(
-                title="active job",
-                objective="work",
-                status="active",
-                accepted_by=str(scenario.character),
-            ),
-            QuestDeadlineComponent(due_at_epoch=10),
-        ],
+        title="active job",
+        objective="work",
+        status="active",
+        accepted_by=scenario.character,
+        due_at_epoch=10,
     )
-    no_deadline_quest = spawn_entity(
+    no_deadline_quest = _spawn_generated_quest(
         world,
-        [
-            IdentityComponent(name="timeless job", kind="quest"),
-            GeneratedQuestComponent(title="job", objective="work"),
-        ],
+        title="timeless job",
+        objective="work",
     )
     for entity in (offered_quest, active_quest, no_deadline_quest):
         character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), entity.id)
@@ -1491,9 +1507,7 @@ async def test_heard_rumor_can_be_verified_into_expansion_request():
 
     await scenario.actor.submit(_cmd(scenario, "ask-rumor", rumor_id=str(rumor_id)))
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(
-        _cmd(scenario, "investigate-rumor", rumor_id=str(rumor_id))
-    )
+    await scenario.actor.submit(_cmd(scenario, "investigate-rumor", rumor_id=str(rumor_id)))
     await scenario.actor.tick(HOUR)
 
     rumor = scenario.actor.world.get_entity(rumor_id).get_component(RumorComponent)
@@ -1516,9 +1530,7 @@ async def test_false_rumor_is_disproven_without_expansion_request():
 
     await scenario.actor.submit(_cmd(scenario, "ask-rumor", rumor_id=str(rumor_id)))
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(
-        _cmd(scenario, "investigate-rumor", rumor_id=str(rumor_id))
-    )
+    await scenario.actor.submit(_cmd(scenario, "investigate-rumor", rumor_id=str(rumor_id)))
     await scenario.actor.tick(HOUR)
 
     rumor = scenario.actor.world.get_entity(rumor_id).get_component(RumorComponent)
@@ -1733,9 +1745,7 @@ def test_expand_ask_rumor_and_travel_handlers_reject_bad_state_directly():
     assert result.reason == "rumor does not exist"
 
     traveling_scenario = build_scenario()
-    traveling_character = traveling_scenario.actor.world.get_entity(
-        traveling_scenario.character
-    )
+    traveling_character = traveling_scenario.actor.world.get_entity(traveling_scenario.character)
     traveling_character.add_component(
         TravelPlanComponent(
             destination_id=str(traveling_scenario.room_b),
@@ -1918,90 +1928,60 @@ def test_daggersim_institution_quest_and_bank_handlers_reject_bad_state_directly
             ),
         ],
     )
-    distant_offered_quest = spawn_entity(
+    distant_offered_quest = _spawn_generated_quest(
         scenario.actor.world,
-        [
-            IdentityComponent(name="distant offered quest", kind="quest"),
-            GeneratedQuestComponent(title="Distant Offered", objective="Help"),
-        ],
+        title="Distant Offered",
+        objective="Help",
     )
-    distant_active_quest = spawn_entity(
+    distant_active_quest = _spawn_generated_quest(
         scenario.actor.world,
-        [
-            IdentityComponent(name="distant active quest", kind="quest"),
-            GeneratedQuestComponent(
-                title="Distant Active",
-                objective="Help",
-                status="active",
-                accepted_by=str(scenario.character),
-            ),
-        ],
+        title="Distant Active",
+        objective="Help",
+        status="active",
+        accepted_by=scenario.character,
     )
-    offered_quest = spawn_entity(
+    offered_quest = _spawn_generated_quest(
         scenario.actor.world,
-        [
-            IdentityComponent(name="offered quest", kind="quest"),
-            GeneratedQuestComponent(title="Offered", objective="Help"),
-        ],
+        title="Offered",
+        objective="Help",
     )
-    active_quest = spawn_entity(
+    active_quest = _spawn_generated_quest(
         scenario.actor.world,
-        [
-            IdentityComponent(name="active quest", kind="quest"),
-            GeneratedQuestComponent(
-                title="Active",
-                objective="Help",
-                status="active",
-                accepted_by=str(scenario.character),
-            ),
-            DaggerQuestRewardComponent(item_name="writ"),
-        ],
+        title="Active",
+        objective="Help",
+        status="active",
+        accepted_by=scenario.character,
+        reward_name="writ",
     )
-    completed_quest = spawn_entity(
+    completed_quest = _spawn_generated_quest(
         scenario.actor.world,
-        [
-            IdentityComponent(name="completed quest", kind="quest"),
-            GeneratedQuestComponent(title="Done", objective="Help", status="completed"),
-        ],
+        title="Done",
+        objective="Help",
+        status="completed",
     )
-    no_reward_quest = spawn_entity(
+    no_reward_quest = _spawn_generated_quest(
         scenario.actor.world,
-        [
-            IdentityComponent(name="rewardless quest", kind="quest"),
-            GeneratedQuestComponent(
-                title="Rewardless",
-                objective="Help",
-                status="active",
-                accepted_by=str(scenario.character),
-            ),
-        ],
+        title="Rewardless",
+        objective="Help",
+        status="active",
+        accepted_by=scenario.character,
     )
-    late_quest = spawn_entity(
+    late_quest = _spawn_generated_quest(
         scenario.actor.world,
-        [
-            IdentityComponent(name="late quest", kind="quest"),
-            GeneratedQuestComponent(
-                title="Late",
-                objective="Help",
-                status="active",
-                accepted_by=str(scenario.character),
-            ),
-            QuestDeadlineComponent(due_at_epoch=scenario.actor.epoch - 1),
-            DaggerQuestRewardComponent(item_name="late writ"),
-        ],
+        title="Late",
+        objective="Help",
+        status="active",
+        accepted_by=scenario.character,
+        due_at_epoch=scenario.actor.epoch - 1,
+        reward_name="late writ",
     )
-    other_character_quest = spawn_entity(
+    other_character_quest = _spawn_generated_quest(
         scenario.actor.world,
-        [
-            IdentityComponent(name="other character quest", kind="quest"),
-            GeneratedQuestComponent(
-                title="Other Character",
-                objective="Help",
-                status="active",
-                accepted_by="entity_999",
-            ),
-            DaggerQuestRewardComponent(item_name="other writ"),
-        ],
+        title="Other Character",
+        objective="Help",
+        status="active",
+        accepted_by=scenario.room_b,
+        reward_name="other writ",
     )
     for quest_id in (
         offered_quest.id,
@@ -3256,9 +3236,7 @@ async def test_plan_travel_moves_character_after_route_time():
     scenario.actor.bus.subscribe(TravelStartedEvent, started.append)
     scenario.actor.bus.subscribe(TravelCompletedEvent, completed.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "plan-travel", destination_id=str(scenario.room_b))
-    )
+    await scenario.actor.submit(_cmd(scenario, "plan-travel", destination_id=str(scenario.room_b)))
     await scenario.actor.tick(HOUR)
 
     character = scenario.actor.world.get_entity(scenario.character)
@@ -3282,9 +3260,7 @@ async def test_travel_mode_speed_shortens_route_time():
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(TravelModeComponent(mode="cart", speed_multiplier=2.0))
 
-    await scenario.actor.submit(
-        _cmd(scenario, "plan-travel", destination_id=str(scenario.room_b))
-    )
+    await scenario.actor.submit(_cmd(scenario, "plan-travel", destination_id=str(scenario.room_b)))
     await scenario.actor.tick(HOUR)
 
     assert scenario.character_room() == scenario.room_a
@@ -3318,9 +3294,7 @@ async def test_join_institution_and_use_member_service_grants_output_item():
 
     character = scenario.actor.world.get_entity(scenario.character)
     assert character.has_relationship(MemberOfInstitution, institution_id)
-    assert character.get_component(InstitutionReputationComponent).scores[
-        str(institution_id)
-    ] == 2
+    assert character.get_component(InstitutionReputationComponent).scores[str(institution_id)] == 2
     assert character.get_component(ServiceAccessComponent).service_ids == (str(service_id),)
     assert joined[0].institution_name == "Burrow Cartographers"
     assert [event.score for event in reputation] == [1, 2]
@@ -3405,18 +3379,15 @@ async def test_generated_quest_can_be_accepted_completed_and_rewarded():
     quest_id = parse_entity_id(generated[0].quest_id)
     assert quest_id is not None
 
-    await scenario.actor.submit(
-        _cmd(scenario, "accept-generated-quest", quest_id=str(quest_id))
-    )
+    await scenario.actor.submit(_cmd(scenario, "accept-generated-quest", quest_id=str(quest_id)))
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(
-        _cmd(scenario, "complete-generated-quest", quest_id=str(quest_id))
-    )
+    await scenario.actor.submit(_cmd(scenario, "complete-generated-quest", quest_id=str(quest_id)))
     await scenario.actor.tick(HOUR)
 
     quest = scenario.actor.world.get_entity(quest_id)
-    assert quest.get_component(GeneratedQuestComponent).status == "completed"
-    assert quest.get_component(DaggerQuestRewardComponent).claimed is True
+    assert quest.get_component(QuestStateComponent).status == "completed"
+    reward_entity = scenario.actor.world.get_entity(quest.get_relationships(QuestHasReward)[0][1])
+    assert reward_entity.get_component(QuestRewardComponent).claimed is True
     assert accepted[0].quest_id == str(quest_id)
     reward_id = parse_entity_id(completed[0].reward_item_id)
     assert reward_id is not None
@@ -3439,15 +3410,14 @@ async def test_generated_quest_fails_after_deadline():
     quest_id = parse_entity_id(generated[0].quest_id)
     assert quest_id is not None
 
-    await scenario.actor.submit(
-        _cmd(scenario, "accept-generated-quest", quest_id=str(quest_id))
-    )
+    await scenario.actor.submit(_cmd(scenario, "accept-generated-quest", quest_id=str(quest_id)))
     await scenario.actor.tick(HOUR)
     await scenario.actor.tick(1)
 
     quest = scenario.actor.world.get_entity(quest_id)
-    assert quest.get_component(GeneratedQuestComponent).status == "failed"
-    assert quest.get_component(QuestDeadlineComponent).due_at_epoch < scenario.actor.epoch
+    state = quest.get_component(QuestStateComponent)
+    assert state.status == "failed"
+    assert state.due_at_epoch < scenario.actor.epoch
     assert failed[0].quest_id == str(quest_id)
 
 
@@ -3467,9 +3437,7 @@ async def test_bank_account_loan_and_repayment_update_balances():
     account_id = parse_entity_id(opened[0].account_id)
     assert account_id is not None
 
-    await scenario.actor.submit(
-        _cmd(scenario, "take-loan", bank_id=str(bank_id), amount=25)
-    )
+    await scenario.actor.submit(_cmd(scenario, "take-loan", bank_id=str(bank_id), amount=25))
     await scenario.actor.tick(HOUR)
     loan_id = parse_entity_id(issued[0].loan_id)
     assert loan_id is not None
@@ -3585,9 +3553,7 @@ async def test_buy_property_spends_bank_balance_and_records_deed_edge():
     property_entity = scenario.actor.world.get_entity(property_id)
     account = scenario.actor.world.get_entity(account_id)
     assert character.has_relationship(OwnsProperty, property_id)
-    assert property_entity.get_component(PropertyDeedComponent).owner_id == str(
-        scenario.character
-    )
+    assert property_entity.get_component(PropertyDeedComponent).owner_id == str(scenario.character)
     assert account.get_component(BankAccountComponent).balance == 8
     assert purchased[0].price == 12
     assert "Property owned: Moss Road Cottage." in daggersim_fragments(
@@ -3821,9 +3787,7 @@ async def test_supernatural_affliction_transforms_and_grows_feeding_need():
     scenario.actor.bus.subscribe(TransformationStartedEvent, transformed.append)
     scenario.actor.bus.subscribe(FeedingNeedChangedEvent, feeding.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "contract-affliction", affliction_type="moon-form")
-    )
+    await scenario.actor.submit(_cmd(scenario, "contract-affliction", affliction_type="moon-form"))
     await scenario.actor.tick(HOUR)
     await scenario.actor.submit(_cmd(scenario, "transform", form_name="moon hare"))
     await scenario.actor.tick(HOUR)
@@ -3925,9 +3889,12 @@ def test_daggersim_component_prompt_fragments_use_target_and_self_context():
     assert institution.get_component(InstitutionDuesComponent).prompt_fragments(
         institution_ctx
     ) == ("Institution dues: 12 (paid).",)
-    assert institution.get_component(InstitutionDuesComponent).prompt_fragments(
-        observer_institution_ctx
-    ) == ()
+    assert (
+        institution.get_component(InstitutionDuesComponent).prompt_fragments(
+            observer_institution_ctx
+        )
+        == ()
+    )
     assert LoanComponent(
         bank_id=str(institution.id),
         borrower_id=str(character.id),
@@ -3935,56 +3902,56 @@ def test_daggersim_component_prompt_fragments_use_target_and_self_context():
         balance=15,
         due_at_epoch=9,
     ).prompt_fragments(institution_ctx) == ("Loan: 15 due at epoch 9 (active).",)
-    assert LoanComponent(
-        bank_id=str(institution.id),
-        borrower_id=str(character.id),
-        principal=20,
-        balance=15,
-        due_at_epoch=9,
-    ).prompt_fragments(observer_institution_ctx) == ()
+    assert (
+        LoanComponent(
+            bank_id=str(institution.id),
+            borrower_id=str(character.id),
+            principal=20,
+            balance=15,
+            due_at_epoch=9,
+        ).prompt_fragments(observer_institution_ctx)
+        == ()
+    )
     custom_spell = CustomSpellComponent(spell_name="Moon Mend", effect_type="heal", magnitude=3)
     assert custom_spell.prompt_fragments(institution_ctx) == (
         "Known custom spell: Moon Mend (heal).",
     )
     assert custom_spell.prompt_fragments(observer_institution_ctx) == ()
-    assert GeneratedQuestComponent(
-        title="Accepted",
-        objective="help",
-        status="accepted",
-        accepted_by=str(character.id),
-    ).prompt_fragments(institution_ctx) == ("Generated quest: Accepted (accepted).",)
-    assert GeneratedQuestComponent(
-        title="Accepted",
-        objective="help",
-        status="accepted",
-        accepted_by=str(character.id),
-    ).prompt_fragments(observer_institution_ctx) == ()
     assert LetterOfCreditComponent(
         bank_id=str(institution.id),
         owner_id=str(character.id),
         amount=30,
     ).prompt_fragments(institution_ctx) == ("Letter of credit: 30 (active).",)
-    assert LetterOfCreditComponent(
-        bank_id=str(institution.id),
-        owner_id=str(character.id),
-        amount=30,
-    ).prompt_fragments(observer_institution_ctx) == ()
+    assert (
+        LetterOfCreditComponent(
+            bank_id=str(institution.id),
+            owner_id=str(character.id),
+            amount=30,
+        ).prompt_fragments(observer_institution_ctx)
+        == ()
+    )
     assert SafeStorageComponent(owner_id=str(character.id), item_ids=("a", "b")).prompt_fragments(
         institution_ctx
     ) == ("Safe storage: 2 item(s).",)
-    assert SafeStorageComponent(owner_id=str(character.id), item_ids=("a", "b")).prompt_fragments(
-        observer_institution_ctx
-    ) == ()
+    assert (
+        SafeStorageComponent(owner_id=str(character.id), item_ids=("a", "b")).prompt_fragments(
+            observer_institution_ctx
+        )
+        == ()
+    )
     assert DebtCollectorComponent(
         borrower_id=str(character.id),
         debt_id="debt",
         pressure=2,
     ).prompt_fragments(institution_ctx) == ("Debt collector pressure: 2.",)
-    assert DebtCollectorComponent(
-        borrower_id=str(character.id),
-        debt_id="debt",
-        pressure=2,
-    ).prompt_fragments(observer_institution_ctx) == ()
+    assert (
+        DebtCollectorComponent(
+            borrower_id=str(character.id),
+            debt_id="debt",
+            pressure=2,
+        ).prompt_fragments(observer_institution_ctx)
+        == ()
+    )
     property_target = spawn_entity(world, [IdentityComponent(name="Burrow Loft", kind="home")])
     assert OwnsProperty(deed_id="deed").prompt_fragments(
         ComponentPromptContext.for_entity(
@@ -3994,17 +3961,20 @@ def test_daggersim_component_prompt_fragments_use_target_and_self_context():
             target=property_target,
         )
     ) == ("Property owned: Burrow Loft.",)
-    assert OwnsProperty(deed_id="deed").prompt_fragments(
-        ComponentPromptContext.for_entity(
-            world,
-            character,
-            perspective=PromptPerspective(viewer=viewer),
-            target=property_target,
+    assert (
+        OwnsProperty(deed_id="deed").prompt_fragments(
+            ComponentPromptContext.for_entity(
+                world,
+                character,
+                perspective=PromptPerspective(viewer=viewer),
+                target=property_target,
+            )
         )
-    ) == ()
-    assert AutomapComponent(discovered_rooms=("room_a", "room_b")).prompt_fragments(
-        self_ctx
-    ) == ("Automap: 2 room(s) discovered.",)
+        == ()
+    )
+    assert AutomapComponent(discovered_rooms=("room_a", "room_b")).prompt_fragments(self_ctx) == (
+        "Automap: 2 room(s) discovered.",
+    )
     assert CustomClassComponent(class_name="Night Gardener").prompt_fragments(self_ctx) == (
         "Custom class: Night Gardener.",
     )
@@ -4084,7 +4054,13 @@ def test_daggersim_fragments_show_nearby_services_magic_law_and_character_state(
         ],
         [
             IdentityComponent(name="Gather Moon Carrots", kind="quest"),
-            GeneratedQuestComponent(title="Gather Moon Carrots", objective="gather"),
+            QuestComponent(
+                quest_id="generated:gather-moon-carrots",
+                title="Gather Moon Carrots",
+                description="gather",
+            ),
+            QuestStateComponent(),
+            QuestProvenanceComponent(generator="bunnyland.dragonsim"),
         ],
         [
             IdentityComponent(name="Sunken Library", kind="dungeon"),
@@ -4110,9 +4086,7 @@ def test_daggersim_fragments_show_nearby_services_magic_law_and_character_state(
         scenario.actor.world.get_entity(scenario.room_a).add_relationship(
             Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id
         )
-    scenario.actor.world.get_entity(scenario.room_a).add_component(
-        RestRiskComponent(band="uneasy")
-    )
+    scenario.actor.world.get_entity(scenario.room_a).add_component(RestRiskComponent(band="uneasy"))
 
     fragments = daggersim_fragments(scenario.actor.world, character)
 
@@ -4266,9 +4240,7 @@ def _secret_door(scenario, room_id, target_room_id):
             ),
         ],
     )
-    world.get_entity(room_id).add_relationship(
-        Contains(mode=ContainmentMode.ROOM_CONTENT), door.id
-    )
+    world.get_entity(room_id).add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), door.id)
     return door.id
 
 
@@ -5222,18 +5194,19 @@ def test_daggersim_dungeon_and_secret_door_fragments_state_dependent():
     # DungeonObjective only shows when found.
     obj_ctx = ComponentPromptContext.for_entity(world, character)
     assert DungeonObjectiveComponent(objective_kind="idol").prompt_fragments(obj_ctx) == ()
-    assert DungeonObjectiveComponent(
-        objective_kind="idol", found=True
-    ).prompt_fragments(obj_ctx) == ("Dungeon objective found: idol.",)
+    assert DungeonObjectiveComponent(objective_kind="idol", found=True).prompt_fragments(
+        obj_ctx
+    ) == ("Dungeon objective found: idol.",)
 
     # SecretDoor shows only when found and not yet opened.
     assert SecretDoorComponent(target_room_id="r").prompt_fragments(obj_ctx) == ()
-    assert SecretDoorComponent(
-        target_room_id="r", found=True, hint="loose brick"
-    ).prompt_fragments(obj_ctx) == ("Secret door found here: loose brick.",)
-    assert SecretDoorComponent(
-        target_room_id="r", found=True, opened=True
-    ).prompt_fragments(obj_ctx) == ()
+    assert SecretDoorComponent(target_room_id="r", found=True, hint="loose brick").prompt_fragments(
+        obj_ctx
+    ) == ("Secret door found here: loose brick.",)
+    assert (
+        SecretDoorComponent(target_room_id="r", found=True, opened=True).prompt_fragments(obj_ctx)
+        == ()
+    )
 
 
 def test_daggersim_social_register_and_conversation_tone_fragments():
@@ -5257,26 +5230,28 @@ def test_daggersim_social_register_and_conversation_tone_fragments():
     # ConversationTone: no last reaction -> empty.
     assert ConversationToneComponent().prompt_fragments(nearby_ctx) == ()
     # Suppressed when the toned entity is the target itself.
-    assert ConversationToneComponent(
-        tone="warm", last_reaction="well"
-    ).prompt_fragments(self_target_ctx) == ()
+    assert (
+        ConversationToneComponent(tone="warm", last_reaction="well").prompt_fragments(
+            self_target_ctx
+        )
+        == ()
+    )
     # Shown to the addressed viewer (can_view_private_state via target==viewer).
     addressed_ctx = ComponentPromptContext.for_entity(
         world, speaker, perspective=PromptPerspective(viewer=character), target=character
     )
-    assert ConversationToneComponent(
-        tone="warm", last_reaction="well"
-    ).prompt_fragments(addressed_ctx) == (
-        "Reeve Tamsin took your last approach well (tone: warm).",
-    )
+    assert ConversationToneComponent(tone="warm", last_reaction="well").prompt_fragments(
+        addressed_ctx
+    ) == ("Reeve Tamsin took your last approach well (tone: warm).",)
     # Hidden from a third-party observer (cannot view private state).
     third = spawn_entity(world, [CharacterComponent()])
     third_ctx = ComponentPromptContext.for_entity(
         world, speaker, perspective=PromptPerspective(viewer=third), target=character
     )
-    assert ConversationToneComponent(
-        tone="warm", last_reaction="well"
-    ).prompt_fragments(third_ctx) == ()
+    assert (
+        ConversationToneComponent(tone="warm", last_reaction="well").prompt_fragments(third_ctx)
+        == ()
+    )
 
 
 def test_daggersim_owns_property_fragment_requires_target():
@@ -5423,9 +5398,7 @@ def test_daggersim_pacify_fail_leaves_creature_hostile():
     )
     result = AttemptPacifyHandler().execute(
         ctx,
-        _handler_cmd(
-            scenario, "attempt-pacify", target_id=str(creature.id), language="growl"
-        ),
+        _handler_cmd(scenario, "attempt-pacify", target_id=str(creature.id), language="growl"),
     )
     # Difficulty 100 vs skill 0 => failure; creature stays hostile, not pacified (3222->3248).
     assert result.ok
@@ -5453,9 +5426,7 @@ def test_daggersim_pacify_succeeds_on_nonhostile_creature():
     )
     result = AttemptPacifyHandler().execute(
         ctx,
-        _handler_cmd(
-            scenario, "attempt-pacify", target_id=str(creature.id), language="growl"
-        ),
+        _handler_cmd(scenario, "attempt-pacify", target_id=str(creature.id), language="growl"),
     )
     # Success path where the creature has no HostilityComponent (3223->3228).
     assert result.ok
@@ -5470,9 +5441,7 @@ def test_daggersim_end_transformation_without_affliction():
     character = world.get_entity(scenario.character)
     # Transformed but with no SupernaturalAfflictionComponent (3458->3462).
     character.add_component(WereformComponent(form_name="wolf", transformed_at_epoch=0))
-    result = EndTransformationHandler().execute(
-        ctx, _handler_cmd(scenario, "end-transformation")
-    )
+    result = EndTransformationHandler().execute(ctx, _handler_cmd(scenario, "end-transformation"))
     assert result.ok
     assert not world.get_entity(scenario.character).has_component(WereformComponent)
 
@@ -5489,9 +5458,7 @@ def test_daggersim_cure_affliction_without_feeding_or_wereform():
     )
     result = CureAfflictionHandler().execute(ctx, _handler_cmd(scenario, "cure-affliction"))
     assert result.ok
-    assert not world.get_entity(scenario.character).has_component(
-        SupernaturalAfflictionComponent
-    )
+    assert not world.get_entity(scenario.character).has_component(SupernaturalAfflictionComponent)
 
 
 def test_daggersim_rest_allows_low_risk_area():
@@ -5528,9 +5495,7 @@ def test_daggersim_withdraw_and_string_tuple_and_identify_can_handle():
         Contains(mode=ContainmentMode.ROOM_CONTENT), ingredient.id
     )
     handler = IdentifyIngredientHandler()
-    assert handler.can_handle(
-        ctx, _handler_cmd(scenario, "identify", target_id=str(ingredient.id))
-    )
+    assert handler.can_handle(ctx, _handler_cmd(scenario, "identify", target_id=str(ingredient.id)))
 
     # Withdraw success path (lines 2127-2129).
     bank_id = _bank(scenario)
@@ -5560,9 +5525,7 @@ def _put_character_in_dungeon_room(scenario):
             DungeonRoomComponent(dungeon_id="vault", depth=1),
         ],
     )
-    dungeon_room.add_relationship(
-        Contains(mode=ContainmentMode.ROOM_CONTENT), character.id
-    )
+    dungeon_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), character.id)
     return dungeon_room
 
 
@@ -5689,9 +5652,7 @@ def test_daggersim_selected_rumor_is_order_independent(heard_flags):
     unheard_ids = set()
     for index, already_heard in enumerate(heard_flags):
         heard_by = (character_key,) if already_heard else ()
-        rumor = spawn_entity(
-            world, [RumorComponent(text=f"rumor-{index}", heard_by=heard_by)]
-        )
+        rumor = spawn_entity(world, [RumorComponent(text=f"rumor-{index}", heard_by=heard_by)])
         room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), rumor.id)
         if not already_heard:
             unheard_ids.add(rumor.id)
@@ -5726,9 +5687,7 @@ def test_daggersim_fragments_keep_unresolvable_reputation_label():
     character = world.get_entity(scenario.character)
 
     # InstitutionReputation keyed by a non-entity string keeps the raw label (4092->4094).
-    replace_component(
-        character, InstitutionReputationComponent(scores={"not-an-entity": 4})
-    )
+    replace_component(character, InstitutionReputationComponent(scores={"not-an-entity": 4}))
     lines = daggersim_fragments(world, character)
     assert any("Institution reputation with not-an-entity: 4." == line for line in lines)
 
@@ -5781,9 +5740,7 @@ def test_daggersim_fragments_skip_owned_property_when_entity_gone(monkeypatch):
     _install(scenario.actor)
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
-    property_entity = spawn_entity(
-        world, [IdentityComponent(name="Vanished Loft", kind="home")]
-    )
+    property_entity = spawn_entity(world, [IdentityComponent(name="Vanished Loft", kind="home")])
     character.add_relationship(OwnsProperty(deed_id="d"), property_entity.id)
     original_has_entity = world.has_entity
 

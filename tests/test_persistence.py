@@ -25,9 +25,9 @@ from bunnyland.core.components import IdentityComponent
 from bunnyland.core.ecs import contents
 from bunnyland.discord.components import DiscordRoomFeedComponent
 from bunnyland.engine import GameLoop
+from bunnyland.foundation.needs.mechanics import HungerComponent
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
-from bunnyland.mechanics.needs import HungerComponent
-from bunnyland.mechanics.toonsim import ToonRoomComponent
+from bunnyland.migrations import WorldMigrationError, migrate_snapshot
 from bunnyland.offline import advance_offline_life
 from bunnyland.persistence import (
     WorldMeta,
@@ -37,8 +37,9 @@ from bunnyland.persistence import (
     save_world,
     type_registries,
 )
-from bunnyland.plugins import apply_plugins, bunnyland_plugins
+from bunnyland.plugins import PluginRegistry, apply_plugins, bunnyland_plugins
 from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.simpacks.toonsim.mechanics import ToonRoomComponent
 from bunnyland.worldgen import StubWorldBuilder, instantiate
 
 
@@ -81,6 +82,275 @@ def _inventory(actor, character_id):
     )
 
 
+def _schema_v1_generated_quest_snapshot():
+    return {
+        "metadata": {"version": "1.0", "epoch": 12},
+        "bunnyland": {"schema_version": 1, "plugins": ["bunnyland.dragonsim"]},
+        "prefabs": {"entity": {"components": {}}},
+        "entities": {
+            "entity_1": {"prefab": "entity", "created_epoch": 0},
+            "entity_2": {"prefab": "entity", "created_epoch": 0},
+            "entity_3": {"prefab": "entity", "created_epoch": 0},
+        },
+        "components": {
+            "GeneratedQuestComponent": {
+                "entity_1": {
+                    "title": "Carry the Letter",
+                    "objective": "deliver it",
+                    "status": "active",
+                    "accepted_by": "entity_2",
+                }
+            },
+            "QuestDeadlineComponent": {"entity_1": {"due_at_epoch": 99}},
+            "DaggerQuestRewardComponent": {
+                "entity_1": {"item_name": "guild writ", "claimed": False}
+            },
+            "WorldClockComponent": {
+                "entity_3": {
+                    "game_time_seconds": 12,
+                    "tick_index": 0,
+                    "time_scale": 1.0,
+                }
+            },
+        },
+        "relationships": {},
+        "relics": [],
+    }
+
+
+def test_schema_v1_quest_snapshot_migrates_to_canonical_graph_without_mutating_source():
+    source = _schema_v1_generated_quest_snapshot()
+
+    migrated = migrate_snapshot(source)
+
+    assert source["bunnyland"]["schema_version"] == 1
+    assert migrated["bunnyland"]["schema_version"] == 2
+    assert (
+        not {
+            "GeneratedQuestComponent",
+            "QuestDeadlineComponent",
+            "DaggerQuestRewardComponent",
+        }
+        & migrated["components"].keys()
+    )
+    assert migrated["components"]["QuestComponent"]["entity_1"] == {
+        "quest_id": "entity_1",
+        "title": "Carry the Letter",
+        "description": "deliver it",
+    }
+    assert migrated["components"]["QuestStateComponent"]["entity_1"] == {
+        "status": "active",
+        "due_at_epoch": 99,
+    }
+    assert migrated["relationships"]["QuestAcceptedBy"]["entity_1"][0]["target"] == ("entity_2")
+    objective_id = migrated["relationships"]["QuestHasObjective"]["entity_1"][0]["target"]
+    reward_id = migrated["relationships"]["QuestHasReward"]["entity_1"][0]["target"]
+    assert objective_id == "quest_objective_1"
+    assert reward_id == "quest_reward_1"
+
+
+def test_schema_migration_rejects_future_and_ambiguous_worlds():
+    with pytest.raises(WorldMigrationError, match="newer than supported"):
+        migrate_snapshot({"bunnyland": {"schema_version": 3}})
+
+    snapshot = _schema_v1_generated_quest_snapshot()
+    snapshot["components"]["QuestComponent"] = {
+        "entity_1": {"quest_id": "duplicate", "title": "Duplicate"},
+        "entity_2": {"quest_id": "duplicate", "title": "Also Duplicate"},
+    }
+    with pytest.raises(WorldMigrationError, match="refers to both"):
+        migrate_snapshot(snapshot)
+
+
+def test_load_schema_v1_migrates_in_memory_and_next_save_is_v2(tmp_path):
+    source = tmp_path / "world-v1.json"
+    dest = tmp_path / "world-v2.json"
+    snapshot = _schema_v1_generated_quest_snapshot()
+    source.write_text(json.dumps(snapshot))
+
+    actor, meta = load_world(source, registry=PluginRegistry(bunnyland_plugins()))
+
+    from bunnyland.simpacks.dragonsim.mechanics import (
+        QuestAcceptedBy,
+        QuestComponent,
+        QuestHasObjective,
+        QuestHasReward,
+        QuestStateComponent,
+    )
+
+    quest = actor.world.get_entity(EntityId.parse("entity_1"))
+    assert quest.has_component(QuestComponent)
+    assert quest.get_component(QuestStateComponent).due_at_epoch == 99
+    assert quest.has_relationship(QuestAcceptedBy, EntityId.parse("entity_2"))
+    assert len(quest.get_relationships(QuestHasObjective)) == 1
+    assert len(quest.get_relationships(QuestHasReward)) == 1
+    assert meta.schema_version == 2
+    assert json.loads(source.read_text())["bunnyland"]["schema_version"] == 1
+
+    save_world(actor, dest, meta=meta)
+
+    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 2
+
+
+def test_schema_v1_regular_quest_collections_become_ordered_edges():
+    snapshot = _schema_v1_generated_quest_snapshot()
+    snapshot["components"].pop("GeneratedQuestComponent")
+    snapshot["components"].pop("DaggerQuestRewardComponent")
+    snapshot["components"]["QuestComponent"] = {
+        "entity_1": {
+            "quest_id": "letter",
+            "title": "Carry the Letter",
+            "status": "active",
+            "accepted_by": "entity_2",
+            "completed_at_epoch": 20,
+        }
+    }
+    snapshot["entities"].update(
+        {
+            "entity_4": {"prefab": "entity", "created_epoch": 0},
+            "entity_5": {"prefab": "entity", "created_epoch": 0},
+            "entity_6": {"prefab": "entity", "created_epoch": 0},
+        }
+    )
+    snapshot["components"]["QuestStageComponent"] = {
+        "entity_4": {
+            "quest_id": "letter",
+            "stage": 2,
+            "branch": "honest",
+            "tracked_by": ["entity_2"],
+        }
+    }
+    snapshot["components"]["QuestObjectiveComponent"] = {
+        "entity_4": {"quest_id": "letter", "description": "Deliver it"}
+    }
+    snapshot["components"]["QuestRewardComponent"] = {
+        "entity_5": {
+            "quest_id": "letter",
+            "description": "A writ",
+            "item_ids": ["entity_6"],
+        }
+    }
+
+    migrated = migrate_snapshot(snapshot)
+
+    assert migrated["components"]["QuestComponent"]["entity_1"]["description"] == ""
+    assert migrated["components"]["QuestStateComponent"]["entity_1"] == {
+        "status": "active",
+        "completed_at_epoch": 20,
+        "stage": 2,
+        "branch": "honest",
+        "due_at_epoch": 99,
+    }
+    assert migrated["relationships"]["TracksQuest"]["entity_2"][0]["target"] == "entity_1"
+    assert migrated["relationships"]["QuestHasObjective"]["entity_1"][0]["target"] == ("entity_4")
+    assert migrated["relationships"]["QuestHasReward"]["entity_1"][0]["target"] == ("entity_5")
+    assert migrated["relationships"]["QuestRewardGrants"]["entity_5"][0]["target"] == ("entity_6")
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda value: value.update({"components": []}), "section 'components'"),
+        (
+            lambda value: value["components"].update({"GeneratedQuestComponent": []}),
+            "GeneratedQuestComponent.*mapping",
+        ),
+        (
+            lambda value: value["components"].update({"GeneratedQuestComponent": {"entity_1": []}}),
+            "fields.*mapping",
+        ),
+        (
+            lambda value: value["relationships"].update({"QuestAcceptedBy": {"entity_1": {}}}),
+            "QuestAcceptedBy edges.*list",
+        ),
+        (
+            lambda value: value["components"].update(
+                {"QuestObjectiveComponent": {"entity_4": {"quest_id": "missing"}}}
+            ),
+            "unknown quest",
+        ),
+        (
+            lambda value: value["components"].update({"QuestStageComponent": []}),
+            "QuestStageComponent.*mapping",
+        ),
+        (
+            lambda value: value["components"].update({"QuestDeadlineComponent": []}),
+            "QuestDeadlineComponent.*mapping",
+        ),
+        (
+            lambda value: value["components"].update({"DaggerQuestRewardComponent": []}),
+            "DaggerQuestRewardComponent.*mapping",
+        ),
+    ],
+)
+def test_schema_v1_migration_rejects_malformed_relationships(mutate, message):
+    snapshot = _schema_v1_generated_quest_snapshot()
+    mutate(snapshot)
+    with pytest.raises(WorldMigrationError, match=message):
+        migrate_snapshot(snapshot)
+
+
+def test_schema_migration_validates_version_and_v2_sections():
+    with pytest.raises(WorldMigrationError, match="must be a mapping"):
+        migrate_snapshot([])
+    with pytest.raises(WorldMigrationError, match="must be an integer"):
+        migrate_snapshot({"bunnyland": {"schema_version": "2"}})
+    with pytest.raises(WorldMigrationError, match="unsupported world schema"):
+        migrate_snapshot({"bunnyland": {"schema_version": 0}})
+    with pytest.raises(WorldMigrationError, match="section 'entities'"):
+        migrate_snapshot({"bunnyland": {"schema_version": 2}, "entities": []})
+
+
+def test_schema_v1_migration_handles_collisions_and_unaccepted_generated_quests():
+    snapshot = _schema_v1_generated_quest_snapshot()
+    snapshot["components"]["GeneratedQuestComponent"]["entity_1"].pop("accepted_by")
+    snapshot["entities"]["quest_objective_1"] = {
+        "prefab": "quest_objective",
+        "created_epoch": 0,
+    }
+
+    migrated = migrate_snapshot(snapshot)
+
+    assert migrated["relationships"]["QuestHasObjective"]["entity_1"][0]["target"] == (
+        "quest_objective_2"
+    )
+    assert "QuestAcceptedBy" not in migrated["relationships"]
+
+
+def test_schema_v1_migration_rejects_ambiguous_quest_state():
+    both_families = _schema_v1_generated_quest_snapshot()
+    both_families["components"]["QuestComponent"] = {
+        "entity_1": {"quest_id": "other", "title": "Other"}
+    }
+    with pytest.raises(WorldMigrationError, match="both quest component families"):
+        migrate_snapshot(both_families)
+
+    invalid_participants = _schema_v1_generated_quest_snapshot()
+    invalid_participants["components"].pop("GeneratedQuestComponent")
+    invalid_participants["components"]["QuestComponent"] = {
+        "entity_1": {
+            "quest_id": "letter",
+            "title": "Letter",
+            "accepted_by": 7,
+        }
+    }
+    with pytest.raises(WorldMigrationError, match="accepted_by.*sequence"):
+        migrate_snapshot(invalid_participants)
+
+    duplicate_stages = _schema_v1_generated_quest_snapshot()
+    duplicate_stages["components"]["QuestStageComponent"] = {
+        "entity_4": {"quest_id": "entity_1"},
+        "entity_5": {"quest_id": "entity_1"},
+    }
+    with pytest.raises(WorldMigrationError, match="multiple lifecycle"):
+        migrate_snapshot(duplicate_stages)
+
+    conflicting_deadline = _schema_v1_generated_quest_snapshot()
+    conflicting_deadline["components"]["QuestStateComponent"] = {"entity_1": {"due_at_epoch": 50}}
+    with pytest.raises(WorldMigrationError, match="conflicting deadlines"):
+        migrate_snapshot(conflicting_deadline)
+
+
 def test_format_for_path_respects_explicit_format_and_suffixes(tmp_path):
     assert _format_for_path(tmp_path / "world.yml", None) == "yaml"
     assert _format_for_path(tmp_path / "world.yaml", None) == "yaml"
@@ -102,7 +372,7 @@ async def test_save_reload_preserves_world(tmp_path):
 
     path = tmp_path / "world.json"
     save_world(actor, path, meta=WorldMeta(seed="a quiet marsh", prompt="p", generator="oneshot"))
-    actor2, meta = load_world(path, plugins=bunnyland_plugins())
+    actor2, meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
 
     # Topology, containment, the clock, and nested value objects all survive.
     assert container_of(actor2.world.get_entity(hazel)) == before_room
@@ -123,7 +393,7 @@ async def test_reloaded_world_keeps_playing(tmp_path):
     path = tmp_path / "world.json"
     save_world(actor, path, meta=WorldMeta(seed="s"))
 
-    actor2, _meta = load_world(path, plugins=bunnyland_plugins())
+    actor2, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
     # The controller edge (and its generation) survived, so dispatch can drive Hazel.
     agent = ScriptedAgent([ToolCall("move", {"direction": "north"})])
     dispatch = ControllerDispatch(actor2, PromptBuilder(actor2.world), agent)
@@ -140,10 +410,10 @@ async def test_offline_life_advances_reloaded_world_and_persists_changes(tmp_pat
     path = tmp_path / "world.json"
     save_world(actor, path, meta=WorldMeta(seed="offline"))
 
-    loaded, meta = load_world(path, plugins=bunnyland_plugins())
+    loaded, meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
     ticks = await advance_offline_life(loaded, 2 * 3600.0, max_ticks=2)
     save_world(loaded, path, meta=meta)
-    reloaded, _meta = load_world(path, plugins=bunnyland_plugins())
+    reloaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
 
     assert ticks == 2
     assert "a scrap of paper" in _inventory(reloaded, hazel)
@@ -209,7 +479,7 @@ async def test_yaml_save_reload_preserves_world(tmp_path):
 
     path = tmp_path / "world.yaml"
     save_world(actor, path, meta=WorldMeta(seed="a quiet marsh", prompt="p", generator="oneshot"))
-    actor2, meta = load_world(path, plugins=bunnyland_plugins())
+    actor2, meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
 
     assert container_of(actor2.world.get_entity(hazel)) == before_room
     assert _inventory(actor2, hazel) == before_inventory
@@ -238,7 +508,7 @@ entity_2:
   IdentityComponent: {"name": "Target", "kind": "room", "tags": []}
 """.lstrip()
     )
-    components, edges = type_registries(bunnyland_plugins())
+    components, edges = type_registries(PluginRegistry(bunnyland_plugins()))
     world = World()
     YAMLPersistenceDriver().load(world, path, components, edges)
 
@@ -296,12 +566,8 @@ def test_yaml_driver_save_omits_relic_name_and_temporary_components(tmp_path):
 
     driver = YAMLPersistenceDriver()
     world = World()
-    world.register_prefab(
-        "room", {IdentityComponent: IdentityComponent(name="Room", kind="room")}
-    )
-    room = world.spawn(
-        "room", {IdentityComponent: IdentityComponent(name="Source", kind="room")}
-    )
+    world.register_prefab("room", {IdentityComponent: IdentityComponent(name="Room", kind="room")})
+    room = world.spawn("room", {IdentityComponent: IdentityComponent(name="Source", kind="room")})
     room.add_component(ScratchComponent(value=7))
 
     path = tmp_path / "world.yaml"
@@ -428,7 +694,7 @@ def test_yaml_driver_handles_relic_listing_errors_and_duplicates(tmp_path):
     with pytest.raises(FileExistsError, match="Relic 'smoke' already exists"):
         driver.save_relic(world, "smoke", relics_dir)
 
-    (relics_dir / "_hidden.yaml").write_text("__metadata__: {\"relic_name\": \"hidden\"}\n")
+    (relics_dir / "_hidden.yaml").write_text('__metadata__: {"relic_name": "hidden"}\n')
     (relics_dir / "broken.yaml").write_text("- not\n- a\n- mapping\n")
 
     relics = driver.list_relics(relics_dir)
@@ -454,7 +720,9 @@ entity_1:
     )
     world = World()
 
-    driver.load_relic(world, "smoke", relics_dir, *type_registries())
+    driver.load_relic(
+        world, "smoke", relics_dir, *type_registries(PluginRegistry(bunnyland_plugins()))
+    )
 
     assert world.epoch == 5
     assert (
@@ -563,7 +831,7 @@ async def test_reload_starts_with_empty_command_queues(tmp_path):
     actor, _result = await _build_and_play()
     path = tmp_path / "world.json"
     save_world(actor, path, meta=WorldMeta())
-    actor2, _meta = load_world(path, plugins=bunnyland_plugins())
+    actor2, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
 
     # Volatile queues are never persisted (spec 26): a reload resumes with empty queues.
     assert actor2.queues.characters_with_pending() == []
@@ -591,7 +859,7 @@ async def test_game_loop_autosaves_every_n_ticks(tmp_path):
 
 
 def test_type_registries_cover_core_and_plugin_types():
-    components, edges = type_registries(bunnyland_plugins())
+    components, edges = type_registries(PluginRegistry(bunnyland_plugins()))
     assert {
         "IdentityComponent",
         "HungerComponent",
@@ -611,7 +879,7 @@ def test_toon_room_default_start_reloads_with_plugin_registry(tmp_path):
 
     path = tmp_path / "toon-room.json"
     save_world(actor, path, meta=WorldMeta(seed="toon"))
-    loaded, _meta = load_world(path, plugins=bunnyland_plugins())
+    loaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
 
     loaded_room = loaded.world.get_entity(room.id)
     assert loaded_room.get_component(ToonRoomComponent).default_start is True
@@ -649,7 +917,7 @@ def test_region_hierarchy_uses_contains_region_mode_and_reloads(tmp_path):
 
     path = tmp_path / "regions.json"
     save_world(actor, path, meta=WorldMeta(seed="regional"))
-    loaded, _meta = load_world(path)
+    loaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
 
     loaded_root = loaded.world.get_entity(chain[0].id).get_component(RegionComponent)
     assert loaded_root.population == 8_400_000_000
@@ -676,7 +944,7 @@ def test_discord_room_feed_component_survives_save_load(tmp_path):
 
     path = tmp_path / "discord-room-feed.json"
     save_world(actor, path, meta=WorldMeta(seed="discord-feed"))
-    loaded, _meta = load_world(path)
+    loaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
 
     component = loaded.world.get_entity(room.id).get_component(DiscordRoomFeedComponent)
     assert component.channel_id == 123456789

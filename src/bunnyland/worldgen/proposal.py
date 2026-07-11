@@ -109,9 +109,7 @@ class _GenerationIntentModel(BaseModel):
         if not isinstance(value, Mapping):
             return value
         data = dict(value)
-        generation = _generation_dict(
-            data.pop("generation", data.pop("generation_intent", {}))
-        )
+        generation = _generation_dict(data.pop("generation", data.pop("generation_intent", {})))
         if "intent" in data and "description" not in generation:
             generation["description"] = data.pop("intent")
         for key in ("description", "tags", "wants", "needs"):

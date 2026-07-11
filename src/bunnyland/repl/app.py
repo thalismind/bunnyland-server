@@ -10,6 +10,7 @@ through the web controller.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 
 from rich.text import Text
@@ -106,6 +107,9 @@ class BunnylandReplApp(App[None]):
             id="cmd", placeholder="type a command — 'help' for a list, 'quit' to exit"
         )
         self._refresh_error: str | None = None  # last reported refresh failure, for throttling
+        self._live_task: asyncio.Task | None = None
+        self._live_player_id = ""
+        self._live_ready = False
         self.show_generator_selector = False
 
     def compose(self) -> ComposeResult:
@@ -147,15 +151,57 @@ class BunnylandReplApp(App[None]):
         self._load_history()
         await self._safe_refresh(prime=True)  # seed event history without dumping the backlog
         self.write_log(
-            Text(f"Bunnyland REPL · {self.repl.backend.label}. Type 'help', 'quit' to exit.",
-                 style="bold")
+            Text(
+                f"Bunnyland REPL · {self.repl.backend.label}. Type 'help', 'quit' to exit.",
+                style="bold",
+            )
         )
-        self.set_interval(REFRESH_SECONDS, self._safe_refresh)
+        self.set_interval(REFRESH_SECONDS, self._poll_refresh)
         self.command.focus()
 
     async def on_unmount(self) -> None:
+        self._stop_live_updates()
         self._save_history()
         await self.repl.backend.close()
+
+    async def _poll_refresh(self) -> None:
+        if not self._live_ready:
+            await self._safe_refresh()
+        self._sync_live_updates()
+
+    def _stop_live_updates(self) -> None:
+        self._live_ready = False
+        self._live_player_id = ""
+        if self._live_task is not None:
+            self._live_task.cancel()
+        self._live_task = None
+
+    def _sync_live_updates(self) -> None:
+        player_id = self.repl.player_id
+        if player_id == self._live_player_id:
+            return
+        self._stop_live_updates()
+        if not player_id or not self.repl.backend.supports_live_updates():
+            return
+        self._live_player_id = player_id
+
+        async def on_message(frame: dict) -> None:
+            if frame.get("type") != "heartbeat":
+                await self._safe_refresh()
+
+        async def on_state(state: str) -> None:
+            self._live_ready = state == "live"
+            if state == "fallback":
+                await self._safe_refresh()
+
+        self._live_task = asyncio.create_task(
+            self.repl.backend.watch_updates(
+                player_id,
+                self.repl.control,
+                on_message,
+                on_state,
+            )
+        )
 
     # ── helpers ─────────────────────────────────────────────────────────────────
     def write_log(self, renderable) -> None:
@@ -164,7 +210,7 @@ class BunnylandReplApp(App[None]):
     async def _safe_refresh(self, prime: bool = False) -> None:
         try:
             await self.repl.refresh()
-            events = await self.repl.backend.recent_events()
+            events = await self.repl.backend.recent_events(self.repl.player_id)
         except Exception as exc:  # network hiccup, server restart, …
             message = f"⚠ {self.repl.backend.label} — {exc}"
             if message != self._refresh_error:  # report a failure once, not every tick
@@ -197,6 +243,7 @@ class BunnylandReplApp(App[None]):
         except Exception as exc:  # keep the REPL alive through a bad command
             output = Text(f"⚠ {exc}", style="red")
         self.write_log(output)
+        self._sync_live_updates()
         self.sub_title = self.repl.status_text()
 
     def action_insert(self, ref: str) -> None:
@@ -228,9 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bunnyland-repl", description=__doc__)
     parser.add_argument("--server", help="connect to a running server (e.g. http://localhost:8765)")
     parser.add_argument("--seed", default=None, help="seed for a locally hosted world")
-    parser.add_argument(
-        "--generator", default=None, help="generator for a locally hosted world"
-    )
+    parser.add_argument("--generator", default=None, help="generator for a locally hosted world")
     parser.add_argument("--claim-fallback", choices=("suspend", "llm"), default=None)
     parser.add_argument("--claim-timeout-minutes", type=int, default=None)
     parser.add_argument(
@@ -258,7 +303,8 @@ def main(argv: list[str] | None = None) -> int:
             args.server,
             fallback_controller=args.claim_fallback,
             timeout_seconds=timeout_seconds,
-        ) if args.server
+        )
+        if args.server
         else LocalBackend(
             seed=args.seed or DEFAULT_LOCAL_SEED,
             generator=args.generator or DEFAULT_LOCAL_GENERATOR,

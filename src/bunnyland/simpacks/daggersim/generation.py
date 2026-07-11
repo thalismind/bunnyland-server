@@ -1,6 +1,6 @@
 """daggersim generation contribution compatibility surface."""
 
-from ...worldgen.enrichment import DaggerWorldgenHook, LegacyWorldgenEnricher
+from ...worldgen.enrichment import ComponentPlanEnricher, DaggerWorldgenHook
 
 CAPABILITIES = (
     "bunnyland.daggersim.affliction-stigma",
@@ -112,6 +112,6 @@ ALIASES = {
     "travel-supply": "bunnyland.daggersim.travel-supply",
     "unrealized-location": "bunnyland.daggersim.unrealized-location",
 }
-GENERATION_ENRICHER = LegacyWorldgenEnricher(DaggerWorldgenHook, provided_capabilities=CAPABILITIES)
+GENERATION_ENRICHER = ComponentPlanEnricher(DaggerWorldgenHook, provided_capabilities=CAPABILITIES)
 
 __all__ = ["GENERATION_ENRICHER", "DaggerWorldgenHook"]

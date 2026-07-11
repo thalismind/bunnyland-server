@@ -239,9 +239,7 @@ class Decision:
 
 
 def _tool_text(call: ToolCall) -> str:
-    return " ".join(
-        value.strip() for value in call.arguments.values() if isinstance(value, str)
-    )
+    return " ".join(value.strip() for value in call.arguments.values() if isinstance(value, str))
 
 
 def persona_contradictions(context, call: ToolCall) -> tuple[str, ...]:
@@ -265,9 +263,7 @@ def persona_contradictions(context, call: ToolCall) -> tuple[str, ...]:
         claimed = match.group(1).strip(" .,!?:;\"'")
         claimed_key = claimed.lower()
         if claimed_key != context.name.lower() and claimed_key in visible_names:
-            issues.append(
-                f"name contradiction: claimed to be {visible_names[claimed_key]}"
-            )
+            issues.append(f"name contradiction: claimed to be {visible_names[claimed_key]}")
             break
 
     status = context.status.split(",", 1)[0].strip().lower()
@@ -290,9 +286,7 @@ def persona_contradictions(context, call: ToolCall) -> tuple[str, ...]:
                 f"{name_key} is not my {relation_key}" in lowered
                 or f"{name_key} is not your {relation_key}" in lowered
             ):
-                issues.append(
-                    f"relationship contradiction: denied {name}'s {relation} status"
-                )
+                issues.append(f"relationship contradiction: denied {name}'s {relation} status")
         partner = re.fullmatch(r"You are partners with (.+)\.", line)
         if partner is not None:
             name = partner.group(1)
@@ -315,9 +309,7 @@ def persona_contradictions(context, call: ToolCall) -> tuple[str, ...]:
                     f"i don't {descriptor_key} {name_key}",
                 )
             if any(denial in lowered for denial in denials):
-                issues.append(
-                    f"relationship contradiction: denied bond with {name}"
-                )
+                issues.append(f"relationship contradiction: denied bond with {name}")
     return tuple(dict.fromkeys(issues))
 
 
@@ -566,14 +558,13 @@ class ControllerDispatch:
             task.add_done_callback(lambda finished, key=cid: self._forget(key, finished))
             return None
 
-        with telemetry.record_duration(
-            telemetry.record_llm_decision, metric_attrs
-        ), telemetry.span("agent.decide", span_attrs) as dspan:
+        with (
+            telemetry.record_duration(telemetry.record_llm_decision, metric_attrs),
+            telemetry.span("agent.decide", span_attrs) as dspan,
+        ):
             call = decision
             self._annotate_decision_span(dspan, call)
-        return await self._finalize_decision(
-            character_id, controller_id, generation, context, call
-        )
+        return await self._finalize_decision(character_id, controller_id, generation, context, call)
 
     async def _await_decision(
         self,
@@ -594,9 +585,10 @@ class ControllerDispatch:
         cid = str(character_id)
         try:
             async with self._llm_lock:
-                with telemetry.record_duration(
-                    telemetry.record_llm_decision, metric_attrs
-                ), telemetry.span("agent.decide", span_attrs) as dspan:
+                with (
+                    telemetry.record_duration(telemetry.record_llm_decision, metric_attrs),
+                    telemetry.span("agent.decide", span_attrs) as dspan,
+                ):
                     call = await pending
                     self._annotate_decision_span(dspan, call)
             decision = await self._finalize_decision(

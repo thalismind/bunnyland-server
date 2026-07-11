@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from relics import EntityId
 
+from bunnyland.foundation.history.mechanics import history_record_for_event, record_world_history
+
 from ..core.components import RoomComponent
 from ..core.ecs import container_of, entity_name, parse_entity_id
 from ..core.world_actor import WorldActor
-from ..mechanics.history import history_record_for_event, record_world_history
 from .service import ImageGenJob, ImageGenService
 from .spec import ImagePurpose
 
@@ -54,7 +55,12 @@ async def request_scene_image(
         if record is None:  # this moment already has a record -> reuse it
             record = history_record_for_event(actor.world, source_event_id)
         record_id = str(record.id)
-    return await service.start(record_id, ImagePurpose.EVENT, requested_by=requested_by)
+    return await service.start(
+        record_id,
+        ImagePurpose.EVENT,
+        requested_by=requested_by,
+        target_id=str(parsed),
+    )
 
 
 __all__ = ["request_scene_image"]

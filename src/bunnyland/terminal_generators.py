@@ -32,8 +32,7 @@ def group_generators(generators: Iterable[WorldGenerator]) -> dict[str, list[Wor
     for generator in generators:
         grouped.setdefault(_generator_group(generator), []).append(generator)
     return {
-        group: sorted(items, key=lambda item: item.name)
-        for group, items in sorted(grouped.items())
+        group: sorted(items, key=lambda item: item.name) for group, items in sorted(grouped.items())
     }
 
 

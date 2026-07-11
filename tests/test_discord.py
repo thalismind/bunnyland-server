@@ -60,7 +60,6 @@ from bunnyland.discord import (
     did_you_mean,
     discord_broadcast_channel_ids,
     explain_rejection,
-    parse_discord_action,
     parse_discord_id_list,
     release_discord_claim,
     render_action_result,
@@ -72,6 +71,9 @@ from bunnyland.discord import (
     set_discord_claim_fallback,
     split_discord_text,
     suspend_discord_character,
+)
+from bunnyland.discord import (
+    parse_discord_action as _parse_discord_action,
 )
 from bunnyland.discord.bot import (
     PAUSED_REACTION,
@@ -92,6 +94,15 @@ from bunnyland.discord.claim import (
 )
 from bunnyland.discord.components import DiscordRoomFeedComponent
 from bunnyland.memory import InMemoryStore, install_memory
+from bunnyland.plugins import PluginRegistry, bunnyland_plugins
+
+ALL_ACTION_DEFINITIONS = tuple(
+    definition for _owner, definition in PluginRegistry(bunnyland_plugins()).actions.values()
+)
+
+
+def parse_discord_action(text, available_commands, definitions=ALL_ACTION_DEFINITIONS):
+    return _parse_discord_action(text, available_commands, definitions)
 
 
 class _DiscordObject:
@@ -381,8 +392,7 @@ def test_render_character_list_reports_web_suspended_and_stale_controllers(scena
     scenario.actor.assign_controller(juniper.id, bare_controller.id)
 
     statuses = dict(
-        line[2:].split(" - ", 1)
-        for line in render_character_list(scenario.actor).splitlines()[1:]
+        line[2:].split(" - ", 1) for line in render_character_list(scenario.actor).splitlines()[1:]
     )
 
     assert statuses["Hazel"] == "player"
@@ -408,7 +418,7 @@ def test_assign_discord_controller_rejects_missing_character_name(scenario):
 
 
 def test_assign_discord_controller_rejects_child_character(scenario):
-    from bunnyland.mechanics.lifesim import LifeStageComponent
+    from bunnyland.simpacks.lifesim.mechanics import LifeStageComponent
 
     juniper = scenario.actor.world.get_entity(scenario.character)
     juniper.add_component(LifeStageComponent(stage="child"))
@@ -3182,9 +3192,7 @@ async def test_discord_bot_drain_controller_outbox_delivers_only_matching_pendin
     assert matching_after.delivered_at_epoch == scenario.actor.epoch
 
     # Skipped messages are untouched.
-    assert (
-        already_delivered.get_component(ControllerOutboxMessageComponent).delivered_at_epoch == 7
-    )
+    assert already_delivered.get_component(ControllerOutboxMessageComponent).delivered_at_epoch == 7
     assert (
         other_controller.get_component(ControllerOutboxMessageComponent).delivered_at_epoch is None
     )

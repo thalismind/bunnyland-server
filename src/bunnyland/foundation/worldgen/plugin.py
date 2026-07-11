@@ -1,9 +1,10 @@
 """Canonical Worldgen plugin entrypoint."""
 
-from ...mechanics.tutorial import (
+from bunnyland.foundation.tutorial.mechanics import (
     HungryCourierControllerComponent,
     install_tutorial,
 )
+
 from ...plugins.ids import WORLDGEN
 from ...plugins.model import (
     ContentContribution,

@@ -37,17 +37,17 @@ from bunnyland.core import (
 )
 from bunnyland.core.controllers import LLMControllerComponent
 from bunnyland.core.events import SpeechSaidEvent
-from bunnyland.llm_agents import ControllerDispatch, OllamaAgent, OpenRouterAgent, tool_schemas
-from bunnyland.llm_agents.agent import CHARACTER_SYSTEM_PROMPT
-from bunnyland.mechanics.persona import (
+from bunnyland.foundation.persona.mechanics import (
     GoalComponent,
     PersonaProfileComponent,
     PreferenceComponent,
     TraitSetComponent,
 )
+from bunnyland.llm_agents import ControllerDispatch, OllamaAgent, OpenRouterAgent, tool_schemas
+from bunnyland.llm_agents.agent import CHARACTER_SYSTEM_PROMPT
 from bunnyland.memory import install_memory
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_persona_fragments
-from bunnyland.plugins.builtin import CORE_VERBS
+from bunnyland.plugins.ids import CORE_VERBS
 from bunnyland.prompts.builder import PromptBuilder, render_prompt
 from bunnyland.server.app import create_app
 from bunnyland.server.character_chat import ALLOWED_CHAT_TOOLS, build_character_chat_service
@@ -342,9 +342,7 @@ async def test_live_character_agent_records_prompt_tools_metrics_and_traces(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", PROVIDERS)
-async def test_live_world_agent_records_history_metrics_and_traces(
-    provider, live_otel_capture
-):
+async def test_live_world_agent_records_history_metrics_and_traces(provider, live_otel_capture):
     span_exporter, metric_reader = live_otel_capture
     agent = _world_agent(provider)
     model = _world_options(provider, max_rooms=1).model

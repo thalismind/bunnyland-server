@@ -1,6 +1,7 @@
 """Canonical Mechanisms plugin entrypoint."""
 
-from ...mechanics.mechanisms import install_mechanisms
+from bunnyland.foundation.mechanisms.mechanics import install_mechanisms
+
 from ...plugins.ids import (
     CORE_VERBS,
     MECHANISMS,

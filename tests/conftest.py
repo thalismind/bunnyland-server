@@ -25,6 +25,7 @@ from bunnyland.core import (
     WorldActor,
     spawn_entity,
 )
+from bunnyland.plugins import PluginRegistry, bunnyland_plugins
 
 
 @dataclass
@@ -49,6 +50,9 @@ def build_scenario(
     initiative: float = 1.0,
 ) -> Scenario:
     actor = WorldActor()
+    actor.plugins = PluginRegistry(bunnyland_plugins())
+    for _owner, definition in actor.plugins.actions.values():
+        actor.register_action_definition(definition)
     actor.register_handler(MoveHandler())
     world = actor.world
 

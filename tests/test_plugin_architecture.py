@@ -10,6 +10,7 @@ import pytest
 from relics import Component, Edge
 
 from bunnyland.core import (
+    GenerationChild,
     GenerationDelta,
     GenerationEdge,
     GenerationError,
@@ -29,9 +30,9 @@ from bunnyland.plugins import (
     PluginRegistry,
     RuntimeContribution,
     apply_plugins,
+    bunnyland_plugins,
     resolve_order,
 )
-from bunnyland.plugins.builtin import bunnyland_plugins
 from bunnyland.plugins.registry import placement_order
 from bunnyland.worldgen import collect_generators
 
@@ -111,24 +112,21 @@ def test_registry_namespaces_same_named_event_classes_and_uses_exact_identity():
 
 
 def test_dragonsim_is_the_single_owner_of_quest_contracts():
-    from bunnyland.mechanics.daggersim import (
-        GeneratedQuestComponent,
-        QuestGeneratedEvent,
-        QuestTemplateComponent,
-    )
-    from bunnyland.mechanics.daggersim import (
+    from bunnyland.simpacks.daggersim.mechanics import (
         QuestCompletedEvent as DaggerQuestCompletedEvent,
     )
+    from bunnyland.simpacks.daggersim.mechanics import QuestGeneratedEvent, QuestTemplateComponent
     from bunnyland.simpacks.dragonsim.events import QuestCompletedEvent
+    from bunnyland.simpacks.dragonsim.quests import QuestProvenanceComponent
 
     registry = PluginRegistry(bunnyland_plugins())
 
     assert DaggerQuestCompletedEvent is QuestCompletedEvent
     assert registry.event_key(QuestCompletedEvent) == "bunnyland.dragonsim:QuestCompletedEvent"
     assert registry.event_key(QuestGeneratedEvent) == "bunnyland.dragonsim:QuestGeneratedEvent"
-    assert registry.components["GeneratedQuestComponent"] == (
+    assert registry.components["QuestProvenanceComponent"] == (
         "bunnyland.dragonsim",
-        GeneratedQuestComponent,
+        QuestProvenanceComponent,
     )
     assert registry.components["QuestTemplateComponent"] == (
         "bunnyland.dragonsim",
@@ -253,7 +251,7 @@ def test_registry_validates_capability_namespaces_aliases_and_indexes():
     assert registry.integrations[(plugin.id, "weather")].name == "weather"
     assert registry.events
     assert registry.actions == {}
-    assert registry.worldgen_hooks == ()
+    assert not hasattr(registry, "worldgen_hooks")
     assert registry.enabled("bunnyland.core")
     assert registry.placement("bunnyland.core") is PluginPlacement.CORE
     assert placement_order("inner") < placement_order("outer")
@@ -302,7 +300,7 @@ def test_canonical_builtin_package_entrypoints_are_independently_importable():
         "bunnyland.foundation.worldgen": "bunnyland.worldgen",
     }
     for module_name, plugin_id in expected.items():
-        module = import_module(module_name)
+        module = import_module(f"{module_name}.plugin")
         assert module.plugin().id == plugin_id
         assert [plugin.id for plugin in module.bunnyland_plugins()] == [plugin_id]
 
@@ -329,9 +327,7 @@ def test_registry_backed_generator_collection_and_runtime_factory_flattening():
                 Plugin(
                     id="pack.bad",
                     name="Bad",
-                    content=ContentContribution(
-                        generation_aliases={"old": "pack.bad.missing"}
-                    ),
+                    content=ContentContribution(generation_aliases={"old": "pack.bad.missing"}),
                 )
             ]
         )
@@ -405,8 +401,11 @@ def test_optional_awareness_may_be_cyclic_and_installs_after_all_contracts():
 
 
 def test_storyteller_installation_uses_incidents_from_the_complete_registry():
-    from bunnyland.mechanics.storyteller import IncidentDefinition, StorytellerConsequence
-    from bunnyland.plugins.builtin import CORE_VERBS, STORYTELLER
+    from bunnyland.foundation.storyteller.mechanics import (
+        IncidentDefinition,
+        StorytellerConsequence,
+    )
+    from bunnyland.plugins.ids import CORE_VERBS, STORYTELLER
 
     custom = Plugin(
         id="pack.weather",
@@ -415,11 +414,7 @@ def test_storyteller_installation_uses_incidents_from_the_complete_registry():
             incident_definitions=(IncidentDefinition(id="squall", cost=1.0, priority=100),)
         ),
     )
-    selected = [
-        plugin
-        for plugin in bunnyland_plugins()
-        if plugin.id in {CORE_VERBS, STORYTELLER}
-    ]
+    selected = [plugin for plugin in bunnyland_plugins() if plugin.id in {CORE_VERBS, STORYTELLER}]
     actor = WorldActor()
     apply_plugins([*selected, custom], actor)
 
@@ -506,9 +501,7 @@ async def test_reaction_limits_defer_deliveries_and_stop_causal_loops():
     cascade = EventBus(max_causal_hops=2)
 
     async def continue_cascade(event: CascadeEvent):
-        await cascade.publish(
-            CascadeEvent(**event_base(0, generation=event.generation + 1))
-        )
+        await cascade.publish(CascadeEvent(**event_base(0, generation=event.generation + 1)))
 
     cascade.subscribe(CascadeEvent, continue_cascade, reaction_id="loop")
     diagnostics: list[ReactionCascadeLimitedEvent] = []
@@ -747,9 +740,7 @@ async def test_generation_pipeline_rejects_unregistered_and_foreign_edges():
             GenerationRequest(entity_kind="item", capabilities=("pack.bad.value",))
         )
 
-    owner = Plugin(
-        id="pack.owner", name="Owner", ecs=EcsContribution(edges=(MarkerEdge,))
-    )
+    owner = Plugin(id="pack.owner", name="Owner", ecs=EcsContribution(edges=(MarkerEdge,)))
     with pytest.raises(GenerationError, match="cannot provide edge"):
         await GenerationPipeline(PluginRegistry([owner, plugin])).compile(
             GenerationRequest(entity_kind="item", capabilities=("pack.bad.value",))
@@ -807,9 +798,7 @@ async def test_generation_pipeline_rejects_conflicts_failures_and_wrong_owners()
         def enrich(self, request):
             return GenerationDelta(components=(MarkerComponent(),))
 
-    owner = Plugin(
-        id="pack.one", name="One", ecs=EcsContribution(components=(MarkerComponent,))
-    )
+    owner = Plugin(id="pack.one", name="One", ecs=EcsContribution(components=(MarkerComponent,)))
     consumer = Plugin(
         id="pack.two",
         name="Two",
@@ -834,7 +823,12 @@ async def test_generation_pipeline_accepts_repeatable_edges_and_child_requests()
         async def enrich(self, request):
             return GenerationDelta(
                 edges=(GenerationEdge(MarkerEdge(), target.id),),
-                children=(GenerationRequest(entity_kind="item"),),
+                children=(
+                    GenerationChild(
+                        request=GenerationRequest(entity_kind="item"),
+                        parent_edge=MarkerEdge(),
+                    ),
+                ),
                 satisfies=self.capabilities,
             )
 
@@ -852,7 +846,142 @@ async def test_generation_pipeline_accepts_repeatable_edges_and_child_requests()
     )
 
     assert plan.edges[0].target_id == target.id
-    assert plan.children[0].parent_request_id == plan.request.request_id
+    assert plan.children[0].request.parent_request_id == plan.request.request_id
+
+    class ExplicitChildEnricher:
+        capabilities = ()
+
+        def enrich(self, request):
+            return GenerationDelta(
+                children=(
+                    GenerationChild(
+                        request=GenerationRequest(
+                            entity_kind="item",
+                            request_id="explicit-child",
+                            parent_request_id=request.request_id,
+                        ),
+                        parent_edge=MarkerEdge(),
+                    ),
+                )
+            )
+
+    explicit_plugin = plugin.model_copy(
+        update={"content": ContentContribution(generation_enrichers=(ExplicitChildEnricher(),))}
+    )
+    explicit = await GenerationPipeline(PluginRegistry([explicit_plugin])).compile(
+        GenerationRequest(entity_kind="room")
+    )
+    assert explicit.children[0].request.request_id == "explicit-child"
+
+
+async def test_generation_pipeline_rejects_invalid_child_contracts():
+    @dataclass(frozen=True)
+    class ForeignEdge(Edge):
+        pass
+
+    @dataclass(frozen=True)
+    class UnregisteredEdge(Edge):
+        pass
+
+    @dataclass(frozen=True)
+    class UnregisteredComponent(Component):
+        pass
+
+    owner = Plugin(
+        id="pack.owner",
+        name="Owner",
+        ecs=EcsContribution(components=(MarkerComponent,), edges=(ForeignEdge,)),
+    )
+
+    async def rejected(delta, message):
+        class InvalidChildEnricher:
+            capabilities = ()
+
+            def enrich(self, request):
+                return delta
+
+        consumer = Plugin(
+            id="pack.consumer",
+            name="Consumer",
+            ecs=EcsContribution(components=(OtherComponent,), edges=(MarkerEdge,)),
+            content=ContentContribution(generation_enrichers=(InvalidChildEnricher(),)),
+        )
+        with pytest.raises(GenerationError, match=message):
+            await GenerationPipeline(PluginRegistry([owner, consumer])).compile(
+                GenerationRequest(entity_kind="room")
+            )
+
+    request = GenerationRequest(entity_kind="item")
+    await rejected(GenerationDelta(children=(object(),)), "must be GenerationChild")
+    await rejected(
+        GenerationDelta(
+            children=(GenerationChild(request=request, parent_edge=UnregisteredEdge()),)
+        ),
+        "unregistered parent edge",
+    )
+    await rejected(
+        GenerationDelta(children=(GenerationChild(request=request, parent_edge=ForeignEdge()),)),
+        "cannot use parent edge",
+    )
+    await rejected(
+        GenerationDelta(
+            children=(
+                GenerationChild(
+                    request=request,
+                    parent_edge=MarkerEdge(),
+                    additional_parent_edges=(MarkerEdge(),),
+                ),
+            )
+        ),
+        "duplicate parent edge",
+    )
+    await rejected(
+        GenerationDelta(
+            children=(
+                GenerationChild(
+                    request=request,
+                    parent_edge=MarkerEdge(),
+                    components=(UnregisteredComponent(),),
+                ),
+            )
+        ),
+        "unregistered component",
+    )
+    await rejected(
+        GenerationDelta(
+            children=(
+                GenerationChild(
+                    request=request,
+                    parent_edge=MarkerEdge(),
+                    components=(MarkerComponent(),),
+                ),
+            )
+        ),
+        "cannot provide child component",
+    )
+    await rejected(
+        GenerationDelta(
+            children=(
+                GenerationChild(
+                    request=request,
+                    parent_edge=MarkerEdge(),
+                    components=(OtherComponent(), OtherComponent()),
+                ),
+            )
+        ),
+        "duplicate component",
+    )
+    await rejected(
+        GenerationDelta(
+            children=(
+                GenerationChild(
+                    request=GenerationRequest(entity_kind="item", parent_request_id="different"),
+                    parent_edge=MarkerEdge(),
+                ),
+            )
+        ),
+        "different parent",
+    )
 
 
 async def test_generation_plan_edge_application_validates_string_and_entity_references():
@@ -868,9 +997,7 @@ async def test_generation_plan_edge_application_validates_string_and_entity_refe
     _apply_plan_edges(actor, source, plan)
     assert source.has_relationship(MarkerEdge, target.id)
 
-    entity_plan = type(
-        "Plan", (), {"edges": (GenerationEdge(MarkerEdge("second"), target.id),)}
-    )()
+    entity_plan = type("Plan", (), {"edges": (GenerationEdge(MarkerEdge("second"), target.id),)})()
     _validate_plan_edges(actor, entity_plan)
     _apply_plan_edges(actor, source, entity_plan)
 
@@ -879,45 +1006,150 @@ async def test_generation_plan_edge_application_validates_string_and_entity_refe
         _validate_plan_edges(actor, invalid)
 
 
-async def test_legacy_generation_adapter_awaits_callable_hooks_and_ignores_nonhandlers():
+async def test_declarative_generation_finalizer_applies_owned_components_and_edges():
+    from bunnyland.core import spawn_entity
     from bunnyland.core.events import GeneratedEntityEvent
-    from bunnyland.worldgen.instantiate import _finalize_legacy_hooks
+    from bunnyland.worldgen.instantiate import _finalize_generation
 
     actor = WorldActor()
-    seen: list[str] = []
+    source = spawn_entity(actor.world, [])
+    target = spawn_entity(actor.world, [])
 
-    async def hook(event):
-        seen.append(event.entity_id)
+    class Finalizer:
+        capabilities = ()
 
-    actor._worldgen_hooks.extend((object(), hook))
+        def enrich(self, request):
+            return GenerationDelta()
+
+        async def finalize(self, actor, event):
+            return GenerationDelta(
+                components=(MarkerComponent("final"),),
+                edges=(GenerationEdge(MarkerEdge(), target.id),),
+            )
+
+    apply_plugins(
+        [
+            Plugin(
+                id="pack.final",
+                name="Final",
+                ecs=EcsContribution(components=(MarkerComponent,), edges=(MarkerEdge,)),
+                content=ContentContribution(generation_enrichers=(Finalizer(),)),
+            )
+        ],
+        actor,
+    )
     event = GeneratedEntityEvent(
         **event_base(
             0,
             seed="seed",
-            entity_id="entity_1",
+            entity_id=str(source.id),
             entity_key="one",
             entity_kind="item",
         )
     )
-    await _finalize_legacy_hooks(actor, event)
-    assert seen == ["entity_1"]
-    assert event.needs == ()
+    await _finalize_generation(actor, event)
+    assert source.get_component(MarkerComponent).value == "final"
+    assert source.has_relationship(MarkerEdge, target.id)
 
 
-def test_legacy_type_discovery_rejects_loaded_schema_v1_name_collisions():
+async def test_generation_finalizer_rejects_invalid_deltas_and_ownership():
+    from bunnyland.core import spawn_entity
+    from bunnyland.core.events import GeneratedEntityEvent
+    from bunnyland.worldgen.instantiate import _finalize_generation
+
+    async def run(finalizers, *, ecs=None):
+        actor = WorldActor()
+        source = spawn_entity(actor.world, [])
+        apply_plugins(
+            [
+                Plugin(
+                    id="pack.final-errors",
+                    name="Final Errors",
+                    ecs=ecs or EcsContribution(),
+                    content=ContentContribution(generation_enrichers=tuple(finalizers)),
+                )
+            ],
+            actor,
+        )
+        event = GeneratedEntityEvent(
+            **event_base(
+                0,
+                seed="seed",
+                entity_id=str(source.id),
+                entity_key="one",
+                entity_kind="item",
+            )
+        )
+        await _finalize_generation(actor, event)
+
+    class WrongResult:
+        def enrich(self, request):
+            return GenerationDelta()
+
+        def finalize(self, actor, event):
+            return object()
+
+    with pytest.raises(GenerationError, match="expected GenerationDelta"):
+        await run((WrongResult(),))
+
+    class ComponentFinalizer:
+        def enrich(self, request):
+            return GenerationDelta()
+
+        def finalize(self, actor, event):
+            return GenerationDelta(components=(MarkerComponent(),))
+
+    with pytest.raises(GenerationError, match="cannot finalize component"):
+        await run((ComponentFinalizer(),))
+    with pytest.raises(GenerationError, match="conflicting finalized component"):
+        await run(
+            (ComponentFinalizer(), ComponentFinalizer()),
+            ecs=EcsContribution(components=(MarkerComponent,)),
+        )
+
+    class EdgeFinalizer:
+        def __init__(self, target):
+            self.target = target
+
+        def enrich(self, request):
+            return GenerationDelta()
+
+        def finalize(self, actor, event):
+            return GenerationDelta(edges=(GenerationEdge(MarkerEdge(), self.target),))
+
+    with pytest.raises(GenerationError, match="cannot finalize edge"):
+        await run((EdgeFinalizer("missing"),))
+    with pytest.raises(GenerationError, match="missing entity"):
+        await run(
+            (EdgeFinalizer("missing"),),
+            ecs=EcsContribution(edges=(MarkerEdge,)),
+        )
+
+
+def test_type_registries_ignore_unowned_loaded_subclasses():
     from bunnyland.persistence import type_registries
 
-    duplicate_component = type(
-        "IdentityComponent", (Component,), {"__module__": "bunnyland.fake"}
-    )
-    with pytest.raises(PluginError, match="duplicate persisted component"):
-        type_registries()
-    duplicate_component.__name__ = "LegacyIdentityComponent"
-
+    duplicate_component = type("IdentityComponent", (Component,), {"__module__": "bunnyland.fake"})
     duplicate_edge = type("Contains", (Edge,), {"__module__": "bunnyland.fake"})
-    with pytest.raises(PluginError, match="duplicate persisted edge"):
-        type_registries()
-    duplicate_edge.__name__ = "LegacyContains"
+    components, edges = type_registries(PluginRegistry(()))
+
+    assert components["IdentityComponent"] is not duplicate_component
+    assert edges["Contains"] is not duplicate_edge
+
+
+def test_registry_consumers_reject_unconfigured_world_actor():
+    from bunnyland.scripting.runtime import ScriptRuntimeError, install_scripting
+    from bunnyland.server.patches import _component_registry as patch_components
+    from bunnyland.server.patches import _edge_registry as patch_edges
+    from bunnyland.server.schema import _component_registry as schema_components
+    from bunnyland.server.schema import _edge_registry as schema_edges
+
+    actor = WorldActor()
+    for lookup in (patch_components, patch_edges, schema_components, schema_edges):
+        with pytest.raises(RuntimeError, match="PluginRegistry"):
+            lookup(actor)
+    with pytest.raises(ScriptRuntimeError, match="PluginRegistry"):
+        install_scripting(actor, [])
 
 
 def test_canonical_plugin_entrypoints_do_not_depend_on_builtin_catalogue():
@@ -930,9 +1162,7 @@ def test_canonical_plugin_entrypoints_do_not_depend_on_builtin_catalogue():
 def test_bundled_generation_uses_declarative_enrichers_not_runtime_hooks():
     registry = PluginRegistry(bunnyland_plugins())
 
-    assert tuple(plugin_id for plugin_id, _hook in registry.worldgen_hooks) == (
-        "bunnyland.toonsim",
-    )
+    assert not hasattr(registry, "worldgen_hooks")
     providers = {plugin_id for plugin_id, _enricher in registry.generation_enrichers}
     assert {
         "bunnyland.core",
@@ -946,7 +1176,7 @@ def test_bundled_generation_uses_declarative_enrichers_not_runtime_hooks():
 
 
 def test_actor_action_catalogue_contains_only_enabled_plugin_actions():
-    from bunnyland.plugins.builtin import CORE_VERBS
+    from bunnyland.plugins.ids import CORE_VERBS
 
     core = next(plugin for plugin in bunnyland_plugins() if plugin.id == CORE_VERBS)
     actor = WorldActor()
@@ -969,7 +1199,12 @@ def test_storyteller_resolution_rules_are_pack_owned_and_registry_backed():
         "bunnyland.dragonsim",
     } <= providers
     storyteller_source = (
-        Path(__file__).parents[1] / "src" / "bunnyland" / "mechanics" / "storyteller.py"
+        Path(__file__).parents[1]
+        / "src"
+        / "bunnyland"
+        / "foundation"
+        / "storyteller"
+        / "mechanics.py"
     ).read_text()
     assert '"PacifiedComponent"' not in storyteller_source
     assert '"GeneratedQuestComponent"' not in storyteller_source

@@ -1,6 +1,6 @@
 """Canonical Storyteller plugin entrypoint."""
 
-from ...mechanics.storyteller import (
+from bunnyland.foundation.storyteller.mechanics import (
     IncidentBudgetComponent,
     IncidentComponent,
     IncidentGeneratedEvent,
@@ -16,6 +16,7 @@ from ...mechanics.storyteller import (
     install_storyteller,
     storyteller_fragments,
 )
+
 from ...plugins.model import (
     CommandContribution,
     ContentContribution,

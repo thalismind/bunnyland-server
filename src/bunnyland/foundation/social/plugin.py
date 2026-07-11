@@ -1,6 +1,6 @@
 """Canonical Social plugin entrypoint."""
 
-from ...mechanics.social import (
+from bunnyland.foundation.social.mechanics import (
     GossipClaimComponent,
     KnowsGossip,
     ObligationComponent,
@@ -14,6 +14,7 @@ from ...mechanics.social import (
     obligation_fragments,
     relationship_fragments,
 )
+
 from ...plugins.ids import (
     CORE_VERBS,
     SOCIAL,

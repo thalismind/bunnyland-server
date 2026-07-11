@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from bunnyland.simpacks.lifesim.mechanics import configure_lifesim_aging
 
 from . import telemetry
 from .claims import ClaimSecretRegistry
@@ -27,22 +30,23 @@ from .core.world_actor import WorldActor
 from .discord.claim import assign_discord_controller
 from .engine import GameLoop
 from .llm_agents import DEFAULT_MODEL, ControllerDispatch, ScriptedAgent
-from .mechanics.lifesim import configure_lifesim_aging
 from .memory import install_memory
+from .migrations import migrate_snapshot
 from .persistence import WorldMeta, load_world, save_world
+from .persistence_yaml import YAMLPersistenceDriver
 from .plugins import (
     PluginError,
+    PluginRegistry,
     PluginRuntimeContext,
     apply_plugins,
     bunnyland_plugins,
     collect_persona_fragments,
     collect_prompt_fragments,
-    load_modules,
     resolve_order,
     select,
     validate_plugin_config,
 )
-from .plugins.builtin import (
+from .plugins.ids import (
     BARBARIANSIM,
     COLONYSIM,
     CORE_VERBS,
@@ -50,6 +54,7 @@ from .plugins.builtin import (
     GARDENSIM,
     LIFESIM,
     MCP,
+    MEDIA,
     NUKESIM,
     VOIDSIM,
     WORLDGEN,
@@ -62,7 +67,6 @@ from .worldgen import (
     traced_generate,
 )
 
-BUILTIN_MODULE = "bunnyland.plugins.builtin"
 #: Ollama Cloud endpoint; the API key authenticates against it.
 OLLAMA_CLOUD_HOST = "https://ollama.com"
 STARTER_PACKS: dict[str, tuple[str, ...]] = {
@@ -131,14 +135,14 @@ def load_dotenv(path: str | Path = ".env") -> None:
 
 
 def select_plugins(
-    modules: list[str],
     enabled_ids: list[str] | None,
     extra_enabled_ids: tuple[str, ...] = (),
     starter_pack: str | None = None,
 ) -> list:
-    """Collect builtin + requested plugins and select which are enabled."""
+    """Discover installed plugins and select which are enabled."""
     plugins = list(bunnyland_plugins())
-    plugins.extend(load_modules(modules))
+    if enabled_ids is not None and MEDIA not in enabled_ids:
+        enabled_ids = [MEDIA, *enabled_ids]
     if starter_pack:
         pack_ids = STARTER_PACKS.get(starter_pack)
         if pack_ids is None:
@@ -158,9 +162,9 @@ def select_plugins(
     return selected
 
 
-def build_actor(modules: list[str], enabled_ids: list[str] | None) -> tuple[WorldActor, list]:
-    """Create an actor and apply builtin + requested plugins; return (actor, applied)."""
-    chosen = select_plugins(modules, enabled_ids)
+def build_actor(enabled_ids: list[str] | None) -> tuple[WorldActor, list]:
+    """Create an actor and apply installed requested plugins; return (actor, applied)."""
+    chosen = select_plugins(enabled_ids)
     actor = WorldActor()
     applied = apply_plugins(chosen, actor)
     return actor, applied
@@ -263,7 +267,6 @@ def _validate_serve_args(args) -> None:
 def _load_serve_plugins(args) -> tuple[list, list, PluginRuntimeContext]:
     try:
         plugins = select_plugins(
-            args.module,
             args.plugin,
             extra_enabled_ids=(MCP,) if args.mcp else (),
             starter_pack=args.starter_pack or os.environ.get("BUNNYLAND_STARTER_PACK") or None,
@@ -309,12 +312,11 @@ def _serve_credentials(args) -> ServeCredentials:
     openrouter_api_key = openrouter_server_url = None
 
     if args.llm or getattr(args, "character_chat", False):
-        openrouter_api_key = (
-            getattr(args, "openrouter_api_key", None) or os.environ.get("OPENROUTER_API_KEY")
+        openrouter_api_key = getattr(args, "openrouter_api_key", None) or os.environ.get(
+            "OPENROUTER_API_KEY"
         )
-        openrouter_server_url = (
-            getattr(args, "openrouter_server_url", None)
-            or os.environ.get("OPENROUTER_SERVER_URL")
+        openrouter_server_url = getattr(args, "openrouter_server_url", None) or os.environ.get(
+            "OPENROUTER_SERVER_URL"
         )
         host = getattr(args, "ollama_host", None) or os.environ.get(
             "OLLAMA_HOST", OLLAMA_CLOUD_HOST
@@ -371,7 +373,11 @@ async def _load_or_generate_world(
     plugin_context = plugin_context or PluginRuntimeContext()
     if args.load:
         try:
-            actor, meta = load_world(args.load, plugins=plugins, plugin_context=plugin_context)
+            actor, meta = load_world(
+                args.load,
+                registry=PluginRegistry(plugins),
+                plugin_context=plugin_context,
+            )
         except PluginError as exc:
             logging.getLogger(__name__).error("plugin loading failed: %s", exc)
             raise SystemExit(2) from exc
@@ -464,10 +470,7 @@ def _build_provider_agent(args, credentials: ServeCredentials, models: ServeMode
     if args.llm_provider not in providers:
         raise SystemExit(f"no LLM agent configured for provider {args.llm_provider!r}")
     agent = ProviderRouterAgent(providers, default_provider=args.llm_provider)
-    print(
-        f"Driving characters with default {args.llm_provider} model "
-        f"{models.character_model!r}."
-    )
+    print(f"Driving characters with default {args.llm_provider} model {models.character_model!r}.")
     return agent
 
 
@@ -631,13 +634,10 @@ async def _run_serve_runtime(
 ) -> int:
     max_ticks = args.ticks if args.ticks > 0 else None
     display_ticks = (
-        discord_playtest.resolved_ticks(max_ticks)
-        if discord_playtest is not None
-        else max_ticks
+        discord_playtest.resolved_ticks(max_ticks) if discord_playtest is not None else max_ticks
     )
     print(
-        f"Running game loop "
-        f"({'forever' if display_ticks is None else f'{display_ticks} ticks'})..."
+        f"Running game loop ({'forever' if display_ticks is None else f'{display_ticks} ticks'})..."
     )
     if discord_playtest is not None:
         return await _run_discord_playtest_runtime(loop, discord_playtest, max_ticks)
@@ -701,8 +701,7 @@ async def _run_api_runtime(
                 definitions_path=args.controller_definitions,
                 worldgen_options=_worldgen_options(args, credentials, models),
                 plugins=plugins,
-                admin_token=args.admin_token
-                or os.environ.get("BUNNYLAND_ADMIN_TOKEN"),
+                admin_token=args.admin_token or os.environ.get("BUNNYLAND_ADMIN_TOKEN"),
                 player_client_ids=getattr(args, "player_client_id", None),
                 admin_client_ids=getattr(args, "admin_client_id", None),
                 imagegen=imagegen,
@@ -746,7 +745,6 @@ def _build_imagegen_service(actor, plugins, config_block=None):
 
 
 _CONFIG_ARG_FLAGS: dict[str, tuple[str, ...]] = {
-    "module": ("--module", "--import"),
     "plugin": ("--plugin",),
     "starter_pack": ("--starter-pack",),
     "seed": ("--seed",),
@@ -849,8 +847,12 @@ async def _serve(args) -> None:
     _configure_claim_timeout(actor, args, models)
     claim_secrets = ClaimSecretRegistry()
     loop = GameLoop(
-        actor, dispatch, tick_seconds=args.tick_seconds, time_scale=args.time_scale,
-        autosave=autosave, autosave_every=args.autosave_every,
+        actor,
+        dispatch,
+        tick_seconds=args.tick_seconds,
+        time_scale=args.time_scale,
+        autosave=autosave,
+        autosave_every=args.autosave_every,
         paused=bool(args.load and args.load_paused),
     )
     discord_bot = _setup_discord_bot(
@@ -889,16 +891,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bunnyland")
     sub = parser.add_subparsers(dest="command")
 
+    migrate_world = sub.add_parser(
+        "migrate-world", help="convert a schema-v1 JSON or YAML world to schema v2"
+    )
+    migrate_world.add_argument("source", help="source world; never modified")
+    migrate_world.add_argument("dest", help="destination JSON or YAML world")
+
     serve = sub.add_parser("serve", help="generate a world and run the game loop")
     serve.add_argument("--config", default=None, help="read server settings from YAML")
-    serve.add_argument(
-        "--module",
-        "--import",
-        dest="module",
-        action="append",
-        default=[],
-        help="import a plugin module",
-    )
     serve.add_argument("--plugin", action="append", default=None, help="enable a plugin id")
     serve.add_argument(
         "--starter-pack",
@@ -999,8 +999,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=("discord", "web"),
         default=None,
         help=(
-            "controller kind subject to claim timeout; repeat for more "
-            "(default: discord and web)"
+            "controller kind subject to claim timeout; repeat for more (default: discord and web)"
         ),
     )
     serve.add_argument(
@@ -1167,14 +1166,6 @@ def main(argv: list[str] | None = None) -> int:
         "--cli", action="store_true", help="use prompt mode instead of Textual"
     )
     config_wizard.add_argument(
-        "--module",
-        "--import",
-        dest="module",
-        action="append",
-        default=[],
-        help="import a plugin module for the Textual checklist",
-    )
-    config_wizard.add_argument(
         "--plugin",
         action="append",
         default=None,
@@ -1182,6 +1173,27 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(raw_argv)
+
+    if args.command == "migrate-world":
+        source = Path(args.source)
+        dest = Path(args.dest)
+        if source.resolve() == dest.resolve():
+            parser.error("migrate-world SOURCE and DEST must be different paths")
+        driver = YAMLPersistenceDriver()
+        snapshot = (
+            driver.read_snapshot(source)
+            if source.suffix.lower() in {".yaml", ".yml"}
+            else json.loads(source.read_text())
+        )
+        migrated = migrate_snapshot(snapshot)
+        WorldMeta.model_validate(migrated.get("bunnyland", {}))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.suffix.lower() in {".yaml", ".yml"}:
+            driver.save_snapshot(migrated, dest)
+        else:
+            dest.write_text(json.dumps(migrated, indent=2) + "\n")
+        print(f"Migrated {source} -> {dest} (schema v2).")
+        return 0
 
     if args.command == "chat":
         from .chat import main as chat_main
@@ -1202,9 +1214,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.claim_fallback:
             tui_args.extend(["--claim-fallback", args.claim_fallback])
         if args.claim_timeout_minutes is not None:
-            tui_args.extend(
-                ["--claim-timeout-minutes", str(args.claim_timeout_minutes)]
-            )
+            tui_args.extend(["--claim-timeout-minutes", str(args.claim_timeout_minutes)])
         if args.no_icons:
             tui_args.append("--no-icons")
         return tui_main(tui_args)
@@ -1223,8 +1233,6 @@ def main(argv: list[str] | None = None) -> int:
             wizard_args.append("--non-interactive")
         if args.cli:
             wizard_args.append("--cli")
-        for module in args.module:
-            wizard_args.extend(["--import", module])
         for plugin in args.plugin or []:
             wizard_args.extend(["--plugin", plugin])
         return config_wizard_main(wizard_args)

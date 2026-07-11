@@ -47,7 +47,7 @@ from .instantiate import (
     _apply_plan_edges,
     _character_components,
     _cooperative_components,
-    _finalize_legacy_hooks,
+    _finalize_generation,
     _generation_intent,
     _object_components,
     _wire_controller,
@@ -63,12 +63,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger("bunnyland.worldgen")
 
 _OPPOSITES = {
-    "north": "south", "south": "north",
-    "east": "west", "west": "east",
-    "up": "down", "down": "up",
-    "in": "out", "out": "in",
-    "northeast": "southwest", "southwest": "northeast",
-    "northwest": "southeast", "southeast": "northwest",
+    "north": "south",
+    "south": "north",
+    "east": "west",
+    "west": "east",
+    "up": "down",
+    "down": "up",
+    "in": "out",
+    "out": "in",
+    "northeast": "southwest",
+    "southwest": "northeast",
+    "northwest": "southeast",
+    "southeast": "northwest",
 }
 
 
@@ -83,9 +89,7 @@ def _opposite(direction: str) -> str:
 class RecursiveWorldGenerator:
     """Builds a world graph node-by-node from a ``WorldAgent``."""
 
-    def __init__(
-        self, actor: WorldActor, builder: WorldAgent, *, max_rooms: int = 6
-    ) -> None:
+    def __init__(self, actor: WorldActor, builder: WorldAgent, *, max_rooms: int = 6) -> None:
         self.actor = actor
         self.builder = builder
         self.max_rooms = max_rooms
@@ -191,9 +195,7 @@ class RecursiveWorldGenerator:
         self.stats["rooms"] += 1
         return key
 
-    def _with_unique_room_title(
-        self, key: str, spec: RoomNodeProposal
-    ) -> RoomNodeProposal:
+    def _with_unique_room_title(self, key: str, spec: RoomNodeProposal) -> RoomNodeProposal:
         used = {_normalize_room_title(title) for title in self._room_titles.values()}
         base = spec.title.strip() or key.replace("_", " ").title()
         if _normalize_room_title(base) not in used:
@@ -251,9 +253,7 @@ class RecursiveWorldGenerator:
         else:
             self.stats["dropped"] += 1
 
-    async def _spawn_sealed_door(
-        self, room_key: str, door: DoorProposal
-    ) -> tuple[str, EntityId]:
+    async def _spawn_sealed_door(self, room_key: str, door: DoorProposal) -> tuple[str, EntityId]:
         object_key = f"door_{room_key}_{door.direction}"
         generation = _generation_intent(
             GenerationIntentComponent(description=door.beyond_hint, tags=("sealed",)),
@@ -396,19 +396,19 @@ class RecursiveWorldGenerator:
         entity_id = self.result.rooms[room_key]
         generation = self.world.get_entity(entity_id).get_component(GenerationIntentComponent)
         event = RoomGeneratedEvent(
-                **self.actor._event_base(
-                    seed=self._seed,
-                    entity_id=str(entity_id),
-                    entity_key=room_key,
-                    entity_kind="room",
-                    room_id=str(entity_id),
-                    room_key=room_key,
-                    generation=generation,
-                    biome=spec.biome,
-                    indoor=spec.indoor,
-                )
+            **self.actor._event_base(
+                seed=self._seed,
+                entity_id=str(entity_id),
+                entity_key=room_key,
+                entity_kind="room",
+                room_id=str(entity_id),
+                room_key=room_key,
+                generation=generation,
+                biome=spec.biome,
+                indoor=spec.indoor,
             )
-        await _finalize_legacy_hooks(self.actor, event)
+        )
+        await _finalize_generation(self.actor, event)
         await self.actor.bus.publish(event)
 
     async def _publish_object_generated(
@@ -422,19 +422,19 @@ class RecursiveWorldGenerator:
     ) -> None:
         generation = self.world.get_entity(entity_id).get_component(GenerationIntentComponent)
         event = ObjectGeneratedEvent(
-                **self.actor._event_base(
-                    seed=self._seed,
-                    entity_id=str(entity_id),
-                    entity_key=object_key,
-                    entity_kind=generation.entity_kind,
-                    object_key=object_key,
-                    room_id=str(room_id) if room_id is not None else None,
-                    container_id=str(container_id) if container_id is not None else None,
-                    containment_mode=mode.value,
-                    generation=generation,
-                )
+            **self.actor._event_base(
+                seed=self._seed,
+                entity_id=str(entity_id),
+                entity_key=object_key,
+                entity_kind=generation.entity_kind,
+                object_key=object_key,
+                room_id=str(room_id) if room_id is not None else None,
+                container_id=str(container_id) if container_id is not None else None,
+                containment_mode=mode.value,
+                generation=generation,
             )
-        await _finalize_legacy_hooks(self.actor, event)
+        )
+        await _finalize_generation(self.actor, event)
         await self.actor.bus.publish(event)
 
     async def _publish_character_generated(
@@ -442,18 +442,18 @@ class RecursiveWorldGenerator:
     ) -> None:
         generation = self.world.get_entity(entity_id).get_component(GenerationIntentComponent)
         event = CharacterGeneratedEvent(
-                **self.actor._event_base(
-                    seed=self._seed,
-                    entity_id=str(entity_id),
-                    entity_key=character.key,
-                    entity_kind="character",
-                    character_key=character.key,
-                    room_id=str(room_id),
-                    generation=generation,
-                    species=character.species,
-                )
+            **self.actor._event_base(
+                seed=self._seed,
+                entity_id=str(entity_id),
+                entity_key=character.key,
+                entity_kind="character",
+                character_key=character.key,
+                room_id=str(room_id),
+                generation=generation,
+                species=character.species,
             )
-        await _finalize_legacy_hooks(self.actor, event)
+        )
+        await _finalize_generation(self.actor, event)
         await self.actor.bus.publish(event)
 
 

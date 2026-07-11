@@ -25,9 +25,10 @@ from bunnyland.core import (
 )
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers.inventory import DropHandler
-from bunnyland.mechanics.colonysim import ResourceStackComponent
-from bunnyland.mechanics.daggersim import BountyComponent, BountyPostedEvent, DebtComponent
-from bunnyland.mechanics.neonsim import (
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
+from bunnyland.simpacks.colonysim.mechanics import ResourceStackComponent
+from bunnyland.simpacks.daggersim.mechanics import BountyComponent, BountyPostedEvent, DebtComponent
+from bunnyland.simpacks.neonsim.mechanics import (
     TRACE_SECONDS,
     AccessDeniedEvent,
     AccessGrantedEvent,
@@ -172,8 +173,7 @@ from bunnyland.mechanics.neonsim import (
     install_neonsim,
     neonsim_fragments,
 )
-from bunnyland.mechanics.voidsim import DroneComponent
-from bunnyland.prompts import ComponentPromptContext, PromptPerspective
+from bunnyland.simpacks.voidsim.mechanics import DroneComponent
 
 
 def _install(actor):
@@ -293,8 +293,18 @@ def _other_character(scenario, *, room=None, components=()):
     return entity.id
 
 
-def _hackable(scenario, name="terminal", *, security=1, owner="", breached=False,
-              privilege="user", backdoored=False, device_type="terminal", extra=()):
+def _hackable(
+    scenario,
+    name="terminal",
+    *,
+    security=1,
+    owner="",
+    breached=False,
+    privilege="user",
+    backdoored=False,
+    device_type="terminal",
+    extra=(),
+):
     return _room_entity(
         scenario,
         name,
@@ -566,9 +576,7 @@ async def test_covert_entry_into_patrolled_restricted_area_is_detected_once():
     trespass: list[TrespassDetectedEvent] = []
     scenario.actor.bus.subscribe(TrespassDetectedEvent, trespass.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "enter-district", target_id=str(site), covert=True)
-    )
+    await scenario.actor.submit(_cmd(scenario, "enter-district", target_id=str(site), covert=True))
     await scenario.actor.tick(1.0)
     await scenario.actor.tick(1.0)
 
@@ -620,9 +628,7 @@ async def test_covert_entry_without_patrol_escapes_detection():
     trespass: list[TrespassDetectedEvent] = []
     scenario.actor.bus.subscribe(TrespassDetectedEvent, trespass.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "enter-district", target_id=str(site), covert=True)
-    )
+    await scenario.actor.submit(_cmd(scenario, "enter-district", target_id=str(site), covert=True))
     await scenario.actor.tick(1.0)
     await scenario.actor.tick(1.0)
 
@@ -642,9 +648,7 @@ async def test_covert_entry_into_unrestricted_secured_site_is_not_detected():
     trespass: list[TrespassDetectedEvent] = []
     scenario.actor.bus.subscribe(TrespassDetectedEvent, trespass.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "enter-district", target_id=str(site), covert=True)
-    )
+    await scenario.actor.submit(_cmd(scenario, "enter-district", target_id=str(site), covert=True))
     await scenario.actor.tick(1.0)
     await scenario.actor.tick(1.0)
 
@@ -717,9 +721,7 @@ async def test_bribe_guard_consumes_full_scrip_stack():
     scenario = build_scenario()
     _install(scenario.actor)
     scrip = _give_scrip(scenario, 30)
-    gate = _room_entity(
-        scenario, "toll booth", "checkpoint", [CheckpointComponent(bribe_cost=30)]
-    )
+    gate = _room_entity(scenario, "toll booth", "checkpoint", [CheckpointComponent(bribe_cost=30)])
 
     await scenario.actor.submit(_cmd(scenario, "bribe", target_id=str(gate)))
     await scenario.actor.tick(1.0)
@@ -757,9 +759,7 @@ async def test_sneak_through_calm_checkpoint_succeeds():
     passed: list[CheckpointPassedEvent] = []
     scenario.actor.bus.subscribe(CheckpointPassedEvent, passed.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "sneak", target_id=str(gate))
-    )
+    await scenario.actor.submit(_cmd(scenario, "sneak", target_id=str(gate)))
     await scenario.actor.tick(1.0)
 
     assert passed[0].method == "stealth"
@@ -952,9 +952,12 @@ def test_component_prompt_fragments_cover_suppressed_and_alternate_neon_branches
     assert secured_device.get_component(DeviceComponent).prompt_fragments(
         ComponentPromptContext.for_entity(world, secured_device, target=character)
     ) == ("Device terminal: terminal (unpowered, disabled, security 5, backdoored).",)
-    assert wiped_evidence.get_component(RecordedEvidenceComponent).prompt_fragments(
-        ComponentPromptContext.for_entity(world, wiped_evidence, target=character)
-    ) == ()
+    assert (
+        wiped_evidence.get_component(RecordedEvidenceComponent).prompt_fragments(
+            ComponentPromptContext.for_entity(world, wiped_evidence, target=character)
+        )
+        == ()
+    )
     assert sale_implant.get_component(ImplantComponent).prompt_fragments(
         ComponentPromptContext.for_entity(world, sale_implant, target=character)
     ) == ("Implant for sale: optic (optic, legal).",)
@@ -1010,14 +1013,12 @@ async def test_enter_district_rejects_wrong_kind():
     assert any("wrong kind" in event.reason for event in rejects)
 
 
-
 async def test_show_credentials_rejects_non_checkpoint():
     scenario = build_scenario()
     _install(scenario.actor)
     site = _room_entity(scenario, "plaza", "site", [CyberpunkSiteComponent()])
     rejects = await _reject(scenario, _cmd(scenario, "show-credentials", target_id=str(site)))
     assert any("wrong kind" in event.reason for event in rejects)
-
 
 
 async def test_bribe_guard_rejects_non_checkpoint():
@@ -1053,14 +1054,11 @@ async def test_bribe_guard_rejects_with_no_scrip_at_all():
     assert any("not enough scrip" in event.reason for event in rejects)
 
 
-
 async def test_sneak_rejects_non_checkpoint():
     scenario = build_scenario()
     _install(scenario.actor)
     site = _room_entity(scenario, "plaza", "site", [CyberpunkSiteComponent()])
-    rejects = await _reject(
-        scenario, _cmd(scenario, "sneak", target_id=str(site))
-    )
+    rejects = await _reject(scenario, _cmd(scenario, "sneak", target_id=str(site)))
     assert any("no handler accepted sneak" in event.reason for event in rejects)
 
 
@@ -1070,9 +1068,7 @@ async def test_sneak_rejects_alerted_checkpoint():
     gate = _room_entity(
         scenario, "gate", "checkpoint", [CheckpointComponent(clearance_required=2, alerted=True)]
     )
-    rejects = await _reject(
-        scenario, _cmd(scenario, "sneak", target_id=str(gate))
-    )
+    rejects = await _reject(scenario, _cmd(scenario, "sneak", target_id=str(gate)))
     assert any("watching too closely" in event.reason for event in rejects)
 
 
@@ -1081,11 +1077,8 @@ async def test_sneak_rejects_when_already_cleared():
     _install(scenario.actor)
     _give_clearance(scenario, clearance=5)
     gate = _room_entity(scenario, "gate", "checkpoint", [CheckpointComponent(clearance_required=2)])
-    rejects = await _reject(
-        scenario, _cmd(scenario, "sneak", target_id=str(gate))
-    )
+    rejects = await _reject(scenario, _cmd(scenario, "sneak", target_id=str(gate)))
     assert any("show credentials" in event.reason for event in rejects)
-
 
 
 async def test_claim_safehouse_rejects_non_safehouse():
@@ -1114,7 +1107,6 @@ async def test_claim_safehouse_rejects_when_already_yours():
     )
     rejects = await _reject(scenario, _cmd(scenario, "claim-safehouse", target_id=str(house)))
     assert any("already hold this safehouse" in event.reason for event in rejects)
-
 
 
 async def test_case_location_rejects_non_site():
@@ -2385,9 +2377,7 @@ async def test_post_bounty_uses_daggersim_bounty_state_and_event():
     posted: list[BountyPostedEvent] = []
     scenario.actor.bus.subscribe(BountyPostedEvent, posted.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "post-bounty", target_id=str(target), amount=300)
-    )
+    await scenario.actor.submit(_cmd(scenario, "post-bounty", target_id=str(target), amount=300))
     await scenario.actor.tick(1.0)
 
     assert posted[0].amount == 300
@@ -2960,9 +2950,7 @@ async def test_license_implant_makes_it_legal():
     licensed: list[ImplantLicensedEvent] = []
     scenario.actor.bus.subscribe(ImplantLicensedEvent, licensed.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "license-implant", implant_id=str(implant), fee=40)
-    )
+    await scenario.actor.submit(_cmd(scenario, "license-implant", implant_id=str(implant), fee=40))
     await scenario.actor.tick(1.0)
 
     assert licensed[0].implant_id == str(implant)
@@ -3215,9 +3203,7 @@ async def test_service_implant_rejects_when_no_maintenance():
     _install(scenario.actor)
     _give_scrip(scenario, 50)
     clinic = _clinic(scenario)
-    implant = _install_implant(
-        scenario, components=[ImplantComponent(maintenance_interval=0.0)]
-    )
+    implant = _install_implant(scenario, components=[ImplantComponent(maintenance_interval=0.0)])
     rejects = await _reject(
         scenario, _cmd(scenario, "service-implant", implant_id=str(implant), clinic_id=str(clinic))
     )
@@ -3306,9 +3292,7 @@ async def test_service_implant_rejects_without_scrip():
     scenario = build_scenario()
     _install(scenario.actor)
     clinic = _clinic(scenario, service_cost=20)
-    implant = _install_implant(
-        scenario, components=[ImplantComponent(maintenance_interval=3600.0)]
-    )
+    implant = _install_implant(scenario, components=[ImplantComponent(maintenance_interval=3600.0)])
     rejects = await _reject(
         scenario, _cmd(scenario, "service-implant", implant_id=str(implant), clinic_id=str(clinic))
     )
@@ -3475,9 +3459,7 @@ async def test_plant_evidence_without_a_room_leaves_the_file_uncontained():
     planted: list[EvidencePlantedEvent] = []
     scenario.actor.bus.subscribe(EvidencePlantedEvent, planted.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "plant-evidence", target_id=str(scenario.character))
-    )
+    await scenario.actor.submit(_cmd(scenario, "plant-evidence", target_id=str(scenario.character)))
     await scenario.actor.tick(1.0)
 
     assert planted[0].target_id == str(scenario.character)
@@ -3770,7 +3752,7 @@ async def test_leak_file_with_non_character_target_skips_heat():
 
 # --- helper coverage: dangling/edge-case branches ------------------------------------
 
-from bunnyland.mechanics import neonsim as _neon  # noqa: E402
+from bunnyland.simpacks.neonsim import mechanics as _neon  # noqa: E402
 
 
 def test_payload_entity_id_returns_none_when_no_key_matches():
@@ -3884,9 +3866,7 @@ def test_scrip_stack_skips_non_inventory_and_non_scrip_items():
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
     # Non-inventory scrip is skipped by the mode filter.
-    room_scrip = spawn_entity(
-        world, [ResourceStackComponent(resource_type="scrip", quantity=5)]
-    )
+    room_scrip = spawn_entity(world, [ResourceStackComponent(resource_type="scrip", quantity=5)])
     character.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), room_scrip.id)
     # Inventory item that is not scrip is skipped by the resource-type check.
     _inventory_entity(
@@ -3997,9 +3977,7 @@ async def test_wipe_evidence_for_unparented_record():
     )
     # Keep it reachable for the handler by leaving it in the room; the parent
     # branch runs. Instead exercise the no-parent path via the helper directly.
-    orphan = spawn_entity(
-        world, [RecordedEvidenceComponent(subject_id="y", device_id="cam2")]
-    )
+    orphan = spawn_entity(world, [RecordedEvidenceComponent(subject_id="y", device_id="cam2")])
     _neon._remove_item(world, orphan.id)
     assert not world.has_entity(orphan.id)
     assert world.has_entity(parse_entity_id(str(record)))
@@ -4112,9 +4090,7 @@ async def test_scan_implant_skips_already_breached_implants():
         ],
     )
     subject_entity.add_relationship(HasImplant(slot="body"), breached_implant.id)
-    rejects = await _reject(
-        scenario, _cmd(scenario, "exploit-implant", target_id=str(subject))
-    )
+    rejects = await _reject(scenario, _cmd(scenario, "exploit-implant", target_id=str(subject)))
     assert rejects
 
 
@@ -4151,5 +4127,3 @@ def test_neonsim_fragments_dedup_when_installed_implant_is_also_reachable():
     character.add_relationship(HasImplant(slot="body"), implant)
     lines = _neon.neonsim_fragments(world, character)
     assert len([line for line in lines if "reflex" in line]) == 1
-
-

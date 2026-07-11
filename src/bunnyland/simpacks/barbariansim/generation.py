@@ -1,6 +1,6 @@
 """barbariansim generation contribution compatibility surface."""
 
-from ...worldgen.enrichment import BarbarianWorldgenHook, LegacyWorldgenEnricher
+from ...worldgen.enrichment import BarbarianWorldgenHook, ComponentPlanEnricher
 
 CAPABILITIES = (
     "bunnyland.barbariansim.armor",
@@ -60,7 +60,7 @@ ALIASES = {
     "treasure": "bunnyland.barbariansim.treasure",
     "weapon": "bunnyland.barbariansim.weapon",
 }
-GENERATION_ENRICHER = LegacyWorldgenEnricher(
+GENERATION_ENRICHER = ComponentPlanEnricher(
     BarbarianWorldgenHook, provided_capabilities=CAPABILITIES
 )
 

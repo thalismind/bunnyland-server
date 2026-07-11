@@ -364,13 +364,9 @@ def test_equipment_handlers_reject_duplicate_hold_and_wear_directly():
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), hat.id)
 
     assert execute_item_handler(HoldHandler(), scenario, tool.id).ok is True
-    assert execute_item_handler(HoldHandler(), scenario, tool.id).reason == (
-        "already holding item"
-    )
+    assert execute_item_handler(HoldHandler(), scenario, tool.id).reason == ("already holding item")
     assert execute_item_handler(WearHandler(), scenario, hat.id).ok is True
-    assert execute_item_handler(WearHandler(), scenario, hat.id).reason == (
-        "already wearing item"
-    )
+    assert execute_item_handler(WearHandler(), scenario, hat.id).reason == ("already wearing item")
 
 
 def test_take_from_open_container_succeeds():
@@ -411,9 +407,7 @@ def test_put_rejects_fixed_in_place_item():
         item.id,
     )
 
-    assert execute_put(scenario, item.id).reason == (
-        "item is fixed in place and cannot be moved"
-    )
+    assert execute_put(scenario, item.id).reason == ("item is fixed in place and cannot be moved")
 
 
 async def test_put_into_container_in_room():

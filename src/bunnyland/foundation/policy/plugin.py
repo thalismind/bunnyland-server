@@ -1,11 +1,12 @@
 """Canonical Policy plugin entrypoint."""
 
-from ...mechanics.policy import (
+from bunnyland.foundation.policy.mechanics import (
     CharacterBoundaryComponent,
     WorldPolicyComponent,
     boundary_fragments,
     install_policy,
 )
+
 from ...plugins.ids import (
     CORE_VERBS,
     POLICY,

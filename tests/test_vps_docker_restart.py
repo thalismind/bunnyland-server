@@ -22,7 +22,7 @@ def test_vps_docker_restart_pulls_images_before_up(tmp_path: Path) -> None:
     restart_script.chmod(0o755)
 
     sudo_bin = fake_bin / "sudo"
-    sudo_bin.write_text("#!/bin/sh\nexec \"$@\"\n")
+    sudo_bin.write_text('#!/bin/sh\nexec "$@"\n')
     sudo_bin.chmod(0o755)
 
     docker_bin = fake_bin / "docker"

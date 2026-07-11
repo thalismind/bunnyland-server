@@ -21,10 +21,32 @@ from bunnyland.core import (
     RoomComponent,
     SleepingComponent,
     SuspendedComponent,
+    replace_component,
     spawn_entity,
 )
 from bunnyland.core.events import ActorMovedEvent, EventVisibility, SpeechSaidEvent
-from bunnyland.mechanics.dinosim import (
+from bunnyland.foundation.meters.mechanics import Meter
+from bunnyland.foundation.needs.mechanics import HungerComponent, ThirstComponent, need_fragments
+from bunnyland.foundation.persona.mechanics import (
+    GoalComponent,
+    PersonaProfileComponent,
+    PreferenceComponent,
+    TraitSetComponent,
+)
+from bunnyland.foundation.policy.mechanics import BoundaryTag, CharacterBoundaryComponent
+from bunnyland.foundation.social.mechanics import SocialBond
+from bunnyland.memory import InMemoryStore
+from bunnyland.plugins import bunnyland_plugins, collect_persona_fragments
+from bunnyland.projections import RecentContextProjection, RoomSummaryProjection
+from bunnyland.prompts import (
+    ComponentPromptContext,
+    PerspectivePhrase,
+    PromptBuilder,
+    PromptPerspective,
+    render_prompt,
+)
+from bunnyland.prompts.builder import _status
+from bunnyland.simpacks.dinosim.mechanics import (
     ApexPredatorComponent,
     ArmyResponseComponent,
     BoneComponent,
@@ -50,7 +72,7 @@ from bunnyland.mechanics.dinosim import (
     TrainingComponent,
     WeakPointComponent,
 )
-from bunnyland.mechanics.dragonsim import (
+from bunnyland.simpacks.dragonsim.mechanics import (
     AncientBeastComponent,
     ArtifactComponent,
     EncounterZoneComponent,
@@ -65,35 +87,17 @@ from bunnyland.mechanics.dragonsim import (
     MemberOf,
     PointOfInterestComponent,
     PotionRecipeComponent,
+    QuestAcceptedBy,
     QuestComponent,
-    QuestStageComponent,
+    QuestProvenanceComponent,
+    QuestStateComponent,
     SpellComponent,
     SpellCooldownComponent,
     SurrenderComponent,
+    TracksQuest,
     VoiceInscriptionComponent,
     WantedComponent,
 )
-from bunnyland.mechanics.meter import Meter
-from bunnyland.mechanics.needs import HungerComponent, ThirstComponent, need_fragments
-from bunnyland.mechanics.persona import (
-    GoalComponent,
-    PersonaProfileComponent,
-    PreferenceComponent,
-    TraitSetComponent,
-)
-from bunnyland.mechanics.policy import BoundaryTag, CharacterBoundaryComponent
-from bunnyland.mechanics.social import SocialBond
-from bunnyland.memory import InMemoryStore
-from bunnyland.plugins import bunnyland_plugins, collect_persona_fragments
-from bunnyland.projections import RecentContextProjection, RoomSummaryProjection
-from bunnyland.prompts import (
-    ComponentPromptContext,
-    PerspectivePhrase,
-    PromptBuilder,
-    PromptPerspective,
-    render_prompt,
-)
-from bunnyland.prompts.builder import _status
 
 
 def add_item(scenario, room_id, name):
@@ -153,15 +157,11 @@ def test_build_context_has_stable_persona_surface_from_plugins():
         world,
         [IdentityComponent(name="Hazel", kind="character")],
     )
-    character.add_component(
-        PersonaProfileComponent(voice="warm and direct", role="forager")
-    )
+    character.add_component(PersonaProfileComponent(voice="warm and direct", role="forager"))
     character.add_component(TraitSetComponent(traits=("curious",)))
     character.add_component(PreferenceComponent(likes=("berries",)))
     character.add_component(GoalComponent(active_goals=("find the elder",)))
-    character.add_component(
-        CharacterBoundaryComponent(denied=frozenset({BoundaryTag.PREGNANCY}))
-    )
+    character.add_component(CharacterBoundaryComponent(denied=frozenset({BoundaryTag.PREGNANCY})))
     character.add_relationship(SocialBond(affinity=0.5, familiarity=0.5), hazel.id)
     builder = PromptBuilder(
         world,
@@ -594,15 +594,18 @@ def test_component_prompt_context_lazy_room_siblings_and_inventory_helpers():
 
 
 def test_prompt_perspective_choose_selects_by_person():
-    assert PromptPerspective(perspective="first-person").choose(
-        first="I", second="you", third="they"
-    ) == "I"
-    assert PromptPerspective(perspective="second-person").choose(
-        first="I", second="you", third="they"
-    ) == "you"
-    assert PromptPerspective(perspective="third-person").choose(
-        first="I", second="you", third="they"
-    ) == "they"
+    assert (
+        PromptPerspective(perspective="first-person").choose(first="I", second="you", third="they")
+        == "I"
+    )
+    assert (
+        PromptPerspective(perspective="second-person").choose(first="I", second="you", third="they")
+        == "you"
+    )
+    assert (
+        PromptPerspective(perspective="third-person").choose(first="I", second="you", third="they")
+        == "they"
+    )
 
 
 def test_component_prompt_context_handles_missing_world_and_room():
@@ -698,63 +701,101 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     )
 
     discovered = entity("ruin", PointOfInterestComponent(discovered=True))
-    marker = entity(
-        "camp", MapMarkerComponent(label="Camp", marked_by=(str(character.id),))
-    )
+    marker = entity("camp", MapMarkerComponent(label="Camp", marked_by=(str(character.id),)))
     inactive_zone = entity("zone", EncounterZoneComponent(active=False))
     active_quest = entity(
         "quest",
         QuestComponent(
             quest_id="q1",
             title="Find the relic",
-            status="active",
-            accepted_by=(str(character.id),),
         ),
+        QuestStateComponent(status="active"),
     )
     declined_quest = entity(
-        "declined", QuestComponent(quest_id="q2", title="Bad idea", status="declined")
+        "declined",
+        QuestComponent(quest_id="q2", title="Bad idea"),
+        QuestStateComponent(status="declined"),
     )
-    stage = entity(
-        "stage",
-        QuestStageComponent(quest_id="q1", stage=2, tracked_by=(str(character.id),), branch="a"),
+    offered_quest = entity(
+        "offered",
+        QuestComponent(quest_id="q3", title="Unaccepted"),
+        QuestStateComponent(),
     )
+    generated_quest = entity(
+        "generated",
+        QuestComponent(quest_id="q4", title="Generated"),
+        QuestStateComponent(),
+        QuestProvenanceComponent(generator="bunnyland.dragonsim"),
+    )
+    hidden_generated_quest = entity(
+        "hidden generated",
+        QuestComponent(quest_id="q5", title="Hidden"),
+        QuestStateComponent(status="active"),
+        QuestProvenanceComponent(generator="bunnyland.dragonsim"),
+    )
+    hidden_generated_quest.add_relationship(QuestAcceptedBy(), other.id)
+    active_quest.add_relationship(QuestAcceptedBy(), character.id)
+    character.add_relationship(TracksQuest(), active_quest.id)
+    replace_component(active_quest, QuestStateComponent(status="active", stage=2, branch="a"))
     faction = entity("Companions", FactionComponent(name="Companions"))
     known_spell = entity("spark", SpellComponent(name="Spark"))
     character.add_relationship(KnowsSpell(), known_spell.id)
 
-    assert discovered.get_component(PointOfInterestComponent).prompt_fragments(
-        target_ctx(discovered)
-    ) == ()
+    assert (
+        discovered.get_component(PointOfInterestComponent).prompt_fragments(target_ctx(discovered))
+        == ()
+    )
     assert marker.get_component(MapMarkerComponent).prompt_fragments(target_ctx(marker)) == (
         "Map marker: Camp (landmark).",
     )
-    assert marker.get_component(MapMarkerComponent).prompt_fragments(
-        observer_target_ctx(marker)
-    ) == ()
+    assert (
+        marker.get_component(MapMarkerComponent).prompt_fragments(observer_target_ctx(marker)) == ()
+    )
     assert MapMarkerComponent(label="Hidden").prompt_fragments(self_ctx) == ()
-    assert inactive_zone.get_component(EncounterZoneComponent).prompt_fragments(
-        target_ctx(inactive_zone)
-    ) == ()
+    assert (
+        inactive_zone.get_component(EncounterZoneComponent).prompt_fragments(
+            target_ctx(inactive_zone)
+        )
+        == ()
+    )
     assert EncounterZoneComponent(zone_type="crypt", danger_rating=3).prompt_fragments(
         self_ctx
     ) == ("Encounter zone nearby: crypt (danger 3).",)
     assert active_quest.get_component(QuestComponent).prompt_fragments(
         target_ctx(active_quest)
     ) == ("Active quest: Find the relic.",)
-    assert active_quest.get_component(QuestComponent).prompt_fragments(
-        observer_target_ctx(active_quest)
-    ) == ()
+    assert (
+        active_quest.get_component(QuestComponent).prompt_fragments(
+            observer_target_ctx(active_quest)
+        )
+        == ()
+    )
     assert declined_quest.get_component(QuestComponent).prompt_fragments(
         target_ctx(declined_quest)
     ) == ("Declined quest: Bad idea.",)
-    assert QuestComponent(quest_id="q3", title="Ignored").prompt_fragments(self_ctx) == ()
-    assert stage.get_component(QuestStageComponent).prompt_fragments(target_ctx(stage)) == (
-        "Tracked quest stage 2 for q1, branch a.",
+    assert (
+        offered_quest.get_component(QuestComponent).prompt_fragments(target_ctx(offered_quest))
+        == ()
     )
-    assert stage.get_component(QuestStageComponent).prompt_fragments(
-        observer_target_ctx(stage)
-    ) == ()
-    assert QuestStageComponent(quest_id="q1").prompt_fragments(self_ctx) == ()
+    assert generated_quest.get_component(QuestComponent).prompt_fragments(
+        target_ctx(generated_quest)
+    ) == ("Generated quest: Generated (offered).",)
+    assert (
+        hidden_generated_quest.get_component(QuestComponent).prompt_fragments(
+            target_ctx(hidden_generated_quest)
+        )
+        == ()
+    )
+    assert QuestComponent(quest_id="q3", title="Ignored").prompt_fragments(self_ctx) == ()
+    assert active_quest.get_component(QuestStateComponent).prompt_fragments(
+        target_ctx(active_quest)
+    ) == ("Tracked quest stage 2, branch a.",)
+    assert (
+        active_quest.get_component(QuestStateComponent).prompt_fragments(
+            observer_target_ctx(active_quest)
+        )
+        == ()
+    )
     assert JailComponent(faction_id="hold", release_epoch=10).prompt_fragments(other_ctx) == ()
     assert JailComponent(faction_id="hold", release_epoch=10).prompt_fragments(self_ctx) == (
         "Serving jail time for hold until 10.",
@@ -763,14 +804,17 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     assert MemberOf(rank="thane").prompt_fragments(
         ComponentPromptContext.for_entity(world, character, target=faction)
     ) == ("You are a thane of Companions.",)
-    assert MemberOf(rank="thane").prompt_fragments(
-        ComponentPromptContext.for_entity(
-            world, character, perspective=other_ctx.perspective, target=faction
+    assert (
+        MemberOf(rank="thane").prompt_fragments(
+            ComponentPromptContext.for_entity(
+                world, character, perspective=other_ctx.perspective, target=faction
+            )
         )
-    ) == ()
-    assert AncientBeastComponent(name="Alduin", soul_absorbed=True).prompt_fragments(
-        self_ctx
-    ) == ("Ancient beast nearby: Alduin (soul absorbed).",)
+        == ()
+    )
+    assert AncientBeastComponent(name="Alduin", soul_absorbed=True).prompt_fragments(self_ctx) == (
+        "Ancient beast nearby: Alduin (soul absorbed).",
+    )
     assert GreatSoulComponent(souls=0).prompt_fragments(self_ctx) == ()
     assert WantedComponent(amounts={"hold": 40}).prompt_fragments(other_ctx) == ()
     assert WantedComponent(amounts={"hold": 40}).prompt_fragments(self_ctx) == (
@@ -780,24 +824,28 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     assert LockDifficultyComponent(difficulty=5).prompt_fragments(
         ComponentPromptContext.for_entity(world, entity("chest"))
     ) == ("Locked target nearby: chest (difficulty 5).",)
-    assert LoreBookComponent(title="Read", read_by=(str(character.id),)).prompt_fragments(
-        target_ctx(known_spell)
-    ) == ()
-    assert LoreBookComponent(title="Herbs", skill_name="alchemy").prompt_fragments(
-        self_ctx
-    ) == ("Unread skill book nearby: Herbs (alchemy).",)
+    assert (
+        LoreBookComponent(title="Read", read_by=(str(character.id),)).prompt_fragments(
+            target_ctx(known_spell)
+        )
+        == ()
+    )
+    assert LoreBookComponent(title="Herbs", skill_name="alchemy").prompt_fragments(self_ctx) == (
+        "Unread skill book nearby: Herbs (alchemy).",
+    )
     assert MagicComponent().prompt_fragments(other_ctx) == ()
     assert SpellCooldownComponent().prompt_fragments(self_ctx) == ()
     assert SpellCooldownComponent(ready_at_epoch=7).prompt_fragments(self_ctx) == (
         "Spell cooldown nearby: ready at epoch 7.",
     )
     assert SurrenderComponent().prompt_fragments(other_ctx) == ()
-    assert known_spell.get_component(SpellComponent).prompt_fragments(
-        target_ctx(known_spell)
-    ) == ("Spell learned: Spark.",)
-    assert known_spell.get_component(SpellComponent).prompt_fragments(
-        observer_target_ctx(known_spell)
-    ) == ()
+    assert known_spell.get_component(SpellComponent).prompt_fragments(target_ctx(known_spell)) == (
+        "Spell learned: Spark.",
+    )
+    assert (
+        known_spell.get_component(SpellComponent).prompt_fragments(observer_target_ctx(known_spell))
+        == ()
+    )
     unknown_spell = entity("bolt", SpellComponent(name="Bolt"))
     assert unknown_spell.get_component(SpellComponent).prompt_fragments(
         target_ctx(unknown_spell)
@@ -808,9 +856,12 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     assert ArtifactComponent(name="Blade", identified_by=(str(character.id),)).prompt_fragments(
         target_ctx(known_spell)
     ) == ("Artifact nearby: Blade (1 charges, identified).",)
-    assert VoiceInscriptionComponent(word_id="w", studied_by=(str(character.id),)).prompt_fragments(
-        target_ctx(known_spell)
-    ) == ()
+    assert (
+        VoiceInscriptionComponent(word_id="w", studied_by=(str(character.id),)).prompt_fragments(
+            target_ctx(known_spell)
+        )
+        == ()
+    )
     assert VoiceInscriptionComponent(word_id="w").prompt_fragments(target_ctx(known_spell)) == (
         "Voice inscription nearby: spark.",
     )
@@ -831,21 +882,19 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
         EscapeRiskComponent(risk=2.0),
     )
 
-    assert fossil.get_component(FossilFragmentComponent).prompt_fragments(
-        target_ctx(fossil)
-    ) == ("Nearby fossil: fossil (raptor).",)
+    assert fossil.get_component(FossilFragmentComponent).prompt_fragments(target_ctx(fossil)) == (
+        "Nearby fossil: fossil (raptor).",
+    )
     assert FossilSurveyComponent(stabilized=True).prompt_fragments(target_ctx(fossil)) == (
         "Fossil survey fossil: stabilized.",
     )
     assert egg.get_component(EggComponent).prompt_fragments(target_ctx(egg)) == (
         "Nearby egg: egg (raptor, ready to hatch, 37 C).",
     )
-    assert LabIncubationComponent(lab_id="lab", active=False).prompt_fragments(
-        target_ctx(egg)
-    ) == ()
-    assert ContainmentPanicComponent(active=False).prompt_fragments(
-        target_ctx(enclosure)
-    ) == ()
+    assert (
+        LabIncubationComponent(lab_id="lab", active=False).prompt_fragments(target_ctx(egg)) == ()
+    )
+    assert ContainmentPanicComponent(active=False).prompt_fragments(target_ctx(enclosure)) == ()
     assert TrainingComponent().prompt_fragments(target_ctx(enclosure)) == ()
     assert ImprintComponent(imprinted_by="other").prompt_fragments(target_ctx(egg)) == ()
     assert enclosure.get_component(ContainmentPanicComponent).prompt_fragments(
@@ -859,16 +908,19 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     )
     assert FenceComponent().prompt_fragments(self_ctx) == ()
     assert GateComponent().prompt_fragments(self_ctx) == ()
-    assert enclosure.get_component(EscapeRiskComponent).prompt_fragments(
-        target_ctx(enclosure)
-    ) == ("Raptor pen escape risk: 2.",)
+    assert enclosure.get_component(EscapeRiskComponent).prompt_fragments(target_ctx(enclosure)) == (
+        "Raptor pen escape risk: 2.",
+    )
     assert SettlementDamageComponent(repaired=True).prompt_fragments(target_ctx(enclosure)) == ()
     assert WeakPointComponent(exposed=False).prompt_fragments(target_ctx(enclosure)) == ()
     assert ApexPredatorComponent(threat_level=0).prompt_fragments(target_ctx(enclosure)) == ()
     assert ArmyResponseComponent(called=False).prompt_fragments(target_ctx(enclosure)) == ()
-    assert CreatureProductComponent(product_type="egg", quantity=0).prompt_fragments(
-        target_ctx(enclosure)
-    ) == ()
+    assert (
+        CreatureProductComponent(product_type="egg", quantity=0).prompt_fragments(
+            target_ctx(enclosure)
+        )
+        == ()
+    )
     assert HideComponent(harvested=True).prompt_fragments(target_ctx(enclosure)) == ()
     assert BoneComponent(harvested=True).prompt_fragments(target_ctx(enclosure)) == ()
     assert ToxinComponent(quantity=0).prompt_fragments(target_ctx(enclosure)) == ()
@@ -998,9 +1050,7 @@ def test_recall_is_empty_when_query_has_no_content():
     # A room with an empty title and nothing visible produces an empty recall query.
     blank_room = spawn_entity(world, [RoomComponent(title="")])
     world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
-    blank_room.add_relationship(
-        Contains(mode=ContainmentMode.ROOM_CONTENT), scenario.character
-    )
+    blank_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), scenario.character)
     char = world.get_entity(scenario.character)
     char.add_component(MemoryProfileComponent(vector_collection="juniper"))
     store = InMemoryStore()
@@ -1020,8 +1070,8 @@ def test_recall_budget_of_zero_drops_all_memory():
     store = InMemoryStore()
     store.add("juniper", text="The basin water is unsafe.", tags=("basin",), created_at_epoch=1)
 
-    ctx = PromptBuilder(
-        scenario.actor.world, memory_store=store, recall_budget_chars=0
-    ).build(scenario.character)
+    ctx = PromptBuilder(scenario.actor.world, memory_store=store, recall_budget_chars=0).build(
+        scenario.character
+    )
 
     assert ctx.recall == ()

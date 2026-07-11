@@ -13,16 +13,8 @@ from typing import TYPE_CHECKING
 
 from relics import Component, World
 
-from ..core.components import (
-    CharacterComponent,
-    GenerationIntentComponent,
-    IdentityComponent,
-    RoomComponent,
-)
-from ..core.ecs import parse_entity_id, replace_component, spawn_entity
-from ..core.events import CharacterGeneratedEvent, ObjectGeneratedEvent, RoomGeneratedEvent
-from ..core.generation import GenerationDelta, GenerationRequest
-from ..mechanics.barbariansim import (
+from bunnyland.foundation.environment.mechanics import FireComponent, FlammableComponent
+from bunnyland.simpacks.barbariansim.mechanics import (
     ArmorComponent,
     BaseClaimComponent,
     BlessingComponent,
@@ -50,7 +42,7 @@ from ..mechanics.barbariansim import (
     TreasureComponent,
     WeaponComponent,
 )
-from ..mechanics.colonysim import (
+from bunnyland.simpacks.colonysim.mechanics import (
     AllowedAreaComponent,
     BedRestComponent,
     BodyPartHealthComponent,
@@ -85,7 +77,7 @@ from ..mechanics.colonysim import (
     WorkPriorityComponent,
     WorkstationComponent,
 )
-from ..mechanics.daggersim import (
+from bunnyland.simpacks.daggersim.mechanics import (
     AfflictionStigmaComponent,
     AutomapComponent,
     BankComponent,
@@ -97,7 +89,6 @@ from ..mechanics.daggersim import (
     CureQuestHookComponent,
     CustomClassComponent,
     CustomSpellComponent,
-    DaggerQuestRewardComponent,
     DialogueApproachComponent,
     DungeonComponent,
     DungeonObjectiveComponent,
@@ -106,7 +97,6 @@ from ..mechanics.daggersim import (
     EtiquetteSkillComponent,
     ExpansionHookComponent,
     FeedingNeedComponent,
-    GeneratedQuestComponent,
     HostilityComponent,
     IngredientComponent,
     InstitutionComponent,
@@ -120,7 +110,6 @@ from ..mechanics.daggersim import (
     PotionMakerComponent,
     ProceduralSiteComponent,
     PropertyDeedComponent,
-    QuestDeadlineComponent,
     QuestTemplateComponent,
     RecallAnchorComponent,
     RechargeServiceComponent,
@@ -142,7 +131,7 @@ from ..mechanics.daggersim import (
     TravelSupplyComponent,
     UnrealizedLocationComponent,
 )
-from ..mechanics.dinosim import (
+from bunnyland.simpacks.dinosim.mechanics import (
     AncientSampleComponent,
     ApexPredatorComponent,
     ArmorPlateComponent,
@@ -174,7 +163,7 @@ from ..mechanics.dinosim import (
     WaterCreatureComponent,
     WeakPointComponent,
 )
-from ..mechanics.dragonsim import (
+from bunnyland.simpacks.dragonsim.mechanics import (
     AncientBeastComponent,
     ArtifactComponent,
     CarvableComponent,
@@ -196,8 +185,9 @@ from ..mechanics.dragonsim import (
     PotionRecipeComponent,
     QuestComponent,
     QuestObjectiveComponent,
+    QuestProvenanceComponent,
     QuestRewardComponent,
-    QuestStageComponent,
+    QuestStateComponent,
     SpellComponent,
     SpellCooldownComponent,
     StealthComponent,
@@ -206,8 +196,7 @@ from ..mechanics.dragonsim import (
     WantedComponent,
     WordOfPowerComponent,
 )
-from ..mechanics.environment import FireComponent, FlammableComponent
-from ..mechanics.gardensim import (
+from bunnyland.simpacks.gardensim.mechanics import (
     AnimalBreedingComponent,
     AnimalHomeComponent,
     AnimalProductComponent,
@@ -249,7 +238,7 @@ from ..mechanics.gardensim import (
     WateredComponent,
     WeedComponent,
 )
-from ..mechanics.lifesim import (
+from bunnyland.simpacks.lifesim.mechanics import (
     AspirationComponent,
     BillComponent,
     BusinessOwnerComponent,
@@ -267,7 +256,7 @@ from ..mechanics.lifesim import (
     SkillSetComponent,
     WhimComponent,
 )
-from ..mechanics.neonsim import (
+from bunnyland.simpacks.neonsim.mechanics import (
     AccessLevelComponent,
     AugmentationSlotsComponent,
     BlackMarketComponent,
@@ -285,7 +274,7 @@ from ..mechanics.neonsim import (
     SecurityZoneComponent,
     SurveillanceCoverageComponent,
 )
-from ..mechanics.nukesim import (
+from bunnyland.simpacks.nukesim.mechanics import (
     BeaconComponent,
     ChemComponent,
     ChemRecipeComponent,
@@ -320,7 +309,7 @@ from ..mechanics.nukesim import (
     WaterPurifierComponent,
     WaterPurityComponent,
 )
-from ..mechanics.voidsim import (
+from bunnyland.simpacks.voidsim.mechanics import (
     AirlockComponent,
     AlienArtifactComponent,
     AlienSpeciesComponent,
@@ -372,6 +361,16 @@ from ..mechanics.voidsim import (
     XenobiologySampleComponent,
 )
 
+from ..core.components import (
+    CharacterComponent,
+    GenerationIntentComponent,
+    IdentityComponent,
+    RoomComponent,
+)
+from ..core.ecs import parse_entity_id, replace_component, spawn_entity
+from ..core.events import CharacterGeneratedEvent, ObjectGeneratedEvent, RoomGeneratedEvent
+from ..core.generation import GenerationDelta, GenerationRequest
+
 if TYPE_CHECKING:
     from relics import Entity
 
@@ -397,7 +396,7 @@ _DEFAULT_EXPANSION_GENERATOR = "worldgen.recursive"
 
 
 @dataclass(frozen=True)
-class LegacyWorldgenEnricher:
+class ComponentPlanEnricher:
     """Run an existing pure ECS hook as a declarative generation enricher.
 
     Bundled plugins use this adapter while their hook implementations retain save-compatible
@@ -410,8 +409,8 @@ class LegacyWorldgenEnricher:
     capabilities: tuple[str, ...] = ()
     provided_capabilities: tuple[str, ...] = ()
 
-    def bind_components(self, component_types) -> LegacyWorldgenEnricher:
-        return LegacyWorldgenEnricher(
+    def bind_components(self, component_types) -> ComponentPlanEnricher:
+        return ComponentPlanEnricher(
             hook=self.hook,
             component_types=tuple(component_types),
             capabilities=self.capabilities,
@@ -1156,21 +1155,26 @@ class DragonWorldgenHook:
         if _wants(event, "faction") or _mentions(event, "faction", "guild", "clan"):
             replace_component(entity, FactionComponent(name=name))
         if _wants(event, "quest"):
-            replace_component(entity, QuestComponent(quest_id=event.entity_key, title=name))
+            replace_component(
+                entity,
+                QuestComponent(
+                    quest_id=event.entity_key,
+                    title=name,
+                    description=event.intent or name,
+                ),
+            )
+            replace_component(entity, QuestStateComponent())
         if _wants(event, "quest-stage"):
-            replace_component(entity, QuestStageComponent(quest_id=event.entity_key))
+            replace_component(entity, QuestStateComponent())
         if _wants(event, "quest-objective"):
             replace_component(
                 entity,
-                QuestObjectiveComponent(
-                    quest_id=event.entity_key,
-                    description=event.intent or name,
-                ),
+                QuestObjectiveComponent(description=event.intent or name),
             )
         if _wants(event, "quest-reward"):
             replace_component(
                 entity,
-                QuestRewardComponent(quest_id=event.entity_key, description=event.intent or name),
+                QuestRewardComponent(description=event.intent or name),
             )
         if _wants(event, "guard") or _mentions(event, "guard"):
             replace_component(entity, GuardComponent(faction_id=_generated_id(event, "faction")))
@@ -1374,15 +1378,27 @@ class DaggerWorldgenHook:
         if _wants(event, "generated-quest"):
             replace_component(
                 entity,
-                GeneratedQuestComponent(title=name, objective=event.intent or name),
+                QuestComponent(
+                    quest_id=event.entity_key,
+                    title=name,
+                    description=event.intent or name,
+                ),
+            )
+            replace_component(entity, QuestStateComponent())
+            replace_component(
+                entity,
+                QuestProvenanceComponent(
+                    generator="bunnyland.dragonsim",
+                    generated_at_epoch=event.world_epoch,
+                ),
             )
         if _wants(event, "quest-deadline"):
             replace_component(
                 entity,
-                QuestDeadlineComponent(due_at_epoch=event.world_epoch + 86400),
+                QuestStateComponent(due_at_epoch=event.world_epoch + 86400),
             )
         if _wants(event, "dagger-quest-reward"):
-            replace_component(entity, DaggerQuestRewardComponent(item_name=name))
+            replace_component(entity, QuestRewardComponent(description=name))
         if _wants(event, "bank") or _mentions(event, "bank"):
             replace_component(entity, BankComponent(name=name, region_id=event.room_id or ""))
         if _wants(event, "spell-template"):

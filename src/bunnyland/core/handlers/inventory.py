@@ -86,9 +86,10 @@ class TakeHandler:
         if source_id not in _reachable_container_ids(ctx, character):
             return rejected("item is not reachable")
 
-        if not item.has_component(PortableComponent) or not item.get_component(
-            PortableComponent
-        ).can_pick_up:
+        if (
+            not item.has_component(PortableComponent)
+            or not item.get_component(PortableComponent).can_pick_up
+        ):
             return rejected("item cannot be picked up")
 
         if source.has_component(ContainerComponent):
@@ -146,9 +147,10 @@ class PutHandler:
             return rejected("item is not in inventory")
         # A fixed-in-place item (e.g. an installed implant) can be carried but not
         # set down or stashed; if you cannot pick it up, you cannot drop it either.
-        if item.has_component(PortableComponent) and not item.get_component(
-            PortableComponent
-        ).can_pick_up:
+        if (
+            item.has_component(PortableComponent)
+            and not item.get_component(PortableComponent).can_pick_up
+        ):
             return rejected("item is fixed in place and cannot be moved")
 
         room_id = container_of(character)
@@ -170,10 +172,7 @@ class PutHandler:
                 return rejected("container does not allow adding")
             if not container.open:
                 return rejected("container is closed")
-            if (
-                container.max_slots is not None
-                and len(contents(target)) >= container.max_slots
-            ):
+            if container.max_slots is not None and len(contents(target)) >= container.max_slots:
                 return rejected("container is full")
             mode = ContainmentMode.CONTAINER
 
@@ -272,9 +271,7 @@ class UnholdHandler:
         if error is not None:
             return error
         held = [
-            edge
-            for edge, target_id in character.get_relationships(Holding)
-            if target_id == item.id
+            edge for edge, target_id in character.get_relationships(Holding) if target_id == item.id
         ]
         if not held:
             return rejected("item is not held")
@@ -326,9 +323,7 @@ class RemoveHandler:
         if error is not None:
             return error
         worn = [
-            edge
-            for edge, target_id in character.get_relationships(Wearing)
-            if target_id == item.id
+            edge for edge, target_id in character.get_relationships(Wearing) if target_id == item.id
         ]
         if not worn:
             return rejected("item is not worn")

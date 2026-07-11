@@ -27,8 +27,14 @@ from bunnyland.core.controllers import (
     SuspendedControllerComponent,
 )
 from bunnyland.core.events import SpeechSaidEvent
-from bunnyland.plugins import ContentContribution, Plugin, apply_plugins, bunnyland_plugins
-from bunnyland.plugins.builtin import CORE_VERBS
+from bunnyland.plugins import (
+    ContentContribution,
+    Plugin,
+    PluginRegistry,
+    apply_plugins,
+    bunnyland_plugins,
+)
+from bunnyland.plugins.ids import CORE_VERBS
 from bunnyland.scripting import (
     AddComponentPatch,
     AddEntityPatch,
@@ -53,6 +59,12 @@ from bunnyland.scripting import (
     write_script_state,
 )
 from bunnyland.scripting.runtime import install_scripting
+
+_ScriptRuntime = ScriptRuntime
+
+
+def ScriptRuntime(*args, **kwargs):
+    return _ScriptRuntime(*args, registry=PluginRegistry(bunnyland_plugins()), **kwargs)
 
 
 async def test_epoch_trigger_submits_normal_command_once():
@@ -505,9 +517,7 @@ async def test_script_runtime_records_block_errors_without_marking_fired():
                     PatchWorldAction(
                         operations=(
                             SetComponentFieldsPatch(
-                                target=TargetSelector(
-                                    query=EntityQuery(identity_name="Juniper")
-                                ),
+                                target=TargetSelector(query=EntityQuery(identity_name="Juniper")),
                                 component_type="RoomComponent",
                                 fields={"title": "Wrong"},
                             ),

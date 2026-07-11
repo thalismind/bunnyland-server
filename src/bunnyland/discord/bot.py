@@ -101,9 +101,7 @@ logger = logging.getLogger("bunnyland.discord")
 #: Reaction added to a player's message once their command is accepted and queued.
 QUEUED_REACTION = "\N{HOURGLASS WITH FLOWING SAND}"
 PAUSED_REACTION = "\N{DOUBLE VERTICAL BAR}\N{VARIATION SELECTOR-16}"
-META_COMMANDS = frozenset(
-    {"help", "claim", "characters", "fallback", "look", "release", "suspend"}
-)
+META_COMMANDS = frozenset({"help", "claim", "characters", "fallback", "look", "release", "suspend"})
 COMMAND_LIFECYCLE_EVENTS = (
     CommandAcceptedEvent,
     CommandCancelledEvent,
@@ -414,10 +412,7 @@ def render_room_feed_event(event: DomainEvent, actor: WorldActor | None = None) 
         to_room = _feed_entity_name(actor, event.to_room_id) or event.to_room_id
         direction = f" {event.direction}" if event.direction else ""
         summary = f" {event.arrival_summary}" if event.arrival_summary else ""
-        return (
-            f"**{title}**: {actor_name} moved{direction} "
-            f"from {from_room} to {to_room}.{summary}"
-        )
+        return f"**{title}**: {actor_name} moved{direction} from {from_room} to {to_room}.{summary}"
 
     base_fields = {
         "event_id",
@@ -992,13 +987,9 @@ class DiscordBot:
                 await self._reply(ctx, str(exc))
                 return True
             timeout_note = (
-                ""
-                if timeout_seconds is None
-                else f" after {timeout_seconds // 60} minutes"
+                "" if timeout_seconds is None else f" after {timeout_seconds // 60} minutes"
             )
-            await self._reply(
-                ctx, f"{name} will fall back to {normalized}{timeout_note}."
-            )
+            await self._reply(ctx, f"{name} will fall back to {normalized}{timeout_note}.")
             return True
 
         if head == "characters":
@@ -1157,9 +1148,7 @@ class DiscordBot:
                 await self._reply(ctx, str(exc))
                 return
             timeout_note = (
-                ""
-                if timeout_seconds is None
-                else f" after {timeout_seconds // 60} minutes"
+                "" if timeout_seconds is None else f" after {timeout_seconds // 60} minutes"
             )
             await self._reply(ctx, f"{name} will fall back to {normalized}{timeout_note}.")
 

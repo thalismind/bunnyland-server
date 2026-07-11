@@ -39,7 +39,19 @@ from bunnyland.core.events import (
     FortificationBuiltEvent,
     RaidStartedEvent,
 )
-from bunnyland.mechanics.barbariansim import (
+from bunnyland.foundation.policy.mechanics import BoundaryTag, install_policy
+from bunnyland.foundation.storyteller.mechanics import (
+    IncidentBudgetComponent,
+    IncidentComponent,
+    IncidentGeneratedEvent,
+    IncidentSpawned,
+    StorytellerComponent,
+    StorytellerConsequence,
+    default_incident_definitions,
+)
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
+from bunnyland.simpacks.barbariansim.incidents import BARBARIAN_RAID
+from bunnyland.simpacks.barbariansim.mechanics import (
     ArmorComponent,
     AttackHandler,
     BarbarianRaidEnrichment,
@@ -126,22 +138,10 @@ from bunnyland.mechanics.barbariansim import (
     generate_raid_spawn_specs,
     install_barbariansim,
 )
-from bunnyland.mechanics.barbariansim import _ambient_celsius as ambient_celsius
-from bunnyland.mechanics.barbariansim import _armor_rating as armor_rating
-from bunnyland.mechanics.barbariansim import _damage_item as damage_item
-from bunnyland.mechanics.colonysim import install_colonysim
-from bunnyland.mechanics.policy import BoundaryTag, install_policy
-from bunnyland.mechanics.storyteller import (
-    IncidentBudgetComponent,
-    IncidentComponent,
-    IncidentGeneratedEvent,
-    IncidentSpawned,
-    StorytellerComponent,
-    StorytellerConsequence,
-    default_incident_definitions,
-)
-from bunnyland.prompts import ComponentPromptContext, PromptPerspective
-from bunnyland.simpacks.barbariansim.incidents import BARBARIAN_RAID
+from bunnyland.simpacks.barbariansim.mechanics import _ambient_celsius as ambient_celsius
+from bunnyland.simpacks.barbariansim.mechanics import _armor_rating as armor_rating
+from bunnyland.simpacks.barbariansim.mechanics import _damage_item as damage_item
+from bunnyland.simpacks.colonysim.mechanics import install_colonysim
 
 HOUR = 3600.0
 
@@ -766,12 +766,16 @@ def test_barbariansim_parity_handlers_reject_wrong_kind_and_state_directly():
         assert result.ok is False
         assert result.reason == reason
 
-    assert ExploreDangerZoneHandler().execute(
-        ctx, _handler_cmd(scenario, "explore-danger-zone", zone_id=str(zone.id))
-    ).ok
-    assert ExploreDangerZoneHandler().execute(
-        ctx, _handler_cmd(scenario, "explore-danger-zone", zone_id=str(zone.id))
-    ).ok
+    assert (
+        ExploreDangerZoneHandler()
+        .execute(ctx, _handler_cmd(scenario, "explore-danger-zone", zone_id=str(zone.id)))
+        .ok
+    )
+    assert (
+        ExploreDangerZoneHandler()
+        .execute(ctx, _handler_cmd(scenario, "explore-danger-zone", zone_id=str(zone.id)))
+        .ok
+    )
 
 
 async def test_attack_is_blocked_when_pvp_not_enabled():
@@ -1733,9 +1737,7 @@ def test_barbariansim_component_prompt_fragments_cover_self_and_target_context()
     )
     weapon_ctx = ComponentPromptContext.for_entity(world, weapon)
 
-    assert StaminaComponent(current=4, maximum=10).prompt_fragments(self_ctx) == (
-        "Stamina: 4/10.",
-    )
+    assert StaminaComponent(current=4, maximum=10).prompt_fragments(self_ctx) == ("Stamina: 4/10.",)
     assert StaminaComponent(current=4, maximum=10).prompt_fragments(external_ctx) == ()
     assert thrall.get_component(ThrallComponent).prompt_fragments(thrall_ctx) == (
         "Your thrall Captive is set to haul.",
@@ -2078,28 +2080,20 @@ def test_status_component_fragments_are_hidden_from_external_viewers():
     )
 
     # Components whose self-view emits a line but whose external-view is empty.
-    exposure = TemperatureExposureComponent(
-        heat=4.0, cold=2.0, heat_danger=True, cold_danger=True
-    )
+    exposure = TemperatureExposureComponent(heat=4.0, cold=2.0, heat_danger=True, cold_danger=True)
     self_exposure = exposure.prompt_fragments(self_ctx)
     assert "Exposure: heat 4, cold 2." in self_exposure
     assert "You are suffering dangerous heat exposure." in self_exposure
     assert "You are suffering dangerous cold exposure." in self_exposure
     assert exposure.prompt_fragments(external_ctx) == ()
 
-    assert PoisonComponent(severity=2.0).prompt_fragments(self_ctx) == (
-        "Poisoned: severity 2.",
-    )
+    assert PoisonComponent(severity=2.0).prompt_fragments(self_ctx) == ("Poisoned: severity 2.",)
     assert PoisonComponent(severity=2.0).prompt_fragments(external_ctx) == ()
 
-    assert CorruptionComponent(amount=3.0).prompt_fragments(self_ctx) == (
-        "Corruption: 3.",
-    )
+    assert CorruptionComponent(amount=3.0).prompt_fragments(self_ctx) == ("Corruption: 3.",)
     assert CorruptionComponent(amount=3.0).prompt_fragments(external_ctx) == ()
 
-    assert ArmorComponent(rating=2.0).prompt_fragments(self_ctx) == (
-        "Your armor rating is 2.0.",
-    )
+    assert ArmorComponent(rating=2.0).prompt_fragments(self_ctx) == ("Your armor rating is 2.0.",)
     assert ArmorComponent(rating=2.0).prompt_fragments(external_ctx) == ()
 
     assert DefendingComponent(started_at_epoch=0).prompt_fragments(self_ctx) == (
@@ -2107,19 +2101,13 @@ def test_status_component_fragments_are_hidden_from_external_viewers():
     )
     assert DefendingComponent(started_at_epoch=0).prompt_fragments(external_ctx) == ()
 
-    assert BlessingComponent(name="ember").prompt_fragments(self_ctx) == (
-        "Blessing: ember.",
-    )
+    assert BlessingComponent(name="ember").prompt_fragments(self_ctx) == ("Blessing: ember.",)
     assert BlessingComponent(name="ember").prompt_fragments(external_ctx) == ()
 
-    assert CurseComponent(name="ash").prompt_fragments(self_ctx) == (
-        "Curse: ash severity 1.",
-    )
+    assert CurseComponent(name="ash").prompt_fragments(self_ctx) == ("Curse: ash severity 1.",)
     assert CurseComponent(name="ash").prompt_fragments(external_ctx) == ()
 
-    assert ClimbingSkillComponent(level=3).prompt_fragments(self_ctx) == (
-        "Climbing skill: 3.",
-    )
+    assert ClimbingSkillComponent(level=3).prompt_fragments(self_ctx) == ("Climbing skill: 3.",)
     assert ClimbingSkillComponent(level=3).prompt_fragments(external_ctx) == ()
 
 
@@ -2164,16 +2152,10 @@ def test_attack_uses_requested_body_part_string():
     _weapon(scenario, damage=6.0)
     result = AttackHandler().execute(
         ctx,
-        _handler_cmd(
-            scenario, "attack", target_id=str(target), body_part="left arm"
-        ),
+        _handler_cmd(scenario, "attack", target_id=str(target), body_part="left arm"),
     )
     assert result.ok, result.reason
-    injuries = [
-        e
-        for e in result.events
-        if e.__class__.__name__ == "InjuryAddedEvent"
-    ]
+    injuries = [e for e in result.events if e.__class__.__name__ == "InjuryAddedEvent"]
     assert injuries and injuries[0].body_part == "left arm"
 
 
@@ -2185,9 +2167,7 @@ def test_attack_defaults_to_body_when_body_plan_has_no_parts():
     # A body plan present but with no parts falls back to the generic "body".
     scenario.actor.world.get_entity(target).add_component(BodyPlanComponent(parts=()))
     _weapon(scenario, damage=6.0)
-    result = AttackHandler().execute(
-        ctx, _handler_cmd(scenario, "attack", target_id=str(target))
-    )
+    result = AttackHandler().execute(ctx, _handler_cmd(scenario, "attack", target_id=str(target)))
     assert result.ok, result.reason
     injuries = [e for e in result.events if e.__class__.__name__ == "InjuryAddedEvent"]
     assert injuries and injuries[0].body_part == "body"
@@ -2297,9 +2277,7 @@ def test_parity_handlers_reject_targets_in_another_room():
         "far wall", "building", [BuildingComponent(integrity=8.0, maximum_integrity=10.0)]
     )
     base = _in_room_b("far camp", "base", [])
-    treasure = _in_room_b(
-        "far hoard", "treasure", [TreasureComponent(treasure_type="hoard")]
-    )
+    treasure = _in_room_b("far hoard", "treasure", [TreasureComponent(treasure_type="hoard")])
 
     cases = [
         (
@@ -2411,14 +2389,11 @@ def test_damage_item_noop_when_item_is_already_broken():
         DurabilityComponent(current=0.0, maximum=1.0, broken=True),
     )
     target = _target(scenario)
-    result = AttackHandler().execute(
-        ctx, _handler_cmd(scenario, "attack", target_id=str(target))
-    )
+    result = AttackHandler().execute(ctx, _handler_cmd(scenario, "attack", target_id=str(target)))
     assert result.ok, result.reason
     # An already-broken weapon emits no further item damage/break events.
     assert not any(
-        e.__class__.__name__ in {"ItemDamagedEvent", "ItemBrokenEvent"}
-        for e in result.events
+        e.__class__.__name__ in {"ItemDamagedEvent", "ItemBrokenEvent"} for e in result.events
     )
 
 
@@ -2431,15 +2406,11 @@ def test_exposure_fragments_cover_each_danger_independently():
     # No exposure values but cold is dangerous: skips the exposure summary and
     # the heat-danger line, emitting only the cold-danger warning.
     cold_only = TemperatureExposureComponent(cold_danger=True)
-    assert cold_only.prompt_fragments(self_ctx) == (
-        "You are suffering dangerous cold exposure.",
-    )
+    assert cold_only.prompt_fragments(self_ctx) == ("You are suffering dangerous cold exposure.",)
 
     # Heat danger without cold danger emits only the heat-danger warning.
     heat_only = TemperatureExposureComponent(heat_danger=True)
-    assert heat_only.prompt_fragments(self_ctx) == (
-        "You are suffering dangerous heat exposure.",
-    )
+    assert heat_only.prompt_fragments(self_ctx) == ("You are suffering dangerous heat exposure.",)
 
 
 def test_armor_rating_ignores_worn_items_without_armor_component():
@@ -2550,9 +2521,7 @@ async def test_prepare_siege_defaults_to_current_room():
     _install(scenario.actor, enabled=frozenset())
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
 
-    result = PrepareSiegeHandler().execute(
-        ctx, _handler_cmd(scenario, "prepare-siege", score=3.0)
-    )
+    result = PrepareSiegeHandler().execute(ctx, _handler_cmd(scenario, "prepare-siege", score=3.0))
 
     assert result.ok, result.reason
     room = scenario.actor.world.get_entity(scenario.room_a)
@@ -2597,9 +2566,7 @@ def test_ensure_barbariansim_policy_returns_existing_singleton():
     _install(scenario.actor)
     # install_barbariansim already spawned the policy; a second call must reuse it.
     before = list(
-        scenario.actor.world.query()
-        .with_all([BarbarianSimPolicyComponent])
-        .execute_entities()
+        scenario.actor.world.query().with_all([BarbarianSimPolicyComponent]).execute_entities()
     )
     assert len(before) == 1
 
@@ -2607,8 +2574,6 @@ def test_ensure_barbariansim_policy_returns_existing_singleton():
 
     assert isinstance(policy, BarbarianSimPolicyComponent)
     after = list(
-        scenario.actor.world.query()
-        .with_all([BarbarianSimPolicyComponent])
-        .execute_entities()
+        scenario.actor.world.query().with_all([BarbarianSimPolicyComponent]).execute_entities()
     )
     assert len(after) == 1

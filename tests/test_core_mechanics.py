@@ -8,6 +8,7 @@ from conftest import build_scenario
 import bunnyland.core.world_actor as world_actor_module
 from bunnyland.claims import controlled_character
 from bunnyland.core import (
+    ActionDefinition,
     ActionPointsComponent,
     AttentionComponent,
     BleedingComponent,
@@ -71,7 +72,7 @@ from bunnyland.core.events import (
     NoiseHeardEvent,
 )
 from bunnyland.core.handlers.base import HandlerContext, require_reachable_entity
-from bunnyland.mechanics.barbariansim import AttackHandler
+from bunnyland.simpacks.barbariansim.mechanics import AttackHandler
 
 HOUR = 3600.0
 
@@ -98,30 +99,39 @@ def test_require_reachable_entity_reports_validation_failures():
         [IdentityComponent(name="far lever", kind="button")],
     )
 
-    assert require_reachable_entity(
-        ctx,
-        character,
-        "not-an-id",
-        invalid_reason="invalid target",
-        missing_reason="missing target",
-        unreachable_reason="unreachable target",
-    )[2].reason == "invalid target"
-    assert require_reachable_entity(
-        ctx,
-        character,
-        "entity_999999",
-        invalid_reason="invalid target",
-        missing_reason="missing target",
-        unreachable_reason="unreachable target",
-    )[2].reason == "missing target"
-    assert require_reachable_entity(
-        ctx,
-        character,
-        str(far.id),
-        invalid_reason="invalid target",
-        missing_reason="missing target",
-        unreachable_reason="unreachable target",
-    )[2].reason == "unreachable target"
+    assert (
+        require_reachable_entity(
+            ctx,
+            character,
+            "not-an-id",
+            invalid_reason="invalid target",
+            missing_reason="missing target",
+            unreachable_reason="unreachable target",
+        )[2].reason
+        == "invalid target"
+    )
+    assert (
+        require_reachable_entity(
+            ctx,
+            character,
+            "entity_999999",
+            invalid_reason="invalid target",
+            missing_reason="missing target",
+            unreachable_reason="unreachable target",
+        )[2].reason
+        == "missing target"
+    )
+    assert (
+        require_reachable_entity(
+            ctx,
+            character,
+            str(far.id),
+            invalid_reason="invalid target",
+            missing_reason="missing target",
+            unreachable_reason="unreachable target",
+        )[2].reason
+        == "unreachable target"
+    )
 
     entity_id, entity, error = require_reachable_entity(
         ctx,
@@ -155,9 +165,9 @@ def test_controlled_character_returns_none_for_unassigned_matching_controller():
     result = controlled_character(
         actor,
         WebControllerComponent,
-        lambda component: component.client_id == controller.get_component(
-            WebControllerComponent
-        ).client_id,
+        lambda component: (
+            component.client_id == controller.get_component(WebControllerComponent).client_id
+        ),
     )
 
     assert result is None
@@ -207,9 +217,7 @@ def _command(scenario, command_type="move", **kwargs):
         cost=kwargs.pop("cost", CommandCost(action=0)),
         lane=kwargs.pop("lane", Lane.WORLD),
         payload=payload,
-        on_insufficient_points=kwargs.pop(
-            "on_insufficient_points", OnInsufficientPoints.QUEUE
-        ),
+        on_insufficient_points=kwargs.pop("on_insufficient_points", OnInsufficientPoints.QUEUE),
         submitted_at_epoch=kwargs.pop("submitted_at_epoch", 0),
         expires_at_epoch=kwargs.pop("expires_at_epoch", None),
         command_id=kwargs.pop("command_id", None),
@@ -457,6 +465,7 @@ async def test_world_actor_rejects_gate_affordability_missing_handler_and_handle
             return HandlerResult(ok=False)
 
     scenario.actor.register_handler(FailingHandler())
+    scenario.actor.register_action_definition(ActionDefinition("fail"))
     scenario.actor.submit_nowait(_command(scenario, "fail", payload={}))
     await scenario.actor.tick(0.0)
     assert rejected[-1].reason == "rejected by handler"
@@ -485,6 +494,7 @@ async def test_world_actor_tries_latest_matching_handler_for_shared_verbs():
 
     scenario.actor.register_handler(FallbackHandler())
     scenario.actor.register_handler(SpecificHandler())
+    scenario.actor.register_action_definition(ActionDefinition("shared"))
 
     scenario.actor.submit_nowait(_command(scenario, "shared", payload={"kind": "specific"}))
     await scenario.actor.tick(0.0)
@@ -492,6 +502,21 @@ async def test_world_actor_tries_latest_matching_handler_for_shared_verbs():
     await scenario.actor.tick(0.0)
 
     assert events == ["specific", "fallback"]
+
+
+async def test_world_actor_rejects_handler_without_owned_action_definition():
+    scenario = build_scenario()
+
+    class UnownedHandler:
+        command_type = "unowned"
+
+        def execute(self, _ctx, _command):
+            return HandlerResult(ok=True)
+
+    scenario.actor.register_handler(UnownedHandler())
+    outcome = await scenario.actor.submit(_command(scenario, "unowned", payload={}))
+    assert not outcome.accepted
+    assert outcome.reason == "no action definition for unowned"
 
 
 def test_world_actor_initiative_order_handles_missing_and_unscored_entities():
@@ -518,6 +543,7 @@ async def test_world_actor_spends_action_and_focus_on_success():
             return HandlerResult(ok=True)
 
     scenario.actor.register_handler(FocusHandler())
+    scenario.actor.register_action_definition(ActionDefinition("focus-test"))
     scenario.actor.submit_nowait(
         _command(scenario, "focus-test", cost=CommandCost(action=2, focus=1), payload={})
     )
@@ -535,8 +561,7 @@ async def test_world_actor_control_commands_and_controller_kinds():
     character = scenario.actor.world.get_entity(scenario.character)
 
     assert (
-        scenario.actor.current_generation(scenario.character, parse_entity_id("entity_999"))
-        is None
+        scenario.actor.current_generation(scenario.character, parse_entity_id("entity_999")) is None
     )
     assert (
         scenario.actor._generation_current(character, _command(scenario, controller_id="bad"))
@@ -560,9 +585,7 @@ async def test_world_actor_control_commands_and_controller_kinds():
     assert scenario.actor._controller_kind(suspended.id) == "suspended"
     assert scenario.actor._controller_kind(unknown.id) == "unknown"
     assert (
-        scenario.actor._generation_current(
-            character, _command(scenario, controller_id=str(mcp.id))
-        )
+        scenario.actor._generation_current(character, _command(scenario, controller_id=str(mcp.id)))
         is False
     )
     character.add_relationship(ControlledBy(generation=7), mcp.id)
@@ -881,9 +904,7 @@ def test_hearing_consequence_clears_audible_when_perception_inactive():
     HearingConsequence().process(world, epoch=0)
 
     assert (
-        world.get_entity(scenario.character)
-        .get_component(PerceptionComponent)
-        .audible_entities
+        world.get_entity(scenario.character).get_component(PerceptionComponent).audible_entities
         == frozenset()
     )
 
@@ -962,9 +983,7 @@ async def test_cancel_command_removes_a_queued_command_from_the_inbox():
     assert outcome.accepted is True
     assert not scenario.actor._inbox.empty()
 
-    removed = await scenario.actor.cancel_command(
-        str(scenario.character), "inbox-cancel-me"
-    )
+    removed = await scenario.actor.cancel_command(str(scenario.character), "inbox-cancel-me")
 
     # The command is pulled out of the inbox (before any tick ingests it) and a
     # cancellation event is published for the removed command.

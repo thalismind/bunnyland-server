@@ -7,8 +7,7 @@ from .loader import (
     collect_persona_fragments,
     collect_prompt_enhancers,
     collect_prompt_fragments,
-    load_and_apply,
-    load_modules,
+    discover_plugins,
     resolve_order,
     select,
     validate_plugin_config,
@@ -29,10 +28,9 @@ from .registry import PluginRegistry
 
 
 def bunnyland_plugins():
-    """Load the bundled compatibility catalogue without coupling canonical entrypoints."""
-    from .builtin import bunnyland_plugins as collect
+    """Discover installed bundled and external plugins."""
+    return discover_plugins()
 
-    return collect()
 
 __all__ = [
     "CommandContribution",
@@ -53,8 +51,7 @@ __all__ = [
     "collect_persona_fragments",
     "collect_prompt_enhancers",
     "collect_prompt_fragments",
-    "load_and_apply",
-    "load_modules",
+    "discover_plugins",
     "resolve_order",
     "select",
     "validate_plugin_config",

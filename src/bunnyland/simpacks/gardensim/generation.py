@@ -1,6 +1,6 @@
 """gardensim generation contribution compatibility surface."""
 
-from ...worldgen.enrichment import GardenWorldgenHook, LegacyWorldgenEnricher
+from ...worldgen.enrichment import ComponentPlanEnricher, GardenWorldgenHook
 
 CAPABILITIES = (
     "bunnyland.gardensim.animal-breeding",
@@ -88,6 +88,6 @@ ALIASES = {
     "watered": "bunnyland.gardensim.watered",
     "weed": "bunnyland.gardensim.weed",
 }
-GENERATION_ENRICHER = LegacyWorldgenEnricher(GardenWorldgenHook, provided_capabilities=CAPABILITIES)
+GENERATION_ENRICHER = ComponentPlanEnricher(GardenWorldgenHook, provided_capabilities=CAPABILITIES)
 
 __all__ = ["GENERATION_ENRICHER", "GardenWorldgenHook"]

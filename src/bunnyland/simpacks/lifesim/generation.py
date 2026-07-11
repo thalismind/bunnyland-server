@@ -1,6 +1,6 @@
 """lifesim generation contribution compatibility surface."""
 
-from ...worldgen.enrichment import LegacyWorldgenEnricher, LifeWorldgenHook
+from ...worldgen.enrichment import ComponentPlanEnricher, LifeWorldgenHook
 
 CAPABILITIES = (
     "bunnyland.lifesim.aspiration",
@@ -40,6 +40,6 @@ ALIASES = {
     "skill-set": "bunnyland.lifesim.skill-set",
     "whim": "bunnyland.lifesim.whim",
 }
-GENERATION_ENRICHER = LegacyWorldgenEnricher(LifeWorldgenHook, provided_capabilities=CAPABILITIES)
+GENERATION_ENRICHER = ComponentPlanEnricher(LifeWorldgenHook, provided_capabilities=CAPABILITIES)
 
 __all__ = ["GENERATION_ENRICHER", "LifeWorldgenHook"]

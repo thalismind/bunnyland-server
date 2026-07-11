@@ -38,9 +38,7 @@ class PerspectivePhrase:
 
     def render(self, perspective: PromptPerspective | PerspectiveName, **values: object) -> str:
         style = (
-            perspective.perspective
-            if isinstance(perspective, PromptPerspective)
-            else perspective
+            perspective.perspective if isinstance(perspective, PromptPerspective) else perspective
         )
         if style == "first-person":
             text = self.first

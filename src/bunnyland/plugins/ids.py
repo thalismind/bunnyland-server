@@ -1,6 +1,7 @@
 """Stable identifiers for bundled Bunnyland plugins."""
 
 CORE_VERBS = "bunnyland.core_verbs"
+MEDIA = "bunnyland.media"
 LIFESIM = "bunnyland.lifesim"
 MEMORY = "bunnyland.memory"
 WORLDGEN = "bunnyland.worldgen"
@@ -24,5 +25,6 @@ STORYTELLER = "bunnyland.storyteller"
 IMAGEGEN = "bunnyland.imagegen"
 MCP = "bunnyland.mcp"
 CHECKPOINTS = "bunnyland.checkpoints"
+DISCORD = "bunnyland.discord"
 
 __all__ = [name for name in globals() if name.isupper()]

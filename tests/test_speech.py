@@ -393,12 +393,15 @@ def test_tell_rejects_invalid_empty_missing_absent_and_inactive_targets():
     assert execute_tell(scenario, listener, "hello", character_id="entity_999").reason == (
         "speaker does not exist"
     )
-    assert execute_tell(
-        scenario,
-        listener,
-        "hello",
-        payload={"target_id": "not-an-id", "text": "hello"},
-    ).reason == "invalid speaker or target id"
+    assert (
+        execute_tell(
+            scenario,
+            listener,
+            "hello",
+            payload={"target_id": "not-an-id", "text": "hello"},
+        ).reason
+        == "invalid speaker or target id"
+    )
     assert execute_tell(scenario, listener, "   ").reason == "nothing to say"
     assert execute_tell(scenario, "entity_999", "hello").reason == "target does not exist"
 
@@ -532,11 +535,15 @@ def test_three_person_conversation_rotates_turns_and_targets_other_participants(
 def test_conversation_line_rejects_wrong_turn_and_timeout_ends_conversation():
     scenario = speech_scenario()
     listener = add_listener(scenario, scenario.room_a)
-    start = execute_start_conversation(scenario, [listener], payload={
-        "target_ids": (str(listener),),
-        "topic": "watch",
-        "timeout_seconds": 1,
-    })
+    start = execute_start_conversation(
+        scenario,
+        [listener],
+        payload={
+            "target_ids": (str(listener),),
+            "topic": "watch",
+            "timeout_seconds": 1,
+        },
+    )
     conversation_id = start.events[0].conversation_id
 
     assert (
@@ -586,9 +593,7 @@ def test_conversation_rejects_invalid_missing_absent_and_nonparticipant_cases():
     start = execute_start_conversation(scenario, [listener])
     conversation_id = start.events[0].conversation_id
 
-    invalid_start = execute_start_conversation(
-        scenario, [], payload={"target_ids": ("not-an-id",)}
-    )
+    invalid_start = execute_start_conversation(scenario, [], payload={"target_ids": ("not-an-id",)})
     missing_start = execute_start_conversation(
         scenario, [], payload={"target_ids": ("entity_999",)}
     )
@@ -598,21 +603,27 @@ def test_conversation_rejects_invalid_missing_absent_and_nonparticipant_cases():
     assert execute_start_conversation(scenario, []).reason == (
         "conversation needs another participant"
     )
-    assert execute_conversation_line(
-        scenario,
-        "not-an-id",
-        "hello",
-        payload={"conversation_id": "not-an-id", "text": "hello"},
-    ).reason == "invalid conversation id"
+    assert (
+        execute_conversation_line(
+            scenario,
+            "not-an-id",
+            "hello",
+            payload={"conversation_id": "not-an-id", "text": "hello"},
+        ).reason
+        == "invalid conversation id"
+    )
     assert execute_conversation_line(scenario, "entity_999", "hello").reason == (
         "conversation does not exist"
     )
-    assert execute_conversation_line(
-        scenario,
-        conversation_id,
-        "hello",
-        character_id=str(absent),
-    ).reason == "speaker is not a conversation participant"
+    assert (
+        execute_conversation_line(
+            scenario,
+            conversation_id,
+            "hello",
+            character_id=str(absent),
+        ).reason
+        == "speaker is not a conversation participant"
+    )
 
 
 def test_start_conversation_rejects_bad_speaker_states_and_inactive_participant():
@@ -698,23 +709,32 @@ def test_conversation_line_rejects_bad_speaker_wrong_kind_empty_and_detached():
     start = execute_start_conversation(scenario, [listener])
     conversation_id = start.events[0].conversation_id
 
-    assert execute_conversation_line(
-        scenario,
-        conversation_id,
-        "hello",
-        character_id="not-an-id",
-    ).reason == "invalid character id"
-    assert execute_conversation_line(
-        scenario,
-        conversation_id,
-        "hello",
-        character_id="entity_999",
-    ).reason == "speaker does not exist"
-    assert execute_conversation_line(
-        scenario,
-        str(scenario.room_a),
-        "hello",
-    ).reason == "conversation is the wrong kind"
+    assert (
+        execute_conversation_line(
+            scenario,
+            conversation_id,
+            "hello",
+            character_id="not-an-id",
+        ).reason
+        == "invalid character id"
+    )
+    assert (
+        execute_conversation_line(
+            scenario,
+            conversation_id,
+            "hello",
+            character_id="entity_999",
+        ).reason
+        == "speaker does not exist"
+    )
+    assert (
+        execute_conversation_line(
+            scenario,
+            str(scenario.room_a),
+            "hello",
+        ).reason
+        == "conversation is the wrong kind"
+    )
     assert execute_conversation_line(scenario, conversation_id, "   ").reason == "nothing to say"
 
     scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
@@ -733,24 +753,33 @@ def test_end_conversation_rejects_bad_speaker_wrong_kind_nonparticipant_and_ende
     start = execute_start_conversation(scenario, [listener])
     conversation_id = start.events[0].conversation_id
 
-    assert execute_end_conversation(
-        scenario,
-        conversation_id,
-        character_id="not-an-id",
-    ).reason == "invalid character id"
-    assert execute_end_conversation(
-        scenario,
-        conversation_id,
-        character_id="entity_999",
-    ).reason == "speaker does not exist"
+    assert (
+        execute_end_conversation(
+            scenario,
+            conversation_id,
+            character_id="not-an-id",
+        ).reason
+        == "invalid character id"
+    )
+    assert (
+        execute_end_conversation(
+            scenario,
+            conversation_id,
+            character_id="entity_999",
+        ).reason
+        == "speaker does not exist"
+    )
     assert execute_end_conversation(scenario, str(scenario.room_a)).reason == (
         "conversation is the wrong kind"
     )
-    assert execute_end_conversation(
-        scenario,
-        conversation_id,
-        character_id=str(absent),
-    ).reason == "speaker is not a conversation participant"
+    assert (
+        execute_end_conversation(
+            scenario,
+            conversation_id,
+            character_id=str(absent),
+        ).reason
+        == "speaker is not a conversation participant"
+    )
 
     assert execute_end_conversation(scenario, conversation_id).ok is True
     assert execute_end_conversation(scenario, conversation_id).reason == "conversation has ended"
@@ -772,9 +801,7 @@ def test_start_conversation_rejects_speaker_with_no_room():
         scenario.character,
     )
 
-    assert execute_start_conversation(scenario, [listener]).reason == (
-        "speaker is not in a room"
-    )
+    assert execute_start_conversation(scenario, [listener]).reason == ("speaker is not in a room")
 
 
 def test_start_conversation_with_no_participant_keys_needs_another():

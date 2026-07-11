@@ -15,17 +15,15 @@ from .models import EcsTypeSchema, WorldSchemaResponse
 
 
 def _component_registry(actor: WorldActor) -> dict[str, type[Component]]:
-    plugins = tuple(actor.plugins.plugins.values()) if actor.plugins is not None else None
-    registry = type_registries(plugins)[0]
-    registry.update(getattr(actor.world, "_component_types", {}))
-    return registry
+    if actor.plugins is None:
+        raise RuntimeError("world schema requires an applied PluginRegistry")
+    return type_registries(actor.plugins)[0]
 
 
 def _edge_registry(actor: WorldActor) -> dict[str, type[Edge]]:
-    plugins = tuple(actor.plugins.plugins.values()) if actor.plugins is not None else None
-    registry = type_registries(plugins)[1]
-    registry.update(getattr(actor.world, "_edge_types", {}))
-    return registry
+    if actor.plugins is None:
+        raise RuntimeError("world schema requires an applied PluginRegistry")
+    return type_registries(actor.plugins)[1]
 
 
 def _type_schema(name: str, type_: type, count: int) -> EcsTypeSchema:
@@ -87,14 +85,8 @@ def dm_schema_context(actor: WorldActor) -> str:
     payload = {
         "schema_version": schema.schema_version,
         "world_epoch": schema.world_epoch,
-        "components": {
-            name: item.json_schema
-            for name, item in schema.components.items()
-        },
-        "edges": {
-            name: item.json_schema
-            for name, item in schema.edges.items()
-        },
+        "components": {name: item.json_schema for name, item in schema.components.items()},
+        "edges": {name: item.json_schema for name, item in schema.edges.items()},
     }
     return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 

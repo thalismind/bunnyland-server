@@ -1,6 +1,6 @@
 """Canonical Checkpoints plugin entrypoint."""
 
-from ...mechanics.checkpoints import (
+from bunnyland.foundation.checkpoints.mechanics import (
     CheckpointReloadedEvent,
     CheckpointReloadRequestedEvent,
     CheckpointSavedEvent,
@@ -8,6 +8,7 @@ from ...mechanics.checkpoints import (
     checkpoint_action_definitions,
     install_checkpoints,
 )
+
 from ...plugins.ids import (
     CHECKPOINTS,
     CORE_VERBS,

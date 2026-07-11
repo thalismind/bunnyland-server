@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from ..core.actions import ActionDefinition
 from .specs import ScriptSpec
 from .tools import ToolCall, tool_names
 
@@ -23,9 +24,7 @@ BUILTIN_SCRIPTS: dict[str, tuple[ToolCall, ...]] = {
         ToolCall("move", {"direction": "south"}),
     ),
     # Offer a single greeting, then wait.
-    "greeter": (
-        ToolCall("say", {"text": "Welcome.", "intent": "praise", "approach": "friendly"}),
-    ),
+    "greeter": (ToolCall("say", {"text": "Welcome.", "intent": "praise", "approach": "friendly"}),),
     # First-run demo intro. Saved Hungry Courier worlds persist only this script name, so
     # it must exist before a saved world is reloaded.
     "hungry-courier-intro": (
@@ -68,22 +67,26 @@ def script_names() -> frozenset[str]:
     return frozenset(_REGISTRY)
 
 
-def compile_script(spec: ScriptSpec) -> tuple[ToolCall, ...]:
+def compile_script(
+    spec: ScriptSpec, definitions: Iterable[ActionDefinition]
+) -> tuple[ToolCall, ...]:
     """Compile a ``ScriptSpec`` into the tuple of tool calls a scripted controller replays.
 
     Every call must name a registered tool; an unknown tool raises ``ValueError`` so a bad
     spec is rejected at registration time rather than failing silently during replay.
     """
-    known = tool_names()
+    known = tool_names(tuple(definitions))
     for call in spec.calls:
         if call.name not in known:
             raise ValueError(f"unknown tool {call.name!r} in script {spec.name!r}")
     return tuple(call.to_tool_call() for call in spec.calls)
 
 
-def register_script_spec(spec: ScriptSpec) -> tuple[ToolCall, ...]:
+def register_script_spec(
+    spec: ScriptSpec, definitions: Iterable[ActionDefinition]
+) -> tuple[ToolCall, ...]:
     """Compile and register a script from its spec; returns the compiled calls."""
-    calls = compile_script(spec)
+    calls = compile_script(spec, definitions)
     register_script(spec.name, calls)
     return calls
 

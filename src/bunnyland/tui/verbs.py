@@ -17,9 +17,9 @@ class Verb:
     ap: int
     fp: int
     lane: str
-    target_key: str | None = None   # payload key the picked target fills
+    target_key: str | None = None  # payload key the picked target fills
     target_kind: str | None = None  # which nearby entities are candidates
-    prompt: str | None = None       # free-text payload key to collect
+    prompt: str | None = None  # free-text payload key to collect
 
 
 ACTION_VERBS: tuple[Verb, ...] = (

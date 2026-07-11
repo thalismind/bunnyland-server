@@ -106,9 +106,7 @@ def _openrouter_usage(response: object) -> LLMUsage:
         return LLMUsage()
     prompt_tokens = _int_field(usage, "prompt_tokens")
     completion_tokens = _int_field(usage, "completion_tokens")
-    total_tokens = _usage_total(
-        prompt_tokens, completion_tokens, _int_field(usage, "total_tokens")
-    )
+    total_tokens = _usage_total(prompt_tokens, completion_tokens, _int_field(usage, "total_tokens"))
     cost = _float_field(usage, "cost", "total_cost", "estimated_cost")
     return LLMUsage(prompt_tokens, completion_tokens, total_tokens, cost)
 
@@ -138,9 +136,7 @@ async def _openrouter_enriched_usage(client: object, response: object) -> LLMUsa
             if data is None:
                 return usage
             prompt_tokens = usage.prompt_tokens or _int_field(data, "tokens_prompt")
-            completion_tokens = usage.completion_tokens or _int_field(
-                data, "tokens_completion"
-            )
+            completion_tokens = usage.completion_tokens or _int_field(data, "tokens_completion")
             total_tokens = _usage_total(prompt_tokens, completion_tokens, usage.total_tokens)
             cost = _float_field(data, "total_cost", "usage", "upstream_inference_cost")
             return LLMUsage(prompt_tokens, completion_tokens, total_tokens, cost)
@@ -301,9 +297,7 @@ _DIRECTION_WORDS = (
 )
 
 BackgroundProfile = Literal["idle", "social", "timid", "aggressive", "worker"]
-BACKGROUND_PROFILES: frozenset[str] = frozenset(
-    {"idle", "social", "timid", "aggressive", "worker"}
-)
+BACKGROUND_PROFILES: frozenset[str] = frozenset({"idle", "social", "timid", "aggressive", "worker"})
 
 
 def _tokens(text: str) -> frozenset[str]:
@@ -853,9 +847,7 @@ class OpenRouterAgent:
                 _tool_call_history(
                     {
                         "name": function.name,
-                        "arguments": _openrouter_arguments(
-                            getattr(function, "arguments", {})
-                        ),
+                        "arguments": _openrouter_arguments(getattr(function, "arguments", {})),
                     }
                 )
             )

@@ -1,6 +1,6 @@
 """Canonical Dagger Sim plugin entrypoint."""
 
-from ...mechanics.daggersim import (
+from bunnyland.simpacks.daggersim.mechanics import (
     AccountOpenedEvent,
     AfflictionContractedEvent,
     AfflictionCuredEvent,
@@ -175,6 +175,7 @@ from ...mechanics.daggersim import (
     daggersim_fragments,
     install_daggersim,
 )
+
 from ...plugins.ids import (
     CORE_VERBS,
     DAGGERSIM,

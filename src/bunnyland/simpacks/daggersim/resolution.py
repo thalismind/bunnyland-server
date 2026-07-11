@@ -1,7 +1,7 @@
 """Storyteller resolution rules contributed by Dagger Sim."""
 
-from ...mechanics.daggersim import PacifiedComponent
-from ...mechanics.storyteller import IncidentResolutionRule
+from bunnyland.foundation.storyteller.mechanics import IncidentResolutionRule
+from bunnyland.simpacks.daggersim.mechanics import PacifiedComponent
 
 
 def _pacified(world, incident, entity) -> bool:

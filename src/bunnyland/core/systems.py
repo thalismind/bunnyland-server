@@ -71,8 +71,13 @@ class WorldClockSystem(System):
             )
 
 
-def _regen(current: float, maximum: float, overflow_maximum: float | None,
-           regen_per_hour: float, delta_seconds: float) -> float:
+def _regen(
+    current: float,
+    maximum: float,
+    overflow_maximum: float | None,
+    regen_per_hour: float,
+    delta_seconds: float,
+) -> float:
     cap = overflow_maximum if overflow_maximum is not None else maximum
     gained = regen_per_hour * (delta_seconds / SECONDS_PER_HOUR)
     return min(cap, current + gained)
@@ -128,9 +133,7 @@ class ClaimTimeoutSystem:
     ) -> None:
         normalized_default = normalize_claim_timeout(default_timeout_seconds)
         self.default_timeout_seconds = (
-            normalized_default
-            if normalized_default is not None
-            else CLAIM_TIMEOUT_DEFAULT_SECONDS
+            normalized_default if normalized_default is not None else CLAIM_TIMEOUT_DEFAULT_SECONDS
         )
         self.controller_kinds = frozenset(
             kind.strip().lower().replace("_", "-") for kind in controller_kinds if kind
@@ -146,9 +149,7 @@ class ClaimTimeoutSystem:
             return
         now_unix = int(self.now())
         expired = []
-        characters = list(
-            actor.world.query().with_all([CharacterComponent]).execute_entities()
-        )
+        characters = list(actor.world.query().with_all([CharacterComponent]).execute_entities())
         for character in characters:
             for _edge, controller_id in character.get_relationships(ControlledBy):
                 if not actor.world.has_entity(controller_id):
@@ -184,13 +185,12 @@ class ClaimTimeoutSystem:
                             model=claim.llm_model or self.default_llm_model,
                             provider=claim.llm_provider or self.default_llm_provider,
                         )
-                    ]
+                    ],
                 )
                 kind = "llm"
             else:
                 controller = spawn_entity(
-                    actor.world,
-                    [SuspendedControllerComponent(reason=claim.fallback_reason)]
+                    actor.world, [SuspendedControllerComponent(reason=claim.fallback_reason)]
                 )
                 kind = "suspended"
             transfer_claim(old_controller, controller)

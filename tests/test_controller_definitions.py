@@ -12,6 +12,7 @@ from conftest import build_scenario
 
 from bunnyland.core import spawn_entity
 from bunnyland.core.controllers import ScriptedControllerComponent
+from bunnyland.foundation.core_verbs.actions import ACTION_DEFINITIONS
 from bunnyland.llm_agents import (
     BehaviorNodeSpec,
     BehaviorTreeSpec,
@@ -55,9 +56,9 @@ def test_compile_and_register_script_spec():
         name="spec-north",
         calls=(ToolCallSpec(name="move", arguments={"direction": "north"}),),
     )
-    compiled = compile_script(spec)
+    compiled = compile_script(spec, ACTION_DEFINITIONS)
     assert compiled == (ToolCallSpec(name="move", arguments={"direction": "north"}).to_tool_call(),)
-    register_script_spec(spec)
+    register_script_spec(spec, ACTION_DEFINITIONS)
     assert resolve_script("spec-north")[0].name == "move"
 
 
@@ -69,9 +70,10 @@ def test_compile_behavior_tree_happy_path_drives_decision():
 
     context = PromptBuilder(scenario.actor.world).build(scenario.character)
     # No items in the room -> falls through to move.
-    assert BehaviorTreeAgent(tree).decide(
-        "", context, character_id=str(scenario.character)
-    ).name == "move"
+    assert (
+        BehaviorTreeAgent(tree).decide("", context, character_id=str(scenario.character)).name
+        == "move"
+    )
 
 
 @pytest.mark.parametrize(
@@ -203,7 +205,7 @@ def test_library_names_include_builtins():
 
 def test_store_persists_and_reloads(tmp_path):
     path = tmp_path / "defs.json"
-    store = ControllerDefinitionStore(path)
+    store = ControllerDefinitionStore(path, action_definitions=ACTION_DEFINITIONS)
     store.add_script(ScriptSpec(name="stored-script", calls=(ToolCallSpec(name="move"),)))
     store.add_behavior(_forager_spec("stored-forager"))
     assert store.snapshot() == {
@@ -212,7 +214,7 @@ def test_store_persists_and_reloads(tmp_path):
     }
     assert path.exists()
 
-    reloaded = ControllerDefinitionStore(path)
+    reloaded = ControllerDefinitionStore(path, action_definitions=ACTION_DEFINITIONS)
     assert reloaded.load() == (1, 1)
     assert resolve_script("stored-script")[0].name == "move"
     assert resolve_behavior_tree("stored-forager").name == "stored-forager"
@@ -234,13 +236,13 @@ def test_store_skips_invalid_entries_on_load(tmp_path, caplog):
             }
         )
     )
-    store = ControllerDefinitionStore(path)
+    store = ControllerDefinitionStore(path, action_definitions=ACTION_DEFINITIONS)
     # one bad script and one bad behavior are skipped; the good ones register.
     assert store.load() == (1, 1)
 
 
 def test_store_without_path_is_ephemeral():
-    store = ControllerDefinitionStore(None)
+    store = ControllerDefinitionStore(None, action_definitions=ACTION_DEFINITIONS)
     assert not store.persistent
     assert store.load() == (0, 0)
     store.add_script(ScriptSpec(name="ephemeral", calls=()))
@@ -249,7 +251,7 @@ def test_store_without_path_is_ephemeral():
 
 
 def test_store_add_behavior_rejects_invalid_spec(tmp_path):
-    store = ControllerDefinitionStore(tmp_path / "defs.json")
+    store = ControllerDefinitionStore(tmp_path / "defs.json", action_definitions=ACTION_DEFINITIONS)
     bad = BehaviorTreeSpec(name="x", root=BehaviorNodeSpec(kind="action", ref="nope"))
     with pytest.raises(ValueError, match="unknown action"):
         store.add_behavior(bad)
@@ -264,7 +266,7 @@ async def test_dispatch_drives_a_stored_scripted_controller(tmp_path):
     from bunnyland.prompts.builder import PromptBuilder
 
     scenario = build_scenario()
-    store = ControllerDefinitionStore(tmp_path / "defs.json")
+    store = ControllerDefinitionStore(tmp_path / "defs.json", action_definitions=ACTION_DEFINITIONS)
     store.add_script(
         ScriptSpec(
             name="loaded-move",
@@ -418,7 +420,7 @@ def _make_mcp(monkeypatch, scenario, *, with_definitions=True):
 
     registered = _install_fake_mcp(monkeypatch)
     # Back the MCP tools with the same store + listing the real REST handlers use.
-    store = ControllerDefinitionStore(None)
+    store = ControllerDefinitionStore(None, action_definitions=ACTION_DEFINITIONS)
 
     def listing() -> ControllerDefinitionListResponse:
         return ControllerDefinitionListResponse(

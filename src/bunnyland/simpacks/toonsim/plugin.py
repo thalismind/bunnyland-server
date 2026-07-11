@@ -1,6 +1,6 @@
 """Canonical Toon Sim plugin entrypoint."""
 
-from ...mechanics.toonsim import (
+from bunnyland.simpacks.toonsim.mechanics import (
     MoveSpriteHandler,
     PlacedOn,
     SpriteBoundsComponent,
@@ -12,6 +12,7 @@ from ...mechanics.toonsim import (
     ToonRoomComponent,
     install_toonsim,
 )
+
 from ...plugins.ids import TOONSIM
 from ...plugins.model import (
     CommandContribution,
@@ -26,7 +27,6 @@ from .generation import (
     ALIASES,
     CAPABILITIES,
     GENERATION_ENRICHER,
-    ToonPlacementWorldgenHook,
 )
 
 
@@ -55,7 +55,6 @@ def _definition() -> Plugin:
             generation_capabilities=CAPABILITIES,
             generation_aliases=ALIASES,
             generation_enrichers=(GENERATION_ENRICHER,),
-            worldgen_hooks=(ToonPlacementWorldgenHook,),
         ),
     )
 

@@ -125,9 +125,7 @@ def test_get_or_none_and_nowait_submission_cover_absent_paths():
 
 def test_event_base_defaults_visibility_only_when_requested():
     system_payload = event_base(7)
-    public_payload = event_base(
-        8, default_visibility=EventVisibility.PUBLIC, actor_id="entity_1"
-    )
+    public_payload = event_base(8, default_visibility=EventVisibility.PUBLIC, actor_id="entity_1")
 
     assert system_payload["world_epoch"] == 7
     assert "visibility" not in system_payload
@@ -396,9 +394,7 @@ async def test_claim_timeout_noops_without_controller_kinds():
         timeout_seconds=300,
         reset_activity=True,
     )
-    scenario.actor.register_after_tick(
-        ClaimTimeoutSystem(controller_kinds=(), now=lambda: 999999)
-    )
+    scenario.actor.register_after_tick(ClaimTimeoutSystem(controller_kinds=(), now=lambda: 999999))
 
     await scenario.actor.tick(0)
 
@@ -648,10 +644,13 @@ def test_claim_secret_registry_and_claim_helpers_cover_security_paths():
         scenario.actor,
         client_id=" client ",
     ) == (character, web, character.get_relationships(ControlledBy)[0][0], claim)
-    assert claimed_character_for(
-        scenario.actor,
-        client_id="missing",
-    ) is None
+    assert (
+        claimed_character_for(
+            scenario.actor,
+            client_id="missing",
+        )
+        is None
+    )
     ensure_claim_secret(registry, claim, claim_id="claim-1", claim_secret=secret)
 
     with pytest.raises(PermissionError, match="invalid claim id"):
@@ -676,10 +675,13 @@ def test_claim_secret_registry_and_claim_helpers_cover_security_paths():
     registry.issue(kept.claim_id)
     normalize_claimed_controllers_without_secrets(scenario.actor, registry)
     assert not web.has_component(ClaimedComponent)
-    assert claimed_character_for(
-        scenario.actor,
-        client_id="kept",
-    ) is None
+    assert (
+        claimed_character_for(
+            scenario.actor,
+            client_id="kept",
+        )
+        is None
+    )
     discord = spawn_entity(scenario.actor.world, [SuspendedControllerComponent(reason="idle")])
     discord_claim = add_claim(
         discord,
@@ -828,9 +830,7 @@ async def test_insufficient_points_deny_is_rejected_immediately():
     scenario = build_scenario(action_current=0.0)
     rejects = collect(scenario.actor, CommandRejectedEvent)
 
-    await scenario.actor.submit(
-        move_command(scenario, on_insufficient=OnInsufficientPoints.DENY)
-    )
+    await scenario.actor.submit(move_command(scenario, on_insufficient=OnInsufficientPoints.DENY))
     await scenario.actor.tick(0.0)  # no regen
 
     assert scenario.character_room() == scenario.room_a
@@ -841,9 +841,7 @@ async def test_insufficient_points_queue_waits_then_executes():
     scenario = build_scenario(action_current=0.0)
     executed = collect(scenario.actor, CommandExecutedEvent)
 
-    await scenario.actor.submit(
-        move_command(scenario, on_insufficient=OnInsufficientPoints.QUEUE)
-    )
+    await scenario.actor.submit(move_command(scenario, on_insufficient=OnInsufficientPoints.QUEUE))
     # First tick: tiny regen, still cannot afford 1 action -> stays queued.
     await scenario.actor.tick(0.1)
     assert scenario.character_room() == scenario.room_a

@@ -100,11 +100,7 @@ _STOPWORDS = frozenset(
 
 
 def _tokens(text: str) -> set[str]:
-    return {
-        token
-        for token in re.findall(r"[a-z0-9']+", text.lower())
-        if token not in _STOPWORDS
-    }
+    return {token for token in re.findall(r"[a-z0-9']+", text.lower()) if token not in _STOPWORDS}
 
 
 def _fuzzy_score(query_tokens: set[str], candidates: set[str]) -> float:
@@ -243,9 +239,7 @@ class InMemoryStore:
                 entry.source,
                 entry.metadata,
             )
-            documents.append(
-                MemoryDocument(id=entry.id, document=entry.text, metadata=metadata)
-            )
+            documents.append(MemoryDocument(id=entry.id, document=entry.text, metadata=metadata))
         return documents
 
     def create_document(

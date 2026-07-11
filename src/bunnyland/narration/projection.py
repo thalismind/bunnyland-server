@@ -204,10 +204,7 @@ def _event_visible_to(world: World, viewer: Entity, event: DomainEvent) -> bool:
         return (
             event.actor_id == viewer_id
             or viewer_id in event.target_ids
-            or (
-                isinstance(event, SpeechToldEvent)
-                and viewer_id in event.overhearer_ids
-            )
+            or (isinstance(event, SpeechToldEvent) and viewer_id in event.overhearer_ids)
         )
     rooms = _event_rooms(world, event)
     if rooms and viewer_room in rooms:
@@ -342,9 +339,7 @@ def render_scene(scene: SceneInput) -> str:
     title = scene.location_title or "Somewhere"
     lead_in = f"{scene.voice.lead_in} " if scene.voice.lead_in else ""
     if scene.clusters:
-        cluster_text = " ".join(
-            " ".join(cluster.summaries) for cluster in scene.clusters
-        )
+        cluster_text = " ".join(" ".join(cluster.summaries) for cluster in scene.clusters)
         lines.append(f"{title}: {lead_in}{cluster_text}")
     elif scene.events:
         lines.append(f"{title}: {lead_in}" + " ".join(event.summary for event in scene.events))
@@ -662,9 +657,7 @@ class NarrationProjection:
             text = self.fallback_renderer(scene)
         self._record_narration(viewer_id, epoch, scene, text)
 
-    def _record_narration(
-        self, viewer_id: str, epoch: int, scene: SceneInput, text: str
-    ) -> None:
+    def _record_narration(self, viewer_id: str, epoch: int, scene: SceneInput, text: str) -> None:
         narration = SceneNarration(
             viewer_id=viewer_id,
             epoch=epoch,

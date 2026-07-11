@@ -1,6 +1,6 @@
 """voidsim generation contribution compatibility surface."""
 
-from ...worldgen.enrichment import LegacyWorldgenEnricher, VoidWorldgenHook
+from ...worldgen.enrichment import ComponentPlanEnricher, VoidWorldgenHook
 
 CAPABILITIES = (
     "bunnyland.voidsim.airlock",
@@ -94,6 +94,6 @@ ALIASES = {
     "translation-matrix": "bunnyland.voidsim.translation-matrix",
     "xenobiology-sample": "bunnyland.voidsim.xenobiology-sample",
 }
-GENERATION_ENRICHER = LegacyWorldgenEnricher(VoidWorldgenHook, provided_capabilities=CAPABILITIES)
+GENERATION_ENRICHER = ComponentPlanEnricher(VoidWorldgenHook, provided_capabilities=CAPABILITIES)
 
 __all__ = ["GENERATION_ENRICHER", "VoidWorldgenHook"]

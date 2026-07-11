@@ -36,7 +36,7 @@ class RecentContextProjection:
     def subscribe(self, bus) -> None:
         # Eat/drink events live in the mechanics layer; import lazily so this core
         # projection module does not form an import cycle (needs -> prompts -> projections).
-        from ..mechanics.needs import DrinkConsumedEvent, FoodEatenEvent
+        from bunnyland.foundation.needs.mechanics import DrinkConsumedEvent, FoodEatenEvent
 
         for event_type in (
             ActorMovedEvent,

@@ -69,9 +69,7 @@ async def test_release_to_llm_reassigns_to_llm_controller():
     await scenario.actor.submit(control_cmd(scenario, "take-control", human.id))
     await scenario.actor.tick(HOUR)
 
-    llm = spawn_entity(
-        scenario.actor.world, [LLMControllerComponent(profile_name="p", model="m")]
-    )
+    llm = spawn_entity(scenario.actor.world, [LLMControllerComponent(profile_name="p", model="m")])
     await scenario.actor.submit(control_cmd(scenario, "release-to-llm", llm.id))
     await scenario.actor.tick(HOUR)
 

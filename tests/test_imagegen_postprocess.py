@@ -17,7 +17,7 @@ from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
 from bunnyland.imagegen.service import ImageGenService
 from bunnyland.imagegen.spec import ImagePurpose
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
-from bunnyland.mechanics.toonsim import SpriteImageComponent
+from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 
 
 @pytest.fixture(autouse=True)

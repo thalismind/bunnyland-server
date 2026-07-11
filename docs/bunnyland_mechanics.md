@@ -3252,9 +3252,11 @@ quest items
 
 ```python
 QuestComponent
-QuestStageComponent
+QuestStateComponent
 QuestObjectiveComponent
 QuestRewardComponent
+QuestHasObjective
+QuestHasReward
 QuestItemComponent
 RadiantQuestTemplateComponent
 ```
@@ -3896,13 +3898,18 @@ delay, legal trouble, relationship damage, debt, new rumors, rivals, or follow-u
 
 ```python
 QuestTemplateComponent
-GeneratedQuestComponent
-QuestDeadlineComponent
+QuestComponent
+QuestStateComponent
 QuestGiverComponent
-QuestTargetComponent
+QuestObjectiveComponent
 QuestRewardComponent
 QuestFailureConsequenceComponent
 QuestFactionComponent
+QuestHasObjective
+QuestHasReward
+QuestAcceptedBy
+TracksQuest
+RequiresQuest
 ```
 
 ### Systems

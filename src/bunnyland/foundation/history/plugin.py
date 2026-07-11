@@ -1,6 +1,6 @@
 """Canonical History plugin entrypoint."""
 
-from ...mechanics.history import (
+from bunnyland.foundation.history.mechanics import (
     CreatedBy,
     CreatorSignatureComponent,
     DeathConsequenceComponent,
@@ -18,6 +18,7 @@ from ...mechanics.history import (
     install_history,
     mark_fragments,
 )
+
 from ...plugins.ids import (
     CORE_VERBS,
     HISTORY,

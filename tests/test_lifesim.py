@@ -37,9 +37,17 @@ from bunnyland.core.events import (
     event_base,
 )
 from bunnyland.core.handlers import HandlerContext
-from bunnyland.mechanics.colonysim import Owns
-from bunnyland.mechanics.daggersim import OwnsProperty, PropertyDeedComponent
-from bunnyland.mechanics.lifesim import (
+from bunnyland.foundation.policy.mechanics import (
+    BoundaryTag,
+    CharacterBoundaryComponent,
+    install_policy,
+)
+from bunnyland.persistence import WorldMeta, load_world, save_world
+from bunnyland.plugins import PluginRegistry, bunnyland_plugins
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
+from bunnyland.simpacks.colonysim.mechanics import Owns
+from bunnyland.simpacks.daggersim.mechanics import OwnsProperty, PropertyDeedComponent
+from bunnyland.simpacks.lifesim.mechanics import (
     AddWhimHandler,
     AdoptChildHandler,
     AgeComponent,
@@ -156,13 +164,6 @@ from bunnyland.mechanics.lifesim import (
     lifesim_fragments,
     project_inheritance_for_death,
 )
-from bunnyland.mechanics.policy import (
-    BoundaryTag,
-    CharacterBoundaryComponent,
-    install_policy,
-)
-from bunnyland.persistence import WorldMeta, load_world, save_world
-from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 3600.0
 LIFE_TAGS = frozenset({BoundaryTag.ROMANCE, BoundaryTag.ADULT, BoundaryTag.PREGNANCY})
@@ -1230,9 +1231,7 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
     assert isinstance(result.events[0], PartnershipEndedEvent)
     assert not actor.has_relationship(PartnerOf, partner_id)
 
-    actor.add_component(
-        ReproductiveComponent(can_be_pregnant=True, species_group="bunny")
-    )
+    actor.add_component(ReproductiveComponent(can_be_pregnant=True, species_group="bunny"))
     actor.add_component(
         PregnancyComponent(
             started_at_epoch=scenario.actor.epoch,
@@ -1397,13 +1396,12 @@ async def test_death_projects_inheritance_to_child_with_assets_and_persistence(t
     assert inherited_edge.source_event_id == event.event_id
     assert inherited_edge.record_id == str(record_entity.id)
     assert any(
-        "inherited child legacy from Juniper" in line
-        for line in lifesim_fragments(world, heir)
+        "inherited child legacy from Juniper" in line for line in lifesim_fragments(world, heir)
     )
 
     path = tmp_path / "world.json"
     save_world(scenario.actor, path, meta=WorldMeta(seed="inheritance"))
-    loaded, _meta = load_world(path)
+    loaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
     loaded_record = inheritance_record_for_event(loaded.world, event.event_id)
     assert loaded_record is not None
     assert loaded_record.get_component(InheritanceRecordComponent).inherited_funds == 17
@@ -1421,9 +1419,7 @@ def test_inheritance_is_idempotent_and_falls_back_to_household_member():
     decedent = world.get_entity(scenario.character)
     decedent.add_component(HouseholdComponent(household_id="moss", name="Moss Burrow"))
     dead_child_id = _child(scenario, name="Bramble")
-    world.get_entity(dead_child_id).add_component(
-        DeadComponent(died_at_epoch=1, cause="past loss")
-    )
+    world.get_entity(dead_child_id).add_component(DeadComponent(died_at_epoch=1, cause="past loss"))
     decedent.add_relationship(ParentOf(), dead_child_id)
     housemate_id = _co_parent(scenario)
     housemate = world.get_entity(housemate_id)
@@ -1544,9 +1540,7 @@ def test_inheritance_covers_partner_existing_links_and_prompt_fallback():
 
     fallback_record_id = parse_entity_id("entity_998")
     assert fallback_record_id is not None
-    lost_ancestor = spawn_entity(
-        world, [IdentityComponent(name="Lost Ancestor", kind="character")]
-    )
+    lost_ancestor = spawn_entity(world, [IdentityComponent(name="Lost Ancestor", kind="character")])
     partner.add_relationship(
         InheritedFrom(
             source_event_id="fallback",
@@ -1834,7 +1828,7 @@ def test_lifesim_aging_policy_is_world_level_and_persists(tmp_path):
     path = tmp_path / "world.json"
     save_world(scenario.actor, path, meta=WorldMeta(seed="aging"))
 
-    loaded, _meta = load_world(path)
+    loaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
     policies = list(loaded.world.query().with_all([LifesimAgingPolicyComponent]).execute_entities())
     assert len(policies) == 1
     assert policies[0].get_component(LifesimAgingPolicyComponent).natural_aging is True
@@ -1990,9 +1984,7 @@ async def test_career_shift_pays_funds_and_can_promote():
         )
     )
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(
-        _cmd(scenario, "go-to-work", performance_gain=1.0)
-    )
+    await scenario.actor.submit(_cmd(scenario, "go-to-work", performance_gain=1.0))
     await scenario.actor.tick(HOUR)
 
     character = scenario.actor.world.get_entity(scenario.character)
@@ -2048,9 +2040,10 @@ async def test_household_economy_pays_wages_taxes_rent_and_bills():
     await scenario.actor.tick(HOUR)
 
     assert employer.get_component(HouseholdFundsComponent).balance == 55
-    assert scenario.actor.world.get_entity(tax_bill_id).get_component(
-        BillComponent
-    ).paid_at_epoch == scenario.actor.epoch
+    assert (
+        scenario.actor.world.get_entity(tax_bill_id).get_component(BillComponent).paid_at_epoch
+        == scenario.actor.epoch
+    )
 
     await scenario.actor.submit(
         _cmd(scenario, "charge-rent", tenant_id=str(worker.id), amount=15, reason="stall rent")
@@ -2113,9 +2106,7 @@ async def test_business_sale_moves_item_out_of_inventory_and_pays_funds():
     scenario = build_scenario()
     _install(scenario.actor)
     character = scenario.actor.world.get_entity(scenario.character)
-    item = spawn_entity(
-        scenario.actor.world, [IdentityComponent(name="berry tart", kind="item")]
-    )
+    item = spawn_entity(scenario.actor.world, [IdentityComponent(name="berry tart", kind="item")])
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
     customer = spawn_entity(
         scenario.actor.world,
@@ -2180,9 +2171,7 @@ async def test_buy_item_without_business_moves_inventory_and_pays_seller():
     seller = _co_parent(scenario)
     seller_entity = scenario.actor.world.get_entity(seller)
     seller_entity.add_component(HouseholdFundsComponent(balance=5))
-    item = spawn_entity(
-        scenario.actor.world, [IdentityComponent(name="moon jam", kind="item")]
-    )
+    item = spawn_entity(scenario.actor.world, [IdentityComponent(name="moon jam", kind="item")])
     seller_entity.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
     purchases: list[BusinessPurchaseEvent] = []
     scenario.actor.bus.subscribe(BusinessPurchaseEvent, purchases.append)
@@ -2213,9 +2202,7 @@ async def test_buy_item_from_business_increments_sales_count():
         [BusinessOwnerComponent(name="Hazel's Stall", default_price=11)],
     )
     seller_entity.add_relationship(OwnsBusiness(), business.id)
-    item = spawn_entity(
-        scenario.actor.world, [IdentityComponent(name="star biscuit", kind="item")]
-    )
+    item = spawn_entity(scenario.actor.world, [IdentityComponent(name="star biscuit", kind="item")])
     seller_entity.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
     purchases: list[BusinessPurchaseEvent] = []
     scenario.actor.bus.subscribe(BusinessPurchaseEvent, purchases.append)
@@ -2282,9 +2269,9 @@ async def test_routine_due_consequence_advances_next_due_without_auto_commanding
     await scenario.actor.tick(0.0)
     await scenario.actor.tick(HOUR)
 
-    routine_id = scenario.actor.world.get_entity(scenario.character).get_relationships(
-        HasRoutine
-    )[0][1]
+    routine_id = scenario.actor.world.get_entity(scenario.character).get_relationships(HasRoutine)[
+        0
+    ][1]
     routine = scenario.actor.world.get_entity(routine_id).get_component(RoutineComponent)
     assert routine.activity == "water the window herbs"
     assert routine.last_completed_epoch == scenario.actor.epoch
@@ -2553,9 +2540,7 @@ async def test_start_pregnancy_requires_policy_consent():
     scenario = build_scenario()
     _install(scenario.actor)
     character = scenario.actor.world.get_entity(scenario.character)
-    character.add_component(
-        ReproductiveComponent(can_be_pregnant=True, species_group="bunny")
-    )
+    character.add_component(ReproductiveComponent(can_be_pregnant=True, species_group="bunny"))
     target = _co_parent(
         scenario,
         boundary=CharacterBoundaryComponent(denied=frozenset({BoundaryTag.PREGNANCY})),
@@ -2576,9 +2561,7 @@ async def test_pregnancy_becomes_due_while_suspended_but_birth_waits_for_resume(
     scenario = build_scenario()
     _install(scenario.actor)
     character = scenario.actor.world.get_entity(scenario.character)
-    character.add_component(
-        ReproductiveComponent(can_be_pregnant=True, species_group="bunny")
-    )
+    character.add_component(ReproductiveComponent(can_be_pregnant=True, species_group="bunny"))
     target = _co_parent(scenario)
     due: list[BirthDueEvent] = []
     scenario.actor.bus.subscribe(BirthDueEvent, due.append)
@@ -2596,9 +2579,7 @@ async def test_pregnancy_becomes_due_while_suspended_but_birth_waits_for_resume(
     assert character.has_component(SuspendedComponent)
     assert character.has_component(BirthDueComponent)
     assert len(due) == 1
-    children = [
-        target_id for _edge, target_id in character.get_relationships(ParentOf)
-    ]
+    children = [target_id for _edge, target_id in character.get_relationships(ParentOf)]
     assert children == []
 
 
@@ -2606,16 +2587,12 @@ async def test_relationship_pregnancy_and_birth_create_llm_controlled_child():
     scenario = build_scenario()
     _install(scenario.actor)
     character = scenario.actor.world.get_entity(scenario.character)
-    character.add_component(
-        ReproductiveComponent(can_be_pregnant=True, species_group="bunny")
-    )
+    character.add_component(ReproductiveComponent(can_be_pregnant=True, species_group="bunny"))
     target = _co_parent(scenario)
     resolved: list[BirthResolvedEvent] = []
     scenario.actor.bus.subscribe(BirthResolvedEvent, resolved.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "start-partnership", target_id=str(target))
-    )
+    await scenario.actor.submit(_cmd(scenario, "start-partnership", target_id=str(target)))
     await scenario.actor.tick(HOUR)
     assert character.has_relationship(PartnerOf, target)
 
@@ -2638,10 +2615,7 @@ async def test_relationship_pregnancy_and_birth_create_llm_controlled_child():
     assert child.get_component(AgeComponent).born_at_epoch == scenario.actor.epoch
     assert child.get_component(LifeStageComponent).stage == "child"
     assert scenario.actor.world.get_entity(target).has_relationship(ParentOf, child.id)
-    controllers = [
-        target_id
-        for _edge, target_id in child.get_relationships(ControlledBy)
-    ]
+    controllers = [target_id for _edge, target_id in child.get_relationships(ControlledBy)]
     assert len(controllers) == 1
     controller = scenario.actor.world.get_entity(controllers[0])
     assert controller.has_component(LLMControllerComponent)
@@ -2739,9 +2713,10 @@ def test_lifesim_component_prompt_fragments_respect_visibility_and_targets():
     assert RoutineComponent(activity="garden", next_due_epoch=9).prompt_fragments(home_ctx) == (
         "Routine: garden due at epoch 9.",
     )
-    assert RoutineComponent(activity="garden", next_due_epoch=9).prompt_fragments(
-        external_home_ctx
-    ) == ()
+    assert (
+        RoutineComponent(activity="garden", next_due_epoch=9).prompt_fragments(external_home_ctx)
+        == ()
+    )
 
 
 def test_lifesim_fragments_describe_aspiration_career_funds_routine_and_jealousy():
@@ -2813,9 +2788,7 @@ def test_lifesim_fragments_cover_fallbacks_and_skipped_relationships():
     character.add_component(HouseholdComponent(household_id="burrow-1"))
     character.add_component(WellRestedComponent(expires_at_epoch=100))
     character.add_component(ReputationComponent(score=1.0, known_for=("kindness", "craft")))
-    character.add_component(
-        SkillSetComponent(levels={"cooking": 2, "logic": 1}, xp={"logic": 3.5})
-    )
+    character.add_component(SkillSetComponent(levels={"cooking": 2, "logic": 1}, xp={"logic": 3.5}))
     character.add_component(
         PregnancyComponent(started_at_epoch=0, due_at_epoch=10, co_parent_ids=())
     )
@@ -3054,13 +3027,9 @@ async def test_lifesim_profile_whims_home_objects_invites_and_aging_controls():
     await scenario.actor.tick(HOUR)
     await scenario.actor.submit(_cmd(scenario, "add-whim", want="read a book", reward_xp=7))
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(
-        _cmd(scenario, "complete-whim", whim_id=whim_added[0].whim_id)
-    )
+    await scenario.actor.submit(_cmd(scenario, "complete-whim", whim_id=whim_added[0].whim_id))
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(
-        _cmd(scenario, "use-home-object", object_id=str(home_object.id))
-    )
+    await scenario.actor.submit(_cmd(scenario, "use-home-object", object_id=str(home_object.id)))
     await scenario.actor.tick(HOUR)
     await scenario.actor.submit(
         _cmd(
@@ -3086,9 +3055,7 @@ async def test_lifesim_profile_whims_home_objects_invites_and_aging_controls():
     assert character.get_component(CharacterProfileComponent).traits == ("bookish", "tidy")
     whim_id = parse_entity_id(whim_added[0].whim_id)
     assert character.has_relationship(HasWhim, whim_id)
-    assert scenario.actor.world.get_entity(whim_id).get_component(
-        WhimComponent
-    ).completed_at_epoch
+    assert scenario.actor.world.get_entity(whim_id).get_component(WhimComponent).completed_at_epoch
     home_state = home_object.get_component(HomeObjectComponent)
     assert home_state.upgrade_level == 1
     assert home_state.condition == 0.75
@@ -3490,12 +3457,22 @@ def test_inheritance_record_lookup_skips_non_matching_records():
     """inheritance_record_for_event iterates past a non-matching record (981->979)."""
     scenario = build_scenario()
     world = scenario.actor.world
-    spawn_entity(world, [InheritanceRecordComponent(
-        decedent_id="a", heir_id="b", source_event_id="other", created_at_epoch=1
-    )])
-    match = spawn_entity(world, [InheritanceRecordComponent(
-        decedent_id="a", heir_id="b", source_event_id="wanted", created_at_epoch=1
-    )])
+    spawn_entity(
+        world,
+        [
+            InheritanceRecordComponent(
+                decedent_id="a", heir_id="b", source_event_id="other", created_at_epoch=1
+            )
+        ],
+    )
+    match = spawn_entity(
+        world,
+        [
+            InheritanceRecordComponent(
+                decedent_id="a", heir_id="b", source_event_id="wanted", created_at_epoch=1
+            )
+        ],
+    )
     assert inheritance_record_for_event(world, "wanted").id == match.id
     assert inheritance_record_for_event(world, "absent") is None
 
@@ -3590,8 +3567,8 @@ def test_optional_sim_transfers_fall_back_when_modules_unavailable(monkeypatch):
     heir = world.get_entity(scenario.room_b)  # any entity works as the heir handle
 
     # Force the lazy in-function imports to fail, simulating the sims being absent.
-    monkeypatch.setitem(sys.modules, "bunnyland.mechanics.daggersim", None)
-    monkeypatch.setitem(sys.modules, "bunnyland.mechanics.colonysim", None)
+    monkeypatch.setitem(sys.modules, "bunnyland.simpacks.daggersim.mechanics", None)
+    monkeypatch.setitem(sys.modules, "bunnyland.simpacks.colonysim.mechanics", None)
 
     assert _transfer_property_deeds(world, decedent, heir, inherited_at_epoch=1) == ()
     assert _transfer_colony_ownership(decedent, heir, inherited_at_epoch=1) == ()

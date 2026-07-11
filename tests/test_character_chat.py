@@ -17,17 +17,17 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.events import CommandExecutedEvent, CommandRejectedEvent
-from bunnyland.llm_agents.agent import ChatAgentReply
-from bunnyland.llm_agents.tools import ToolCall
-from bunnyland.mechanics.persona import (
+from bunnyland.foundation.persona.mechanics import (
     GoalComponent,
     PersonaProfileComponent,
     PreferenceComponent,
     TraitSetComponent,
 )
+from bunnyland.llm_agents.agent import ChatAgentReply
+from bunnyland.llm_agents.tools import ToolCall
 from bunnyland.memory import InMemoryStore, install_memory
-from bunnyland.plugins import apply_plugins, collect_persona_fragments
-from bunnyland.plugins.builtin import CORE_VERBS, bunnyland_plugins
+from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_persona_fragments
+from bunnyland.plugins.ids import CORE_VERBS
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server import character_chat as character_chat_module
 from bunnyland.server.app import create_app
@@ -318,19 +318,15 @@ async def test_character_chat_pending_registration_handles_already_completed_eve
     install_core(scenario.actor)
     agent = FakeChatAgent([ChatAgentReply(content="That already happened.")])
     service = chat_service(scenario, agent, timeout=0.0)
-    service._pending[("test-client", str(scenario.character), "other-command")] = (
-        PendingChatAction(
-            client_id="test-client",
-            character_id=str(scenario.character),
-            command_id="other-command",
-            messages=[],
-            user_message="wait",
-            model=None,
-            provider=None,
-            action=CharacterChatActionResult(
-                tool="wait", command_id="other-command", status="queued"
-            ),
-        )
+    service._pending[("test-client", str(scenario.character), "other-command")] = PendingChatAction(
+        client_id="test-client",
+        character_id=str(scenario.character),
+        command_id="other-command",
+        messages=[],
+        user_message="wait",
+        model=None,
+        provider=None,
+        action=CharacterChatActionResult(tool="wait", command_id="other-command", status="queued"),
     )
     service._complete_pending(
         CommandExecutedEvent(
@@ -357,9 +353,7 @@ async def test_character_chat_pending_registration_handles_already_completed_eve
         )
     )
 
-    result = await service.pending_result(
-        str(scenario.character), "test-client", "cmd-completed"
-    )
+    result = await service.pending_result(str(scenario.character), "test-client", "cmd-completed")
 
     assert result.complete is True
     assert result.action.tool == "say"

@@ -1,6 +1,6 @@
 """Canonical Barbarian Sim plugin entrypoint."""
 
-from ...mechanics.barbariansim import (
+from bunnyland.simpacks.barbariansim.mechanics import (
     ArmorComponent,
     AttackHandler,
     BarbarianSimPolicyComponent,
@@ -98,6 +98,7 @@ from ...mechanics.barbariansim import (
     barbariansim_fragments,
     install_barbariansim,
 )
+
 from ...plugins.ids import (
     BARBARIANSIM,
     CORE_VERBS,

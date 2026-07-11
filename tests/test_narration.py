@@ -117,16 +117,12 @@ def test_narration_assembles_visible_pov_and_omits_hidden_or_remote_state(scenar
         )
     )
 
-    scene = projection.assemble(
-        world.get_entity(scenario.character), (visible_event, remote_event)
-    )
+    scene = projection.assemble(world.get_entity(scenario.character), (visible_event, remote_event))
     text = projection.renderer(scene)
 
     assert scene.visible_characters == ("Hazel",)
     assert "silver secret" not in scene.visible_objects
-    assert [event.summary for event in scene.events] == [
-        'Hazel said, "Juniper, watch the moss."'
-    ]
+    assert [event.summary for event in scene.events] == ['Hazel said, "Juniper, watch the moss."']
     assert remote_event.event_id in scene.omitted_event_ids
     assert "distant bell" not in text
     assert "silver secret" not in text
@@ -465,12 +461,10 @@ def test_narration_voice_controls_style_without_changing_facts(scenario):
     plain_scene = plain.assemble(world.get_entity(scenario.character), (event,))
     cozy_scene = cozy.assemble(world.get_entity(scenario.character), (event,))
     plain_facts = tuple(
-        (fact.category, fact.text, fact.entity_id, fact.event_id)
-        for fact in plain_scene.facts
+        (fact.category, fact.text, fact.entity_id, fact.event_id) for fact in plain_scene.facts
     )
     cozy_facts = tuple(
-        (fact.category, fact.text, fact.entity_id, fact.event_id)
-        for fact in cozy_scene.facts
+        (fact.category, fact.text, fact.entity_id, fact.event_id) for fact in cozy_scene.facts
     )
 
     assert plain_facts == cozy_facts

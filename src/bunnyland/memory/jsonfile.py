@@ -68,9 +68,7 @@ class JsonMemoryStore(InMemoryStore):
             return
         raw = json.loads(self._path.read_text(encoding="utf-8"))
         for collection, entries in raw.get("collections", {}).items():
-            self._collections[collection] = [
-                _entry_from_json(item) for item in entries
-            ]
+            self._collections[collection] = [_entry_from_json(item) for item in entries]
 
     def _save(self) -> None:
         data = {
@@ -80,9 +78,7 @@ class JsonMemoryStore(InMemoryStore):
             }
         }
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(
-            json.dumps(data, indent=2, sort_keys=True), encoding="utf-8"
-        )
+        self._path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
 
     def add(
         self,
@@ -116,9 +112,7 @@ class JsonMemoryStore(InMemoryStore):
         document: str,
         metadata: dict[str, Any],
     ):
-        created = super().create_document(
-            collection, document=document, metadata=metadata
-        )
+        created = super().create_document(collection, document=document, metadata=metadata)
         self._save()
         return created
 
@@ -130,9 +124,7 @@ class JsonMemoryStore(InMemoryStore):
         document: str,
         metadata: dict[str, Any],
     ):
-        updated = super().update_document(
-            collection, note_id, document=document, metadata=metadata
-        )
+        updated = super().update_document(collection, note_id, document=document, metadata=metadata)
         if updated is not None:
             self._save()
         return updated

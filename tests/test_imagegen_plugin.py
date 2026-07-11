@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bunnyland.foundation.imagegen.plugin import plugin as imagegen_plugin
 from bunnyland.imagegen.components import (
     EventImageComponent,
     ImageRequestComponent,
@@ -18,7 +19,7 @@ from bunnyland.plugins import (
     Plugin,
     collect_prompt_enhancers,
 )
-from bunnyland.plugins.builtin import IMAGEGEN, imagegen_plugin
+from bunnyland.plugins.ids import IMAGEGEN
 
 
 def test_imagegen_plugin_registers_components_and_events():

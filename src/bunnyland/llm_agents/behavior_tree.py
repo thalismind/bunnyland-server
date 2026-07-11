@@ -155,9 +155,7 @@ def _address_first_character(
     if not _command_available(context, "say something to the room"):
         return None
     target = context.visible_characters[0]
-    return ToolCall(
-        "say", {"text": f"{target}, {text}", "intent": intent, "approach": approach}
-    )
+    return ToolCall("say", {"text": f"{target}, {text}", "intent": intent, "approach": approach})
 
 
 def _greet_first_character(context: PromptContext) -> ToolCall | None:

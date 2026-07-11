@@ -10,6 +10,8 @@ from uuid import uuid4
 
 from relics import Component
 
+from bunnyland.simpacks.lifesim.mechanics import LifeStageComponent
+
 from .core.components import CharacterComponent, IdentityComponent, SuspendedComponent
 from .core.contracts import ActorContext, EntityLike
 from .core.controllers import (
@@ -18,7 +20,6 @@ from .core.controllers import (
 )
 from .core.ecs import replace_component
 from .core.edges import ControlledBy
-from .mechanics.lifesim import LifeStageComponent
 
 CHILD_LIFE_STAGES = frozenset({"baby", "infant", "toddler", "child"})
 CLIENT_KIND_DISCORD = "discord"
@@ -102,8 +103,7 @@ def claimable_characters(
         character
         for character in characters
         if (
-            character.has_component(SuspendedComponent)
-            or not character_has_claim(actor, character)
+            character.has_component(SuspendedComponent) or not character_has_claim(actor, character)
         )
         and (allow_child_claims or not is_child_character(character))
     ]
@@ -136,10 +136,7 @@ def character_has_claim(actor: ActorContext, character: EntityLike) -> bool:
 
 
 def claim_matches(claim: ClaimedComponent, client_kind: str, client_id: str) -> bool:
-    return (
-        claim.client_kind == client_kind.strip().lower()
-        and claim.client_id == client_id.strip()
-    )
+    return claim.client_kind == client_kind.strip().lower() and claim.client_id == client_id.strip()
 
 
 def claim_client_matches(claim: ClaimedComponent, client_id: str) -> bool:

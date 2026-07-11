@@ -23,7 +23,7 @@ from bunnyland.core import (
 from bunnyland.core.components import WritableComponent
 from bunnyland.core.edges import ExitTo
 from bunnyland.core.events import WorldGeneratedEvent
-from bunnyland.mechanics.consumables import FoodComponent
+from bunnyland.foundation.consumables.components import FoodComponent
 from bunnyland.worldgen import (
     DanglingResolution,
     DoorProposal,
@@ -86,9 +86,7 @@ async def test_dangling_doors_are_sealed_dropped_or_linked():
 
     # The hidden vault door is sealed -> a locked Door object appears in the room.
     sealed = [
-        oid
-        for oid in result.objects.values()
-        if world.get_entity(oid).has_component(DoorComponent)
+        oid for oid in result.objects.values() if world.get_entity(oid).has_component(DoorComponent)
     ]
     assert sealed and gen.stats["sealed"] >= 1
     assert not world.get_entity(sealed[0]).get_component(DoorComponent).open

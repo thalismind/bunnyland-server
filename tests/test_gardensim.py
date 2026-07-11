@@ -21,10 +21,11 @@ from bunnyland.core import (
 )
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
-from bunnyland.mechanics.colonysim import ResourceStackComponent
-from bunnyland.mechanics.consumables import FoodComponent
-from bunnyland.mechanics.environment import CalendarComponent
-from bunnyland.mechanics.gardensim import (
+from bunnyland.foundation.consumables.components import FoodComponent
+from bunnyland.foundation.environment.mechanics import CalendarComponent
+from bunnyland.prompts import ComponentPromptContext
+from bunnyland.simpacks.colonysim.mechanics import ResourceStackComponent
+from bunnyland.simpacks.gardensim.mechanics import (
     AnimalBornEvent,
     AnimalBreedingComponent,
     AnimalProductCollectedEvent,
@@ -127,7 +128,6 @@ from bunnyland.mechanics.gardensim import (
     WeedCropHandler,
     gardensim_fragments,
 )
-from bunnyland.prompts import ComponentPromptContext
 
 DAY = 24 * 60 * 60
 HOUR = 60 * 60
@@ -168,7 +168,7 @@ def _install(actor):
     actor.register_handler(ClaimRewardHandler())
     actor.register_consequence(CropGrowthConsequence())
     actor.register_consequence(TreeGrowthConsequence())
-    from bunnyland.mechanics.gardensim import (
+    from bunnyland.simpacks.gardensim.mechanics import (
         AnimalBirthConsequence,
         AnimalProductConsequence,
         DailyFarmResetConsequence,
@@ -590,9 +590,7 @@ async def test_crop_withers_out_of_season():
     _install(scenario.actor)
     soil = _soil(scenario)
     seed = _seed(scenario)
-    clock = list(
-        scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities()
-    )[0]
+    clock = list(scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities())[0]
     clock.add_component(CalendarComponent(season="spring"))
 
     await scenario.actor.submit(_cmd(scenario, "till", soil_id=str(soil)))
@@ -858,9 +856,7 @@ async def test_planting_respects_seed_season_unless_soil_is_greenhouse():
     soil = _soil(scenario)
     winter_seed = _seed(scenario, "snow yam", seasons=("winter",))
     spring_seed = _seed(scenario, "turnip", seasons=("spring",))
-    clock = list(
-        scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities()
-    )[0]
+    clock = list(scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities())[0]
     clock.add_component(CalendarComponent(season="winter"))
     rejects: list[CommandRejectedEvent] = []
     scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
@@ -904,9 +900,7 @@ async def test_clear_dead_crop_removes_crop_state_from_soil():
     _install(scenario.actor)
     soil = _soil(scenario)
     seed = _seed(scenario)
-    clock = list(
-        scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities()
-    )[0]
+    clock = list(scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities())[0]
     clock.add_component(CalendarComponent(season="spring"))
     cleared: list[DeadCropClearedEvent] = []
     scenario.actor.bus.subscribe(DeadCropClearedEvent, cleared.append)
@@ -1359,8 +1353,9 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
         ),
         (
             HarvestSapHandler(),
-            _handler_cmd(scenario, "harvest", character_id="not-an-id",
-                         tree_id=str(tapped_tree.id)),
+            _handler_cmd(
+                scenario, "harvest", character_id="not-an-id", tree_id=str(tapped_tree.id)
+            ),
             "invalid character or tree id",
         ),
         (
@@ -1714,8 +1709,9 @@ def test_farm_loop_handlers_reject_invalid_and_unavailable_targets_directly():
         ),
         (
             CollectMachineOutputHandler(),
-            _handler_cmd(scenario, "collect-machine-output", character_id="bad",
-                         machine_id=str(machine.id)),
+            _handler_cmd(
+                scenario, "collect-machine-output", character_id="bad", machine_id=str(machine.id)
+            ),
             "invalid character or machine id",
         ),
         (
@@ -2181,7 +2177,7 @@ async def test_farm_consequences_and_metadata_outputs_cover_state_edges():
         == "wine"
     )
     wine = scenario.actor.world.get_entity(output_id)
-    from bunnyland.mechanics.consumables import ConsumableComponent, DrinkableComponent
+    from bunnyland.foundation.consumables.components import ConsumableComponent, DrinkableComponent
 
     assert wine.get_component(IdentityComponent).name == "aged wine"
     assert wine.get_component(DrinkableComponent).hydration == 1.0
@@ -3433,12 +3429,14 @@ def test_weed_and_treat_without_quality_component_skip_quality_bump_directly():
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), soil.id)
 
-    assert WeedCropHandler().execute(
-        ctx, _handler_cmd(scenario, "weed-crop", soil_id=str(soil.id))
-    ).ok
-    assert TreatPestsHandler().execute(
-        ctx, _handler_cmd(scenario, "treat-pests", soil_id=str(soil.id))
-    ).ok
+    assert (
+        WeedCropHandler().execute(ctx, _handler_cmd(scenario, "weed-crop", soil_id=str(soil.id))).ok
+    )
+    assert (
+        TreatPestsHandler()
+        .execute(ctx, _handler_cmd(scenario, "treat-pests", soil_id=str(soil.id)))
+        .ok
+    )
     assert not soil.has_component(WeedComponent)
     assert not soil.has_component(PestComponent)
     assert not soil.has_component(CropQualityComponent)
@@ -3457,9 +3455,7 @@ def test_weed_treat_repair_reject_unparseable_character_id_directly():
     )
     assert (
         TreatPestsHandler()
-        .execute(
-            ctx, _handler_cmd(scenario, "treat-pests", character_id="bad", soil_id="entity_1")
-        )
+        .execute(ctx, _handler_cmd(scenario, "treat-pests", character_id="bad", soil_id="entity_1"))
         .reason
         == "invalid character or soil id"
     )
@@ -3543,14 +3539,18 @@ def test_claim_mail_and_complete_quest_without_reward_skip_spawn_directly():
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), mail.id)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), quest.id)
 
-    assert ClaimMailHandler().execute(
-        ctx, _handler_cmd(scenario, "claim-mail", mail_id=str(mail.id))
-    ).ok
+    assert (
+        ClaimMailHandler()
+        .execute(ctx, _handler_cmd(scenario, "claim-mail", mail_id=str(mail.id)))
+        .ok
+    )
     assert mail.get_component(MailComponent).claimed is True
 
-    assert CompleteFarmQuestHandler().execute(
-        ctx, _handler_cmd(scenario, "complete-farm-quest", quest_id=str(quest.id))
-    ).ok
+    assert (
+        CompleteFarmQuestHandler()
+        .execute(ctx, _handler_cmd(scenario, "complete-farm-quest", quest_id=str(quest.id)))
+        .ok
+    )
     assert quest.get_component(FarmQuestComponent).completed is True
 
 
@@ -3635,7 +3635,7 @@ def test_record_collection_returns_false_for_existing_entry_directly():
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
     replace_component(character, CollectionComponent(entries=("ruby",)))
-    from bunnyland.mechanics.gardensim import _record_collection
+    from bunnyland.simpacks.gardensim.mechanics import _record_collection
 
     # Entry already present -> returns False without changing the collection (line 819).
     assert _record_collection(world, character, "ruby") is False
@@ -3646,7 +3646,7 @@ def test_record_collection_returns_false_for_existing_entry_directly():
 
 
 def test_animal_birth_skips_when_not_due_and_handles_uncontained_parent_directly():
-    from bunnyland.mechanics.gardensim import AnimalBirthConsequence
+    from bunnyland.simpacks.gardensim.mechanics import AnimalBirthConsequence
 
     scenario = build_scenario()
     world = scenario.actor.world

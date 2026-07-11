@@ -5,7 +5,7 @@ description = "An asynchronous social sandbox where humans and LLM agents share 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "relics",
+    "relics @ git+https://github.com/ssube/relics.git@c6d10fa6674b550022a617599f0c9c73106ebc9d",
     "pydantic>=2.0",
     "PyYAML>=6.0",
 ]
@@ -23,13 +23,41 @@ otel = [
     "opentelemetry-instrumentation-fastapi>=0.48b0",
 ]
 server = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
-tui = ["textual>=0.60", "httpx>=0.27"]
-repl = ["textual>=0.60", "httpx>=0.27"]
+tui = ["textual>=0.60", "httpx>=0.27", "websockets>=12"]
+repl = ["textual>=0.60", "httpx>=0.27", "websockets>=12"]
 
 [project.scripts]
 bunnyland = "bunnyland.cli:main"
 bunnyland-tui = "bunnyland.tui:main"
 bunnyland-repl = "bunnyland.repl:main"
+
+[project.entry-points."bunnyland.plugins"]
+"bunnyland.barbariansim" = "bunnyland.simpacks.barbariansim.plugin:plugin"
+"bunnyland.checkpoints" = "bunnyland.foundation.checkpoints.plugin:plugin"
+"bunnyland.colonysim" = "bunnyland.simpacks.colonysim.plugin:plugin"
+"bunnyland.core_verbs" = "bunnyland.foundation.core_verbs.plugin:plugin"
+"bunnyland.daggersim" = "bunnyland.simpacks.daggersim.plugin:plugin"
+"bunnyland.dinosim" = "bunnyland.simpacks.dinosim.plugin:plugin"
+"bunnyland.discord" = "bunnyland.discord.plugin:plugin"
+"bunnyland.dragonsim" = "bunnyland.simpacks.dragonsim.plugin:plugin"
+"bunnyland.environment" = "bunnyland.foundation.environment.plugin:plugin"
+"bunnyland.gardensim" = "bunnyland.simpacks.gardensim.plugin:plugin"
+"bunnyland.history" = "bunnyland.foundation.history.plugin:plugin"
+"bunnyland.imagegen" = "bunnyland.foundation.imagegen.plugin:plugin"
+"bunnyland.media" = "bunnyland.foundation.media.plugin:plugin"
+"bunnyland.lifesim" = "bunnyland.simpacks.lifesim.plugin:plugin"
+"bunnyland.mcp" = "bunnyland.foundation.mcp.plugin:plugin"
+"bunnyland.mechanisms" = "bunnyland.foundation.mechanisms.plugin:plugin"
+"bunnyland.memory" = "bunnyland.foundation.memory.plugin:plugin"
+"bunnyland.neonsim" = "bunnyland.simpacks.neonsim.plugin:plugin"
+"bunnyland.nukesim" = "bunnyland.simpacks.nukesim.plugin:plugin"
+"bunnyland.persona" = "bunnyland.foundation.persona.plugin:plugin"
+"bunnyland.policy" = "bunnyland.foundation.policy.plugin:plugin"
+"bunnyland.social" = "bunnyland.foundation.social.plugin:plugin"
+"bunnyland.storyteller" = "bunnyland.foundation.storyteller.plugin:plugin"
+"bunnyland.toonsim" = "bunnyland.simpacks.toonsim.plugin:plugin"
+"bunnyland.voidsim" = "bunnyland.simpacks.voidsim.plugin:plugin"
+"bunnyland.worldgen" = "bunnyland.foundation.worldgen.plugin:plugin"
 
 [dependency-groups]
 dev = [
@@ -50,6 +78,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bunnyland"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

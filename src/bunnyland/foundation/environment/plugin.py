@@ -1,6 +1,6 @@
 """Canonical Environment plugin entrypoint."""
 
-from ...mechanics.environment import (
+from bunnyland.foundation.environment.mechanics import (
     CalendarComponent,
     ExtinguishHandler,
     FireComponent,
@@ -15,6 +15,7 @@ from ...mechanics.environment import (
     environment_fragments,
     install_environment,
 )
+
 from ...plugins.ids import ENVIRONMENT
 from ...plugins.model import (
     CommandContribution,

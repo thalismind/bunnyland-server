@@ -150,9 +150,7 @@ def assign_discord_controller(
             )
         if _is_child_character(character) and not allow_child_claims:
             name = character.get_component(IdentityComponent).name
-            raise RuntimeError(
-                f"{name} is a child character and cannot be claimed on this server"
-            )
+            raise RuntimeError(f"{name} is a child character and cannot be claimed on this server")
     else:
         suspended = _claimable_characters(
             actor,

@@ -8,7 +8,6 @@ from ...core.actions import (
 
 ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     define_action("eat", ("item_id",), tool_name="eat", patterns=("eat {item_id}",)),
-    define_action("drink", ("source_id",), tool_name="drink", patterns=("drink {source_id}",)),
     define_action(
         "bathe",
         ("target_id",),

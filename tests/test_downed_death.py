@@ -19,7 +19,7 @@ from bunnyland.core.events import (
     CharacterDownedEvent,
     CharacterRevivedEvent,
 )
-from bunnyland.mechanics.history import (
+from bunnyland.foundation.history.mechanics import (
     death_consequence_for_event,
     install_history,
     world_history_records,

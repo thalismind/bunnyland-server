@@ -24,7 +24,7 @@ from bunnyland.core.events import (
     PhysicalWriteEvent,
     event_base,
 )
-from bunnyland.mechanics.history import (
+from bunnyland.foundation.history.mechanics import (
     CreatedBy,
     CreatorSignatureComponent,
     DeathConsequenceComponent,
@@ -52,8 +52,13 @@ from bunnyland.mechanics.history import (
     world_history_records,
 )
 from bunnyland.persistence import WorldMeta, load_world, save_world
-from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_prompt_fragments
-from bunnyland.plugins.builtin import CORE_VERBS, HISTORY
+from bunnyland.plugins import (
+    PluginRegistry,
+    apply_plugins,
+    bunnyland_plugins,
+    collect_prompt_fragments,
+)
+from bunnyland.plugins.ids import CORE_VERBS, HISTORY
 from bunnyland.prompts import PromptBuilder
 
 HOUR = 3600.0
@@ -127,23 +132,21 @@ async def test_physical_writing_creates_persisted_world_history_prompt(tmp_path)
     assert signature.creator_id == str(scenario.character)
     assert signature.circumstance == "writing on watch sign"
     assert mark_entity.get_relationships(CreatedBy)[0][1] == scenario.character
-    deed_reputation = world.get_entity(scenario.character).get_component(
-        DeedReputationComponent
-    )
+    deed_reputation = world.get_entity(scenario.character).get_component(DeedReputationComponent)
     assert deed_reputation.scores["writing"] == 0.7
     assert deed_reputation.scores["authored"] == 0.7
     assert deed_reputation.known_for == (record.summary,)
 
-    ctx = PromptBuilder(
-        world, fragment_providers=collect_prompt_fragments(plugins)
-    ).build(scenario.character)
+    ctx = PromptBuilder(world, fragment_providers=collect_prompt_fragments(plugins)).build(
+        scenario.character
+    )
     assert any("Juniper kept watch through the storm" in line for line in ctx.conditions)
     assert any("watch sign bears writing by Juniper" in line for line in ctx.conditions)
     assert any("Deed reputation writing: 0.7." in line for line in ctx.conditions)
 
     path = tmp_path / "world.json"
     save_world(scenario.actor, path, meta=WorldMeta(seed="history"))
-    loaded, _meta = load_world(path, plugins=plugins)
+    loaded, _meta = load_world(path, registry=PluginRegistry(plugins))
 
     loaded_records = world_history_records(loaded.world)
     assert len(loaded_records) == 1
@@ -199,14 +202,11 @@ async def test_character_death_event_becomes_history_and_visible_consequence(tmp
     ctx = PromptBuilder(
         scenario.actor.world, fragment_providers=collect_prompt_fragments(plugins)
     ).build(scenario.character)
-    assert any(
-        "Death consequence: Juniper died from a cave-in." in line
-        for line in ctx.conditions
-    )
+    assert any("Death consequence: Juniper died from a cave-in." in line for line in ctx.conditions)
 
     path = tmp_path / "world.json"
     save_world(scenario.actor, path, meta=WorldMeta(seed="death-consequence"))
-    loaded, _meta = load_world(path, plugins=plugins)
+    loaded, _meta = load_world(path, registry=PluginRegistry(plugins))
     loaded_consequence = death_consequence_for_event(loaded.world, event.event_id)
     assert loaded_consequence is not None
     assert loaded_consequence.get_component(DeathConsequenceComponent).summary == (
@@ -216,8 +216,7 @@ async def test_character_death_event_becomes_history_and_visible_consequence(tmp
         loaded.world, fragment_providers=collect_prompt_fragments(plugins)
     ).build(scenario.character)
     assert any(
-        "Death consequence: Juniper died from a cave-in." in line
-        for line in loaded_ctx.conditions
+        "Death consequence: Juniper died from a cave-in." in line for line in loaded_ctx.conditions
     )
 
 
@@ -732,12 +731,8 @@ def test_history_fragments_skip_records_with_other_actors_and_targets():
     scenario = build_scenario()
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
-    other_character = spawn_entity(
-        world, [IdentityComponent(name="Bramble", kind="character")]
-    )
-    far_target = spawn_entity(
-        world, [IdentityComponent(name="distant relic", kind="item")]
-    )
+    other_character = spawn_entity(world, [IdentityComponent(name="Bramble", kind="character")])
+    far_target = spawn_entity(world, [IdentityComponent(name="distant relic", kind="item")])
     # Far record whose only actor/target are someone else and an unreachable item:
     # both relevance loops iterate fully without matching (653->652, 656->655).
     record_world_history(
@@ -885,9 +880,7 @@ def test_death_consequence_fragments_show_relevant_deaths_with_limit():
             created_at_epoch=index,
             location_id=str(scenario.room_a),
         )
-    far_character = spawn_entity(
-        world, [IdentityComponent(name="Farley", kind="character")]
-    )
+    far_character = spawn_entity(world, [IdentityComponent(name="Farley", kind="character")])
     world.get_entity(scenario.room_b).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), far_character.id
     )

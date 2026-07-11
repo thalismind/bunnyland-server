@@ -229,9 +229,7 @@ class TellHandler:
         overhearers: tuple[str, ...] = ()
         if bool(payload.get("audible", False)):
             overhearers = tuple(
-                str(hearer)
-                for hearer in _audience(ctx, room_id, speaker_id)
-                if hearer != target_id
+                str(hearer) for hearer in _audience(ctx, room_id, speaker_id) if hearer != target_id
             )
 
         return ok(

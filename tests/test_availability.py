@@ -24,7 +24,6 @@ from bunnyland.core import (
     build_submitted_command,
     spawn_entity,
 )
-from bunnyland.core.actions import action_definition_for_command_type
 from bunnyland.core.availability import (
     affordable,
     evaluate_availability,
@@ -34,7 +33,12 @@ from bunnyland.core.availability import (
 )
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerResult, ok
-from bunnyland.mechanics.lifesim import SkillSetComponent
+from bunnyland.plugins import PluginRegistry, bunnyland_plugins
+from bunnyland.simpacks.lifesim.mechanics import SkillSetComponent
+
+
+def _action_definition(command_type):
+    return PluginRegistry(bunnyland_plugins()).actions[command_type][1]
 
 
 @dataclass(frozen=True)
@@ -165,9 +169,7 @@ def test_requirement_met_via_character_edge():
     character = _character(scenario)
     requirement = ActionRequirement(character_edges=("_Knows",))
 
-    assert (
-        meets_requirement(scenario.actor.world, character, requirement) is False
-    )
+    assert meets_requirement(scenario.actor.world, character, requirement) is False
 
     character.add_relationship(_Knows(), scenario.room_b)
     assert meets_requirement(scenario.actor.world, character, requirement) is True
@@ -211,9 +213,7 @@ def test_can_act_reflects_lifecycle_gates():
     character.add_component(DeadComponent(died_at_epoch=0, cause="test"))
 
     assert lifecycle_block_reason(character, "demo") == "character is dead"
-    result = evaluate_availability(
-        scenario.actor, character, _definition(), target_groups={}
-    )
+    result = evaluate_availability(scenario.actor, character, _definition(), target_groups={})
     assert result.can_act is False
     assert result.available is False
     assert result.reason == "character is dead"
@@ -225,9 +225,7 @@ def test_downed_character_cannot_act():
     character.add_component(DownedComponent(downed_at_epoch=0, cause="test"))
 
     assert lifecycle_block_reason(character, "demo") == "character is downed"
-    result = evaluate_availability(
-        scenario.actor, character, _definition(), target_groups={}
-    )
+    result = evaluate_availability(scenario.actor, character, _definition(), target_groups={})
     assert result.can_act is False
     assert result.reason == "character is downed"
 
@@ -274,7 +272,7 @@ def _capture_rejections(actor):
 def test_submit_rejects_missing_required_argument():
     scenario = build_scenario()
     scenario.actor.register_handler(SayHandler())
-    scenario.actor.register_action_definition(action_definition_for_command_type("say"))
+    scenario.actor.register_action_definition(_action_definition("say"))
     rejected = _capture_rejections(scenario.actor)
 
     outcome = asyncio.run(scenario.actor.submit(_say_command(scenario, {})))
@@ -289,9 +287,7 @@ def test_submit_accepts_valid_command():
     scenario = build_scenario()
     scenario.actor.register_handler(SayHandler())
 
-    outcome = asyncio.run(
-        scenario.actor.submit(_say_command(scenario, {"text": "hello"}))
-    )
+    outcome = asyncio.run(scenario.actor.submit(_say_command(scenario, {"text": "hello"})))
 
     assert outcome.accepted is True
     assert outcome.reason == ""
@@ -349,9 +345,7 @@ def test_submit_rejects_when_character_cannot_act():
     scenario.actor.register_handler(SayHandler())
     _character(scenario).add_component(DeadComponent(died_at_epoch=0, cause="test"))
 
-    outcome = asyncio.run(
-        scenario.actor.submit(_say_command(scenario, {"text": "hi"}))
-    )
+    outcome = asyncio.run(scenario.actor.submit(_say_command(scenario, {"text": "hi"})))
 
     assert outcome.accepted is False
     assert outcome.reason == "character is dead"
@@ -367,7 +361,7 @@ def test_submit_rejects_unmet_capability_requirement():
             return ok()
 
     scenario.actor.register_handler(_PickLockHandler())
-    scenario.actor.register_action_definition(action_definition_for_command_type("pick-lock"))
+    scenario.actor.register_action_definition(_action_definition("pick-lock"))
 
     def _pick(payload=None):
         return build_submitted_command(

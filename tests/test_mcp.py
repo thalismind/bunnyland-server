@@ -37,10 +37,9 @@ from bunnyland.mcp import (
     release_mcp_controller,
     render_mcp_client_prompt,
 )
-from bunnyland.mechanics.lifesim import LifeStageComponent
 from bunnyland.persistence import WorldMeta
 from bunnyland.plugins import bunnyland_plugins, select
-from bunnyland.plugins.builtin import MCP, WORLDGEN
+from bunnyland.plugins.ids import MCP, WORLDGEN
 from bunnyland.server.app import create_app
 from bunnyland.server.client_ids import CLIENT_ID_HEADER
 from bunnyland.server.models import (
@@ -54,6 +53,7 @@ from bunnyland.server.models import (
     WorldPatchResponse,
     WorldRoomGenerationResponse,
 )
+from bunnyland.simpacks.lifesim.mechanics import LifeStageComponent
 
 
 def _free_port() -> int:
@@ -76,7 +76,7 @@ def _claim_args(claimed: dict) -> dict[str, str]:
 
 
 def test_select_plugins_can_add_mcp_without_disabling_defaults():
-    selected = select_plugins([], None, extra_enabled_ids=(MCP,))
+    selected = select_plugins(None, extra_enabled_ids=(MCP,))
     ids = {plugin.id for plugin in selected}
 
     assert MCP in ids
@@ -115,8 +115,7 @@ def test_mcp_uri_and_character_summary_helpers_cover_edge_cases():
     assert mcp_server._active_controller_kind(actor, active) == "other"
     assert mcp_server._character_summary(actor, suspended)["controller_status"] == "suspended"
     assert {
-        item["name"]: item["controller_status"]
-        for item in mcp_server.list_mcp_characters(actor)
+        item["name"]: item["controller_status"] for item in mcp_server.list_mcp_characters(actor)
     } == {"Clover": "suspended", "Juniper": "other"}
 
 
@@ -1434,9 +1433,7 @@ def _install_fake_fastmcp(monkeypatch, *, registered_tools, low_server, get_cont
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
 
 
-async def test_mcp_admin_tools_wrap_generator_failures_and_definition_tools(
-    monkeypatch, scenario
-):
+async def test_mcp_admin_tools_wrap_generator_failures_and_definition_tools(monkeypatch, scenario):
     from bunnyland.server.models import ControllerDefinitionListResponse
 
     registered_tools = {}
@@ -1453,9 +1450,7 @@ async def test_mcp_admin_tools_wrap_generator_failures_and_definition_tools(
             return lambda func: func
 
     low_server = FakeLowServer()
-    _install_fake_fastmcp(
-        monkeypatch, registered_tools=registered_tools, low_server=low_server
-    )
+    _install_fake_fastmcp(monkeypatch, registered_tools=registered_tools, low_server=low_server)
 
     async def boom(_request):
         raise ValueError("generator unavailable")
@@ -1589,9 +1584,7 @@ async def test_mcp_controller_definition_tools_report_when_unconfigured(monkeypa
     with pytest.raises(RuntimeError, match="not configured"):
         registered_tools["list_controller_definitions_admin"](admin_token="secret")
     with pytest.raises(RuntimeError, match="not configured"):
-        await registered_tools["register_script_admin"](
-            admin_token="secret", name="x", calls=[]
-        )
+        await registered_tools["register_script_admin"](admin_token="secret", name="x", calls=[])
     with pytest.raises(RuntimeError, match="not configured"):
         await registered_tools["register_behavior_admin"](
             admin_token="secret", name="x", root={"kind": "action", "ref": "wait"}
@@ -1738,9 +1731,7 @@ async def test_mcp_admin_header_fallback_when_request_is_absent(monkeypatch, sce
             return lambda func: func
 
     def context_with_no_request():
-        return SimpleNamespace(
-            request_context=SimpleNamespace(request=None), session=object()
-        )
+        return SimpleNamespace(request_context=SimpleNamespace(request=None), session=object())
 
     _install_fake_fastmcp(
         monkeypatch,
@@ -1782,9 +1773,7 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
     plugins = select(bunnyland_plugins(), [MCP, WORLDGEN])
     app = create_app(scenario.actor, plugins=plugins, admin_token="secret")
     port = _free_port()
-    server = uvicorn.Server(
-        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    )
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     server_task = asyncio.create_task(server.serve())
     try:
         for _ in range(100):
@@ -1963,9 +1952,7 @@ def _capture_mcp_tools(
                 return SimpleNamespace(session=object())
             return SimpleNamespace(
                 session=object(),
-                request_context=SimpleNamespace(
-                    request=SimpleNamespace(headers=request_headers)
-                ),
+                request_context=SimpleNamespace(request=SimpleNamespace(headers=request_headers)),
             )
 
         def streamable_http_app(self):
@@ -1995,9 +1982,7 @@ def _capture_mcp_tools(
 
 
 def test_runtime_status_reports_tick_cadence(monkeypatch, scenario):
-    loop = SimpleNamespace(
-        running=True, paused=False, tick_seconds=2.0, time_scale=1800.0
-    )
+    loop = SimpleNamespace(running=True, paused=False, tick_seconds=2.0, time_scale=1800.0)
     tools = _capture_mcp_tools(monkeypatch, scenario.actor, loop=loop)
 
     status = tools["runtime_status"]()
@@ -2021,9 +2006,7 @@ def test_mcp_client_resources_require_and_accept_claim_headers(monkeypatch, scen
         request_headers=headers,
         registered_resources=resources,
     )
-    claimed = asyncio.run(
-        tools["claim_character"](client_id="client-a", character_name="Juniper")
-    )
+    claimed = asyncio.run(tools["claim_character"](client_id="client-a", character_name="Juniper"))
 
     with pytest.raises(RuntimeError, match="client is not controlling"):
         resources["bunnyland://clients/{client_id}/events"]("missing")
@@ -2074,13 +2057,9 @@ def test_save_world_admin_wraps_save_errors(monkeypatch, scenario, tmp_path):
 
 
 def test_send_command_and_queue_report_resolves_at_epoch(monkeypatch, scenario):
-    loop = SimpleNamespace(
-        running=True, paused=False, tick_seconds=2.0, time_scale=1800.0
-    )
+    loop = SimpleNamespace(running=True, paused=False, tick_seconds=2.0, time_scale=1800.0)
     tools = _capture_mcp_tools(monkeypatch, scenario.actor, loop=loop)
-    claimed = asyncio.run(
-        tools["claim_character"](client_id="a", character_name="Juniper")
-    )
+    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
 
     expected = scenario.actor.epoch + 3600  # tick_seconds * time_scale
     queued = asyncio.run(
@@ -2129,9 +2108,7 @@ def test_character_view_exposes_actions_and_resolved_target_ids(monkeypatch, sce
         Contains(mode=ContainmentMode.ROOM_CONTENT), bun.id
     )
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    claimed = asyncio.run(
-        tools["claim_character"](client_id="a", character_name="Juniper")
-    )
+    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
 
     view = tools["character_view"](client_id="a", **_claim_args(claimed))
     assert view["character_name"] == "Juniper"
@@ -2152,7 +2129,7 @@ def test_character_view_exposes_actions_and_resolved_target_ids(monkeypatch, sce
 def test_examine_inspects_perceivable_entity_and_self(monkeypatch, scenario):
     from bunnyland.core import ContainmentMode, Contains
     from bunnyland.core.components import PortableComponent
-    from bunnyland.mechanics.consumables import FoodComponent
+    from bunnyland.foundation.consumables.components import FoodComponent
 
     world = scenario.actor.world
     bun = spawn_entity(
@@ -2167,9 +2144,7 @@ def test_examine_inspects_perceivable_entity_and_self(monkeypatch, scenario):
         Contains(mode=ContainmentMode.ROOM_CONTENT), bun.id
     )
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    claimed = asyncio.run(
-        tools["claim_character"](client_id="a", character_name="Juniper")
-    )
+    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
 
     # Examining a perceivable item exposes its component values.
     item = tools["examine"](client_id="a", entity_id=str(bun.id), **_claim_args(claimed))
@@ -2199,7 +2174,7 @@ def test_serialize_examine_self_needs_and_targets(scenario):
         FocusPointsComponent,
     )
     from bunnyland.core.components import AffectComponent, DoorComponent, SleepingComponent
-    from bunnyland.mechanics.needs import HungerComponent
+    from bunnyland.foundation.needs.mechanics import HungerComponent
     from bunnyland.server.serialization import serialize_examine
 
     world = scenario.actor.world
@@ -2327,9 +2302,7 @@ def test_search_actions_smart_mode_uses_chroma(monkeypatch, scenario):
                 doc_tokens = set(document.lower().split())
                 return (len(query_tokens & doc_tokens), id_ == "move", id_)
 
-            ranked = sorted(
-                zip(self.ids, self.documents, strict=False), key=score, reverse=True
-            )
+            ranked = sorted(zip(self.ids, self.documents, strict=False), key=score, reverse=True)
             return {"ids": [[id_ for id_, _document in ranked[:n_results]]]}
 
     class FakeClient:
@@ -2463,13 +2436,9 @@ def test_mcp_player_client_id_allowlist_gates_claim_tool(monkeypatch, scenario):
     )
 
     with pytest.raises(RuntimeError, match="player client_id is not allowed"):
-        asyncio.run(
-            tools["claim_character"](client_id="client-b", character_name="Juniper")
-        )
+        asyncio.run(tools["claim_character"](client_id="client-b", character_name="Juniper"))
 
-    claimed = asyncio.run(
-        tools["claim_character"](client_id="client-a", character_name="Juniper")
-    )
+    claimed = asyncio.run(tools["claim_character"](client_id="client-a", character_name="Juniper"))
     assert claimed["client_id"] == "client-a"
 
 
@@ -2492,9 +2461,7 @@ def test_room_view_and_component_schema_tools(monkeypatch, scenario):
 
 def test_character_commands_reflects_queue(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    claimed = asyncio.run(
-        tools["claim_character"](client_id="a", character_name="Juniper")
-    )
+    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
 
     asyncio.run(
         tools["send_command"](
@@ -2510,9 +2477,7 @@ def test_character_commands_reflects_queue(monkeypatch, scenario):
 
 def test_send_command_returns_outcome_hint(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    claimed = asyncio.run(
-        tools["claim_character"](client_id="a", character_name="Juniper")
-    )
+    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
 
     queued = asyncio.run(
         tools["send_command"](
@@ -2528,9 +2493,7 @@ def test_send_command_returns_outcome_hint(monkeypatch, scenario):
 
 def test_send_command_rejects_unknown_command_type(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    claimed = asyncio.run(
-        tools["claim_character"](client_id="a", character_name="Juniper")
-    )
+    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
 
     # Fail fast on a typo'd verb instead of queuing it for a tick-later rejection.
     with pytest.raises(RuntimeError, match="unknown command_type"):
@@ -2555,9 +2518,7 @@ def test_send_command_rejects_unknown_command_type(monkeypatch, scenario):
 
 def test_perceived_events_tool_reports_rejection(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    claimed = asyncio.run(
-        tools["claim_character"](client_id="a", character_name="Juniper")
-    )
+    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
 
     # A valid verb that the handler rejects on resolution (no exit in that direction).
     asyncio.run(

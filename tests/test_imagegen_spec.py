@@ -78,9 +78,7 @@ def test_substitute_does_not_mutate_template_graph():
 
 def test_substitute_overrides_negative_and_dimensions():
     template = _template()
-    graph = substitute(
-        template, prompt="x", seed=1, negative="ugly", width=256, height=256
-    )
+    graph = substitute(template, prompt="x", seed=1, negative="ugly", width=256, height=256)
     assert graph["2"]["inputs"]["text"] == "ugly"
     assert graph["4"]["inputs"]["width"] == 256
     assert graph["4"]["inputs"]["height"] == 256
@@ -146,9 +144,7 @@ def test_substitute_rejects_missing_intermediate_key():
         name="t",
         purpose=ImagePurpose.ENTITY,
         graph={"1": {"inputs": {"text": ""}}},
-        slots=(
-            SubstitutionSlot(node_id="1", field_path=("missing", "text"), token="%PROMPT%"),
-        ),
+        slots=(SubstitutionSlot(node_id="1", field_path=("missing", "text"), token="%PROMPT%"),),
     )
     with pytest.raises(ValueError, match="invalid for node '1'"):
         substitute(template, prompt="x", seed=1)
@@ -159,9 +155,7 @@ def test_substitute_rejects_non_dict_intermediate():
         name="t",
         purpose=ImagePurpose.ENTITY,
         graph={"1": {"inputs": "not-a-dict"}},
-        slots=(
-            SubstitutionSlot(node_id="1", field_path=("inputs", "text"), token="%PROMPT%"),
-        ),
+        slots=(SubstitutionSlot(node_id="1", field_path=("inputs", "text"), token="%PROMPT%"),),
     )
     with pytest.raises(ValueError, match="invalid for node '1'"):
         substitute(template, prompt="x", seed=1)
@@ -172,9 +166,7 @@ def test_substitute_rejects_missing_final_key():
         name="t",
         purpose=ImagePurpose.ENTITY,
         graph={"1": {"inputs": {"other": ""}}},
-        slots=(
-            SubstitutionSlot(node_id="1", field_path=("inputs", "text"), token="%PROMPT%"),
-        ),
+        slots=(SubstitutionSlot(node_id="1", field_path=("inputs", "text"), token="%PROMPT%"),),
     )
     with pytest.raises(ValueError, match="invalid for node '1'"):
         substitute(template, prompt="x", seed=1)

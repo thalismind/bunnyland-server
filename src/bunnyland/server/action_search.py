@@ -148,8 +148,7 @@ class ChromaActionSearchIndex:
                 import chromadb
             except ImportError as exc:
                 raise RuntimeError(
-                    "smart action search requires the 'chroma' extra: "
-                    "pip install bunnyland[chroma]"
+                    "smart action search requires the 'chroma' extra: pip install bunnyland[chroma]"
                 ) from exc
             client = chromadb.EphemeralClient()
         self._client = client
@@ -177,9 +176,7 @@ class ChromaActionSearchIndex:
             collection.upsert(
                 ids=[definition.command_type for definition in definitions],
                 documents=[_action_document(definition) for definition in definitions],
-                metadatas=[
-                    {"command_type": definition.command_type} for definition in definitions
-                ],
+                metadatas=[{"command_type": definition.command_type} for definition in definitions],
             )
             self._loaded_keys.add(key)
         return collection

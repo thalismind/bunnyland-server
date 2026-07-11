@@ -2545,7 +2545,9 @@ class ContentContribution(BaseModel):
 
     prefabs: tuple[Any, ...] = ()
     prompt_parts: tuple[Any, ...] = ()
-    worldgen_hooks: tuple[Any, ...] = ()
+    generation_capabilities: tuple[str, ...] = ()
+    intent_normalizers: tuple[Any, ...] = ()
+    generation_enrichers: tuple[Any, ...] = ()
 
 
 class PolicyContribution(BaseModel):

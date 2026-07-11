@@ -1,6 +1,6 @@
 """Environment generation contribution compatibility surface."""
 
-from ...worldgen.enrichment import EnvironmentWorldgenHook, LegacyWorldgenEnricher
+from ...worldgen.enrichment import ComponentPlanEnricher, EnvironmentWorldgenHook
 
 CAPABILITIES = (
     "bunnyland.environment.burning",
@@ -14,7 +14,7 @@ ALIASES = {
     "flammable": "bunnyland.environment.flammable",
     "fuel": "bunnyland.environment.fuel",
 }
-GENERATION_ENRICHER = LegacyWorldgenEnricher(
+GENERATION_ENRICHER = ComponentPlanEnricher(
     EnvironmentWorldgenHook, provided_capabilities=CAPABILITIES
 )
 

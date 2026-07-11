@@ -22,8 +22,9 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.handlers import HandlerContext
-from bunnyland.mechanics import toonsim
-from bunnyland.mechanics.toonsim import (
+from bunnyland.plugins import apply_plugins
+from bunnyland.simpacks.toonsim import mechanics as toonsim
+from bunnyland.simpacks.toonsim.mechanics import (
     LAYER_BACKGROUND,
     LAYER_CHARACTER,
     LAYER_FURNITURE,
@@ -41,8 +42,7 @@ from bunnyland.mechanics.toonsim import (
     default_layer_for,
     install_toonsim,
 )
-from bunnyland.plugins import apply_plugins
-from bunnyland.plugins.builtin import toonsim_plugin
+from bunnyland.simpacks.toonsim.plugin import plugin as toonsim_plugin
 from bunnyland.worldgen import ObjectSpec, RoomSpec, WorldProposal, instantiate
 
 
@@ -338,6 +338,11 @@ def test_generated_surface_position_preserves_existing_placed_on_edge():
     assert item.has_relationship(PlacedOn, surface.id)
     assert abs(pos.x - 45.0) <= 10.0
     assert abs(pos.y - 45.0) <= 5.0
+
+    unplaced = spawn_entity(world, [PortableComponent(), SpriteBoundsComponent()])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), unplaced.id)
+    toonsim._generated_position(world, unplaced, room, "unplaced-item")
+    assert unplaced.has_relationship(PlacedOn, surface.id)
 
 
 def test_worldgen_hook_ignores_invalid_or_non_room_events():
@@ -651,11 +656,3 @@ def test_move_sprite_rejects_invalid_character_id():
     result = MoveSpriteHandler().execute(ctx, command)
 
     assert result.reason == "invalid character id"
-
-
-def test_toon_placement_hook_ignores_missing_generated_entities():
-    scenario = build_scenario()
-    hook = toonsim.ToonPlacementWorldgenHook()
-    hook.actor = scenario.actor
-
-    hook._on_object(SimpleNamespace(entity_id="not-an-entity", room_id=None))

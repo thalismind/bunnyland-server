@@ -292,22 +292,23 @@ class OllamaWorldAgent:
     async def _ask(self, instruction: str) -> dict:
         self._history.append({"role": "user", "content": instruction})
         attrs = {"provider": "ollama", "model": self._model}
-        with telemetry.record_duration(
-            telemetry.record_worldgen_request, attrs
-        ), telemetry.span(
-            "worldgen.llm.request",
-            {
-                **attrs,
-                **_llm_request_attrs(
-                    "worldgen",
-                    self._model,
-                    self._history,
-                    None,
-                    system_prompt=_SYSTEM_PROMPT,
-                ),
-                "instruction.chars": len(instruction),
-            },
-        ) as request_span:
+        with (
+            telemetry.record_duration(telemetry.record_worldgen_request, attrs),
+            telemetry.span(
+                "worldgen.llm.request",
+                {
+                    **attrs,
+                    **_llm_request_attrs(
+                        "worldgen",
+                        self._model,
+                        self._history,
+                        None,
+                        system_prompt=_SYSTEM_PROMPT,
+                    ),
+                    "instruction.chars": len(instruction),
+                },
+            ) as request_span,
+        ):
             response = await self._client.chat(
                 model=self._model, format="json", messages=self._history
             )
@@ -368,7 +369,7 @@ class OllamaWorldAgent:
         listing = "; ".join(f"{key}={title}" for key, title in candidates.items()) or "(none)"
         instruction = (
             f"The {door.direction} door out of {room.title!r} leads nowhere yet and the room "
-            "budget is spent. Reply JSON {\"action\": \"seal|drop|link\", "
+            'budget is spent. Reply JSON {"action": "seal|drop|link", '
             '"target_room_key": <key or null>}. Prefer seal, then drop, then link to one of '
             f"these existing rooms: {listing}."
         )
@@ -456,9 +457,7 @@ class OllamaWorldAgent:
             await self._ask(self._with_schema_context(instruction, schema_context))
         )
 
-    async def propose_inventory(
-        self, *, name: str, species: str
-    ) -> list[ItemProposal]:
+    async def propose_inventory(self, *, name: str, species: str) -> list[ItemProposal]:
         instruction = (
             f"What is {name} (a {species}) carrying? Reply JSON "
             '{"objects":[{"name","kind","portable"}]} (may be empty).'
@@ -466,9 +465,7 @@ class OllamaWorldAgent:
         data = await self._ask(instruction)
         return [ItemProposal.model_validate(o) for o in data.get("objects", [])]
 
-    async def propose_container_contents(
-        self, *, name: str
-    ) -> list[ItemProposal]:
+    async def propose_container_contents(self, *, name: str) -> list[ItemProposal]:
         instruction = (
             f"What is inside {name}? Reply JSON "
             '{"objects":[{"name","kind","portable"}]} (may be empty).'
@@ -507,22 +504,23 @@ class OpenRouterWorldAgent(OllamaWorldAgent):
     async def _ask(self, instruction: str) -> dict:
         self._history.append({"role": "user", "content": instruction})
         attrs = {"provider": "openrouter", "model": self._model}
-        with telemetry.record_duration(
-            telemetry.record_worldgen_request, attrs
-        ), telemetry.span(
-            "worldgen.llm.request",
-            {
-                **attrs,
-                **_llm_request_attrs(
-                    "worldgen",
-                    self._model,
-                    self._history,
-                    None,
-                    system_prompt=_SYSTEM_PROMPT,
-                ),
-                "instruction.chars": len(instruction),
-            },
-        ) as request_span:
+        with (
+            telemetry.record_duration(telemetry.record_worldgen_request, attrs),
+            telemetry.span(
+                "worldgen.llm.request",
+                {
+                    **attrs,
+                    **_llm_request_attrs(
+                        "worldgen",
+                        self._model,
+                        self._history,
+                        None,
+                        system_prompt=_SYSTEM_PROMPT,
+                    ),
+                    "instruction.chars": len(instruction),
+                },
+            ) as request_span,
+        ):
             response = await self._client.chat.send_async(
                 model=self._model,
                 messages=self._history,
@@ -540,9 +538,7 @@ class OpenRouterWorldAgent(OllamaWorldAgent):
         return json.loads(content)
 
 
-def _annotate_worldgen_usage(
-    request_span, provider: str, model: str, usage
-) -> None:
+def _annotate_worldgen_usage(request_span, provider: str, model: str, usage) -> None:
     """Record a worldgen LLM call's token counts to both the metric and the active span."""
     _record_llm_usage(provider, model, usage)
     request_span.set_attribute("llm.tokens.available", usage.tokens_available)

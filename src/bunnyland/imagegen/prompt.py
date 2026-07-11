@@ -94,9 +94,7 @@ class StubPromptEnhancer:
         hint = _PURPOSE_HINT[request.purpose]
         if request.style is PromptStyle.TAG:
             tags = [request.purpose.value, *_subject_tags(request.subject)]
-            return GeneratedPrompt(
-                style=PromptStyle.TAG, prompt=", ".join(tags), tags=tuple(tags)
-            )
+            return GeneratedPrompt(style=PromptStyle.TAG, prompt=", ".join(tags), tags=tuple(tags))
         subject = request.subject.strip()
         prompt = f"{hint}: {subject}" if subject else hint
         return GeneratedPrompt(style=PromptStyle.NATURAL, prompt=prompt)
@@ -176,9 +174,7 @@ def load_catalog_from(directory: Any) -> ExamplePromptCatalog:
         style = PromptStyle(style_name)
         purpose = ImagePurpose(purpose_name)
         raw = json.loads(entry.read_text())
-        catalog[(style, purpose)] = [
-            GeneratedPrompt(style=style, **item) for item in raw
-        ]
+        catalog[(style, purpose)] = [GeneratedPrompt(style=style, **item) for item in raw]
     return catalog
 
 

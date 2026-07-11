@@ -236,9 +236,7 @@ def _build_otlp_providers() -> tuple[Any, Any]:
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
-    resource = Resource.create(
-        {"service.name": os.environ.get("OTEL_SERVICE_NAME", "bunnyland")}
-    )
+    resource = Resource.create({"service.name": os.environ.get("OTEL_SERVICE_NAME", "bunnyland")})
     tracer_provider = TracerProvider(resource=resource)
     trace_file = (os.environ.get("BUNNYLAND_OTEL_TRACE_FILE") or "").strip()
     if trace_file:

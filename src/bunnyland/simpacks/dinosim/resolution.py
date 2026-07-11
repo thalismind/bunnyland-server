@@ -1,7 +1,7 @@
 """Storyteller resolution rules contributed by Dino Sim."""
 
-from ...core.ecs import container_of
-from ...mechanics.dinosim import (
+from bunnyland.foundation.storyteller.mechanics import IncidentResolutionRule
+from bunnyland.simpacks.dinosim.mechanics import (
     ApexPredatorComponent,
     CompanionComponent,
     EnclosureComponent,
@@ -10,7 +10,8 @@ from ...mechanics.dinosim import (
     SettlementDamageComponent,
     TamingComponent,
 )
-from ...mechanics.storyteller import IncidentResolutionRule
+
+from ...core.ecs import container_of
 
 
 def _creature_neutralized(world, incident, entity) -> bool:

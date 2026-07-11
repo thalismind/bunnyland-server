@@ -13,7 +13,13 @@ import pytest
 from conftest import build_scenario
 
 import bunnyland.server.worldgen as server_worldgen
-from bunnyland.claims import add_claim, current_controller, transfer_claim
+from bunnyland.claims import (
+    ClaimSecretRegistry,
+    add_claim,
+    current_controller,
+    remove_claim,
+    transfer_claim,
+)
 from bunnyland.content import load_content_library
 from bunnyland.core import (
     ActionArgument,
@@ -82,43 +88,28 @@ from bunnyland.core.events import (
 from bunnyland.core.handlers import ok
 from bunnyland.discord.components import DiscordRoomFeedComponent
 from bunnyland.engine import GameLoop
-from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
-from bunnyland.llm_agents.specs import BehaviorNodeSpec, BehaviorTreeSpec, ScriptSpec, ToolCallSpec
-from bunnyland.mechanics.lifesim import (
-    AgeComponent,
-    AspirationComponent,
-    CareerComponent,
-    CharacterProfileComponent,
-    HouseholdComponent,
-    LifeStageComponent,
-    PregnancyComponent,
-    ReputationComponent,
-    SkillSetComponent,
-    WellRestedComponent,
-    WhimComponent,
-)
-from bunnyland.mechanics.meter import Meter
-from bunnyland.mechanics.needs import HungerComponent, ThirstComponent
-from bunnyland.mechanics.persona import (
+from bunnyland.foundation.meters.mechanics import Meter
+from bunnyland.foundation.needs.mechanics import HungerComponent, ThirstComponent
+from bunnyland.foundation.persona.mechanics import (
     GoalComponent,
     PersonaProfileComponent,
     PreferenceComponent,
     TraitSetComponent,
 )
-from bunnyland.mechanics.social import SocialBond
-from bunnyland.mechanics.storyteller import IncidentComponent
-from bunnyland.mechanics.toonsim import (
-    SpriteBoundsComponent,
-    SpriteImageComponent,
-    SpriteLayerComponent,
-    SpritePositionComponent,
-    SpriteScaleComponent,
-    ToonRoomComponent,
-)
+from bunnyland.foundation.social.mechanics import SocialBond
+from bunnyland.foundation.storyteller.mechanics import IncidentComponent
+from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
+from bunnyland.llm_agents.specs import BehaviorNodeSpec, BehaviorTreeSpec, ScriptSpec, ToolCallSpec
 from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.persistence import WorldMeta, load_world
-from bunnyland.plugins import Plugin, RuntimeContribution, bunnyland_plugins, select
-from bunnyland.plugins.builtin import MCP
+from bunnyland.plugins import (
+    Plugin,
+    PluginRegistry,
+    RuntimeContribution,
+    bunnyland_plugins,
+    select,
+)
+from bunnyland.plugins.ids import MCP
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server import (
     CommandRequest,
@@ -137,7 +128,13 @@ from bunnyland.server.admin import (
     save_configured_world,
     start_world_generation,
 )
-from bunnyland.server.app import create_app, next_websocket_update
+from bunnyland.server.app import (
+    create_app,
+    next_player_update,
+    next_websocket_update,
+    player_update_for_message,
+    recent_player_updates,
+)
 from bunnyland.server.client_ids import CLIENT_ID_HEADER
 from bunnyland.server.models import (
     CharacterChatRequest,
@@ -168,6 +165,27 @@ from bunnyland.server.worldgen import (
     generate_event_patch,
     generate_item_patch,
     generate_room_patch,
+)
+from bunnyland.simpacks.lifesim.mechanics import (
+    AgeComponent,
+    AspirationComponent,
+    CareerComponent,
+    CharacterProfileComponent,
+    HouseholdComponent,
+    LifeStageComponent,
+    PregnancyComponent,
+    ReputationComponent,
+    SkillSetComponent,
+    WellRestedComponent,
+    WhimComponent,
+)
+from bunnyland.simpacks.toonsim.mechanics import (
+    SpriteBoundsComponent,
+    SpriteImageComponent,
+    SpriteLayerComponent,
+    SpritePositionComponent,
+    SpriteScaleComponent,
+    ToonRoomComponent,
 )
 from bunnyland.worldgen import (
     CharacterProposal,
@@ -249,7 +267,13 @@ def _use_sync_asgi_test_client(monkeypatch):
     monkeypatch.setattr(fastapi_testclient, "TestClient", _SyncASGIClient)
 
 
-async def _websocket_outputs(app, path: str, *, headers: dict[str, str] | None = None):
+async def _websocket_outputs(
+    app,
+    path: str,
+    *,
+    headers: dict[str, str] | None = None,
+    messages: list[dict] | None = None,
+):
     from asgiref.testing import ApplicationCommunicator
 
     split = urlsplit(path)
@@ -271,6 +295,10 @@ async def _websocket_outputs(app, path: str, *, headers: dict[str, str] | None =
     await communicator.send_input({"type": "websocket.connect"})
     outputs = [await communicator.receive_output(timeout=1)]
     if outputs[0]["type"] == "websocket.accept":
+        for message in messages or ():
+            await communicator.send_input(
+                {"type": "websocket.receive", "text": json.dumps(message)}
+            )
         outputs.append(await communicator.receive_output(timeout=1))
         await communicator.send_input({"type": "websocket.disconnect", "code": 1000})
     await communicator.wait(timeout=1)
@@ -1383,7 +1411,10 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario, 
     snapshot = client.get("/world/snapshot", headers={"X-Bunnyland-Admin-Secret": "secret"})
     schema = client.get("/world/schema")
     library = client.get("/world/library")
-    recent = client.get("/world/events/recent")
+    recent = client.get(
+        "/world/events/recent",
+        headers={"X-Bunnyland-Admin-Secret": "secret"},
+    )
     character_view = client.get(f"/world/character/{scenario.character}")
     room_view = client.get(f"/world/room/{scenario.room_a}")
     queued = client.get(f"/world/character/{scenario.character}/commands")
@@ -2068,7 +2099,11 @@ def test_fastapi_command_endpoint_queues_command_and_recent_events(scenario):
 
     asyncio.run(scenario.actor.tick(0.0))
 
-    recent = client.get("/world/events/recent")
+    recent = client.get(
+        f"/world/character/{scenario.character}/events/recent",
+        params={"claim_id": claimed["claim_id"]},
+        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
+    )
     assert scenario.character_room() == scenario.room_b
     assert recent.status_code == 200
     assert any(
@@ -3344,7 +3379,7 @@ def test_admin_save_uses_configured_path_and_meta(scenario, tmp_path):
     assert response.ok is True
     assert response.path == str(path)
     assert response.saved_at_epoch == scenario.actor.epoch
-    reloaded, meta = load_world(path)
+    reloaded, meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
     assert reloaded.epoch == scenario.actor.epoch
     assert meta.seed == "moss"
 
@@ -3441,7 +3476,7 @@ async def test_admin_world_generate_saves_replacement_world(scenario, tmp_path):
         save=True,
     )
 
-    reloaded, saved_meta = load_world(path)
+    reloaded, saved_meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
     assert response.status == "succeeded"
     assert reloaded.epoch == scenario.actor.epoch
     assert saved_meta.seed == "saved blank slate"
@@ -3536,7 +3571,7 @@ async def test_start_world_generation_saves_when_requested(scenario, tmp_path):
     assert job.status == "succeeded"
     assert job.saved is not None
     assert job.saved.path == str(path)
-    reloaded, saved_meta = load_world(path)
+    reloaded, saved_meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
     assert reloaded.epoch == scenario.actor.epoch
     assert saved_meta.seed == "moss job"
 
@@ -5307,6 +5342,380 @@ async def test_websocket_updates_send_snapshot_and_heartbeat(scenario, monkeypat
     assert snapshot["type"] == "snapshot"
     assert snapshot["data"]["world_epoch"] == scenario.actor.epoch
     assert heartbeat == {"type": "heartbeat", "data": {"world_epoch": scenario.actor.epoch}}
+
+
+def test_player_update_filter_preserves_visible_events_and_redacts_system_state(scenario):
+    character_id = str(scenario.character)
+
+    def message(visibility, **event):
+        return {
+            "type": "event",
+            "data": {
+                "event_type": "PluginEvent",
+                "event": {
+                    "event_id": visibility,
+                    "world_epoch": 7,
+                    "visibility": visibility,
+                    **event,
+                },
+            },
+        }
+
+    public = message("public", payload="safe")
+    room = message("room", room_id=str(scenario.room_a), payload="nearby")
+    directed = message("directed", target_ids=[character_id], payload="for-player")
+    private = message("private", actor_id=character_id, payload="own-private")
+    hidden = message("private", actor_id="other", payload="must-not-leak")
+    system = message("system", payload="admin-only")
+
+    filtered = recent_player_updates(
+        scenario.actor,
+        character_id,
+        [public, room, directed, private, hidden, system],
+    )
+
+    assert filtered[:4] == [public, room, directed, private]
+    assert filtered[4] == {"type": "invalidate", "data": {"world_epoch": 7}}
+    assert "admin-only" not in json.dumps(filtered)
+    assert "must-not-leak" not in json.dumps(filtered)
+    assert player_update_for_message(
+        scenario.actor,
+        character_id,
+        {"type": "snapshot", "data": {"secret": "world"}},
+    ) == {"type": "invalidate", "data": {"world_epoch": scenario.actor.epoch}}
+    assert (
+        player_update_for_message(
+            scenario.actor,
+            "ghost_9",
+            room,
+        )
+        is None
+    )
+    assert (
+        player_update_for_message(
+            scenario.actor,
+            character_id,
+            {"type": "event", "data": None},
+        )
+        is None
+    )
+    assert (
+        player_update_for_message(
+            scenario.actor,
+            character_id,
+            {"type": "event", "data": {}},
+        )
+        is None
+    )
+
+
+async def test_player_update_reports_queue_overflow_as_resync(scenario):
+    stream = EventStream(scenario.actor)
+    subscription = stream.subscribe(max_queue_size=1)
+    try:
+        stream.broadcast({"type": "one", "data": {}})
+        stream.broadcast({"type": "two", "data": {}})
+        update = await next_player_update(
+            scenario.actor,
+            subscription,
+            str(scenario.character),
+        )
+    finally:
+        subscription.close()
+
+    assert update == {"type": "resync", "data": {"world_epoch": scenario.actor.epoch}}
+
+    subscription = stream.subscribe(max_queue_size=1)
+    try:
+        waiting = asyncio.create_task(
+            next_player_update(scenario.actor, subscription, str(scenario.character))
+        )
+        await asyncio.sleep(0)
+        stream.broadcast({"type": "one", "data": {}})
+        stream.broadcast({"type": "two", "data": {}})
+        assert await waiting == {
+            "type": "resync",
+            "data": {"world_epoch": scenario.actor.epoch},
+        }
+    finally:
+        subscription.close()
+
+
+async def test_player_update_skips_hidden_frames_until_visible_or_heartbeat(scenario, monkeypatch):
+    stream = EventStream(scenario.actor)
+    subscription = stream.subscribe(max_queue_size=2)
+    hidden = {
+        "type": "event",
+        "data": {
+            "event_type": "PrivateEvent",
+            "event": {"visibility": "private", "actor_id": "other"},
+        },
+    }
+    visible = {
+        "type": "event",
+        "data": {
+            "event_type": "PublicEvent",
+            "event": {"visibility": "public"},
+        },
+    }
+    try:
+        stream.broadcast(hidden)
+        stream.broadcast(visible)
+        assert (
+            await next_player_update(
+                scenario.actor,
+                subscription,
+                str(scenario.character),
+            )
+            == visible
+        )
+        monkeypatch.setattr(server_app, "WEBSOCKET_HEARTBEAT_SECONDS", 0.01)
+        stream.broadcast(hidden)
+        assert await next_player_update(
+            scenario.actor,
+            subscription,
+            str(scenario.character),
+        ) == {"type": "heartbeat", "data": {"world_epoch": scenario.actor.epoch}}
+    finally:
+        subscription.close()
+
+
+async def test_character_updates_websocket_authenticates_before_ready(scenario):
+    app = create_app(scenario.actor)
+    auth = {
+        "type": "authenticate",
+        "data": {"claim_id": None, "claim_secret": None},
+    }
+
+    outputs = await _websocket_outputs(
+        app,
+        f"/world/character/{scenario.character}/updates",
+        messages=[auth],
+    )
+
+    assert outputs[0]["type"] == "websocket.accept"
+    assert json.loads(outputs[1]["text"]) == {
+        "type": "ready",
+        "data": {
+            "character_id": str(scenario.character),
+            "world_epoch": scenario.actor.epoch,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "auth",
+    [
+        {},
+        {"type": "event", "data": {"claim_id": None, "claim_secret": None}},
+        {"type": "authenticate", "data": {}},
+        {"type": "authenticate", "data": {"claim_id": 1, "claim_secret": None}},
+    ],
+)
+async def test_character_updates_websocket_rejects_malformed_auth(scenario, auth):
+    app = create_app(scenario.actor)
+
+    outputs = await _websocket_outputs(
+        app,
+        f"/world/character/{scenario.character}/updates",
+        messages=[auth],
+    )
+
+    assert outputs == [
+        {"type": "websocket.accept", "subprotocol": None, "headers": []},
+        {"type": "websocket.close", "code": 1008, "reason": ""},
+    ]
+
+
+async def test_character_updates_websocket_times_out_before_sending_data(scenario, monkeypatch):
+    monkeypatch.setattr(server_app, "PLAYER_WEBSOCKET_AUTH_SECONDS", 0.01)
+    app = create_app(scenario.actor)
+
+    outputs = await _websocket_outputs(
+        app,
+        f"/world/character/{scenario.character}/updates",
+    )
+
+    assert outputs == [
+        {"type": "websocket.accept", "subprotocol": None, "headers": []},
+        {"type": "websocket.close", "code": 1008, "reason": ""},
+    ]
+
+
+async def test_character_updates_websocket_rejects_wrong_secret_unknown_and_noncharacter(
+    scenario,
+):
+    registry = ClaimSecretRegistry()
+    controller = scenario.actor.world.get_entity(scenario.controller)
+    claim = add_claim(
+        controller,
+        client_kind="web",
+        client_id="client-a",
+        character_id=str(scenario.character),
+    )
+    registry.issue(claim.claim_id)
+    app = create_app(scenario.actor, claim_secrets=registry)
+    wrong = {
+        "type": "authenticate",
+        "data": {"claim_id": claim.claim_id, "claim_secret": "wrong"},
+    }
+
+    for entity_id in (scenario.character, "ghost_9", scenario.room_a):
+        outputs = await _websocket_outputs(
+            app,
+            f"/world/character/{entity_id}/updates",
+            messages=[wrong],
+        )
+        assert outputs[-1]["type"] == "websocket.close"
+        assert outputs[-1]["code"] == 1008
+
+    remove_claim(controller, registry)
+    nonnull_unclaimed = await _websocket_outputs(
+        app,
+        f"/world/character/{scenario.character}/updates",
+        messages=[wrong],
+    )
+    assert nonnull_unclaimed[-1]["code"] == 1008
+
+
+async def test_character_updates_websocket_revalidates_revoked_claim(scenario, monkeypatch):
+    registry = ClaimSecretRegistry()
+    controller = scenario.actor.world.get_entity(scenario.controller)
+    claim = add_claim(
+        controller,
+        client_kind="web",
+        client_id="client-a",
+        character_id=str(scenario.character),
+    )
+    secret = registry.issue(claim.claim_id)
+    app = create_app(scenario.actor, claim_secrets=registry)
+    route = next(
+        route for route in app.routes if route.path == "/world/character/{character_id}/updates"
+    )
+    monkeypatch.setattr(server_app, "WEBSOCKET_HEARTBEAT_SECONDS", 0.01)
+    sent = []
+    closed = []
+
+    class FakeWebSocket:
+        async def accept(self):
+            return None
+
+        async def receive_json(self):
+            return {
+                "type": "authenticate",
+                "data": {"claim_id": claim.claim_id, "claim_secret": secret},
+            }
+
+        async def send_json(self, payload):
+            sent.append(payload)
+            remove_claim(controller, registry)
+
+        async def close(self, code=1000):
+            closed.append(code)
+
+    await route.endpoint(FakeWebSocket(), str(scenario.character))
+
+    assert sent[0]["type"] == "ready"
+    assert closed == [1008]
+
+
+async def test_character_updates_websocket_handles_revocation_before_ready_and_disconnect(
+    scenario,
+    monkeypatch,
+):
+    from fastapi import WebSocketDisconnect
+
+    registry = ClaimSecretRegistry()
+    controller = scenario.actor.world.get_entity(scenario.controller)
+    claim = add_claim(
+        controller,
+        client_kind="web",
+        client_id="client-a",
+        character_id=str(scenario.character),
+    )
+    secret = registry.issue(claim.claim_id)
+    app = create_app(scenario.actor, claim_secrets=registry)
+    route = next(
+        route for route in app.routes if route.path == "/world/character/{character_id}/updates"
+    )
+    closed = []
+
+    class RevokedBeforeReady:
+        async def accept(self):
+            return None
+
+        async def receive_json(self):
+            remove_claim(controller, registry)
+            return {
+                "type": "authenticate",
+                "data": {"claim_id": claim.claim_id, "claim_secret": secret},
+            }
+
+        async def close(self, code=1000):
+            closed.append(code)
+
+    await route.endpoint(RevokedBeforeReady(), str(scenario.character))
+    assert closed == [1008]
+
+    replacement = add_claim(
+        controller,
+        client_kind="web",
+        client_id="client-a",
+        character_id=str(scenario.character),
+    )
+    replacement_secret = registry.issue(replacement.claim_id)
+    original_validate = registry.validate
+    validation_calls = 0
+
+    def revoke_after_auth(claim_id, supplied):
+        nonlocal validation_calls
+        validation_calls += 1
+        return validation_calls == 1 and original_validate(claim_id, supplied)
+
+    registry.validate = revoke_after_auth
+
+    class RejectedBeforeReady:
+        async def accept(self):
+            return None
+
+        async def receive_json(self):
+            return {
+                "type": "authenticate",
+                "data": {
+                    "claim_id": replacement.claim_id,
+                    "claim_secret": replacement_secret,
+                },
+            }
+
+        async def close(self, code=1000):
+            closed.append(code)
+
+    await route.endpoint(RejectedBeforeReady(), str(scenario.character))
+    assert closed[-1] == 1008
+    registry.validate = original_validate
+    monkeypatch.setattr(server_app, "WEBSOCKET_HEARTBEAT_SECONDS", 0.01)
+
+    class DisconnectOnReady:
+        sent = 0
+
+        async def accept(self):
+            return None
+
+        async def receive_json(self):
+            return {
+                "type": "authenticate",
+                "data": {
+                    "claim_id": replacement.claim_id,
+                    "claim_secret": replacement_secret,
+                },
+            }
+
+        async def send_json(self, _payload):
+            self.sent += 1
+            if self.sent >= 3:
+                raise WebSocketDisconnect(code=1006)
+
+    await route.endpoint(DisconnectOnReady(), str(scenario.character))
 
 
 async def test_fastapi_world_updates_websocket_sends_initial_snapshot(scenario):

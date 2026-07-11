@@ -15,6 +15,7 @@ import logging
 import os
 from pathlib import Path
 
+from ..core.actions import ActionDefinition
 from .behavior_tree import register_behavior_spec
 from .scripts import register_script_spec
 from .specs import BehaviorTreeSpec, ScriptSpec
@@ -25,10 +26,16 @@ logger = logging.getLogger("bunnyland.controller_definitions")
 class ControllerDefinitionStore:
     """Holds editor-loaded controller definitions, registers them, and persists them."""
 
-    def __init__(self, path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        action_definitions: tuple[ActionDefinition, ...],
+    ) -> None:
         self.path = Path(path) if path is not None else None
         self._scripts: dict[str, ScriptSpec] = {}
         self._behaviors: dict[str, BehaviorTreeSpec] = {}
+        self._action_definitions = action_definitions
 
     @property
     def persistent(self) -> bool:
@@ -92,7 +99,9 @@ class ControllerDefinitionStore:
         }
 
     def _register_script(self, spec: ScriptSpec) -> None:
-        register_script_spec(spec)  # raises ValueError on a bad spec before we store it
+        register_script_spec(
+            spec, self._action_definitions
+        )  # raises ValueError on a bad spec before we store it
         self._scripts[spec.name] = spec
 
     def _register_behavior(self, spec: BehaviorTreeSpec) -> None:

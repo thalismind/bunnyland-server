@@ -7,15 +7,14 @@ orders them by dependency, and applies each to a world actor.
 
 from __future__ import annotations
 
-import importlib
 import inspect
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
+from importlib.metadata import entry_points
 from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter, ValidationError
 
-from ..core.actions import action_definition_for_command_type, inferred_action_definition
 from .contributions import collect_content_items
 from .model import Plugin, PluginRuntimeContext
 from .registry import PluginRegistry
@@ -23,7 +22,7 @@ from .registry import PluginRegistry
 if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
 
-ENTRYPOINT = "bunnyland_plugins"
+ENTRYPOINT_GROUP = "bunnyland.plugins"
 LOG = logging.getLogger(__name__)
 
 
@@ -31,35 +30,22 @@ class PluginError(RuntimeError):
     pass
 
 
-def _qualify_plugin(module_name: str, plugin: Plugin) -> Plugin:
-    """Namespace imported plugin ids by their source module for tracking and selection."""
+def discover_plugins() -> list[Plugin]:
+    """Load installed plugins from the canonical package entry-point group."""
 
-    def qualify(value: str) -> str:
-        return value if "." in value else f"{module_name}.{value}"
-
-    dependencies = plugin.dependencies.model_copy(
-        update={
-            "requires": tuple(qualify(dep) for dep in plugin.dependencies.requires),
-            "recommends": tuple(qualify(dep) for dep in plugin.dependencies.recommends),
-            "integrates_with": tuple(
-                qualify(dep) for dep in plugin.dependencies.integrates_with
-            ),
-        }
-    )
-    return plugin.model_copy(update={"id": qualify(plugin.id), "dependencies": dependencies})
-
-
-def load_modules(module_names: Iterable[str]) -> list[Plugin]:
-    """Import each module and collect the plugins it declares."""
-    plugins: list[Plugin] = []
-    for name in module_names:
-        module = importlib.import_module(name)
-        entry = getattr(module, ENTRYPOINT, None)
-        if entry is None:
-            raise PluginError(f"module {name!r} has no {ENTRYPOINT}() entrypoint")
-        result = entry()
-        plugins.extend(_qualify_plugin(name, plugin) for plugin in result)
-    return plugins
+    discovered: list[Plugin] = []
+    for entry_point in sorted(entry_points(group=ENTRYPOINT_GROUP), key=lambda item: item.name):
+        value = entry_point.load()
+        result = value() if callable(value) else value
+        plugins = result if isinstance(result, (list, tuple)) else (result,)
+        for plugin in plugins:
+            if not isinstance(plugin, Plugin):
+                raise PluginError(
+                    f"entry point {entry_point.name!r} returned {type(plugin).__name__}, "
+                    "expected Plugin"
+                )
+            discovered.append(plugin)
+    return discovered
 
 
 def _match_plugin_id(by_id: dict[str, Plugin], requested: str) -> Plugin:
@@ -176,34 +162,6 @@ def validate_plugin_config(
     return validated
 
 
-def _subscribe_worldgen_hook(actor: WorldActor, hook) -> None:
-    """Register a generation hook contributed by plugin content."""
-
-    instance = _instantiate(hook)
-    legacy_handlers = tuple(
-        getattr(instance, name, None)
-        for name in ("_on_room", "_on_object", "_on_character", "_on_entity", "_on_site")
-    )
-    if any(callable(handler) for handler in legacy_handlers):
-        # Transitional adapter: generation entry points invoke these before publishing the
-        # finalized event, rather than using the event as a mutation trigger.
-        instance.actor = actor
-        actor._worldgen_hooks.append(instance)
-        return
-    subscribe = getattr(instance, "subscribe", None)
-    if subscribe is not None:
-        params = list(inspect.signature(subscribe).parameters)
-        if params and params[0] == "actor":
-            subscribe(actor)
-        else:
-            subscribe(actor.bus)
-        return
-    if callable(instance):
-        actor._worldgen_hooks.append(instance)
-        return
-    raise PluginError(f"worldgen hook {hook!r} is not callable and has no subscribe()")
-
-
 def apply_plugin(
     plugin: Plugin,
     actor: WorldActor,
@@ -222,16 +180,6 @@ def apply_plugin(
         for handler in plugin.commands.action_handlers:
             instance = _instantiate(handler)
             actor.register_handler(instance)
-            if not any(
-                definition.command_type == instance.command_type
-                for definition in actor.action_definitions()
-            ):
-                actor.register_action_definition(
-                    action_definition_for_command_type(instance.command_type)
-                    or inferred_action_definition(instance.command_type)
-                )
-        for hook in plugin.content.worldgen_hooks:
-            _subscribe_worldgen_hook(actor, hook)
         for factory in (
             plugin.runtime.controller_factories
             + plugin.runtime.generator_factories
@@ -251,6 +199,13 @@ def apply_plugins(
     """Resolve order and apply each plugin. Returns the applied order."""
     ordered = resolve_order(plugins)
     registry = PluginRegistry(ordered)
+    for plugin in ordered:
+        for handler in plugin.commands.action_handlers:
+            if handler.command_type not in registry.actions:
+                raise PluginError(
+                    f"handler {handler!r} from {plugin.id!r} has no plugin-owned "
+                    f"action definition for {handler.command_type!r}"
+                )
     actor.plugins = registry
     context = context or PluginRuntimeContext()
     context.plugins = registry
@@ -268,18 +223,6 @@ def apply_plugins(
     return ordered
 
 
-def load_and_apply(
-    actor: WorldActor,
-    *,
-    modules: Sequence[str] = (),
-    enabled_ids: Sequence[str] | None = None,
-) -> list[Plugin]:
-    """Load plugins from modules, select + order + apply them to the actor."""
-    plugins = load_modules(modules)
-    chosen = select(plugins, enabled_ids)
-    return apply_plugins(chosen, actor)
-
-
 __all__ = [
     "PluginError",
     "apply_plugin",
@@ -287,8 +230,7 @@ __all__ = [
     "collect_persona_fragments",
     "collect_prompt_enhancers",
     "collect_prompt_fragments",
-    "load_and_apply",
-    "load_modules",
+    "discover_plugins",
     "resolve_order",
     "select",
     "validate_plugin_config",

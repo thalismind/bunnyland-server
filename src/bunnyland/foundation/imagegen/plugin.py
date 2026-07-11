@@ -10,9 +10,10 @@ from ...imagegen.events import (
     ImageGenerationFailedEvent,
     ImageGenerationStartedEvent,
 )
-from ...plugins.ids import IMAGEGEN
+from ...plugins.ids import IMAGEGEN, MEDIA
 from ...plugins.model import (
     CommandContribution,
+    DependencyContribution,
     EcsContribution,
     Plugin,
     PluginPlacement,
@@ -23,6 +24,7 @@ def _definition() -> Plugin:
     return Plugin(
         id=IMAGEGEN,
         name="Image Generation",
+        dependencies=DependencyContribution(requires=(MEDIA,)),
         ecs=EcsContribution(
             components=(
                 PortraitImageComponent,

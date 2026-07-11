@@ -1,12 +1,12 @@
 """Canonical Void Sim plugin entrypoint."""
 
-from ...mechanics.mutation import (
+from bunnyland.foundation.mutation.mechanics import (
     ChaosMutationPressureComponent,
     CyberneticMutationPressureComponent,
     RadiationMutationPressureComponent,
     RadiationShieldComponent,
 )
-from ...mechanics.voidsim import (
+from bunnyland.simpacks.voidsim.mechanics import (
     AcceptContractHandler,
     AcceptTradeProtocolHandler,
     AdjustGravityHandler,
@@ -168,6 +168,7 @@ from ...mechanics.voidsim import (
     install_voidsim,
     voidsim_fragments,
 )
+
 from ...plugins.ids import (
     BARBARIANSIM,
     COLONYSIM,

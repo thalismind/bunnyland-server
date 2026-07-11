@@ -1,6 +1,6 @@
 """dinosim generation contribution compatibility surface."""
 
-from ...worldgen.enrichment import DinoWorldgenHook, LegacyWorldgenEnricher
+from ...worldgen.enrichment import ComponentPlanEnricher, DinoWorldgenHook
 
 CAPABILITIES = (
     "bunnyland.dinosim.ancient-sample",
@@ -60,6 +60,6 @@ ALIASES = {
     "water-creature": "bunnyland.dinosim.water-creature",
     "weak-point": "bunnyland.dinosim.weak-point",
 }
-GENERATION_ENRICHER = LegacyWorldgenEnricher(DinoWorldgenHook, provided_capabilities=CAPABILITIES)
+GENERATION_ENRICHER = ComponentPlanEnricher(DinoWorldgenHook, provided_capabilities=CAPABILITIES)
 
 __all__ = ["GENERATION_ENRICHER", "DinoWorldgenHook"]

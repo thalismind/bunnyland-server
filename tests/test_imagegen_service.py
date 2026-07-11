@@ -8,6 +8,7 @@ from bunnyland.core import spawn_entity
 from bunnyland.core.components import DescriptionComponent, IdentityComponent
 from bunnyland.core.ecs import container_of
 from bunnyland.core.events import DomainEvent
+from bunnyland.foundation.history.mechanics import record_world_history
 from bunnyland.imagegen.components import (
     EventImageComponent,
     ImageRequestComponent,
@@ -31,8 +32,7 @@ from bunnyland.imagegen.service import (
 from bunnyland.imagegen.spec import ImagePurpose
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
 from bunnyland.imagegen.subject import subject_for_entity, subject_for_event
-from bunnyland.mechanics.history import record_world_history
-from bunnyland.mechanics.toonsim import SpriteImageComponent
+from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 
 
 class _FakeClient:

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import sys
 from argparse import Namespace
 
 import pytest
-from conftest import install_plugin_module
 from pydantic import BaseModel
 
 import bunnyland.cli as cli
@@ -31,20 +31,19 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.discord.claim import discord_controlled_character, list_character_names
-from bunnyland.mechanics.lifesim import LifeStageComponent
 from bunnyland.persistence import WorldMeta, load_world, save_world
 from bunnyland.plugins import (
     ConfigContribution,
-    DependencyContribution,
     Plugin,
     PluginError,
+    PluginRegistry,
     PluginRuntimeContext,
     RuntimeContribution,
     apply_plugins,
     bunnyland_plugins,
     validate_plugin_config,
 )
-from bunnyland.plugins.builtin import (
+from bunnyland.plugins.ids import (
     BARBARIANSIM,
     COLONYSIM,
     CORE_VERBS,
@@ -52,11 +51,13 @@ from bunnyland.plugins.builtin import (
     GARDENSIM,
     LIFESIM,
     MCP,
+    MEDIA,
     NUKESIM,
     VOIDSIM,
     WORLDGEN,
 )
 from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.simpacks.lifesim.mechanics import LifeStageComponent
 
 
 def test_cli_imports_in_fresh_interpreter():
@@ -67,6 +68,57 @@ def test_cli_imports_in_fresh_interpreter():
         text=True,
     )
     assert result.stdout.strip() == "ok"
+
+
+def test_migrate_world_cli_writes_schema_v2_without_overwriting_source(tmp_path):
+    source = tmp_path / "world-v1.json"
+    dest = tmp_path / "world-v2.json"
+    source.write_text(
+        json.dumps(
+            {
+                "metadata": {"version": "1.0", "epoch": 0},
+                "bunnyland": {"schema_version": 1},
+                "prefabs": {"entity": {"components": {}}},
+                "entities": {},
+                "components": {},
+                "relationships": {},
+                "relics": [],
+            }
+        )
+    )
+    original = source.read_text()
+
+    assert main(["migrate-world", str(source), str(dest)]) == 0
+
+    assert source.read_text() == original
+    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 2
+
+
+def test_migrate_world_cli_rejects_in_place_conversion(tmp_path):
+    source = tmp_path / "world.json"
+    source.write_text("{}")
+
+    with pytest.raises(SystemExit):
+        main(["migrate-world", str(source), str(source)])
+
+
+def test_migrate_world_cli_writes_yaml_destination(tmp_path):
+    source = tmp_path / "world.json"
+    dest = tmp_path / "world.yaml"
+    source.write_text(
+        json.dumps(
+            {
+                "bunnyland": {"schema_version": 1},
+                "entities": {},
+                "components": {},
+                "relationships": {},
+            }
+        )
+    )
+
+    assert main(["migrate-world", str(source), str(dest)]) == 0
+
+    assert '"schema_version": 2' in dest.read_text()
 
 
 def _serve_args(**overrides):
@@ -116,14 +168,6 @@ def _serve_args(**overrides):
     return Namespace(**values)
 
 
-def test_select_plugins_records_imported_module_namespace(monkeypatch):
-    install_plugin_module(monkeypatch, "module_foo", [Plugin(id="bar", name="Bar")])
-
-    selected = select_plugins(["module_foo"], ["bar"])
-
-    assert [plugin.id for plugin in selected] == ["module_foo.bar"]
-
-
 @pytest.mark.parametrize(
     ("pack", "expected"),
     [
@@ -156,15 +200,16 @@ def test_select_plugins_records_imported_module_namespace(monkeypatch):
     ],
 )
 def test_select_plugins_expands_starter_pack(pack, expected):
-    selected = select_plugins([], None, starter_pack=pack)
+    selected = select_plugins(None, starter_pack=pack)
 
     assert {plugin.id for plugin in selected} == expected
 
 
 def test_select_plugins_combines_starter_pack_with_explicit_plugins():
-    selected = select_plugins([], [CORE_VERBS], starter_pack="peaceful")
+    selected = select_plugins([CORE_VERBS], starter_pack="peaceful")
 
     assert [plugin.id for plugin in selected] == [
+        MEDIA,
         CORE_VERBS,
         WORLDGEN,
         LIFESIM,
@@ -175,11 +220,11 @@ def test_select_plugins_combines_starter_pack_with_explicit_plugins():
 
 def test_unknown_starter_pack_raises_plugin_error():
     with pytest.raises(PluginError, match="unknown starter pack"):
-        select_plugins([], None, starter_pack="cozy")
+        select_plugins(None, starter_pack="cozy")
 
 
 def test_select_plugins_adds_extra_plugin_without_disabling_defaults():
-    selected = select_plugins([], None, extra_enabled_ids=(MCP,))
+    selected = select_plugins(None, extra_enabled_ids=(MCP,))
     ids = {plugin.id for plugin in selected}
 
     assert MCP in ids
@@ -187,22 +232,22 @@ def test_select_plugins_adds_extra_plugin_without_disabling_defaults():
 
 
 def test_select_plugins_ignores_extra_plugin_already_enabled_by_default():
-    selected = select_plugins([], None, extra_enabled_ids=(WORLDGEN,))
+    selected = select_plugins(None, extra_enabled_ids=(WORLDGEN,))
 
     assert [plugin.id for plugin in selected].count(WORLDGEN) == 1
 
 
 def test_select_plugins_adds_extra_plugin_to_explicit_selection():
-    selected = select_plugins([], [WORLDGEN], extra_enabled_ids=(MCP,))
+    selected = select_plugins([WORLDGEN], extra_enabled_ids=(MCP,))
 
-    assert [plugin.id for plugin in selected] == [WORLDGEN, MCP]
+    assert [plugin.id for plugin in selected] == [MEDIA, WORLDGEN, MCP]
 
 
 def test_build_actor_applies_requested_plugins():
-    actor, applied = build_actor([], [WORLDGEN])
+    actor, applied = build_actor([WORLDGEN])
 
     assert actor is not None
-    assert [plugin.id for plugin in applied] == [WORLDGEN]
+    assert [plugin.id for plugin in applied] == [MEDIA, WORLDGEN]
 
 
 def test_cli_starter_pack_records_loaded_plugins(tmp_path):
@@ -223,16 +268,14 @@ def test_cli_starter_pack_records_loaded_plugins(tmp_path):
     )
 
     assert result == 0
-    _actor, meta = load_world(path)
+    _actor, meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
     assert meta.plugins == (CORE_VERBS, WORLDGEN, LIFESIM, COLONYSIM, GARDENSIM)
 
 
 def test_cli_serve_can_load_yaml_config(tmp_path):
     path = tmp_path / "world.json"
     config_path = tmp_path / "bunnyland.yml"
-    BunnylandConfig(
-        world=WorldConfig(generator="empty", ticks=1, save=str(path))
-    ).save(config_path)
+    BunnylandConfig(world=WorldConfig(generator="empty", ticks=1, save=str(path))).save(config_path)
 
     result = main(["serve", "--config", str(config_path)])
 
@@ -243,9 +286,9 @@ def test_cli_serve_can_load_yaml_config(tmp_path):
 def test_cli_flag_overrides_yaml_config(tmp_path):
     path = tmp_path / "world.json"
     config_path = tmp_path / "bunnyland.yml"
-    BunnylandConfig(
-        world=WorldConfig(generator="missing", ticks=1, save=str(path))
-    ).save(config_path)
+    BunnylandConfig(world=WorldConfig(generator="missing", ticks=1, save=str(path))).save(
+        config_path
+    )
 
     result = main(["serve", "--config", str(config_path), "--generator", "empty"])
 
@@ -342,8 +385,6 @@ def test_cli_config_wizard_dispatches_to_config_wizard(monkeypatch):
             "--dry-run",
             "--non-interactive",
             "--cli",
-            "--import",
-            "module_foo",
             "--plugin",
             "bar",
         ]
@@ -360,8 +401,6 @@ def test_cli_config_wizard_dispatches_to_config_wizard(monkeypatch):
         "--dry-run",
         "--non-interactive",
         "--cli",
-        "--import",
-        "module_foo",
         "--plugin",
         "bar",
     ]
@@ -440,7 +479,7 @@ def test_cli_starter_pack_can_come_from_environment(monkeypatch, tmp_path):
     )
 
     assert result == 0
-    _actor, meta = load_world(path)
+    _actor, meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
     assert meta.plugins == (
         CORE_VERBS,
         WORLDGEN,
@@ -454,24 +493,12 @@ def test_cli_starter_pack_can_come_from_environment(monkeypatch, tmp_path):
 
 
 def test_missing_required_plugin_logs_error_and_exits(monkeypatch, caplog):
-    install_plugin_module(
-        monkeypatch,
-        "module_foo",
-        [
-            Plugin(
-                id="bar",
-                name="Bar",
-                dependencies=DependencyContribution(requires=("missing",)),
-            )
-        ],
-    )
-
     with pytest.raises(SystemExit) as exc:
-        main(["serve", "--import", "module_foo", "--plugin", "bar"])
+        main(["serve", "--plugin", "missing.plugin"])
 
     assert exc.value.code == 2
     assert "plugin loading failed" in caplog.text
-    assert "module_foo.missing" in caplog.text
+    assert "missing.plugin" in caplog.text
 
 
 def test_cli_discord_requires_token(monkeypatch, tmp_path):
@@ -1058,9 +1085,7 @@ def test_configure_memory_backend_rejects_unknown_backend():
 def test_resolve_memory_path_derives_chroma_path_from_save(tmp_path):
     save_path = tmp_path / "worlds" / "main.json"
 
-    resolved = cli._resolve_memory_path(
-        _serve_args(memory_backend="chroma", save=str(save_path))
-    )
+    resolved = cli._resolve_memory_path(_serve_args(memory_backend="chroma", save=str(save_path)))
 
     assert resolved == str(tmp_path / "worlds" / "main.memory" / "chroma")
 
@@ -1087,9 +1112,7 @@ def test_resolve_memory_path_keeps_chroma_ephemeral_without_save():
 def test_resolve_memory_path_derives_json_file_from_save(tmp_path):
     save_path = tmp_path / "worlds" / "main.json"
 
-    resolved = cli._resolve_memory_path(
-        _serve_args(memory_backend="json", save=str(save_path))
-    )
+    resolved = cli._resolve_memory_path(_serve_args(memory_backend="json", save=str(save_path)))
 
     assert resolved == str(tmp_path / "worlds" / "main.memory.json")
 
@@ -1425,7 +1448,7 @@ async def test_load_or_generate_world_reports_loaded_world(tmp_path, capsys):
 
     actor, meta = await cli._load_or_generate_world(
         _serve_args(load=str(path)),
-        select_plugins([], [WORLDGEN]),
+        select_plugins([WORLDGEN]),
         [],
         cli.ServeCredentials(worldgen_provider="ollama"),
         cli.ServeModels(worldgen_model="world-model", character_model="character-model"),
@@ -1517,7 +1540,7 @@ async def test_run_api_runtime_without_mcp_uses_env_admin_token(monkeypatch, tmp
         actor,
         meta,
         args,
-        select_plugins([], [WORLDGEN]),
+        select_plugins([WORLDGEN]),
         None,
         cli.ServeCredentials(worldgen_provider="ollama", worldgen_api_key="worldgen-key"),
         cli.ServeModels(worldgen_model="world-model", character_model="character-model"),
@@ -1530,31 +1553,6 @@ async def test_run_api_runtime_without_mcp_uses_env_admin_token(monkeypatch, tmp
     assert "Serving MCP" not in capsys.readouterr().out
 
 
-def test_cli_save_records_namespaced_imported_plugin(monkeypatch, tmp_path):
-    install_plugin_module(monkeypatch, "module_foo", [Plugin(id="bar", name="Bar")])
-    path = tmp_path / "world.json"
-
-    result = main(
-        [
-            "serve",
-            "--import",
-            "module_foo",
-            "--plugin",
-            WORLDGEN,
-            "--plugin",
-            "bar",
-            "--ticks",
-            "1",
-            "--save",
-            str(path),
-        ]
-    )
-
-    assert result == 0
-    _actor, meta = load_world(path)
-    assert meta.plugins == (WORLDGEN, "module_foo.bar")
-
-
 def test_load_rejects_saved_plugin_that_is_no_longer_available(tmp_path):
     path = tmp_path / "world.json"
     save_world(
@@ -1565,7 +1563,7 @@ def test_load_rejects_saved_plugin_that_is_no_longer_available(tmp_path):
     plugins = [plugin for plugin in bunnyland_plugins() if plugin.id == WORLDGEN]
 
     with pytest.raises(PluginError, match="module_foo.bar"):
-        load_world(path, plugins=plugins)
+        load_world(path, registry=PluginRegistry(plugins))
 
 
 def test_cli_load_missing_saved_plugin_logs_error_and_exits(tmp_path, caplog):

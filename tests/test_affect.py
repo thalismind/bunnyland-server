@@ -22,15 +22,16 @@ from bunnyland.core import (
 )
 from bunnyland.core.components import AffectDelta
 from bunnyland.core.events import CharacterDownedEvent, SpeechSaidEvent
-from bunnyland.mechanics import install_affect, install_needs
-from bunnyland.mechanics.affect import (
+from bunnyland.foundation.affect.mechanics import (
     THOUGHT_TTL_SECONDS,
     AffectReactor,
     apply_delta,
+    install_affect,
     labels_for,
 )
-from bunnyland.mechanics.consumables import ConsumableComponent, FoodComponent
-from bunnyland.mechanics.social import SocialBond
+from bunnyland.foundation.consumables.components import ConsumableComponent, FoodComponent
+from bunnyland.foundation.needs.mechanics import install_needs
+from bunnyland.foundation.social.mechanics import SocialBond
 
 HOUR = 3600.0
 
@@ -61,8 +62,8 @@ def test_apply_delta_and_labels():
 async def test_eating_creates_a_satisfied_thought_and_lifts_mood():
     scenario = affect_scenario()
     install_needs(scenario.actor)
-    from bunnyland.mechanics.meter import Meter
-    from bunnyland.mechanics.needs import HungerComponent
+    from bunnyland.foundation.meters.mechanics import Meter
+    from bunnyland.foundation.needs.mechanics import HungerComponent
 
     char = scenario.actor.world.get_entity(scenario.character)
     char.add_component(HungerComponent(meter=Meter(value=40.0)))

@@ -1,6 +1,6 @@
 """Canonical Garden Sim plugin entrypoint."""
 
-from ...mechanics.gardensim import (
+from bunnyland.simpacks.gardensim.mechanics import (
     AnimalBornEvent,
     AnimalBredEvent,
     AnimalBreedingComponent,
@@ -120,6 +120,7 @@ from ...mechanics.gardensim import (
     gardensim_fragments,
     install_gardensim,
 )
+
 from ...plugins.ids import (
     COLONYSIM,
     CORE_VERBS,

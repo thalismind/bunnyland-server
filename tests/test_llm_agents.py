@@ -27,6 +27,8 @@ from bunnyland.core import (
     container_of,
     spawn_entity,
 )
+from bunnyland.foundation.persona.mechanics import GoalComponent
+from bunnyland.foundation.social.mechanics import SocialBond
 from bunnyland.llm_agents import (
     BehaviorProfileAgent,
     ControllerDispatch,
@@ -35,17 +37,27 @@ from bunnyland.llm_agents import (
     ProviderRouterAgent,
     ScriptedAgent,
     ToolCall,
-    command_from_tool_call,
     did_you_mean,
     name_candidates,
-    parse_natural_command,
     persona_contradictions,
     register_autonomous_controller,
     resolve_reference,
-    resolve_reference_args,
     suggest_names,
-    tool_names,
-    tool_schemas,
+)
+from bunnyland.llm_agents import (
+    command_from_tool_call as _command_from_tool_call,
+)
+from bunnyland.llm_agents import (
+    parse_natural_command as _parse_natural_command,
+)
+from bunnyland.llm_agents import (
+    resolve_reference_args as _resolve_reference_args,
+)
+from bunnyland.llm_agents import (
+    tool_names as _tool_names,
+)
+from bunnyland.llm_agents import (
+    tool_schemas as _tool_schemas,
 )
 from bunnyland.llm_agents.agent import (
     CHARACTER_SYSTEM_PROMPT,
@@ -60,10 +72,36 @@ from bunnyland.llm_agents.agent import (
     _tool_call_history,
     normalize_model,
 )
-from bunnyland.mechanics.persona import GoalComponent
-from bunnyland.mechanics.social import SocialBond
-from bunnyland.plugins import bunnyland_plugins, collect_persona_fragments
+from bunnyland.plugins import PluginRegistry, bunnyland_plugins, collect_persona_fragments
 from bunnyland.prompts.builder import PromptBuilder
+
+ALL_ACTION_DEFINITIONS = tuple(
+    definition for _owner, definition in PluginRegistry(bunnyland_plugins()).actions.values()
+)
+
+
+def tool_names(definitions=ALL_ACTION_DEFINITIONS):
+    return _tool_names(definitions)
+
+
+def tool_schemas(definitions=ALL_ACTION_DEFINITIONS):
+    return _tool_schemas(definitions)
+
+
+def command_from_tool_call(call, *, definitions=ALL_ACTION_DEFINITIONS, **kwargs):
+    return _command_from_tool_call(call, definitions=definitions, **kwargs)
+
+
+def parse_natural_command(text, definitions=ALL_ACTION_DEFINITIONS):
+    return _parse_natural_command(text, definitions)
+
+
+def resolve_reference_args(world, character, arguments, *, keys=None, suggestions=3):
+    if keys is None:
+        keys = frozenset(
+            key for definition in ALL_ACTION_DEFINITIONS for key in definition.reference_arg_keys
+        )
+    return _resolve_reference_args(world, character, arguments, keys=keys, suggestions=suggestions)
 
 
 def _add_item(scenario, name, *, container=False):
@@ -99,7 +137,7 @@ def test_tool_schemas_cover_every_verb():
         "drop",
         "enchant_item",
         "fertilize",
-            "harvest",
+        "harvest",
         "join_household",
         "plant",
         "pickpocket",
@@ -342,9 +380,7 @@ def test_parse_natural_command_covers_alternate_command_shapes():
     assert parse_natural_command("write hello on slate") == ToolCall(
         "write", {"target_id": "slate", "text": "hello"}
     )
-    assert parse_natural_command('say "unterminated') == ToolCall(
-        "say", {"text": '"unterminated'}
-    )
+    assert parse_natural_command('say "unterminated') == ToolCall("say", {"text": '"unterminated'})
 
 
 def test_parse_natural_command_rejects_incomplete_command_shapes():
@@ -468,9 +504,7 @@ def test_parse_natural_command_supports_leading_slot_patterns():
         natural_patterns=(ActionPattern("{direction}"),),
     )
 
-    assert parse_natural_command("north", (definition,)) == ToolCall(
-        "move", {"direction": "north"}
-    )
+    assert parse_natural_command("north", (definition,)) == ToolCall("move", {"direction": "north"})
 
 
 def test_parse_natural_command_drops_whitespace_only_slot_captures():
@@ -480,9 +514,7 @@ def test_parse_natural_command_drops_whitespace_only_slot_captures():
         command_type="say",
         tool_name="say",
         arguments={"text": ActionArgument(kind="text")},
-        natural_patterns=(
-            ActionPattern("say{text}please", fixed_arguments={"mode": "polite"}),
-        ),
+        natural_patterns=(ActionPattern("say{text}please", fixed_arguments={"mode": "polite"}),),
     )
 
     assert parse_natural_command("say  please", (definition,)) == ToolCall(
@@ -573,9 +605,7 @@ def test_goal_directed_agent_uses_goal_to_address_visible_character():
 
     call = GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
 
-    assert call == ToolCall(
-        "say", {"text": "Hazel, I am working on ask Hazel about the bridge"}
-    )
+    assert call == ToolCall("say", {"text": "Hazel, I am working on ask Hazel about the bridge"})
 
 
 def test_goal_directed_agent_speaks_from_condition_signal_without_private_goal():
@@ -923,9 +953,7 @@ def test_behavior_profile_agent_aggressive_waits_without_speech_command():
     )
 
     assert (
-        BehaviorProfileAgent("aggressive").decide(
-            "", context, character_id=str(scenario.character)
-        )
+        BehaviorProfileAgent("aggressive").decide("", context, character_id=str(scenario.character))
         is None
     )
 
@@ -1412,9 +1440,7 @@ class _FakeOpenRouterChat:
         self.calls: list[dict] = []
 
     async def send_async(self, *, model, messages, tools):
-        self.calls.append(
-            {"model": model, "messages": [dict(m) for m in messages], "tools": tools}
-        )
+        self.calls.append({"model": model, "messages": [dict(m) for m in messages], "tools": tools})
         function = types.SimpleNamespace(name="wait", arguments='{"reason": "rest"}')
         tool_call = types.SimpleNamespace(function=function)
         message = types.SimpleNamespace(
@@ -1929,13 +1955,7 @@ def test_persona_contradiction_guard_covers_relationship_line_shapes():
         context,
         ToolCall(
             "say",
-            {
-                "text": (
-                    "Hazel is not my friend. "
-                    "I am not partners with Hazel. "
-                    "I don't know Hazel."
-                )
-            },
+            {"text": ("Hazel is not my friend. I am not partners with Hazel. I don't know Hazel.")},
         ),
     )
 

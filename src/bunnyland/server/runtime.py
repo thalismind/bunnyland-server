@@ -64,9 +64,7 @@ async def run_loop_with_api(
         claim_secrets=claim_secrets,
     )
     telemetry.instrument_fastapi(app)
-    server = uvicorn.Server(
-        uvicorn.Config(app, host=host, port=port, log_level="info")
-    )
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="info"))
     game_task = asyncio.create_task(loop.run(max_ticks=max_ticks))
     server_task = asyncio.create_task(server.serve())
 

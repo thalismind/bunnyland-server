@@ -11,6 +11,8 @@ import pytest
 from conftest import build_scenario
 
 from bunnyland.core import CharacterComponent, IdentityComponent, spawn_entity
+from bunnyland.core.events import DomainEvent
+from bunnyland.foundation.history.mechanics import record_world_history
 from bunnyland.imagegen.components import PortraitImageComponent
 from bunnyland.imagegen.config import ImageGenConfig
 from bunnyland.imagegen.media import SEGMENT_PORTRAITS, SEGMENT_SPRITES, MediaStore
@@ -19,10 +21,9 @@ from bunnyland.imagegen.service import ImageGenService
 from bunnyland.imagegen.spec import ImagePurpose
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
 from bunnyland.imagegen.wiring import build_image_service, select_enhancer
-from bunnyland.mechanics.history import record_world_history
-from bunnyland.mechanics.toonsim import SpriteImageComponent
 from bunnyland.persistence import WorldMeta
 from bunnyland.server.app import MAX_UPLOAD_IMAGE_BYTES, create_app
+from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 
 ADMIN = {"X-Bunnyland-Admin-Secret": "secret"}
 
@@ -229,11 +230,20 @@ async def test_scene_helper_unknown_character_returns_none(tmp_path):
 
 async def test_scene_image_endpoint_success(tmp_path):
     scenario = build_scenario()
+    events = []
+    scenario.actor.bus.subscribe(DomainEvent, events.append)
     service = _service(scenario.actor, tmp_path)
     async with _client(_app(scenario.actor, service)) as client:
         response = await client.post(f"/world/character/{scenario.character}/scene-image")
+        await service.wait_idle()
     assert response.status_code == 200
     assert response.json()["purpose"] == "event"
+    image_events = [
+        event for event in events if event.__class__.__name__.startswith("ImageGeneration")
+    ]
+    assert image_events
+    assert all(event.visibility.value == "directed" for event in image_events)
+    assert all(event.target_ids == (str(scenario.character),) for event in image_events)
 
 
 async def test_scene_image_endpoint_unknown_character(tmp_path):

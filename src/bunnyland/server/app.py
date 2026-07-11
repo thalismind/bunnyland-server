@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
+
 from .. import telemetry
 from ..claims import (
     CLIENT_KIND_WEB,
@@ -36,21 +38,24 @@ from ..core import (
     SuspendedComponent,
     SuspendedControllerComponent,
     WebControllerComponent,
+    container_of,
     parse_entity_id,
     replace_component,
     spawn_entity,
 )
 from ..core.claim_timeout import apply_claim_timeout_settings, record_claim_activity
 from ..core.controllers import ClaimedComponent, ClaimTimeoutComponent
-from ..core.events import CharacterClaimedEvent, ControllerChangedEvent
+from ..core.events import (
+    CharacterClaimedEvent,
+    ControllerChangedEvent,
+    serialized_event_visible_to,
+)
 from ..core.world_actor import CONTROL_COMMANDS, WorldActor
 from ..imagegen.components import PortraitImageComponent
 from ..imagegen.media import (
     SEGMENT_PORTRAITS,
     SEGMENT_SPRITES,
-    MediaError,
     MediaStore,
-    content_type_for,
 )
 from ..imagegen.scene import request_scene_image
 from ..imagegen.spec import ImagePurpose
@@ -63,7 +68,6 @@ from ..llm_agents import (
 )
 from ..llm_agents.specs import BehaviorTreeSpec, ScriptSpec
 from ..mcp import MCP_MOUNT_PATH, create_bunnyland_mcp_app, mcp_enabled
-from ..mechanics.toonsim import SpriteImageComponent
 from ..persistence import WorldMeta
 from ..plugins import collect_persona_fragments, collect_prompt_fragments
 from ..worldgen import GenOptions, collect_generators
@@ -152,6 +156,7 @@ from .worldgen import (
 )
 
 WEBSOCKET_HEARTBEAT_SECONDS = 30.0
+PLAYER_WEBSOCKET_AUTH_SECONDS = 5.0
 UPLOAD_IMAGE_TYPES = {
     "image/png": "png",
     "image/jpeg": "jpg",
@@ -204,6 +209,76 @@ async def next_websocket_update(actor: WorldActor, subscription: EventSubscripti
         )
     except TimeoutError:
         return {"type": "heartbeat", "data": {"world_epoch": actor.epoch}}
+
+
+def _character_room_id(actor: WorldActor, character_id: str) -> str | None:
+    parsed = parse_entity_id(character_id)
+    if parsed is None or not actor.world.has_entity(parsed):
+        return None
+    room_id = container_of(actor.world.get_entity(parsed))
+    return str(room_id) if room_id is not None else None
+
+
+def player_update_for_message(
+    actor: WorldActor,
+    character_id: str,
+    message: dict,
+) -> dict | None:
+    """Filter one internal broadcast into a safe player update frame."""
+    if message.get("type") != "event":
+        return {"type": "invalidate", "data": {"world_epoch": actor.epoch}}
+    data = message.get("data")
+    if not isinstance(data, dict):
+        return None
+    event = data.get("event")
+    if not isinstance(event, dict):
+        return None
+    if serialized_event_visible_to(
+        event,
+        character_id=character_id,
+        room_of=lambda candidate: _character_room_id(actor, candidate),
+    ):
+        return message
+    if event.get("visibility") == "system":
+        return {
+            "type": "invalidate",
+            "data": {"world_epoch": int(event.get("world_epoch") or actor.epoch)},
+        }
+    return None
+
+
+def recent_player_updates(
+    actor: WorldActor,
+    character_id: str,
+    messages: list[dict],
+) -> list[dict]:
+    return [
+        update
+        for message in messages
+        if (update := player_update_for_message(actor, character_id, message)) is not None
+    ]
+
+
+async def next_player_update(
+    actor: WorldActor,
+    subscription: EventSubscription,
+    character_id: str,
+) -> dict:
+    """Return the next safe frame, a resync after overflow, or an idle heartbeat."""
+    if subscription.consume_dropped():
+        return {"type": "resync", "data": {"world_epoch": actor.epoch}}
+    deadline = asyncio.get_running_loop().time() + WEBSOCKET_HEARTBEAT_SECONDS
+    while True:
+        timeout = max(0, deadline - asyncio.get_running_loop().time())
+        try:
+            message = await asyncio.wait_for(subscription.queue.get(), timeout=timeout)
+        except TimeoutError:
+            return {"type": "heartbeat", "data": {"world_epoch": actor.epoch}}
+        if subscription.consume_dropped():
+            return {"type": "resync", "data": {"world_epoch": actor.epoch}}
+        update = player_update_for_message(actor, character_id, message)
+        if update is not None:
+            return update
 
 
 def create_app(
@@ -281,11 +356,16 @@ def create_app(
     generation_job = None
     memory_store = memory_store or getattr(actor, "memory_store", None)
     media_store = (
-        getattr(imagegen, "media", None) if imagegen is not None else None
-    ) or MediaStore(os.environ.get("BUNNYLAND_MEDIA_DIR", "media").strip() or "media")
+        (getattr(imagegen, "media", None) if imagegen is not None else None)
+        or getattr(actor, "media_service", None)
+        or MediaStore(os.environ.get("BUNNYLAND_MEDIA_DIR", "media").strip() or "media")
+    )
+    actor.media_service = media_store
     # Editor-loaded scripted/behavioral controller definitions: register any already on disk
     # so a restarted server keeps the scripts and behavior trees the editor previously saved.
-    definition_store = ControllerDefinitionStore(definitions_path)
+    definition_store = ControllerDefinitionStore(
+        definitions_path, action_definitions=actor.action_definitions()
+    )
     definition_store.load()
 
     def _require_imagegen() -> ImageGenService:
@@ -422,7 +502,13 @@ def create_app(
                 return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         return await call_next(request)
 
-    for plugin in plugins or ():
+    from ..foundation.media.plugin import plugin as media_plugin
+
+    router_plugins = [
+        media_plugin(),
+        *(plugin for plugin in (plugins or ()) if plugin.id != "bunnyland.media"),
+    ]
+    for plugin in router_plugins:
         for router_factory in plugin.runtime.server_routers:
             router_factory(
                 app,
@@ -647,8 +733,26 @@ def create_app(
         return WorldLibraryResponse.model_validate(load_content_library().model_dump(mode="json"))
 
     @app.get("/world/events/recent", response_model=RecentEventsResponse)
-    async def recent_events() -> RecentEventsResponse:
+    async def recent_events(
+        admin_token: str | None = Header(default=None, alias=ADMIN_SECRET_HEADER),
+        admin_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> RecentEventsResponse:
+        _require_projection_admin(admin_token, admin_client_id)
         return RecentEventsResponse(events=stream.recent_messages())
+
+    @app.get(
+        "/world/character/{id}/events/recent",
+        response_model=RecentEventsResponse,
+    )
+    async def character_recent_events(
+        id: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+    ) -> RecentEventsResponse:
+        _require_claim_secret(id, claim_id=claim_id, claim_secret=claim_secret)
+        return RecentEventsResponse(
+            events=recent_player_updates(actor, id, stream.recent_messages())
+        )
 
     @app.get("/world/chat/status", response_model=CharacterChatStatusResponse)
     async def world_chat_status() -> CharacterChatStatusResponse:
@@ -1706,15 +1810,6 @@ def create_app(
             raise HTTPException(status_code=400, detail="character has no room to illustrate")
         return response
 
-    @app.get("/media/{segment}/{name}")
-    async def get_media(segment: str, name: str) -> Response:
-        try:
-            data = media_store.read(segment, name)
-            content_type = content_type_for(name)
-        except MediaError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return Response(content=data, media_type=content_type)
-
     @app.post("/admin/world/save", response_model=WorldSaveResponse)
     async def save_world_now() -> WorldSaveResponse:
         if save_path is None:
@@ -1749,6 +1844,86 @@ def create_app(
             await websocket.send_json({"type": "snapshot", "data": snapshot})
             while True:
                 await websocket.send_json(await next_websocket_update(actor, subscription))
+        except WebSocketDisconnect:
+            pass
+        finally:
+            subscription.close()
+
+    @app.websocket("/world/character/{character_id}/updates")
+    async def world_character_updates(websocket: WebSocket, character_id: str) -> None:
+        # Claim secrets deliberately travel only in the first WebSocket frame.  Accepting
+        # first avoids putting player state in handshake failures and keeps credentials out
+        # of URLs, proxy logs, and telemetry attributes.
+        await websocket.accept()
+        try:
+            auth = await asyncio.wait_for(
+                websocket.receive_json(),
+                timeout=PLAYER_WEBSOCKET_AUTH_SECONDS,
+            )
+        except (TimeoutError, ValueError, TypeError, WebSocketDisconnect):
+            await websocket.close(code=1008)
+            return
+        data = auth.get("data") if isinstance(auth, dict) else None
+        if (
+            not isinstance(auth, dict)
+            or auth.get("type") != "authenticate"
+            or not isinstance(data, dict)
+            or "claim_id" not in data
+            or "claim_secret" not in data
+            or not isinstance(data.get("claim_id"), (str, type(None)))
+            or not isinstance(data.get("claim_secret"), (str, type(None)))
+        ):
+            await websocket.close(code=1008)
+            return
+        claim_id = data["claim_id"]
+        claim_secret = data["claim_secret"]
+        try:
+            claim_context = _require_claim_secret(
+                character_id,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
+            )
+            if claim_context is None and (claim_id is not None or claim_secret is not None):
+                raise HTTPException(
+                    status_code=403,
+                    detail="unclaimed character requires null credentials",
+                )
+        except HTTPException:
+            await websocket.close(code=1008)
+            return
+        require_claimed = claim_context is not None
+        subscription = stream.subscribe()
+
+        async def send_frame(frame: dict) -> bool:
+            try:
+                _require_claim_secret(
+                    character_id,
+                    claim_id=claim_id,
+                    claim_secret=claim_secret,
+                    require_claimed=require_claimed,
+                )
+            except HTTPException:
+                await websocket.close(code=1008)
+                return False
+            await websocket.send_json(frame)
+            return True
+
+        try:
+            with telemetry.span("websocket.character", {"character.id": character_id}):
+                if not await send_frame(
+                    {
+                        "type": "ready",
+                        "data": {
+                            "character_id": character_id,
+                            "world_epoch": actor.epoch,
+                        },
+                    }
+                ):
+                    return
+                while True:
+                    frame = await next_player_update(actor, subscription, character_id)
+                    if not await send_frame(frame):
+                        return
         except WebSocketDisconnect:
             pass
         finally:

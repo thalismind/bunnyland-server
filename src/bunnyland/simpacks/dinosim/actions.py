@@ -7,12 +7,6 @@ from ...core.actions import (
 
 ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     define_action(
-        "identify",
-        ("target_id", "species_name"),
-        tool_name="identify",
-        patterns=("identify {target_id}",),
-    ),
-    define_action(
         "extract-ancient-sample",
         ("fossil_id",),
         tool_name="extract_ancient_sample",

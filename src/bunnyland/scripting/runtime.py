@@ -24,6 +24,7 @@ from ..core.edges import ContainmentMode, Contains, ControlledBy
 from ..core.events import DomainEvent
 from ..persistence import type_registries
 from ..plugins.contributions import collect_content_items
+from ..plugins.registry import PluginRegistry
 from .model import (
     AddComponentPatch,
     AddEntityPatch,
@@ -61,9 +62,9 @@ class ScriptRuntime:
         self,
         scripts: Iterable[ScriptDefinition] = (),
         *,
+        registry: PluginRegistry,
         bindings: Mapping[str, str] | None = None,
         state: ScriptState | None = None,
-        component_registry: Mapping[str, type[Component]] | None = None,
     ) -> None:
         self.scripts = tuple(scripts)
         self.bindings: dict[str, str] = dict(bindings or {})
@@ -72,7 +73,7 @@ class ScriptRuntime:
         self.state = state or ScriptState()
         self.errors: list[str] = []
         self._events: list[DomainEvent] = []
-        self._component_registry = dict(component_registry or type_registries()[0])
+        self._component_registry = type_registries(registry)[0]
 
     def install(self, actor: WorldActor) -> ScriptRuntime:
         actor.bus.subscribe(DomainEvent, self._capture_event)
@@ -245,9 +246,7 @@ class ScriptRuntime:
         if operation.contain_in is not None:
             containers = self._resolve_query(actor, operation.contain_in, bindings)
             if len(containers) != 1:
-                raise ScriptRuntimeError(
-                    f"contain_in expected one match, found {len(containers)}"
-                )
+                raise ScriptRuntimeError(f"contain_in expected one match, found {len(containers)}")
             containers[0].add_relationship(
                 Contains(mode=ContainmentMode(operation.containment_mode)), entity.id
             )
@@ -412,13 +411,14 @@ def install_scripting(
     *,
     state: ScriptState | None = None,
     bindings: Mapping[str, str] | None = None,
-    component_registry: Mapping[str, type[Component]] | None = None,
 ) -> ScriptRuntime:
+    if actor.plugins is None:
+        raise ScriptRuntimeError("scripting requires an applied PluginRegistry")
     return ScriptRuntime(
         scripts,
+        registry=actor.plugins,
         state=state,
         bindings=bindings,
-        component_registry=component_registry,
     ).install(actor)
 
 

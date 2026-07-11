@@ -1,15 +1,15 @@
 """Storyteller resolution rules contributed by Dragon Sim."""
 
-from ...mechanics.storyteller import IncidentResolutionRule
-from .quests import GeneratedQuestComponent, QuestComponent
+from bunnyland.foundation.storyteller.mechanics import IncidentResolutionRule
+
+from .quests import QuestStateComponent
 
 
 def _quest_completed(world, incident, entity) -> bool:
     del world, incident
-    for component_type in (QuestComponent, GeneratedQuestComponent):
-        if entity.has_component(component_type):
-            return entity.get_component(component_type).status == "completed"
-    return False
+    return entity.has_component(QuestStateComponent) and (
+        entity.get_component(QuestStateComponent).status == "completed"
+    )
 
 
 RESOLUTION_RULES = (

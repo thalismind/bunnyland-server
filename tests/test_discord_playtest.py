@@ -68,19 +68,13 @@ from bunnyland.discord.playtest import (
     run_discord_playtest,
 )
 from bunnyland.engine import GameLoop
-from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
-from bunnyland.mechanics import barbariansim as barb
-from bunnyland.mechanics import colonysim as colony
-from bunnyland.mechanics import daggersim as dagger
-from bunnyland.mechanics import dinosim as dino
-from bunnyland.mechanics import dragonsim as dragon
-from bunnyland.mechanics import lifesim as life
-from bunnyland.mechanics import nukesim as nuke
-from bunnyland.mechanics import voidsim as void
-from bunnyland.mechanics.colonysim import ClaimOwnershipHandler, Owns
-from bunnyland.mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
-from bunnyland.mechanics.eat_drink import DrinkHandler, EatHandler
-from bunnyland.mechanics.environment import (
+from bunnyland.foundation.consumables.actions import DrinkHandler, EatHandler
+from bunnyland.foundation.consumables.components import (
+    ConsumableComponent,
+    DrinkableComponent,
+    FoodComponent,
+)
+from bunnyland.foundation.environment.mechanics import (
     ExtinguishHandler,
     FireComponent,
     FireExtinguishedEvent,
@@ -89,7 +83,44 @@ from bunnyland.mechanics.environment import (
     IgniteHandler,
     install_environment,
 )
-from bunnyland.mechanics.gardensim import (
+from bunnyland.foundation.mechanisms.mechanics import (
+    ButtonResetEvent,
+    DoorAutoClosedEvent,
+    install_mechanisms,
+)
+from bunnyland.foundation.meters.mechanics import Meter
+from bunnyland.foundation.needs.mechanics import (
+    HungerComponent,
+    HungerSystem,
+    ThirstComponent,
+    ThirstSystem,
+)
+from bunnyland.foundation.policy.mechanics import BoundaryTag, install_policy
+from bunnyland.foundation.social.mechanics import bond_between, install_social
+from bunnyland.foundation.storyteller.mechanics import (
+    IncidentBudgetComponent,
+    IncidentComponent,
+    IncidentResolvedEvent,
+    IncidentStartedEvent,
+    ResolveIncidentHandler,
+    StorytellerComponent,
+    install_storyteller,
+)
+from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
+from bunnyland.memory import InMemoryStore, install_memory
+from bunnyland.memory.store import MemoryEntry
+from bunnyland.narration import NarrationProjection, check_grounding
+from bunnyland.plugins import apply_plugins, bunnyland_plugins
+from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.simpacks.barbariansim import mechanics as barb
+from bunnyland.simpacks.colonysim import mechanics as colony
+from bunnyland.simpacks.colonysim.mechanics import ClaimOwnershipHandler, Owns
+from bunnyland.simpacks.daggersim import mechanics as dagger
+from bunnyland.simpacks.dinosim import mechanics as dino
+from bunnyland.simpacks.dinosim.incidents import KAIJU_ATTACK
+from bunnyland.simpacks.dinosim.resolution import RESOLUTION_RULES as DINO_RESOLUTION_RULES
+from bunnyland.simpacks.dragonsim import mechanics as dragon
+from bunnyland.simpacks.gardensim.mechanics import (
     CropComponent,
     CropGrowthConsequence,
     CropHarvestedEvent,
@@ -105,7 +136,8 @@ from bunnyland.mechanics.gardensim import (
     TillHandler,
     WaterCropHandler,
 )
-from bunnyland.mechanics.lifesim import (
+from bunnyland.simpacks.lifesim import mechanics as life
+from bunnyland.simpacks.lifesim.mechanics import (
     BusinessSaleEvent,
     ClaimRoomHandler,
     CustomerComponent,
@@ -114,31 +146,8 @@ from bunnyland.mechanics.lifesim import (
     RoomClaimComponent,
     SellItemHandler,
 )
-from bunnyland.mechanics.mechanisms import (
-    ButtonResetEvent,
-    DoorAutoClosedEvent,
-    install_mechanisms,
-)
-from bunnyland.mechanics.meter import Meter
-from bunnyland.mechanics.needs import HungerComponent, HungerSystem, ThirstComponent, ThirstSystem
-from bunnyland.mechanics.policy import BoundaryTag, install_policy
-from bunnyland.mechanics.social import bond_between, install_social
-from bunnyland.mechanics.storyteller import (
-    IncidentBudgetComponent,
-    IncidentComponent,
-    IncidentResolvedEvent,
-    IncidentStartedEvent,
-    ResolveIncidentHandler,
-    StorytellerComponent,
-    install_storyteller,
-)
-from bunnyland.memory import InMemoryStore, install_memory
-from bunnyland.memory.store import MemoryEntry
-from bunnyland.narration import NarrationProjection, check_grounding
-from bunnyland.plugins import apply_plugins, bunnyland_plugins, load_modules, select
-from bunnyland.prompts.builder import PromptBuilder
-from bunnyland.simpacks.dinosim.incidents import KAIJU_ATTACK
-from bunnyland.simpacks.dinosim.resolution import RESOLUTION_RULES as DINO_RESOLUTION_RULES
+from bunnyland.simpacks.nukesim import mechanics as nuke
+from bunnyland.simpacks.voidsim import mechanics as void
 from bunnyland.worldgen.examples import (
     APPLE_CROSSING_DEMO,
     BELL_GREEN_DEMO,
@@ -642,16 +651,14 @@ def _add_dragonsim_loop_world(scenario):
         [
             IdentityComponent(name="Find the Lost Ring", kind="quest"),
             dragon.QuestComponent(quest_id="lost-ring", title="Find the Lost Ring"),
+            dragon.QuestStateComponent(),
         ],
     )
     objective = spawn_entity(
         scenario.actor.world,
         [
             IdentityComponent(name="lost ring objective", kind="objective"),
-            dragon.QuestObjectiveComponent(
-                quest_id="lost-ring",
-                description="Recover the ring from the watchtower",
-            ),
+            dragon.QuestObjectiveComponent(description="Recover the ring from the watchtower"),
         ],
     )
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
@@ -663,14 +670,11 @@ def _add_dragonsim_loop_world(scenario):
     reward_item = _room_content(scenario, "silver carrot", "item", [PortableComponent()])
     reward = spawn_entity(
         scenario.actor.world,
-        [
-            dragon.QuestRewardComponent(
-                quest_id="lost-ring",
-                description="A silver carrot",
-                item_ids=(str(reward_item),),
-            )
-        ],
+        [dragon.QuestRewardComponent(description="A silver carrot")],
     )
+    quest.add_relationship(dragon.QuestHasObjective(), objective.id)
+    quest.add_relationship(dragon.QuestHasReward(), reward.id)
+    reward.add_relationship(dragon.QuestRewardGrants(), reward_item)
     faction_id = _room_content(
         scenario,
         "Moss Wardens",
@@ -1183,8 +1187,9 @@ async def test_discord_playtest_autosaves_running_ticks(scenario):
 
 
 async def test_discord_playtest_motd_plugin_sends_claim_message(scenario):
-    plugins = select(load_modules(["examples.plugins.motd_claim"]), ["motd_claim"])
-    apply_plugins(plugins, scenario.actor)
+    from examples.plugins.motd_claim import bunnyland_plugins as motd_plugins
+
+    apply_plugins(motd_plugins(), scenario.actor)
     spec = DiscordPlaytest(
         ticks=1,
         inputs=(
@@ -1285,8 +1290,7 @@ def test_discord_playtest_resolved_ticks_requires_limit_for_epoch_only_inputs():
         DiscordPlaytest(inputs=(PlaytestInput(tick=3, content="wait"),)).resolved_ticks(None) == 4
     )
     assert (
-        DiscordPlaytest(inputs=(PlaytestInput(epoch=3600, content="wait"),)).resolved_ticks(2)
-        == 2
+        DiscordPlaytest(inputs=(PlaytestInput(epoch=3600, content="wait"),)).resolved_ticks(2) == 2
     )
 
     with pytest.raises(
@@ -1574,9 +1578,7 @@ async def test_discord_playtest_storyteller_incident_loop(scenario):
         load_discord_playtest(_run_path("discord-storyteller-incidents.json")),
     )
 
-    incidents = list(
-        scenario.actor.world.query().with_all([IncidentComponent]).execute_entities()
-    )
+    incidents = list(scenario.actor.world.query().with_all([IncidentComponent]).execute_entities())
     assert rejected == []
     assert result.ticks == 3
     assert len(result.inputs) == 3
@@ -1702,8 +1704,7 @@ async def test_discord_playtest_dinosim_lifecycle_loop(scenario):
     assert len(hatched) == 2
     assert len(hatchlings) == 2
     assert all(
-        entity.get_component(CharacterComponent).species == "velociraptor"
-        for entity in hatchlings
+        entity.get_component(CharacterComponent).species == "velociraptor" for entity in hatchlings
     )
 
 
@@ -1723,9 +1724,7 @@ async def test_discord_playtest_dinosim_kaiju_incident_loop(scenario):
         load_discord_playtest(_run_path("discord-dinosim-kaiju.json")),
     )
 
-    incidents = list(
-        scenario.actor.world.query().with_all([IncidentComponent]).execute_entities()
-    )
+    incidents = list(scenario.actor.world.query().with_all([IncidentComponent]).execute_entities())
     room = scenario.actor.world.get_entity(scenario.room_a)
     room_entities = [
         scenario.actor.world.get_entity(entity_id)
@@ -1837,7 +1836,7 @@ async def test_discord_playtest_dragonsim_core_loop(scenario):
     assert result.ticks == 6
     assert len(result.inputs) == 6
     assert poi.get_component(dragon.PointOfInterestComponent).discovered is True
-    assert quest.get_component(dragon.QuestComponent).status == "completed"
+    assert quest.get_component(dragon.QuestStateComponent).status == "completed"
     assert objective.get_component(dragon.QuestObjectiveComponent).completed is True
     assert reward.get_component(dragon.QuestRewardComponent).claimed is True
     assert container_of(scenario.actor.world.get_entity(reward_item_id)) == scenario.character
@@ -2031,9 +2030,7 @@ async def test_discord_playtest_daggersim_magic_loop(scenario):
 
 async def test_discord_playtest_daggersim_enchant_item_loop(scenario):
     _install_daggersim_playtest(scenario.actor)
-    _class_template, _spell_template, charm_id, _creature_id = _add_daggersim_magic_world(
-        scenario
-    )
+    _class_template, _spell_template, charm_id, _creature_id = _add_daggersim_magic_world(scenario)
     rejected = _collect_rejections(scenario.actor)
     enchanted: list = []
     cast: list = []
@@ -2080,9 +2077,7 @@ async def test_discord_playtest_daggersim_dungeon_loop(scenario):
     assert objective.get_component(dagger.DungeonObjectiveComponent).found is True
     discovered_exits = [
         target_id
-        for _edge, target_id in scenario.actor.world.get_entity(entry_id).get_relationships(
-            ExitTo
-        )
+        for _edge, target_id in scenario.actor.world.get_entity(entry_id).get_relationships(ExitTo)
     ]
     assert deeper_id in discovered_exits
     assert container_of(character) == entry_id

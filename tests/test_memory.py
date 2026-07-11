@@ -281,9 +281,7 @@ async def test_conversation_lines_become_retrievable_participant_memories():
     assert clover_results[0].source == "conversation"
     assert "conversation" in hazel_results[0].tags
 
-    prompt = render_prompt(
-        PromptBuilder(scenario.actor.world, memory_store=store).build(hazel.id)
-    )
+    prompt = render_prompt(PromptBuilder(scenario.actor.world, memory_store=store).build(hazel.id))
     assert "Please watch the east tunnel" in prompt
     assert "source:conversation" in prompt
 
@@ -356,9 +354,7 @@ async def test_shared_notes_use_authorized_shared_collection():
     char = scenario.actor.world.get_entity(scenario.character)
     replace_component(
         char,
-        MemoryProfileComponent(
-            vector_collection="juniper", shared_collections=("burrow-board",)
-        ),
+        MemoryProfileComponent(vector_collection="juniper", shared_collections=("burrow-board",)),
     )
     taken = collect(scenario.actor, NoteTakenEvent)
     searched = collect(scenario.actor, NotesSearchedEvent)
@@ -480,9 +476,7 @@ def test_reflection_loop_skips_characters_whose_reflection_fails():
     store.add("juniper", text="Hazel found fresh tracks.", created_at_epoch=1)
     store.add("juniper", text="The north bridge cracked.", created_at_epoch=2)
 
-    consequence = ReflectionLoopConsequence(
-        store, interval_seconds=0, min_entries=2, limit=2
-    )
+    consequence = ReflectionLoopConsequence(store, interval_seconds=0, min_entries=2, limit=2)
 
     class RejectingHandler:
         def __init__(self) -> None:
@@ -877,9 +871,7 @@ def test_chroma_store_delete_removes_existing_note():
             selected = set(ids or self.ids)
             rows = [
                 (id_, doc, meta)
-                for id_, doc, meta in zip(
-                    self.ids, self.documents, self.metadatas, strict=False
-                )
+                for id_, doc, meta in zip(self.ids, self.documents, self.metadatas, strict=False)
                 if id_ in selected
             ]
             return {
@@ -892,9 +884,7 @@ def test_chroma_store_delete_removes_existing_note():
             selected = set(ids)
             rows = [
                 (id_, doc, meta)
-                for id_, doc, meta in zip(
-                    self.ids, self.documents, self.metadatas, strict=False
-                )
+                for id_, doc, meta in zip(self.ids, self.documents, self.metadatas, strict=False)
                 if id_ not in selected
             ]
             self.ids = [row[0] for row in rows]

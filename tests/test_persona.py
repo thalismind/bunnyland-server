@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from bunnyland.core import WorldActor, spawn_entity
-from bunnyland.mechanics.persona import (
+from bunnyland.core.generation import GenerationRequest
+from bunnyland.foundation.persona.mechanics import (
     GoalComponent,
     PersonaProfileComponent,
     PreferenceComponent,
     TraitSetComponent,
     persona_fragments,
+)
+from bunnyland.foundation.persona.plugin import (
+    GOALS_CAPABILITY,
+    GOALS_CONTEXT,
+    PersonaGenerationEnricher,
 )
 from bunnyland.plugins import apply_plugins, bunnyland_plugins
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
@@ -89,15 +95,11 @@ def test_persona_component_fragments_skip_empty_fields():
         "Your current role: scout.",
     )
     # voice set / role empty -> only voice line
-    assert PersonaProfileComponent(voice="gruff").prompt_fragments(ctx) == (
-        "Your voice: gruff.",
-    )
+    assert PersonaProfileComponent(voice="gruff").prompt_fragments(ctx) == ("Your voice: gruff.",)
     # empty traits -> no fragments (45)
     assert TraitSetComponent().prompt_fragments(ctx) == ()
     # dislikes only, no likes (65->74)
-    assert PreferenceComponent(dislikes=("noise",)).prompt_fragments(ctx) == (
-        "I dislike noise.",
-    )
+    assert PreferenceComponent(dislikes=("noise",)).prompt_fragments(ctx) == ("I dislike noise.",)
     # likes only, no dislikes (74->83)
     assert PreferenceComponent(likes=("sun",)).prompt_fragments(ctx) == ("I like sun.",)
     # empty goals -> no fragments (94)
@@ -130,3 +132,28 @@ async def test_generated_characters_carry_their_persona():
     assert "curious" in hazel.get_component(TraitSetComponent).traits
     assert hazel.has_component(GoalComponent)
     assert persona_fragments(actor.world, hazel)  # surfaces in the prompt
+
+
+def test_persona_generation_enricher_materializes_owned_goals():
+    enricher = PersonaGenerationEnricher()
+    ignored = enricher.enrich(GenerationRequest(entity_kind="item"))
+    assert ignored.components == ()
+
+    request = GenerationRequest(
+        entity_kind="character",
+        capabilities=(GOALS_CAPABILITY,),
+        context={GOALS_CONTEXT: ("explore", "explore", "help")},
+    )
+    component = enricher.enrich(request).components[0]
+    assert component.active_goals == ("explore", "help")
+
+    existing = GoalComponent(active_goals=("existing",))
+    assert (
+        enricher.enrich(
+            GenerationRequest(
+                entity_kind="character",
+                context={GOALS_CONTEXT: ("new",), "base_components": (existing,)},
+            )
+        ).components
+        == ()
+    )

@@ -58,9 +58,10 @@ async def traced_generate(
         "provider": options.provider,
         "model": options.model,
     }
-    with telemetry.record_duration(
-        telemetry.record_worldgen, attrs
-    ), telemetry.span("world.generate", {**attrs, "worldgen.seed": seed}):
+    with (
+        telemetry.record_duration(telemetry.record_worldgen, attrs),
+        telemetry.span("world.generate", {**attrs, "worldgen.seed": seed}),
+    ):
         return await generator.generate(actor, seed, options)
 
 
@@ -75,9 +76,7 @@ class WorldGenerator:
     group: str = "custom"
 
 
-async def empty_generator(
-    actor: WorldActor, seed: str, options: GenOptions
-) -> InstantiatedWorld:
+async def empty_generator(actor: WorldActor, seed: str, options: GenOptions) -> InstantiatedWorld:
     """Leave only the actor's default world clock in place."""
 
     del actor, seed, options
@@ -211,9 +210,7 @@ async def halloween_generator(
     return await instantiate(actor, proposal)
 
 
-async def holiday_generator(
-    actor: WorldActor, seed: str, options: GenOptions
-) -> InstantiatedWorld:
+async def holiday_generator(actor: WorldActor, seed: str, options: GenOptions) -> InstantiatedWorld:
     """Generate a compact snowy holiday demo world."""
 
     del options

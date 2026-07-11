@@ -2,13 +2,11 @@
 
 from ...core.actions import (
     ActionDefinition,
-    ActionPattern,
     ActionRequirement,
     define_action,
 )
 
 ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
-    define_action("bribe", ("target_id",), tool_name="bribe", patterns=("bribe {target_id}",)),
     define_action(
         "discover-location",
         ("location_id",),
@@ -87,7 +85,6 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="study_voice_inscription",
         patterns=("study inscription on {target_id}",),
     ),
-    define_action("sneak", tool_name="sneak", patterns=(ActionPattern("sneak", {}),)),
     define_action(
         "steal",
         ("target_id", "item_id"),

@@ -245,9 +245,7 @@ class PromptBuilder:
             break
         return f"{status}, {kind}"
 
-    def _persona_facts(
-        self, character: Entity, identity: IdentityComponent | None
-    ) -> list[str]:
+    def _persona_facts(self, character: Entity, identity: IdentityComponent | None) -> list[str]:
         name = identity.name if identity else "Unknown"
         kind = identity.kind if identity else "character"
         return [
@@ -327,9 +325,7 @@ class PromptBuilder:
                     cues.append(f"{name} is pointedly silent after what you said.")
                 else:
                     cues.append(f"{name} has not answered you.")
-            elif recent and not any(
-                line.startswith(f"{name_key} said:") for line in recent_lower
-            ):
+            elif recent and not any(line.startswith(f"{name_key} said:") for line in recent_lower):
                 cues.append(f"{name} is quiet.")
                 if self._is_brooding(distress):
                     cues.append(f"{name} is brooding silently.")
@@ -353,7 +349,7 @@ class PromptBuilder:
         )
 
     def _visible_bond(self, entity: Entity, viewer_id: EntityId):
-        from ..mechanics.social import bond_between
+        from bunnyland.foundation.social.mechanics import bond_between
 
         return bond_between(self.world, entity.id, viewer_id)
 

@@ -5,13 +5,11 @@ command-queue architecture described in the bunnyland specification.
 """
 
 from .actions import (
-    DEFAULT_ACTION_DEFINITIONS,
     ActionArgument,
     ActionDefinition,
     ActionExample,
     ActionPattern,
     ActionRequirement,
-    action_definition_for_command_type,
     action_definitions,
     definition_by_command_type,
     definitions_by_tool_name,
@@ -148,6 +146,7 @@ from .events import (
     event_base,
 )
 from .generation import (
+    GenerationChild,
     GenerationDelta,
     GenerationEdge,
     GenerationEnricher,
@@ -198,8 +197,6 @@ __all__ = [
     "ActionPattern",
     "ActionRequirement",
     "ActorContext",
-    "DEFAULT_ACTION_DEFINITIONS",
-    "action_definition_for_command_type",
     "action_definitions",
     "AffectComponent",
     "AffectDelta",
@@ -250,6 +247,7 @@ __all__ = [
     "ExitTo",
     "FocusPointsComponent",
     "GeneratedEntityEvent",
+    "GenerationChild",
     "GenerationDelta",
     "GenerationEdge",
     "GenerationEnricher",

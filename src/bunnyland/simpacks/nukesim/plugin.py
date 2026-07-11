@@ -1,6 +1,6 @@
 """Canonical Nuke Sim plugin entrypoint."""
 
-from ...mechanics.nukesim import (
+from bunnyland.simpacks.nukesim.mechanics import (
     ActivateBeaconHandler,
     AddictionComponent,
     BeaconActivatedEvent,
@@ -106,6 +106,7 @@ from ...mechanics.nukesim import (
     install_nukesim,
     nukesim_fragments,
 )
+
 from ...plugins.ids import (
     BARBARIANSIM,
     COLONYSIM,

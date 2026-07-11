@@ -50,9 +50,7 @@ def resolve_family(name: str) -> str:
     base = (name or "").split("-", 1)[0]
     families = available_families()
     if base not in families:
-        raise ValueError(
-            f"unknown workflow family {name!r}; available: {', '.join(families)}"
-        )
+        raise ValueError(f"unknown workflow family {name!r}; available: {', '.join(families)}")
     return base
 
 

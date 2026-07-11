@@ -52,8 +52,15 @@ from bunnyland.llm_agents.behavior_tree import (
     register_action,
     register_condition,
 )
+from bunnyland.plugins import PluginRegistry, bunnyland_plugins
 from bunnyland.prompts.builder import PromptBuilder, PromptContext
 from bunnyland.scripting.runtime import ScriptRuntime
+
+_ScriptRuntime = ScriptRuntime
+
+
+def ScriptRuntime(*args, **kwargs):
+    return _ScriptRuntime(*args, registry=PluginRegistry(bunnyland_plugins()), **kwargs)
 
 
 def _context(scenario, **overrides):

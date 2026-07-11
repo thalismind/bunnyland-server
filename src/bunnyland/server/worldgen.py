@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
+from bunnyland.foundation.storyteller.mechanics import IncidentComponent
+
 from .. import telemetry
 from ..content import content_library_context
 from ..core.components import (
@@ -25,7 +27,6 @@ from ..core.controllers import LLMControllerComponent, SuspendedControllerCompon
 from ..core.ecs import container_of, parse_entity_id
 from ..core.edges import ContainmentMode, Contains, ControlledBy, ExitTo
 from ..core.world_actor import WorldActor
-from ..mechanics.storyteller import IncidentComponent
 from ..worldgen import DoorProposal, GenOptions, RoomNodeProposal, StubWorldAgent
 from ..worldgen.instantiate import _character_components, _object_components
 from ..worldgen.proposal import CharacterProposal, ItemProposal, StoryEventProposal
@@ -218,9 +219,7 @@ def collect_container_selection_context(
         raise WorldPatchError(f"container entity {request.container_entity_id!r} does not exist")
     entity = actor.world.get_entity(container_id)
     identity = (
-        entity.get_component(IdentityComponent)
-        if entity.has_component(IdentityComponent)
-        else None
+        entity.get_component(IdentityComponent) if entity.has_component(IdentityComponent) else None
     )
     if entity.has_component(RoomComponent):
         room = entity.get_component(RoomComponent)
@@ -287,9 +286,7 @@ def _room_components(room: RoomNodeProposal) -> list[ComponentPatchSpec]:
     ]
     if room.description:
         components.append(
-            _component_spec(
-                DescriptionComponent(short=room.description, long=room.description)
-            )
+            _component_spec(DescriptionComponent(short=room.description, long=room.description))
         )
     if room.light is not None:
         components.append(_component_spec(LightComponent(level=room.light)))
@@ -347,9 +344,7 @@ def _character_operations(
         ]
     else:
         components.append(
-            _component_spec(
-                SuspendedComponent(reason="generated", suspended_at_epoch=epoch)
-            )
+            _component_spec(SuspendedComponent(reason="generated", suspended_at_epoch=epoch))
         )
         controller_components = [_component_spec(SuspendedControllerComponent(reason="generated"))]
 
@@ -462,9 +457,7 @@ def build_room_generation_response(
         SetComponentPatchRequest(
             op="set_component",
             entity_id=context.door_entity_id,
-            component=_component_spec(
-                replace(context.door_component, open=True, open_on_use=True)
-            ),
+            component=_component_spec(replace(context.door_component, open=True, open_on_use=True)),
         ),
     ]
 

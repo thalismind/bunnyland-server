@@ -25,12 +25,6 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="fertilize",
         patterns=("fertilize {soil_id} with {fertilizer_id}",),
     ),
-    define_action(
-        "harvest",
-        ("target_id", "product_type", "sample_type", "quantity"),
-        tool_name="harvest",
-        patterns=("harvest {target_id}", "harvest sample {sample_type}"),
-    ),
     define_action("weed-crop", ("soil_id",), tool_name="weed_crop"),
     define_action("treat-pests", ("soil_id",), tool_name="treat_pests"),
     define_action(

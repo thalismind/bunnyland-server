@@ -12,15 +12,21 @@ from ..core.world_actor import WorldActor
 from .serialization import event_message
 
 
-@dataclass(frozen=True)
+@dataclass(eq=False)
 class EventSubscription:
     """A bounded queue registered with an ``EventStream``."""
 
     stream: EventStream
     queue: asyncio.Queue[dict[str, Any]]
+    dropped: bool = False
 
     def close(self) -> None:
         self.stream.unsubscribe(self)
+
+    def consume_dropped(self) -> bool:
+        dropped = self.dropped
+        self.dropped = False
+        return dropped
 
 
 class EventStream:
@@ -42,6 +48,7 @@ class EventStream:
         for subscription in tuple(self._subscribers):
             queue = subscription.queue
             if queue.full():
+                subscription.dropped = True
                 try:
                     queue.get_nowait()
                 except asyncio.QueueEmpty:

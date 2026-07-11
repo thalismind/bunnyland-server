@@ -174,9 +174,7 @@ def test_token_usage_helpers_are_defensive():
     assert ollama_usage.cost == 0.0
     assert ollama_usage.tokens_available is True
     assert ollama_usage.cost_available is False
-    ollama_object_usage = _ollama_usage(
-        types.SimpleNamespace(prompt_eval_count=8, eval_count=5)
-    )
+    ollama_object_usage = _ollama_usage(types.SimpleNamespace(prompt_eval_count=8, eval_count=5))
     assert ollama_object_usage.prompt_tokens == 8
     assert ollama_object_usage.completion_tokens == 5
     assert ollama_object_usage.total_tokens == 13
@@ -602,9 +600,7 @@ async def test_serialized_background_decisions_each_emit_a_non_overlapping_span(
     decisions = await dispatch.await_pending()
     assert sorted(d.tool for d in decisions) == ["move", "move"]
 
-    decide_spans = [
-        s for s in span_exporter.get_finished_spans() if s.name == "agent.decide"
-    ]
+    decide_spans = [s for s in span_exporter.get_finished_spans() if s.name == "agent.decide"]
     assert len(decide_spans) == 2
     # The provider lock serializes the calls: the two decide spans do not overlap in time.
     decide_spans.sort(key=lambda s: s.start_time)
@@ -753,9 +749,7 @@ async def test_worldgen_llm_request_is_traced(otel_capture):
 
 
 @pytestmark_otel
-async def test_openrouter_worldgen_llm_request_records_provider_cost(
-    otel_capture, monkeypatch
-):
+async def test_openrouter_worldgen_llm_request_records_provider_cost(otel_capture, monkeypatch):
     span_exporter, reader = otel_capture
     from bunnyland.worldgen.recursive_builder import OpenRouterWorldAgent
 
@@ -804,7 +798,7 @@ async def test_openrouter_worldgen_llm_request_records_provider_cost(
 async def test_save_and_load_emit_persistence_spans_and_metrics(otel_capture, tmp_path):
     from bunnyland.core import WorldActor
     from bunnyland.persistence import WorldMeta, load_world, save_world
-    from bunnyland.plugins import apply_plugins, bunnyland_plugins
+    from bunnyland.plugins import PluginRegistry, apply_plugins, bunnyland_plugins
     from bunnyland.worldgen import StubWorldBuilder, instantiate
 
     span_exporter, reader = otel_capture
@@ -814,7 +808,7 @@ async def test_save_and_load_emit_persistence_spans_and_metrics(otel_capture, tm
 
     path = tmp_path / "world.json"
     save_world(actor, path, meta=WorldMeta(seed="a quiet marsh", generator="stub"))
-    load_world(path, plugins=bunnyland_plugins())
+    load_world(path, registry=PluginRegistry(bunnyland_plugins()))
 
     spans = _spans_by_name(span_exporter)
     assert spans["world.save"].attributes["operation"] == "save"
@@ -1046,8 +1040,7 @@ async def test_controller_assign_endpoint_is_traced(otel_capture):
     scenario = build_scenario()
     app = create_app(scenario.actor)
     route = next(
-        route for route in app.routes
-        if getattr(route, "path", None) == "/admin/controllers/assign"
+        route for route in app.routes if getattr(route, "path", None) == "/admin/controllers/assign"
     )
     await route.endpoint(
         ControllerAssignmentRequest(
@@ -1071,7 +1064,8 @@ async def test_web_controller_claim_endpoint_reports_client_id_in_trace(otel_cap
     scenario = build_scenario()
     app = create_app(scenario.actor)
     route = next(
-        route for route in app.routes
+        route
+        for route in app.routes
         if getattr(route, "path", None) == "/world/controllers/web/claim"
     )
     response = await route.endpoint(

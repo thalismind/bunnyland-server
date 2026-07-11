@@ -23,7 +23,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.handlers import HandlerContext
-from bunnyland.mechanics.environment import (
+from bunnyland.foundation.environment.mechanics import (
     CalendarComponent,
     ExtinguishHandler,
     FireComponent,
@@ -85,9 +85,7 @@ async def test_phase_change_emits_event_and_updates_singletons():
     # Start of day -> night, then advance to mid-morning (day).
     await actor.tick(0.0)
     assert events[-1].phase == "night"
-    clock = list(
-        actor.world.query().with_all([TimeOfDayComponent]).execute_entities()
-    )[0]
+    clock = list(actor.world.query().with_all([TimeOfDayComponent]).execute_entities())[0]
     assert clock.get_component(TimeOfDayComponent).phase == "night"
 
     await actor.tick(9 * HOUR)  # now 09:00 -> day
@@ -199,7 +197,7 @@ def test_fire_fragment_is_empty_for_non_room_third_person_entity():
 def test_environment_consequence_no_clock_returns_no_events():
     from relics import World
 
-    from bunnyland.mechanics.environment import EnvironmentConsequence
+    from bunnyland.foundation.environment.mechanics import EnvironmentConsequence
 
     # A bare world with no WorldClockComponent: the consequence is a no-op.
     assert EnvironmentConsequence().process(World(), 0) == []
@@ -217,7 +215,7 @@ async def test_outdoor_light_unchanged_when_already_at_target_level():
 
 
 def test_damage_targets_empty_for_entity_without_health_or_room():
-    from bunnyland.mechanics.environment import FireConsequence
+    from bunnyland.foundation.environment.mechanics import FireConsequence
 
     actor = _world()
     item = spawn_entity(
@@ -513,6 +511,5 @@ def test_fire_consequence_covers_edge_damage_and_extinguish_paths():
     assert suspended.get_component(HealthComponent).current == 5.0
     assert sum(isinstance(event, FireExtinguishedEvent) for event in events) == 2
     assert any(
-        isinstance(event, FireDamageEvent) and event.target_id == str(item.id)
-        for event in events
+        isinstance(event, FireDamageEvent) and event.target_id == str(item.id) for event in events
     )

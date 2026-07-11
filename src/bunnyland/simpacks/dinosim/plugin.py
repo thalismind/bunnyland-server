@@ -1,6 +1,6 @@
 """Canonical Dino Sim plugin entrypoint."""
 
-from ...mechanics.dinosim import (
+from bunnyland.simpacks.dinosim.mechanics import (
     AncientSampleComponent,
     AncientSampleExtractedEvent,
     ApexPredatorAppearedEvent,
@@ -189,6 +189,7 @@ from ...mechanics.dinosim import (
     dinosim_fragments,
     install_dinosim,
 )
+
 from ...plugins.ids import (
     BARBARIANSIM,
     COLONYSIM,

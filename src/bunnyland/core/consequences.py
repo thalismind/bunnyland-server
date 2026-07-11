@@ -61,6 +61,7 @@ DEFAULT_RECOVERY_CHECKS = 3
 class Consequence(Protocol):
     def process(self, world: World, epoch: int) -> list[DomainEvent]: ...
 
+
 class HealthConsequence:
     """Down, revive, and kill characters based on ``HealthComponent`` (spec 8.3-8.4)."""
 
@@ -104,9 +105,7 @@ class HealthConsequence:
     def _resolve_downed(self, world: World, epoch: int) -> list[DomainEvent]:
         events: list[DomainEvent] = []
         query = (
-            world.query()
-            .with_all([DownedComponent])
-            .with_none([SuspendedComponent, DeadComponent])
+            world.query().with_all([DownedComponent]).with_none([SuspendedComponent, DeadComponent])
         )
         for entity in query.execute_entities():
             downed = entity.get_component(DownedComponent)

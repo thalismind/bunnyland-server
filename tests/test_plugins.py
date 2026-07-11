@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import sys
-from types import ModuleType
-
 import pytest
-from conftest import build_scenario, install_plugin_module
+from conftest import build_scenario
 
 from bunnyland.core import (
-    DEFAULT_ACTION_DEFINITIONS,
     ActionArgument,
     ActionDefinition,
     ActionExample,
@@ -30,9 +26,13 @@ from bunnyland.core import (
 )
 from bunnyland.core.events import NoteTakenEvent
 from bunnyland.core.handlers import ok
+from bunnyland.discord.plugin import bunnyland_plugins as discord_plugins
+from bunnyland.foundation.checkpoints.mechanics import SaveCheckpointComponent
+from bunnyland.foundation.checkpoints.plugin import plugin as checkpoints_plugin
+from bunnyland.foundation.core_verbs.plugin import plugin as core_verbs_plugin
+from bunnyland.foundation.storyteller.mechanics import IncidentSpawned
+from bunnyland.foundation.storyteller.plugin import plugin as storyteller_plugin
 from bunnyland.llm_agents.tools import tool_schemas
-from bunnyland.mechanics.checkpoints import SaveCheckpointComponent
-from bunnyland.mechanics.storyteller import IncidentSpawned
 from bunnyland.plugins import (
     CommandContribution,
     ContentContribution,
@@ -40,20 +40,21 @@ from bunnyland.plugins import (
     EcsContribution,
     Plugin,
     PluginError,
+    PluginRegistry,
     apply_plugins,
     bunnyland_plugins,
-    load_and_apply,
-    load_modules,
     resolve_order,
     select,
 )
-from bunnyland.plugins.builtin import (
+from bunnyland.plugins.contributions import collect_content_items, collect_ecs_types
+from bunnyland.plugins.ids import (
     BARBARIANSIM,
     CHECKPOINTS,
     COLONYSIM,
     CORE_VERBS,
     DAGGERSIM,
     DINOSIM,
+    DISCORD,
     DRAGONSIM,
     ENVIRONMENT,
     GARDENSIM,
@@ -62,6 +63,7 @@ from bunnyland.plugins.builtin import (
     LIFESIM,
     MCP,
     MECHANISMS,
+    MEDIA,
     MEMORY,
     NEONSIM,
     NUKESIM,
@@ -72,11 +74,8 @@ from bunnyland.plugins.builtin import (
     TOONSIM,
     VOIDSIM,
     WORLDGEN,
-    checkpoints_plugin,
-    core_verbs_plugin,
-    storyteller_plugin,
 )
-from bunnyland.plugins.contributions import collect_content_items, collect_ecs_types
+from bunnyland.plugins.loader import _match_plugin_id, discover_plugins
 
 
 def test_builtin_plugins_declared():
@@ -98,7 +97,9 @@ def test_builtin_plugins_declared():
         DRAGONSIM,
         DAGGERSIM,
         DINOSIM,
+        DISCORD,
         MCP,
+        MEDIA,
         VOIDSIM,
         NUKESIM,
         NEONSIM,
@@ -107,11 +108,12 @@ def test_builtin_plugins_declared():
         IMAGEGEN,
         CHECKPOINTS,
     }
+    assert discord_plugins()[0].id == DISCORD
 
 
 def test_select_defaults_to_default_enabled():
     plugins = bunnyland_plugins()
-    assert len(select(plugins, None)) == 22
+    assert len(select(plugins, None)) == 24
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
     assert CHECKPOINTS not in {p.id for p in select(plugins, None)}
     assert [p.id for p in select(plugins, [CHECKPOINTS])] == [CHECKPOINTS]
@@ -391,27 +393,23 @@ def test_plugin_action_definitions_register_with_actor_and_tool_schema():
     )
 
 
-def test_plugin_handlers_get_inferred_action_definitions_when_missing():
+def test_plugin_handlers_without_owned_action_definitions_are_rejected():
     actor = WorldActor()
-    apply_plugins(
-        [
-            Plugin(
-                id="wave",
-                name="Wave",
-                commands=CommandContribution(action_handlers=(_WaveHandler,)),
-            )
-        ],
-        actor,
-    )
-
-    definitions = actor.action_definitions()
-    assert len(definitions) == 1
-    assert definitions[0].command_type == "wave"
-    assert definitions[0].name == "wave"
+    with pytest.raises(PluginError, match="has no plugin-owned action definition"):
+        apply_plugins(
+            [
+                Plugin(
+                    id="wave",
+                    name="Wave",
+                    commands=CommandContribution(action_handlers=(_WaveHandler,)),
+                )
+            ],
+            actor,
+        )
 
 
 def test_builtin_handler_command_types_are_in_the_shared_action_catalog():
-    catalog = {definition.command_type for definition in DEFAULT_ACTION_DEFINITIONS}
+    catalog = set(PluginRegistry(bunnyland_plugins()).actions)
     handler_types = {
         handler.command_type
         for plugin in bunnyland_plugins()
@@ -421,39 +419,27 @@ def test_builtin_handler_command_types_are_in_the_shared_action_catalog():
     assert handler_types - catalog == set()
 
 
-def _all_subclass_names(base) -> set[str]:
-    names: set[str] = set()
-    for subclass in base.__subclasses__():
-        names.add(subclass.__name__)
-        names |= _all_subclass_names(subclass)
-    return names
-
-
 def test_action_requirement_names_resolve_to_real_components_and_edges():
-    # A typo'd requirement name fails closed (the action looks perpetually unavailable
-    # and is early-rejected), so guard the catalogue against drift. Importing the plugins
-    # loads every mechanic module, registering its Component/Edge subclasses.
-    from relics import Component, Edge
+    registry = PluginRegistry(bunnyland_plugins())
 
-    bunnyland_plugins()
-    component_names = _all_subclass_names(Component)
-    edge_names = _all_subclass_names(Edge)
-
-    for definition in DEFAULT_ACTION_DEFINITIONS:
+    for _owner, definition in registry.actions.values():
         requirement = definition.requirement
         for name in (*requirement.character_components, *requirement.reachable_components):
-            assert name in component_names, (
+            assert name in registry.components, (
                 f"{definition.command_type}: unknown component requirement {name!r}"
             )
         for name in requirement.character_edges:
-            assert name in edge_names, (
+            assert name in registry.edges, (
                 f"{definition.command_type}: unknown edge requirement {name!r}"
             )
 
 
 def test_speech_action_metadata_exposes_intent_and_approach_arguments():
     definitions = {
-        definition.command_type: definition for definition in DEFAULT_ACTION_DEFINITIONS
+        command_type: definition
+        for command_type, (_owner, definition) in PluginRegistry(
+            bunnyland_plugins()
+        ).actions.items()
     }
 
     assert definitions["say"].arg_keys == ("text", "intent", "approach")
@@ -476,74 +462,6 @@ def test_speech_action_metadata_exposes_intent_and_approach_arguments():
     assert definitions["tell"].arguments["target_id"].required is True
     assert definitions["tell"].arguments["text"].required is True
     assert definitions["tell"].arguments["audible"].required is False
-
-
-def test_imported_plugin_ids_are_namespaced_and_selectable_by_short_id(monkeypatch):
-    install_plugin_module(monkeypatch, "module_foo", [Plugin(id="bar", name="Bar")])
-
-    plugins = load_modules(["module_foo"])
-
-    assert [p.id for p in plugins] == ["module_foo.bar"]
-    assert [p.id for p in select(plugins, ["bar"])] == ["module_foo.bar"]
-
-
-def test_imported_plugin_dependencies_are_namespaced(monkeypatch):
-    install_plugin_module(
-        monkeypatch,
-        "module_foo",
-        [
-            Plugin(id="base", name="Base"),
-            Plugin(
-                id="bar",
-                name="Bar",
-                dependencies=DependencyContribution(requires=("base",), recommends=("extra",)),
-            ),
-        ],
-    )
-
-    plugins = load_modules(["module_foo"])
-    bar = next(plugin for plugin in plugins if plugin.id == "module_foo.bar")
-
-    assert bar.dependencies.requires == ("module_foo.base",)
-    assert bar.dependencies.recommends == ("module_foo.extra",)
-
-
-def test_load_modules_requires_entrypoint(monkeypatch):
-    module = ModuleType("module_empty")
-    monkeypatch.setitem(sys.modules, "module_empty", module)
-
-    with pytest.raises(PluginError, match="has no bunnyland_plugins"):
-        load_modules(["module_empty"])
-
-
-def test_short_plugin_id_must_not_be_ambiguous(monkeypatch):
-    install_plugin_module(monkeypatch, "module_one", [Plugin(id="bar", name="Bar One")])
-    install_plugin_module(monkeypatch, "module_two", [Plugin(id="bar", name="Bar Two")])
-
-    plugins = load_modules(["module_one", "module_two"])
-
-    with pytest.raises(PluginError, match="ambiguous plugin id"):
-        select(plugins, ["bar"])
-
-
-def test_load_and_apply_imports_selects_and_applies_plugin(monkeypatch):
-    install_plugin_module(
-        monkeypatch,
-        "module_wave",
-        [
-            Plugin(
-                id="wave",
-                name="Wave",
-                commands=CommandContribution(action_handlers=(_WaveHandler,)),
-            )
-        ],
-    )
-    actor = WorldActor()
-
-    applied = load_and_apply(actor, modules=["module_wave"], enabled_ids=["wave"])
-
-    assert [plugin.id for plugin in applied] == ["module_wave.wave"]
-    assert actor.action_definitions()[0].command_type == "wave"
 
 
 async def test_applying_core_verbs_enables_move():
@@ -584,7 +502,7 @@ async def test_applying_lifesim_plugin_enables_skill_progression():
         [p for p in bunnyland_plugins() if p.id in (CORE_VERBS, LIFESIM)],
         scenario.actor,
     )
-    from bunnyland.mechanics.lifesim import SkillSetComponent
+    from bunnyland.simpacks.lifesim.mechanics import SkillSetComponent
 
     command = build_submitted_command(
         character_id=str(scenario.character),
@@ -757,9 +675,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "BossComponent",
         "TreasureComponent",
         "ClimbingGateComponent",
-    } <= {
-        component.__name__ for component in barbarian.ecs.components
-    }
+    } <= {component.__name__ for component in barbarian.ecs.components}
     assert {
         "claim-base",
         "place-trap",
@@ -776,9 +692,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "unlock-treasure",
         "claim-treasure",
         "climb",
-    } <= {
-        handler.command_type for handler in barbarian.commands.action_handlers
-    }
+    } <= {handler.command_type for handler in barbarian.commands.action_handlers}
     assert {
         "BaseClaimedEvent",
         "TrapPlacedEvent",
@@ -794,9 +708,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "TreasureUnlockedEvent",
         "TreasureClaimedEvent",
         "ClimbingGatePassedEvent",
-    } <= {
-        event.__name__ for event in barbarian.commands.typed_events
-    }
+    } <= {event.__name__ for event in barbarian.commands.typed_events}
 
     dragon = plugins[DRAGONSIM]
     assert {
@@ -817,12 +729,20 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "PersuasionComponent",
         "SurrenderComponent",
         "QuestTemplateComponent",
-        "GeneratedQuestComponent",
-        "QuestDeadlineComponent",
-        "DaggerQuestRewardComponent",
+        "QuestStateComponent",
+        "QuestProvenanceComponent",
         "CureQuestHookComponent",
     } <= {component.__name__ for component in dragon.ecs.components}
-    assert {"HasPerk", "KnowsWord", "KnowsSpell"} <= {edge.__name__ for edge in dragon.ecs.edges}
+    assert {
+        "HasPerk",
+        "KnowsWord",
+        "KnowsSpell",
+        "QuestHasObjective",
+        "QuestHasReward",
+        "QuestAcceptedBy",
+        "TracksQuest",
+        "RequiresQuest",
+    } <= {edge.__name__ for edge in dragon.ecs.edges}
     assert {
         "mark-map",
         "trigger-encounter",
@@ -1115,9 +1035,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "JuvenileCareComponent",
         "WaterCreatureComponent",
         "ContainmentPanicComponent",
-    } <= {
-        component.__name__ for component in dino.ecs.components
-    }
+    } <= {component.__name__ for component in dino.ecs.components}
     assert {
         "mark-territory",
         "track-herd",
@@ -1134,9 +1052,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "brood-egg",
         "set-incubation-temperature",
         "trigger-containment-panic",
-    } <= {
-        handler.command_type for handler in dino.commands.action_handlers
-    }
+    } <= {handler.command_type for handler in dino.commands.action_handlers}
     assert {
         "TerritoryMarkedEvent",
         "HerdTrackedEvent",
@@ -1153,9 +1069,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "BroodingStartedEvent",
         "IncubationTemperatureSetEvent",
         "ContainmentPanicStartedEvent",
-    } <= {
-        event.__name__ for event in dino.commands.typed_events
-    }
+    } <= {event.__name__ for event in dino.commands.typed_events}
 
     neon = plugins[NEONSIM]
     assert {
@@ -1188,9 +1102,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "BlackmailFileComponent",
         "AssetExtractionComponent",
     } <= {component.__name__ for component in neon.ecs.components}
-    assert {"InsideZone", "OwesFavor", "HasImplant"} <= {
-        edge.__name__ for edge in neon.ecs.edges
-    }
+    assert {"InsideZone", "OwesFavor", "HasImplant"} <= {edge.__name__ for edge in neon.ecs.edges}
     assert {
         "enter-district",
         "show-credentials",
@@ -1292,64 +1204,6 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
     } <= {event.__name__ for event in neon.commands.typed_events}
 
 
-def test_worldgen_hook_with_bus_subscribe_signature_receives_bus():
-    captured = {}
-
-    class BusHook:
-        def subscribe(self, bus):
-            captured["bus"] = bus
-
-    actor = WorldActor()
-    apply_plugins(
-        [
-            Plugin(
-                id="bus-hook",
-                name="Bus Hook",
-                content=ContentContribution(worldgen_hooks=(BusHook,)),
-            )
-        ],
-        actor,
-    )
-
-    assert captured["bus"] is actor.bus
-
-
-def test_callable_worldgen_hook_is_registered_for_finalization():
-    seen = []
-
-    def hook(event):
-        seen.append(event)
-
-    actor = WorldActor()
-    apply_plugins(
-        [
-            Plugin(
-                id="callable-hook",
-                name="Callable Hook",
-                content=ContentContribution(worldgen_hooks=(hook,)),
-            )
-        ],
-        actor,
-    )
-
-    assert hook in actor._worldgen_hooks
-
-
-def test_non_callable_worldgen_hook_without_subscribe_raises():
-    actor = WorldActor()
-    with pytest.raises(PluginError, match="is not callable and has no subscribe"):
-        apply_plugins(
-            [
-                Plugin(
-                    id="bad-hook",
-                    name="Bad Hook",
-                    content=ContentContribution(worldgen_hooks=(object(),)),
-                )
-            ],
-            actor,
-        )
-
-
 def test_plugin_observers_are_registered_with_the_world():
     from relics import Component, OnComponentAdded
 
@@ -1385,7 +1239,7 @@ def test_plugin_observers_are_registered_with_the_world():
 
 def test_ecs_systems_can_be_instances_or_classes():
     # apply should accept a system instance as well as a class.
-    from bunnyland.mechanics.needs import HungerSystem
+    from bunnyland.foundation.needs.mechanics import HungerSystem
 
     actor = WorldActor()
     plugin = Plugin(id="t", name="T", ecs=EcsContribution(systems=(HungerSystem(),)))
@@ -1394,11 +1248,16 @@ def test_ecs_systems_can_be_instances_or_classes():
 
 async def test_example_motd_plugin_greets_discord_claims_with_ecs_rows():
     from bunnyland.core.events import CharacterClaimedEvent
-    from examples.plugins.motd_claim import HasMotdMessage, MotdMessageComponent
+    from examples.plugins.motd_claim import (
+        HasMotdMessage,
+        MotdMessageComponent,
+    )
+    from examples.plugins.motd_claim import (
+        bunnyland_plugins as motd_plugins,
+    )
 
     scenario = build_scenario()
-    plugins = select(load_modules(["examples.plugins.motd_claim"]), ["motd_claim"])
-    apply_plugins(plugins, scenario.actor)
+    apply_plugins(motd_plugins(), scenario.actor)
     controller = spawn_entity(
         scenario.actor.world,
         [DiscordControllerComponent(discord_user_id=123, default_channel_id=456)],
@@ -1434,10 +1293,10 @@ async def test_example_motd_plugin_greets_discord_claims_with_ecs_rows():
 async def test_example_motd_plugin_ignores_non_discord_claims():
     from bunnyland.core.events import CharacterClaimedEvent
     from examples.plugins.motd_claim import HasMotdMessage
+    from examples.plugins.motd_claim import bunnyland_plugins as motd_plugins
 
     scenario = build_scenario()
-    plugins = select(load_modules(["examples.plugins.motd_claim"]), ["motd_claim"])
-    apply_plugins(plugins, scenario.actor)
+    apply_plugins(motd_plugins(), scenario.actor)
 
     await scenario.actor.bus.publish(
         CharacterClaimedEvent(
@@ -1475,3 +1334,25 @@ def _move(scenario):
         lane=Lane.WORLD,
         payload={"direction": "north"},
     )
+
+
+def test_plugin_discovery_rejects_invalid_entrypoint_payload(monkeypatch):
+    class EntryPoint:
+        name = "invalid"
+
+        def load(self):
+            return object()
+
+    monkeypatch.setattr("bunnyland.plugins.loader.entry_points", lambda **_kwargs: [EntryPoint()])
+    with pytest.raises(PluginError, match="expected Plugin"):
+        discover_plugins()
+
+
+def test_short_plugin_id_rejects_ambiguous_suffix():
+    plugins = {
+        "one.shared": Plugin(id="one.shared", name="One"),
+        "two.shared": Plugin(id="two.shared", name="Two"),
+    }
+    with pytest.raises(PluginError, match="ambiguous plugin id"):
+        _match_plugin_id(plugins, "shared")
+    assert _match_plugin_id({"one.shared": plugins["one.shared"]}, "shared").id == ("one.shared")

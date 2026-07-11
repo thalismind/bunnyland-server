@@ -65,9 +65,7 @@ class ImageGenConfig:
             use_websocket=_env_bool(environ, "COMFYUI_USE_WEBSOCKET", True),
             poll_interval_seconds=_env_float(environ, "COMFYUI_POLL_INTERVAL_SECONDS", 1.0),
             timeout_seconds=_env_float(environ, "COMFYUI_TIMEOUT_SECONDS", 120.0),
-            backfill_interval_seconds=_env_float(
-                environ, "BUNNYLAND_IMAGE_BACKFILL_SECONDS", 5.0
-            ),
+            backfill_interval_seconds=_env_float(environ, "BUNNYLAND_IMAGE_BACKFILL_SECONDS", 5.0),
             media_root=environ.get("BUNNYLAND_MEDIA_DIR", "media").strip(),
             public_base_url=environ.get("BUNNYLAND_PUBLIC_BASE_URL", "").strip().rstrip("/"),
             templates_path=environ.get("BUNNYLAND_IMAGE_TEMPLATES", "").strip(),

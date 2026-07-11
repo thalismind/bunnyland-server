@@ -1,6 +1,6 @@
 """Canonical Neon Sim plugin entrypoint."""
 
-from ...mechanics.neonsim import (
+from bunnyland.simpacks.neonsim.mechanics import (
     AccessDeniedEvent,
     AccessGrantedEvent,
     AccessLevelComponent,
@@ -145,6 +145,7 @@ from ...mechanics.neonsim import (
     install_neonsim,
     neonsim_fragments,
 )
+
 from ...plugins.ids import (
     COLONYSIM,
     CORE_VERBS,

@@ -55,6 +55,8 @@ def build_image_service(
         config.templates_path or None, defaults=default_templates(config.workflows)
     )
     templates.load()
+    media = MediaStore(config.media_root)
+    actor.media_service = media
     return ImageGenService(
         actor,
         config,
@@ -62,7 +64,7 @@ def build_image_service(
         templates=templates,
         enhancer=select_enhancer(config, plugins),
         examples=CatalogExampleSource(),
-        media=MediaStore(config.media_root),
+        media=media,
         alpha=remove_edge_background,
     )
 

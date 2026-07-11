@@ -105,9 +105,7 @@ def perceive(world: World, character: Entity) -> Perception:
 
     room = world.get_entity(room_id)
     self_id = str(character.id)
-    entities = tuple(
-        e for e in _visible_children(world, room, recurse=True) if e.id != self_id
-    )
+    entities = tuple(e for e in _visible_children(world, room, recurse=True) if e.id != self_id)
     exits = tuple(
         sorted(
             (

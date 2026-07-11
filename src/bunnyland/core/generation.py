@@ -6,7 +6,7 @@ import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid5
 
 from relics import Component, Edge
 
@@ -25,7 +25,7 @@ class GenerationRequest:
     tags: tuple[str, ...] = ()
     source_seed: str = ""
     source_key: str = ""
-    request_id: str = field(default_factory=lambda: uuid4().hex)
+    request_id: str = ""
     parent_request_id: str | None = None
     context: Mapping[str, Any] = field(default_factory=dict)
 
@@ -37,12 +37,23 @@ class GenerationEdge:
 
 
 @dataclass(frozen=True)
+class GenerationChild:
+    """A child entity request and its explicit relationship from the parent."""
+
+    request: GenerationRequest
+    parent_edge: Edge
+    additional_parent_edges: tuple[Edge, ...] = ()
+    components: tuple[Component, ...] = ()
+    singleton_key: str | None = None
+
+
+@dataclass(frozen=True)
 class GenerationDelta:
     """Declarative additions returned by one plugin enricher."""
 
     components: tuple[Component, ...] = ()
     edges: tuple[GenerationEdge, ...] = ()
-    children: tuple[GenerationRequest, ...] = ()
+    children: tuple[GenerationChild, ...] = ()
     satisfies: tuple[str, ...] = ()
 
 
@@ -51,7 +62,7 @@ class GenerationPlan:
     request: GenerationRequest
     components: tuple[Component, ...] = ()
     edges: tuple[GenerationEdge, ...] = ()
-    children: tuple[GenerationRequest, ...] = ()
+    children: tuple[GenerationChild, ...] = ()
     unmet_capabilities: tuple[str, ...] = ()
 
 
@@ -84,6 +95,19 @@ def _dedupe(values) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value for value in values if value))
 
 
+def _request_id(request: GenerationRequest, *, suffix: str = "") -> str:
+    material = "|".join(
+        (
+            request.source_seed,
+            request.source_key,
+            request.entity_kind,
+            request.description,
+            suffix,
+        )
+    )
+    return uuid5(NAMESPACE_URL, f"bunnyland:generation:{material}").hex
+
+
 class GenerationPipeline:
     """Normalize intent and merge every applicable enabled-plugin enrichment."""
 
@@ -93,7 +117,11 @@ class GenerationPipeline:
     def normalize(self, request: GenerationRequest) -> GenerationRequest:
         aliases = self.registry.aliases if self.registry is not None else {}
         capabilities = [aliases.get(value, value) for value in request.capabilities]
-        normalized = replace(request, capabilities=_dedupe(capabilities))
+        normalized = replace(
+            request,
+            capabilities=_dedupe(capabilities),
+            request_id=request.request_id or _request_id(request),
+        )
         if self.registry is None:
             return normalized
         for _plugin_id, normalizer in self.registry.intent_normalizers:
@@ -144,7 +172,7 @@ class GenerationPipeline:
         if len(component_types) != len(components):
             raise GenerationError("base generation contains duplicate singleton components")
         edges: list[GenerationEdge] = []
-        children: list[GenerationRequest] = []
+        children: list[GenerationChild] = []
         satisfied: set[str] = set()
 
         if self.registry is not None:
@@ -184,12 +212,72 @@ class GenerationPipeline:
                 for edge_delta in delta.edges:
                     self._validate_edge(plugin_id, edge_delta.edge)
                     edges.append(edge_delta)
-                children.extend(
-                    replace(child, parent_request_id=normalized.request_id)
-                    if child.parent_request_id is None
-                    else child
-                    for child in delta.children
-                )
+                for child in delta.children:
+                    if not isinstance(child, GenerationChild):
+                        raise GenerationError(
+                            f"generation child from {plugin_id!r} must be GenerationChild"
+                        )
+                    parent_edge_types: set[type] = set()
+                    for parent_edge in (
+                        child.parent_edge,
+                        *child.additional_parent_edges,
+                    ):
+                        registered_edge = self.registry.edges.get(type(parent_edge).__name__)
+                        if registered_edge is None:
+                            raise GenerationError(
+                                f"generation child uses unregistered parent edge "
+                                f"{type(parent_edge).__name__!r}"
+                            )
+                        if registered_edge[0] not in {"bunnyland.core", plugin_id}:
+                            raise GenerationError(
+                                f"plugin {plugin_id!r} cannot use parent edge "
+                                f"{type(parent_edge).__name__!r}; it is owned by "
+                                f"{registered_edge[0]!r}"
+                            )
+                        if type(parent_edge) in parent_edge_types:
+                            raise GenerationError(
+                                f"generation child contains duplicate parent edge "
+                                f"{type(parent_edge).__name__!r}"
+                            )
+                        parent_edge_types.add(type(parent_edge))
+                    component_types: set[type] = set()
+                    for component in child.components:
+                        registered_component = self.registry.components.get(
+                            type(component).__name__
+                        )
+                        if registered_component is None:
+                            raise GenerationError(
+                                f"generation child provides unregistered component "
+                                f"{type(component).__name__!r}"
+                            )
+                        if registered_component[0] not in {"bunnyland.core", plugin_id}:
+                            raise GenerationError(
+                                f"plugin {plugin_id!r} cannot provide child component "
+                                f"{type(component).__name__!r}; it is owned by "
+                                f"{registered_component[0]!r}"
+                            )
+                        if type(component) in component_types:
+                            raise GenerationError(
+                                f"generation child contains duplicate component "
+                                f"{type(component).__name__!r}"
+                            )
+                        component_types.add(type(component))
+                    request = child.request
+                    if not request.request_id:
+                        request = replace(
+                            request,
+                            request_id=_request_id(
+                                request,
+                                suffix=f"{normalized.request_id}:{plugin_id}:{len(children)}",
+                            ),
+                        )
+                    if request.parent_request_id is None:
+                        request = replace(request, parent_request_id=normalized.request_id)
+                    elif request.parent_request_id != normalized.request_id:
+                        raise GenerationError(
+                            f"generation child {request.request_id!r} names a different parent"
+                        )
+                    children.append(replace(child, request=request))
                 satisfied.update(delta.satisfies or capabilities)
 
         available = set(self.registry.capabilities) if self.registry is not None else set()
@@ -209,6 +297,7 @@ class GenerationPipeline:
 
 __all__ = [
     "GenerationDelta",
+    "GenerationChild",
     "GenerationEdge",
     "GenerationEnricher",
     "GenerationError",

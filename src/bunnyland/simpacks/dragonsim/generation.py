@@ -1,9 +1,9 @@
 """dragonsim generation contribution compatibility surface."""
 
 from ...worldgen.enrichment import (
+    ComponentPlanEnricher,
     DaggerWorldgenHook,
     DragonWorldgenHook,
-    LegacyWorldgenEnricher,
 )
 
 CAPABILITIES = (
@@ -74,7 +74,7 @@ ALIASES = {
     "wanted": "bunnyland.dragonsim.wanted",
     "word-of-power": "bunnyland.dragonsim.word-of-power",
 }
-GENERATION_ENRICHER = LegacyWorldgenEnricher(DragonWorldgenHook, provided_capabilities=CAPABILITIES)
-GENERATED_QUEST_ENRICHER = LegacyWorldgenEnricher(DaggerWorldgenHook)
+GENERATION_ENRICHER = ComponentPlanEnricher(DragonWorldgenHook, provided_capabilities=CAPABILITIES)
+GENERATED_QUEST_ENRICHER = ComponentPlanEnricher(DaggerWorldgenHook)
 
 __all__ = ["GENERATED_QUEST_ENRICHER", "GENERATION_ENRICHER", "DragonWorldgenHook"]

@@ -2,7 +2,7 @@
 
 Run with:
 
-    bunnyland serve --import examples.plugins.motd_claim --plugin motd_claim --discord
+    bunnyland serve --plugin examples.motd_claim --discord
 
 The claim event is generic. This plugin treats the world as the source of truth: it uses
 the event's controller entity id to look up the controller component and only creates a
@@ -78,9 +78,8 @@ class MotdClaimListener:
         controller_id = parse_entity_id(event.controller_id)
         if character_id is None or controller_id is None:
             return
-        if (
-            not self.actor.world.has_entity(character_id)
-            or not self.actor.world.has_entity(controller_id)
+        if not self.actor.world.has_entity(character_id) or not self.actor.world.has_entity(
+            controller_id
         ):
             return
 

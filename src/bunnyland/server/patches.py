@@ -28,17 +28,15 @@ class WorldPatchError(ValueError):
 
 
 def _component_registry(actor: WorldActor) -> dict[str, type[Component]]:
-    plugins = tuple(actor.plugins.plugins.values()) if actor.plugins is not None else None
-    registry = type_registries(plugins)[0]
-    registry.update(getattr(actor.world, "_component_types", {}))
-    return registry
+    if actor.plugins is None:
+        raise RuntimeError("world patching requires an applied PluginRegistry")
+    return type_registries(actor.plugins)[0]
 
 
 def _edge_registry(actor: WorldActor) -> dict[str, type[Edge]]:
-    plugins = tuple(actor.plugins.plugins.values()) if actor.plugins is not None else None
-    registry = type_registries(plugins)[1]
-    registry.update(getattr(actor.world, "_edge_types", {}))
-    return registry
+    if actor.plugins is None:
+        raise RuntimeError("world patching requires an applied PluginRegistry")
+    return type_registries(actor.plugins)[1]
 
 
 def _entity_id(actor: WorldActor, raw: str, aliases: dict[str, Any] | None = None):
@@ -66,9 +64,7 @@ def _preflight_entity_id(
     return entity_id
 
 
-def _component(
-    actor: WorldActor, spec, *, fallback: type[Component] | None = None
-) -> Component:
+def _component(actor: WorldActor, spec, *, fallback: type[Component] | None = None) -> Component:
     component_type = fallback or _component_registry(actor).get(spec.type)
     if component_type is None:
         raise WorldPatchError(f"unknown component {spec.type!r}")
@@ -123,14 +119,10 @@ def _preflight_world_patch(actor: WorldActor, request: WorldPatchRequest) -> Non
                 aliases[operation.client_id] = operation.client_id
                 alias_components[operation.client_id] = set(component_types)
         elif isinstance(operation, DeleteEntityPatchRequest):
-            entity_id = _preflight_entity_id(
-                actor, operation.entity_id, aliases, deleted
-            )
+            entity_id = _preflight_entity_id(actor, operation.entity_id, aliases, deleted)
             deleted.add(str(entity_id))
         elif isinstance(operation, AddComponentPatchRequest):
-            entity_id = _preflight_entity_id(
-                actor, operation.entity_id, aliases, deleted
-            )
+            entity_id = _preflight_entity_id(actor, operation.entity_id, aliases, deleted)
             new_type = component_type(operation.component)
             if isinstance(entity_id, str):
                 components = alias_components.setdefault(entity_id, set())
@@ -148,18 +140,14 @@ def _preflight_world_patch(actor: WorldActor, request: WorldPatchRequest) -> Non
                     )
                 pending.add(new_type)
         elif isinstance(operation, SetComponentPatchRequest):
-            entity_id = _preflight_entity_id(
-                actor, operation.entity_id, aliases, deleted
-            )
+            entity_id = _preflight_entity_id(actor, operation.entity_id, aliases, deleted)
             new_type = component_type(operation.component)
             if isinstance(entity_id, str):
                 alias_components.setdefault(entity_id, set()).add(new_type)
             else:
                 pending_components.setdefault(str(entity_id), set()).add(new_type)
         elif isinstance(operation, RemoveComponentPatchRequest):
-            entity_id = _preflight_entity_id(
-                actor, operation.entity_id, aliases, deleted
-            )
+            entity_id = _preflight_entity_id(actor, operation.entity_id, aliases, deleted)
             component_type_ = component_registry.get(operation.component_type)
             if component_type_ is None:
                 raise WorldPatchError(f"unknown component {operation.component_type!r}")

@@ -103,9 +103,7 @@ def _has_any_edge(world: World, character: Entity, names: Sequence[str]) -> bool
     return False
 
 
-def _reachable_has_any_component(
-    world: World, character: Entity, names: Sequence[str]
-) -> bool:
+def _reachable_has_any_component(world: World, character: Entity, names: Sequence[str]) -> bool:
     types = [world._component_types.get(name) for name in names]
     types = [component_type for component_type in types if component_type is not None]
     if not types:
@@ -185,9 +183,7 @@ def evaluate_availability(
     world = actor.world
     enough_action, enough_focus = affordable(character, definition.cost)
     meets = meets_requirement(world, character, definition.requirement)
-    has_target = (
-        True if target_groups is None else _has_required_target(definition, target_groups)
-    )
+    has_target = True if target_groups is None else _has_required_target(definition, target_groups)
     can_act = lifecycle_block_reason(character, definition.command_type) is None
     available = can_act and meets and has_target and enough_action and enough_focus
 
@@ -195,8 +191,7 @@ def evaluate_availability(
     if not available:
         if not can_act:
             reason = (
-                lifecycle_block_reason(character, definition.command_type)
-                or "character cannot act"
+                lifecycle_block_reason(character, definition.command_type) or "character cannot act"
             )
         elif not meets:
             reason = "missing a required skill or item"

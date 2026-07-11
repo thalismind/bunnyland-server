@@ -11,10 +11,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..core.actions import (
-    DEFAULT_ACTION_DEFINITIONS,
     REFERENCE_ARG_KEYS,
     ActionDefinition,
-    action_definition_for_command_type,
     action_definitions,
     definition_by_command_type,
     definitions_by_tool_name,
@@ -106,10 +104,8 @@ def command_from_tool_call(
 
 __all__ = [
     "REFERENCE_ARG_KEYS",
-    "DEFAULT_ACTION_DEFINITIONS",
     "ToolCall",
     "action_definitions",
-    "action_definition_for_command_type",
     "command_from_tool_call",
     "command_type_for_tool",
     "reference_arg_keys",

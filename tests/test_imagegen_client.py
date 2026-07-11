@@ -142,6 +142,7 @@ async def test_http_client_happy_path():
 async def test_http_client_polls_then_succeeds():
     slept = []
     http = _FakeHttp(history_sequence=[{}, _completed_history()])
+
     def _record_sleep(seconds):
         slept.append(seconds)
         return _noop()

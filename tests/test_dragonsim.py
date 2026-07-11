@@ -19,11 +19,13 @@ from bunnyland.core import (
     build_submitted_command,
     container_of,
     parse_entity_id,
+    replace_component,
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
-from bunnyland.mechanics.dragonsim import (
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
+from bunnyland.simpacks.dragonsim.mechanics import (
     AbsorbGreatSoulHandler,
     AcceptQuestHandler,
     AncientBeastComponent,
@@ -88,15 +90,19 @@ from bunnyland.mechanics.dragonsim import (
     PotionBrewedEvent,
     PotionComponent,
     PotionRecipeComponent,
+    QuestAcceptedBy,
     QuestAcceptedEvent,
     QuestBranchChosenEvent,
     QuestCompletedEvent,
     QuestComponent,
     QuestDeclinedEvent,
+    QuestHasObjective,
+    QuestHasReward,
     QuestObjectiveCompletedEvent,
     QuestObjectiveComponent,
     QuestRewardComponent,
-    QuestStageComponent,
+    QuestRewardGrants,
+    QuestStateComponent,
     QuestTrackedEvent,
     ReadLoreBookHandler,
     RecoverMagicHandler,
@@ -116,6 +122,7 @@ from bunnyland.mechanics.dragonsim import (
     SurrenderHandler,
     TheftCommittedEvent,
     TrackQuestHandler,
+    TracksQuest,
     TriggerEncounterHandler,
     UnlockPerkHandler,
     UseArtifactHandler,
@@ -128,8 +135,7 @@ from bunnyland.mechanics.dragonsim import (
     WordOfPowerSpokenEvent,
     dragonsim_fragments,
 )
-from bunnyland.mechanics.lifesim import SkillSetComponent
-from bunnyland.prompts import ComponentPromptContext, PromptPerspective
+from bunnyland.simpacks.lifesim.mechanics import SkillSetComponent
 
 HOUR = 60 * 60
 
@@ -226,10 +232,8 @@ def test_dragonsim_parity_handlers_mutate_state_directly():
             QuestComponent(
                 quest_id="lost-ring",
                 title="Find the Lost Ring",
-                status="active",
-                accepted_by=(str(scenario.character),),
             ),
-            QuestStageComponent(quest_id="lost-ring"),
+            QuestStateComponent(status="active"),
         ],
     )
     declined_quest = _dragon_room_entity(
@@ -238,6 +242,8 @@ def test_dragonsim_parity_handlers_mutate_state_directly():
         "quest",
         [QuestComponent(quest_id="wolf-road", title="Wolf Road Trouble")],
     )
+    declined_quest.add_component(QuestStateComponent())
+    accepted_quest.add_relationship(QuestAcceptedBy(), scenario.character)
     target = _dragon_room_entity(
         scenario,
         "Moss Guard",
@@ -334,10 +340,16 @@ def test_dragonsim_parity_handlers_mutate_state_directly():
         if event_type is not None:
             assert any(isinstance(event, event_type) for event in result.events)
 
-    stage = accepted_quest.get_component(QuestStageComponent)
-    assert str(scenario.character) in stage.tracked_by
+    assert (
+        TrackQuestHandler()
+        .execute(ctx, _handler_cmd(scenario, "track-quest", quest_id="lost-ring"))
+        .ok
+    )
+
+    stage = accepted_quest.get_component(QuestStateComponent)
+    assert character.has_relationship(TracksQuest, accepted_quest.id)
     assert stage.branch == "return"
-    assert declined_quest.get_component(QuestComponent).status == "declined"
+    assert declined_quest.get_component(QuestStateComponent).status == "declined"
     assert target.get_component(PersuasionComponent).disposition == 2
     assert character.get_component(SurrenderComponent).reason == "fine"
     assert criminal.get_component(WantedComponent).amounts[str(faction.id)] == 7
@@ -345,7 +357,7 @@ def test_dragonsim_parity_handlers_mutate_state_directly():
     assert str(scenario.character) in artifact.get_component(ArtifactComponent).identified_by
     fragments = dragonsim_fragments(scenario.actor.world, character)
     assert "Declined quest: Wolf Road Trouble." in fragments
-    assert "Tracked quest stage 0 for lost-ring, branch return." in fragments
+    assert "Tracked quest stage 0, branch return." in fragments
     assert "Magic: 4/10." in fragments
     assert f"Surrendered to {target.id}." in fragments
     assert "Artifact nearby: star mirror (1 charges, identified)." in fragments
@@ -834,16 +846,16 @@ def _encounter_zone(scenario):
 def _quest(scenario):
     quest = spawn_entity(
         scenario.actor.world,
-        [QuestComponent(quest_id="lost-ring", title="Find the Lost Ring")],
+        [
+            QuestComponent(quest_id="lost-ring", title="Find the Lost Ring"),
+            QuestStateComponent(),
+        ],
     )
     objective = spawn_entity(
         scenario.actor.world,
-        [
-            QuestObjectiveComponent(
-                quest_id="lost-ring", description="Recover the ring from the watchtower"
-            )
-        ],
+        [QuestObjectiveComponent(description="Recover the ring from the watchtower")],
     )
+    quest.add_relationship(QuestHasObjective(), objective.id)
     return quest.id, objective.id
 
 
@@ -860,14 +872,15 @@ def _quest_reward(scenario, quest_id="lost-ring"):
     )
     reward = spawn_entity(
         scenario.actor.world,
-        [
-            QuestRewardComponent(
-                quest_id=quest_id,
-                description="A silver carrot",
-                item_ids=(str(item.id),),
-            )
-        ],
+        [QuestRewardComponent(description="A silver carrot")],
     )
+    quest_result = next(
+        entity
+        for entity in scenario.actor.world.query().with_all([QuestComponent]).execute_entities()
+        if entity.get_component(QuestComponent).quest_id == quest_id
+    )
+    quest_result.add_relationship(QuestHasReward(), reward.id)
+    reward.add_relationship(QuestRewardGrants(), item.id)
     return reward.id, item.id
 
 
@@ -971,12 +984,10 @@ async def test_accept_and_complete_quest_objective_completes_quest_and_grants_re
 
     await scenario.actor.submit(_cmd(scenario, "accept-quest", quest_id=str(quest)))
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(
-        _cmd(scenario, "complete-objective", objective_id=str(objective))
-    )
+    await scenario.actor.submit(_cmd(scenario, "complete-objective", objective_id=str(objective)))
     await scenario.actor.tick(HOUR)
 
-    quest_component = scenario.actor.world.get_entity(quest).get_component(QuestComponent)
+    quest_component = scenario.actor.world.get_entity(quest).get_component(QuestStateComponent)
     objective_component = scenario.actor.world.get_entity(objective).get_component(
         QuestObjectiveComponent
     )
@@ -986,9 +997,7 @@ async def test_accept_and_complete_quest_objective_completes_quest_and_grants_re
     assert quest_component.status == "completed"
     assert completed_quests[0].quest_key == "lost-ring"
     assert container_of(scenario.actor.world.get_entity(item)) == scenario.character
-    reward_component = scenario.actor.world.get_entity(reward).get_component(
-        QuestRewardComponent
-    )
+    reward_component = scenario.actor.world.get_entity(reward).get_component(QuestRewardComponent)
     assert reward_component.claimed is True
     assert reward_component.claimed_by == str(scenario.character)
 
@@ -1004,24 +1013,18 @@ async def test_complete_quest_grants_reward_item_without_source_container():
             PortableComponent(),
         ],
     )
-    spawn_entity(
+    reward = spawn_entity(
         scenario.actor.world,
-        [
-            QuestRewardComponent(
-                quest_id="lost-ring",
-                description="A loose silver carrot",
-                item_ids=(str(item.id),),
-            )
-        ],
+        [QuestRewardComponent(description="A loose silver carrot")],
     )
+    scenario.actor.world.get_entity(quest).add_relationship(QuestHasReward(), reward.id)
+    reward.add_relationship(QuestRewardGrants(), item.id)
     completed_quests: list[QuestCompletedEvent] = []
     scenario.actor.bus.subscribe(QuestCompletedEvent, completed_quests.append)
 
     await scenario.actor.submit(_cmd(scenario, "accept-quest", quest_id=str(quest)))
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(
-        _cmd(scenario, "complete-objective", objective_id=str(objective))
-    )
+    await scenario.actor.submit(_cmd(scenario, "complete-objective", objective_id=str(objective)))
     await scenario.actor.tick(HOUR)
 
     assert completed_quests[0].quest_key == "lost-ring"
@@ -1032,14 +1035,16 @@ async def test_complete_nonfinal_objective_by_description_keeps_quest_active():
     scenario = build_scenario()
     _install(scenario.actor)
     quest, objective = _quest(scenario)
-    spawn_entity(
+    second_objective = spawn_entity(
         scenario.actor.world,
         [
             QuestObjectiveComponent(
-                quest_id="lost-ring",
                 description="Report back to the warden",
             )
         ],
+    )
+    scenario.actor.world.get_entity(quest).add_relationship(
+        QuestHasObjective(order=1), second_objective.id
     )
     completed_objectives: list[QuestObjectiveCompletedEvent] = []
     completed_quests: list[QuestCompletedEvent] = []
@@ -1057,7 +1062,7 @@ async def test_complete_nonfinal_objective_by_description_keeps_quest_active():
     )
     await scenario.actor.tick(HOUR)
 
-    quest_component = scenario.actor.world.get_entity(quest).get_component(QuestComponent)
+    quest_component = scenario.actor.world.get_entity(quest).get_component(QuestStateComponent)
     objective_component = scenario.actor.world.get_entity(objective).get_component(
         QuestObjectiveComponent
     )
@@ -1113,43 +1118,6 @@ async def test_read_lore_book_without_skill_only_marks_read():
     assert read and read[0].skill_xp_awarded == 0.0
     assert book.get_component(LoreBookComponent).read_by == (str(scenario.character),)
     assert not character.has_component(SkillSetComponent)
-
-
-async def test_complete_final_objective_rejects_missing_reward_item_without_completion():
-    scenario = build_scenario()
-    _install(scenario.actor)
-    quest, objective = _quest(scenario)
-    reward = spawn_entity(
-        scenario.actor.world,
-        [
-            QuestRewardComponent(
-                quest_id="lost-ring",
-                description="A vanished prize",
-                item_ids=("missing_999",),
-            )
-        ],
-    ).id
-    rejects: list[CommandRejectedEvent] = []
-    scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
-
-    await scenario.actor.submit(_cmd(scenario, "accept-quest", quest_id=str(quest)))
-    await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(
-        _cmd(scenario, "complete-objective", objective_id=str(objective))
-    )
-    await scenario.actor.tick(HOUR)
-
-    quest_component = scenario.actor.world.get_entity(quest).get_component(QuestComponent)
-    objective_component = scenario.actor.world.get_entity(objective).get_component(
-        QuestObjectiveComponent
-    )
-    reward_component = scenario.actor.world.get_entity(reward).get_component(
-        QuestRewardComponent
-    )
-    assert quest_component.status == "active"
-    assert objective_component.completed is False
-    assert reward_component.claimed is False
-    assert any(event.reason == "quest reward item does not exist" for event in rejects)
 
 
 def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
@@ -1209,9 +1177,12 @@ def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
         ],
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), inactive_zone.id)
-    spawn_entity(
+    offered_quest = spawn_entity(
         scenario.actor.world,
-        [QuestComponent(quest_id="guard-duty", title="Guard Duty")],
+        [
+            QuestComponent(quest_id="guard-duty", title="Guard Duty"),
+            QuestStateComponent(),
+        ],
     )
     active_quest = spawn_entity(
         scenario.actor.world,
@@ -1219,9 +1190,8 @@ def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
             QuestComponent(
                 quest_id="active-duty",
                 title="Active Duty",
-                status="active",
-                accepted_by=(str(scenario.character),),
-            )
+            ),
+            QuestStateComponent(status="active"),
         ],
     )
     completed_quest = spawn_entity(
@@ -1230,19 +1200,18 @@ def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
             QuestComponent(
                 quest_id="done-duty",
                 title="Done Duty",
-                status="completed",
-            )
+            ),
+            QuestStateComponent(status="completed"),
         ],
     )
     objective = spawn_entity(
         scenario.actor.world,
-        [QuestObjectiveComponent(quest_id="guard-duty", description="Stand watch")],
+        [QuestObjectiveComponent(description="Stand watch")],
     )
     completed_objective = spawn_entity(
         scenario.actor.world,
         [
             QuestObjectiveComponent(
-                quest_id="guard-duty",
                 description="Already stood watch",
                 completed=True,
             )
@@ -1250,8 +1219,11 @@ def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
     )
     orphan_objective = spawn_entity(
         scenario.actor.world,
-        [QuestObjectiveComponent(quest_id="missing-quest", description="No quest")],
+        [QuestObjectiveComponent(description="No quest")],
     )
+    offered_quest.add_relationship(QuestHasObjective(), objective.id)
+    offered_quest.add_relationship(QuestHasObjective(order=1), completed_objective.id)
+    active_quest.add_relationship(QuestAcceptedBy(), scenario.character)
     faction = spawn_entity(
         scenario.actor.world,
         [
@@ -1524,9 +1496,7 @@ async def test_complete_objective_rejects_unaccepted_quest():
     rejects: list[CommandRejectedEvent] = []
     scenario.actor.bus.subscribe(CommandRejectedEvent, rejects.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "complete-objective", objective_id=str(objective))
-    )
+    await scenario.actor.submit(_cmd(scenario, "complete-objective", objective_id=str(objective)))
     await scenario.actor.tick(HOUR)
 
     assert any(event.reason == "quest is not accepted" for event in rejects)
@@ -1568,15 +1538,8 @@ def test_dragonsim_fragments_show_quests_factions_and_nearby_locations():
     character.add_relationship(MemberOf(rank="scout", since_epoch=0), faction)
     character.add_relationship(MemberOf(rank="ally", since_epoch=0), nameless_group.id)
     quest_entity = scenario.actor.world.get_entity(quest)
-    quest_entity.remove_component(QuestComponent)
-    quest_entity.add_component(
-        QuestComponent(
-            quest_id="lost-ring",
-            title="Find the Lost Ring",
-            status="active",
-            accepted_by=(str(scenario.character),),
-        )
-    )
+    replace_component(quest_entity, QuestStateComponent(status="active"))
+    quest_entity.add_relationship(QuestAcceptedBy(), scenario.character)
 
     fragments = dragonsim_fragments(scenario.actor.world, character)
 
@@ -1599,11 +1562,11 @@ def test_dragonsim_component_prompt_fragments_use_target_context():
             QuestComponent(
                 quest_id="lost-ring",
                 title="Find the Lost Ring",
-                status="active",
-                accepted_by=(str(character.id),),
-            )
+            ),
+            QuestStateComponent(status="active"),
         ],
     )
+    quest.add_relationship(QuestAcceptedBy(), character.id)
     spell = spawn_entity(world, [SpellComponent(name="Oakflesh")])
     artifact = spawn_entity(
         world,
@@ -1642,9 +1605,10 @@ def test_dragonsim_component_prompt_fragments_use_target_context():
     assert PerkComponent(name="Power Attack", skill_name="blade").prompt_fragments(
         reachable_spell_ctx
     ) == ("Perk unlocked: Power Attack.",)
-    assert PerkComponent(name="Power Attack", skill_name="blade").prompt_fragments(
-        observer_spell_ctx
-    ) == ()
+    assert (
+        PerkComponent(name="Power Attack", skill_name="blade").prompt_fragments(observer_spell_ctx)
+        == ()
+    )
     assert WordOfPowerComponent(name="Fus").prompt_fragments(reachable_spell_ctx) == (
         "Word of power known: Fus.",
     )
@@ -1726,9 +1690,7 @@ def test_unlock_perk_rejects_invalid_directly():
             ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(wrong_kind.id))
         ).reason,
         # No SkillSetComponent at all -> treated as level 0.
-        unlock.execute(
-            ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))
-        ).reason,
+        unlock.execute(ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))).reason,
     }
     assert "invalid character or perk id" in rejections
     assert "perk does not exist" in rejections
@@ -1737,13 +1699,9 @@ def test_unlock_perk_rejects_invalid_directly():
 
     # Once the gating skill is high enough, unlocking succeeds; a second unlock is rejected.
     _set_skill_level(scenario, "blade", 2)
-    assert unlock.execute(
-        ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))
-    ).ok
+    assert unlock.execute(ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))).ok
     assert (
-        unlock.execute(
-            ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))
-        ).reason
+        unlock.execute(ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))).reason
         == "perk already unlocked"
     )
 
@@ -1836,18 +1794,30 @@ def test_soul_and_word_handlers_reject_invalid_directly():
     learn = LearnWordOfPowerHandler()
     speak = SpeakWordOfPowerHandler()
 
-    assert absorb.execute(
-        ctx, _handler_cmd(scenario, "absorb-great-soul", character_id="x", beast_id="y")
-    ).reason == "invalid character or beast id"
-    assert absorb.execute(
-        ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id="entity_999")
-    ).reason == "beast does not exist"
-    assert absorb.execute(
-        ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(not_a_beast.id))
-    ).reason == "target is not an ancient beast"
-    assert absorb.execute(
-        ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(living_beast.id))
-    ).reason == "the beast still lives"
+    assert (
+        absorb.execute(
+            ctx, _handler_cmd(scenario, "absorb-great-soul", character_id="x", beast_id="y")
+        ).reason
+        == "invalid character or beast id"
+    )
+    assert (
+        absorb.execute(
+            ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id="entity_999")
+        ).reason
+        == "beast does not exist"
+    )
+    assert (
+        absorb.execute(
+            ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(not_a_beast.id))
+        ).reason
+        == "target is not an ancient beast"
+    )
+    assert (
+        absorb.execute(
+            ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(living_beast.id))
+        ).reason
+        == "the beast still lives"
+    )
     unreachable = spawn_entity(
         scenario.actor.world,
         [
@@ -1856,53 +1826,76 @@ def test_soul_and_word_handlers_reject_invalid_directly():
             DeadComponent(died_at_epoch=0, cause="slain"),
         ],
     )
-    assert absorb.execute(
-        ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(unreachable.id))
-    ).reason == "beast is not reachable"
+    assert (
+        absorb.execute(
+            ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(unreachable.id))
+        ).reason
+        == "beast is not reachable"
+    )
 
     # Word handler validation paths.
-    assert learn.execute(
-        ctx, _handler_cmd(scenario, "learn-word-of-power", character_id="x", word_id="y")
-    ).reason == "invalid character or word id"
-    assert learn.execute(
-        ctx, _handler_cmd(scenario, "learn-word-of-power", word_id="entity_999")
-    ).reason == "word does not exist"
-    assert learn.execute(
-        ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(not_a_beast.id))
-    ).reason == "target is not a word of power"
-    assert speak.execute(
-        ctx, _handler_cmd(scenario, "speak-word-of-power", character_id="x", word_id="y")
-    ).reason == "invalid character or word id"
-    assert speak.execute(
-        ctx, _handler_cmd(scenario, "speak-word-of-power", word_id="entity_999")
-    ).reason == "word does not exist"
+    assert (
+        learn.execute(
+            ctx, _handler_cmd(scenario, "learn-word-of-power", character_id="x", word_id="y")
+        ).reason
+        == "invalid character or word id"
+    )
+    assert (
+        learn.execute(
+            ctx, _handler_cmd(scenario, "learn-word-of-power", word_id="entity_999")
+        ).reason
+        == "word does not exist"
+    )
+    assert (
+        learn.execute(
+            ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(not_a_beast.id))
+        ).reason
+        == "target is not a word of power"
+    )
+    assert (
+        speak.execute(
+            ctx, _handler_cmd(scenario, "speak-word-of-power", character_id="x", word_id="y")
+        ).reason
+        == "invalid character or word id"
+    )
+    assert (
+        speak.execute(
+            ctx, _handler_cmd(scenario, "speak-word-of-power", word_id="entity_999")
+        ).reason
+        == "word does not exist"
+    )
 
     # Learning is gated on souls, then on skill level.
-    assert speak.execute(
-        ctx, _handler_cmd(scenario, "speak-word-of-power", word_id=str(word))
-    ).reason == "you have not learned that word"
-    assert learn.execute(
-        ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))
-    ).reason == "not enough great souls to learn this word"
+    assert (
+        speak.execute(ctx, _handler_cmd(scenario, "speak-word-of-power", word_id=str(word))).reason
+        == "you have not learned that word"
+    )
+    assert (
+        learn.execute(ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))).reason
+        == "not enough great souls to learn this word"
+    )
 
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(GreatSoulComponent(souls=2))
-    assert learn.execute(
-        ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))
-    ).reason == "skill level too low for this word"
+    assert (
+        learn.execute(ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))).reason
+        == "skill level too low for this word"
+    )
 
     _set_skill_level(scenario, "voice", 2)
     assert learn.execute(ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))).ok
-    assert learn.execute(
-        ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))
-    ).reason == "word already learned"
+    assert (
+        learn.execute(ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))).reason
+        == "word already learned"
+    )
 
     # Re-absorbing a claimed soul is rejected.
     dead = _dead_beast(scenario, name="Claimed Wyrm")
     assert absorb.execute(ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(dead))).ok
-    assert absorb.execute(
-        ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(dead))
-    ).reason == "its great soul is already claimed"
+    assert (
+        absorb.execute(ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(dead))).reason
+        == "its great soul is already claimed"
+    )
 
 
 async def test_voice_phrase_can_be_inscribed_on_writable_or_carvable_target_and_studied():
@@ -1947,9 +1940,7 @@ async def test_voice_phrase_can_be_inscribed_on_writable_or_carvable_target_and_
     assert slate.get_component(CarvableComponent).remaining_space == 27
     assert inscribed[0].target_id == str(slate.id)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "study-voice-inscription", target_id=str(slate.id))
-    )
+    await scenario.actor.submit(_cmd(scenario, "study-voice-inscription", target_id=str(slate.id)))
     await scenario.actor.tick(HOUR)
 
     character = scenario.actor.world.get_entity(scenario.character)
@@ -2128,9 +2119,7 @@ def _victim_with_item(scenario, *, faction_id=None, room=None, name="Mara"):
         world,
         [IdentityComponent(name=name, kind="character"), CharacterComponent(species="bunny")],
     )
-    world.get_entity(room).add_relationship(
-        Contains(mode=ContainmentMode.ROOM_CONTENT), victim.id
-    )
+    world.get_entity(room).add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), victim.id)
     if faction_id is not None:
         victim.add_relationship(MemberOf(rank="member"), faction_id)
     item = spawn_entity(
@@ -2168,9 +2157,7 @@ async def test_witnessed_theft_takes_item_and_raises_faction_bounty():
     scenario.actor.bus.subscribe(TheftCommittedEvent, thefts.append)
     scenario.actor.bus.subscribe(CrimeWitnessedEvent, crimes.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "steal", target_id=str(victim), item_id=str(item))
-    )
+    await scenario.actor.submit(_cmd(scenario, "steal", target_id=str(victim), item_id=str(item)))
     await scenario.actor.tick(HOUR)
 
     world = scenario.actor.world
@@ -2236,9 +2223,7 @@ async def test_sneaking_thief_is_not_witnessed():
 
     await scenario.actor.submit(_cmd(scenario, "sneak"))
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(
-        _cmd(scenario, "steal", target_id=str(victim), item_id=str(item))
-    )
+    await scenario.actor.submit(_cmd(scenario, "steal", target_id=str(victim), item_id=str(item)))
     await scenario.actor.tick(HOUR)
 
     world = scenario.actor.world
@@ -2328,9 +2313,7 @@ async def test_theft_without_faction_witnesses_raises_no_bounty():
     crimes: list[CrimeWitnessedEvent] = []
     scenario.actor.bus.subscribe(CrimeWitnessedEvent, crimes.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "steal", target_id=str(victim), item_id=str(item))
-    )
+    await scenario.actor.submit(_cmd(scenario, "steal", target_id=str(victim), item_id=str(item)))
     await scenario.actor.tick(HOUR)
 
     world = scenario.actor.world
@@ -2418,11 +2401,15 @@ def test_quest_track_decline_branch_rejections_directly():
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     world = scenario.actor.world
     unaccepted = spawn_entity(
-        world, [QuestComponent(quest_id="unaccepted", title="Unaccepted")]
+        world,
+        [QuestComponent(quest_id="unaccepted", title="Unaccepted"), QuestStateComponent()],
     )
     completed = spawn_entity(
         world,
-        [QuestComponent(quest_id="done", title="Done", status="completed")],
+        [
+            QuestComponent(quest_id="done", title="Done"),
+            QuestStateComponent(status="completed"),
+        ],
     )
     accepted = spawn_entity(
         world,
@@ -2430,11 +2417,11 @@ def test_quest_track_decline_branch_rejections_directly():
             QuestComponent(
                 quest_id="taken",
                 title="Taken",
-                status="active",
-                accepted_by=(str(scenario.character),),
-            )
+            ),
+            QuestStateComponent(status="active"),
         ],
     )
+    accepted.add_relationship(QuestAcceptedBy(), scenario.character)
     assert unaccepted and completed and accepted
     cases = [
         (
@@ -2444,9 +2431,7 @@ def test_quest_track_decline_branch_rejections_directly():
         ),
         (
             ChooseQuestBranchHandler(),
-            _handler_cmd(
-                scenario, "choose-quest-branch", quest_id="unaccepted", branch="left"
-            ),
+            _handler_cmd(scenario, "choose-quest-branch", quest_id="unaccepted", branch="left"),
             "quest is not accepted",
         ),
         (
@@ -2754,9 +2739,7 @@ def test_brew_potion_without_skill_name_skips_xp_directly():
         world,
         [
             IdentityComponent(name="plain recipe", kind="recipe"),
-            PotionRecipeComponent(
-                name="plain recipe", potion_name="Plain Tonic", skill_name=""
-            ),
+            PotionRecipeComponent(name="plain recipe", potion_name="Plain Tonic", skill_name=""),
         ],
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), recipe.id)
@@ -2812,22 +2795,16 @@ def test_serve_jail_time_branches_directly():
     character = world.get_entity(scenario.character)
 
     # Sentence not complete (line 1649).
-    character.add_component(
-        JailComponent(faction_id="f1", release_epoch=ctx.epoch + 1000)
-    )
+    character.add_component(JailComponent(faction_id="f1", release_epoch=ctx.epoch + 1000))
     assert (
-        ServeJailTimeHandler()
-        .execute(ctx, _handler_cmd(scenario, "serve-jail-time"))
-        .reason
+        ServeJailTimeHandler().execute(ctx, _handler_cmd(scenario, "serve-jail-time")).reason
         == "sentence is not complete"
     )
 
     # Complete sentence, no WantedComponent (branch 1651 false -> 1655).
     character.remove_component(JailComponent)
     character.add_component(JailComponent(faction_id="f1", release_epoch=0))
-    assert ServeJailTimeHandler().execute(
-        ctx, _handler_cmd(scenario, "serve-jail-time")
-    ).ok
+    assert ServeJailTimeHandler().execute(ctx, _handler_cmd(scenario, "serve-jail-time")).ok
     assert not character.has_component(JailComponent)
 
 
@@ -2854,9 +2831,7 @@ def test_study_voice_inscription_when_word_already_known_skips_relationship():
         ctx, _handler_cmd(scenario, "study-voice-inscription", target_id=str(slate.id))
     )
     assert result.ok
-    assert str(scenario.character) in slate.get_component(
-        VoiceInscriptionComponent
-    ).studied_by
+    assert str(scenario.character) in slate.get_component(VoiceInscriptionComponent).studied_by
 
 
 def test_dragonsim_fragments_skip_missing_and_componentless_relationships():

@@ -26,7 +26,7 @@ from typing import Any
 from rich.style import Style
 from rich.text import Text
 
-from ..core.actions import ActionDefinition, action_icon_for, definitions_by_tool_name
+from ..core.actions import ActionArgument, ActionDefinition, ActionPattern, action_icon_for
 from ..imagegen.affordance import DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
 from ..imagegen.feed import latest_image_completion, latest_image_failure
 from ..llm_agents.dispatch import suggest_names
@@ -40,8 +40,18 @@ from ..tui.model import KIND_ICON, World, entity_icon, entity_name, fmt_points, 
 from .completion import complete_line, reference_candidates
 
 META_COMMANDS = (
-    "help", "who", "look", "inventory", "points", "play", "release",
-    "queued", "cancel", "refresh", "quit", "exit"
+    "help",
+    "who",
+    "look",
+    "inventory",
+    "points",
+    "play",
+    "release",
+    "queued",
+    "cancel",
+    "refresh",
+    "quit",
+    "exit",
 )
 IMAGE_COMMANDS = ("image", "img")
 SHEET_COMMANDS = ("sheet", "profile")
@@ -64,9 +74,7 @@ def link(label: str, entity_id: str) -> Text:
     The style is applied as a span (not the Text's base style) so it survives ``append_text``
     when the target is embedded in a larger line."""
     text = Text(label)
-    text.stylize(
-        Style(color="cyan", underline=True, meta={"@click": f"app.insert({entity_id!r})"})
-    )
+    text.stylize(Style(color="cyan", underline=True, meta={"@click": f"app.insert({entity_id!r})"}))
     return text
 
 
@@ -102,7 +110,7 @@ def parse_line(line: str, definitions: dict[str, ActionDefinition]) -> ParsedCom
                 arguments[current] = f"{arguments[current]} {token}".strip()
         return ParsedCommand(definitions[command].name, arguments)
 
-    call = NaturalCommandParser().parse(line)
+    call = NaturalCommandParser(list(definitions.values())).parse(line)
     if call is None:
         return None
     return ParsedCommand(call.name, {k: v for k, v in call.arguments.items() if isinstance(v, str)})
@@ -131,14 +139,20 @@ def resolve_name(value: str, world: World, candidates: list[tuple[str, str]]) ->
 class BunnylandRepl:
     """REPL state and command handling over a snapshot :class:`Backend`."""
 
-    def __init__(self, backend: Backend, *, show_icons: bool = True) -> None:
+    def __init__(
+        self,
+        backend: Backend,
+        *,
+        show_icons: bool = True,
+        definitions: tuple[ActionDefinition, ...] = (),
+    ) -> None:
         self.backend = backend
         self.show_icons = show_icons
         self.world = World()
         self.player_id = ""
         self.control: tuple[str, int] | None = None
         self.character_list: list[CharacterSummaryView] = []
-        self._defs = definitions_by_tool_name()
+        self._defs = {definition.name: definition for definition in definitions}
         self._events = tui_events.EventNarrator()
         self._event_image_url = ""
         self._event_image_failure_epoch = -1
@@ -156,6 +170,8 @@ class BunnylandRepl:
             projection = await self.backend.fetch_character_projection(self.player_id)
             if projection and projection.get("character_id") == self.player_id:
                 self.world = World.parse(projection)
+                if self.world.actions:
+                    self._sync_action_definitions()
                 projected_control = self.world.control(self.player_id)
                 if self.control:
                     if projected_control and projected_control[0] == self.control[0]:
@@ -166,6 +182,37 @@ class BunnylandRepl:
                 self.world = World()
         else:
             self.world = World()
+
+    def _sync_action_definitions(self) -> None:
+        """Build the REPL command surface from the server's serialized registry view."""
+
+        self._defs = {}
+        for action in self.world.actions:
+            arguments = {
+                argument["key"]: ActionArgument(
+                    title=argument.get("title", ""),
+                    kind=argument.get("kind", "string"),
+                    required=argument.get("required", False),
+                )
+                for argument in action.get("arguments", ())
+            }
+            definition = ActionDefinition(
+                command_type=action["command_type"],
+                tool_name=action.get("tool_name"),
+                title=action.get("title", ""),
+                description=action.get("description", ""),
+                icon=action.get("icon", ""),
+                arguments=arguments,
+                natural_patterns=tuple(
+                    ActionPattern(
+                        pattern["text"],
+                        pattern.get("fixed_arguments"),
+                        pattern.get("argument_aliases"),
+                    )
+                    for pattern in action.get("natural_patterns", ())
+                ),
+            )
+            self._defs[definition.name] = definition
 
     async def select_player(self, name: str) -> str:
         candidates = [(summary.name, summary.character_id) for summary in self.character_list]
@@ -370,16 +417,18 @@ class BunnylandRepl:
             else:
                 payload[key] = value
 
-        result = await self.backend.submit({
-            "character_id": self.player_id,
-            "controller_id": self.control[0],
-            "controller_generation": self.control[1],
-            "command_type": definition.command_type,
-            "payload": payload,
-            "cost": {"action": definition.cost.action, "focus": definition.cost.focus},
-            "lane": definition.lane.value,
-            "on_insufficient_points": "queue",
-        })
+        result = await self.backend.submit(
+            {
+                "character_id": self.player_id,
+                "controller_id": self.control[0],
+                "controller_generation": self.control[1],
+                "command_type": definition.command_type,
+                "payload": payload,
+                "cost": {"action": definition.cost.action, "focus": definition.cost.focus},
+                "lane": definition.lane.value,
+                "on_insufficient_points": "queue",
+            }
+        )
         detail = " ".join(f"{k}={v}" for k, v in payload.items())
         icon = (
             f"{definition.icon or action_icon_for(definition.command_type)} "
@@ -434,10 +483,15 @@ class BunnylandRepl:
         if player is None:
             return Text("Pick a player first: play <name>.")
         out = Text()
-        for relationship, label in (("Wearing", "worn"), ("Holding", "held"),
-                                    ("Contains", "carrying")):
-            items = [self.world.get(edge["target"])
-                     for edge in player["relationships"].get(relationship, [])]
+        for relationship, label in (
+            ("Wearing", "worn"),
+            ("Holding", "held"),
+            ("Contains", "carrying"),
+        ):
+            items = [
+                self.world.get(edge["target"])
+                for edge in player["relationships"].get(relationship, [])
+            ]
             items = [item for item in items if item]
             if not items:
                 continue
@@ -506,6 +560,7 @@ class BunnylandRepl:
             return True if info is None else bool(info.get("available", True))
 
         tools = sorted(self._defs)
+
         # Available commands first and prominent; unavailable ones still listed but dimmed,
         # since a player may still choose to queue them.
         def label(tool: str) -> str:

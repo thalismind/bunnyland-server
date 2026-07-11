@@ -53,7 +53,6 @@ class PluginRegistry:
         self._incidents: dict[tuple[str, str], Any] = {}
         self._incident_resolution_rules: dict[tuple[str, str], Any] = {}
         self._integrations: dict[tuple[str, str], Any] = {}
-        self._worldgen_hooks: list[tuple[str, Any]] = []
         self._normalizers: list[tuple[str, Any]] = []
         from ..core.generation import CoreGenerationEnricher
 
@@ -140,10 +139,6 @@ class PluginRegistry:
     @property
     def integrations(self):
         return MappingProxyType(self._integrations)
-
-    @property
-    def worldgen_hooks(self) -> tuple[tuple[str, Any], ...]:
-        return tuple(self._worldgen_hooks)
 
     @property
     def intent_normalizers(self) -> tuple[tuple[str, Any], ...]:
@@ -275,7 +270,6 @@ class PluginRegistry:
             )
         for integration in plugin.runtime.integration_factories:
             self._scoped(self._integrations, plugin.id, integration, "integration")
-        self._worldgen_hooks.extend((plugin.id, hook) for hook in plugin.content.worldgen_hooks)
         self._normalizers.extend(
             (plugin.id, normalizer) for normalizer in plugin.content.intent_normalizers
         )

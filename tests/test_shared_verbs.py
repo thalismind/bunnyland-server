@@ -14,8 +14,8 @@ from bunnyland.core import (
     build_submitted_command,
     spawn_entity,
 )
-from bunnyland.mechanics.daggersim import IdentifyIngredientHandler, IngredientComponent
-from bunnyland.mechanics.dinosim import (
+from bunnyland.simpacks.daggersim.mechanics import IdentifyIngredientHandler, IngredientComponent
+from bunnyland.simpacks.dinosim.mechanics import (
     CreatureMilkComponent,
     EggComponent,
     FossilFragmentComponent,
@@ -23,13 +23,13 @@ from bunnyland.mechanics.dinosim import (
     IdentifyFossilHandler,
     InspectEggHandler,
 )
-from bunnyland.mechanics.dragonsim import (
+from bunnyland.simpacks.dragonsim.mechanics import (
     ArtifactComponent,
     BribeGuardHandler,
     GuardComponent,
     IdentifyArtifactHandler,
 )
-from bunnyland.mechanics.gardensim import (
+from bunnyland.simpacks.gardensim.mechanics import (
     CropComponent,
     HarvestableComponent,
     HarvestCropHandler,
@@ -37,7 +37,7 @@ from bunnyland.mechanics.gardensim import (
     InspectCropHandler,
     TreeComponent,
 )
-from bunnyland.mechanics.neonsim import (
+from bunnyland.simpacks.neonsim.mechanics import (
     BribeCheckpointHandler,
     CheckpointComponent,
     DeviceComponent,
@@ -46,7 +46,7 @@ from bunnyland.mechanics.neonsim import (
     SneakCheckpointHandler,
     UnlockDoorHandler,
 )
-from bunnyland.mechanics.nukesim import (
+from bunnyland.simpacks.nukesim.mechanics import (
     DrinkContaminatedWaterHandler,
     IdentifyTechHandler,
     LockedCrateComponent,
@@ -56,7 +56,7 @@ from bunnyland.mechanics.nukesim import (
     UseRadMedicineHandler,
     WaterPurityComponent,
 )
-from bunnyland.mechanics.voidsim import (
+from bunnyland.simpacks.voidsim.mechanics import (
     CustomsHoldComponent,
     InspectCustomsHandler,
     InspectShipSystemHandler,
@@ -149,9 +149,7 @@ def test_shared_verb_handlers_accept_target_id_for_matching_components():
         (
             UseRadMedicineHandler(),
             "use",
-            _item_id(
-                _room_entity(scenario, "rad-away", "medicine", [RadMedicineComponent()])
-            ),
+            _item_id(_room_entity(scenario, "rad-away", "medicine", [RadMedicineComponent()])),
         ),
         (
             DrinkContaminatedWaterHandler(),
@@ -183,9 +181,7 @@ def test_shared_verb_handlers_accept_target_id_for_matching_components():
         (
             SneakCheckpointHandler(),
             "sneak",
-            _target_id(
-                _room_entity(scenario, "quiet gate", "checkpoint", [CheckpointComponent()])
-            ),
+            _target_id(_room_entity(scenario, "quiet gate", "checkpoint", [CheckpointComponent()])),
         ),
         (
             InspectDeviceHandler(),
@@ -236,9 +232,7 @@ def test_shared_verb_handlers_accept_target_id_for_matching_components():
         (
             HarvestProductHandler(),
             "harvest",
-            _target_id(
-                _room_entity(scenario, "raptor", "creature", [CreatureMilkComponent()])
-            ),
+            _target_id(_room_entity(scenario, "raptor", "creature", [CreatureMilkComponent()])),
         ),
         (
             IdentifyIngredientHandler(),
@@ -331,6 +325,4 @@ def test_shared_verb_handlers_decline_reachable_wrong_kind_targets():
         (InspectShipSystemHandler(), "inspect"),
         (InspectCustomsHandler(), "inspect"),
     ):
-        assert not handler.can_handle(
-            ctx, _cmd(scenario, command_type, target_id=str(plain.id))
-        )
+        assert not handler.can_handle(ctx, _cmd(scenario, command_type, target_id=str(plain.id)))

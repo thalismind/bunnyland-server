@@ -229,6 +229,7 @@ class ClientActionView(BaseModel):
     lane: Lane = Lane.WORLD
     cost: CommandCostRequest = Field(default_factory=CommandCostRequest)
     arguments: list[ClientActionArgumentView] = Field(default_factory=list)
+    natural_patterns: list[dict[str, Any]] = Field(default_factory=list)
     # Per-character availability (character projection only; defaults keep the
     # character-agnostic action search backward compatible).
     available: bool = True

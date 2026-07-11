@@ -18,8 +18,19 @@ from bunnyland.core.components import (
     TemperatureComponent,
 )
 from bunnyland.core.edges import ContainmentMode, Contains
-from bunnyland.mechanics.barbariansim import WeaponComponent
-from bunnyland.mechanics.colonysim import (
+from bunnyland.foundation.consumables.components import DrinkableComponent, FoodComponent
+from bunnyland.foundation.environment.mechanics import (
+    CalendarComponent,
+    FireComponent,
+    FlammableComponent,
+    TimeOfDayComponent,
+    WeatherComponent,
+    install_environment,
+)
+from bunnyland.foundation.needs.mechanics import HungerComponent
+from bunnyland.plugins import apply_plugins, bunnyland_plugins
+from bunnyland.simpacks.barbariansim.mechanics import WeaponComponent
+from bunnyland.simpacks.colonysim.mechanics import (
     ColonyIncidentComponent,
     JobBillComponent,
     PawnProfileComponent,
@@ -32,8 +43,7 @@ from bunnyland.mechanics.colonysim import (
     TradeOfferComponent,
     WorkstationComponent,
 )
-from bunnyland.mechanics.consumables import DrinkableComponent, FoodComponent
-from bunnyland.mechanics.daggersim import (
+from bunnyland.simpacks.daggersim.mechanics import (
     AutomapComponent,
     BankComponent,
     DungeonComponent,
@@ -44,7 +54,7 @@ from bunnyland.mechanics.daggersim import (
     SecretDoorComponent,
     SupernaturalAfflictionComponent,
 )
-from bunnyland.mechanics.dinosim import (
+from bunnyland.simpacks.dinosim.mechanics import (
     CreatureProductComponent,
     DinosaurComponent,
     FeedStoreComponent,
@@ -52,16 +62,8 @@ from bunnyland.mechanics.dinosim import (
     FossilFragmentComponent,
     ReptileProcreationComponent,
 )
-from bunnyland.mechanics.dragonsim import PointOfInterestComponent, QuestComponent
-from bunnyland.mechanics.environment import (
-    CalendarComponent,
-    FireComponent,
-    FlammableComponent,
-    TimeOfDayComponent,
-    WeatherComponent,
-    install_environment,
-)
-from bunnyland.mechanics.gardensim import (
+from bunnyland.simpacks.dragonsim.mechanics import PointOfInterestComponent, QuestComponent
+from bunnyland.simpacks.gardensim.mechanics import (
     CropComponent,
     CropGrowthComponent,
     CropQualityComponent,
@@ -80,24 +82,21 @@ from bunnyland.mechanics.gardensim import (
     TreeTapComponent,
     WeedComponent,
 )
-from bunnyland.mechanics.lifesim import (
+from bunnyland.simpacks.lifesim.mechanics import (
     CareerComponent,
     CharacterProfileComponent,
     HomeObjectComponent,
     WhimComponent,
 )
-from bunnyland.mechanics.needs import HungerComponent
-from bunnyland.mechanics.neonsim import CyberpunkSiteComponent
-from bunnyland.mechanics.nukesim import RadiationSourceComponent
-from bunnyland.mechanics.voidsim import (
+from bunnyland.simpacks.neonsim.mechanics import CyberpunkSiteComponent
+from bunnyland.simpacks.nukesim.mechanics import RadiationSourceComponent
+from bunnyland.simpacks.voidsim.mechanics import (
     HabitatModuleComponent,
     LifeSupportComponent,
     PowerGridComponent,
     ShipComponent,
     ShipSystemComponent,
 )
-from bunnyland.plugins import apply_plugins
-from bunnyland.plugins.builtin import bunnyland_plugins
 from bunnyland.worldgen.examples import (
     BARBARIANSIM_DEMO,
     COLONYSIM_DEMO,
@@ -136,7 +135,11 @@ PACKAGE_DEMOS = [
     DINOSIM_DEMO,
 ]
 ALL_DEMOS = [
-    *PACKAGE_DEMOS, MAPLE_FARM_DEMO, *POP_CULTURE_DEMOS, *DUNGEON_DEMOS, *SCENE_DEMOS,
+    *PACKAGE_DEMOS,
+    MAPLE_FARM_DEMO,
+    *POP_CULTURE_DEMOS,
+    *DUNGEON_DEMOS,
+    *SCENE_DEMOS,
 ]
 
 # Each demo's hallmark component — proof its package's mechanics are present.
@@ -349,8 +352,7 @@ async def test_maple_farm_demo_is_a_functional_canadian_sugarbush():
     trees = list(actor.world.query().with_all([TreeComponent]).execute_entities())
     assert any(not tree.get_component(TreeComponent).mature for tree in trees)
     assert any(
-        tree.has_component(TreeTapComponent)
-        and not tree.get_component(HarvestableComponent).ready
+        tree.has_component(TreeTapComponent) and not tree.get_component(HarvestableComponent).ready
         for tree in trees
     )
 
@@ -366,9 +368,9 @@ async def test_midnight_burger_demo_secret_is_gated_by_a_running_night_cycle():
     assert clock.get_component(CalendarComponent).hour == 17
 
     # The dark secret: a hungry night cook and a hidden, pitch-dark cellar behind the kitchen.
-    cook = list(
-        actor.world.query().with_all([SupernaturalAfflictionComponent]).execute_entities()
-    )[0]
+    cook = list(actor.world.query().with_all([SupernaturalAfflictionComponent]).execute_entities())[
+        0
+    ]
     assert cook.get_component(SupernaturalAfflictionComponent).affliction_type == "nocturnal hunger"
     assert cook.has_component(FeedingNeedComponent)
     assert _has(actor, SecretDoorComponent)
@@ -438,9 +440,10 @@ async def test_frozen_greenhouse_demo_grows_crops_against_the_cold():
     # Crops to tend and a boiler to stoke against the freeze.
     assert _has(actor, CropComponent)
     assert _has(actor, WorkstationComponent)
-    assert actor.world.get_entity(world.rooms["tundra"]).get_component(
-        TemperatureComponent
-    ).celsius <= -10.0
+    assert (
+        actor.world.get_entity(world.rooms["tundra"]).get_component(TemperatureComponent).celsius
+        <= -10.0
+    )
 
     # The unnatural specimen grows far faster than the ordinary winter crop.
     growths = [
@@ -472,8 +475,7 @@ async def test_stuck_subway_demo_is_a_failing_car_full_of_strangers():
 async def test_midnight_laundromat_demo_drifts_from_night_toward_dawn():
     actor = WorldActor()
 
-    world = await MIDNIGHT_LAUNDROMAT_DEMO.generate(
-        actor, "midnight-laundromat-demo", GenOptions())
+    world = await MIDNIGHT_LAUNDROMAT_DEMO.generate(actor, "midnight-laundromat-demo", GenOptions())
 
     # It is already the small hours, and late-night wants give the scene its pull.
     clock = list(actor.world.query().with_all([TimeOfDayComponent]).execute_entities())[0]
@@ -498,7 +500,9 @@ async def test_county_fair_demo_has_a_blue_ribbon_contest_and_a_prize_entry():
     # The blue-ribbon quest is still up for grabs on closing night.
     quest = list(actor.world.query().with_all([QuestComponent]).execute_entities())[0]
     assert quest.get_component(QuestComponent).quest_id == "blue-ribbon"
-    assert quest.get_component(QuestComponent).status == "offered"
+    from bunnyland.simpacks.dragonsim.mechanics import QuestStateComponent
+
+    assert quest.get_component(QuestStateComponent).status == "offered"
 
     # A championship-quality produce entry to win it with.
     qualities = [

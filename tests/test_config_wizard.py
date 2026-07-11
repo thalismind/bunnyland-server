@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import stat
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -115,6 +114,17 @@ def test_api_nginx_template_gates_player_api_without_reusing_basic_auth_user() -
     assert "proxy_set_header X-Bunnyland-Client-Id $remote_user;" not in text
     assert 'auth_basic "Bunnyland admin";' in text
     assert 'proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";' in text
+
+
+def test_generic_player_proxy_carries_character_websocket_upgrades() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    text = (repo_root / "deploy" / "nginx" / "api-locations.inc").read_text()
+    player_location = text[text.index("location /api/ {") :]
+
+    assert "proxy_set_header Upgrade $http_upgrade;" in player_location
+    assert "proxy_set_header Connection $connection_upgrade;" in player_location
+    assert "proxy_read_timeout 3600s;" in player_location
+    assert "location = /api/world/character/" not in text
 
 
 def test_bunnyland_config_round_trips_yaml_with_private_mode(tmp_path: Path) -> None:
@@ -257,9 +267,7 @@ def test_config_wizard_review_lists_optional_services() -> None:
 
 
 def test_config_wizard_review_counts_custom_plugins() -> None:
-    lines = review_lines(
-        BunnylandConfig(plugins=PluginConfig(enabled=("core_verbs", "memory")))
-    )
+    lines = review_lines(BunnylandConfig(plugins=PluginConfig(enabled=("core_verbs", "memory"))))
 
     assert "Plugins           : 2 selected" in "\n".join(lines)
 
@@ -293,9 +301,7 @@ def test_config_wizard_resolves_plugin_ids() -> None:
     )
 
     assert _resolve_enabled_plugin_ids(plugins, None) is None
-    assert _resolve_enabled_plugin_ids(plugins, ("package.alpha",)) == frozenset(
-        {"package.alpha"}
-    )
+    assert _resolve_enabled_plugin_ids(plugins, ("package.alpha",)) == frozenset({"package.alpha"})
     assert _resolve_enabled_plugin_ids(plugins, ("beta",)) == frozenset({"package.beta"})
 
     for requested, expected in (("missing", "unknown plugin"), ("alpha", "ambiguous")):
@@ -441,9 +447,7 @@ async def test_textual_config_wizard_saves_config() -> None:
         assert app.query_one("#data-dir", Input).value == "/var/lib/bunnyland"
         assert app.query_one("#admin-user", Input).value == "admin"
         world_input_ids = [
-            widget.id
-            for widget in app.query_one("#page-world").query("Input, Select")
-            if widget.id
+            widget.id for widget in app.query_one("#page-world").query("Input, Select") if widget.id
         ]
         assert world_input_ids[:3] == ["starter-pack", "generator", "seed"]
         assert str(app.query_one("#cancel", Button).label) == "Close"
@@ -605,89 +609,6 @@ async def test_textual_config_wizard_filters_and_selects_plugins() -> None:
     assert "bunnyland.core_verbs" in app.return_value.plugins.enabled
 
 
-async def test_textual_config_wizard_lists_explicit_imported_plugins(monkeypatch) -> None:
-    from textual.widgets import Button, Checkbox, Input, Select
-
-    install_plugin_module(monkeypatch, "module_foo", [Plugin(id="bar", name="Bar")])
-    app = build_textual_wizard_app(modules=("module_foo",), enabled_plugins=("bar",))
-
-    async with app.run_test() as pilot:
-        imported = next(
-            checkbox
-            for checkbox in app.query(Checkbox)
-            if "module_foo.bar" in str(checkbox.label)
-        )
-        assert imported.value is True
-        app.query_one("#domain", Input).value = "sandbox.example.com"
-        app.query_one("#data-dir", Input).value = "/var/lib/bunnyland"
-        app.query_one("#admin-user", Input).value = "editor"
-        app.query_one("#admin-password", Input).value = "secret"
-        app.query_one("#llm-enabled", Select).value = "no"
-        app.query_one("#character-chat", Select).value = "no"
-        await _advance_textual_wizard_to_review(app, pilot)
-        app.query_one("#save", Button).press()
-        await pilot.pause()
-
-    assert app.return_value.plugins.modules == ("module_foo",)
-    assert "module_foo.bar" in app.return_value.plugins.enabled
-
-
-async def test_textual_config_wizard_lists_loaded_plugin_modules(monkeypatch) -> None:
-    from textual.widgets import Button, Checkbox, Input, Select
-
-    install_plugin_module(monkeypatch, "bunnyland_extra_pack", [Plugin(id="soft", name="Soft")])
-    sys.modules["bunnyland_extra_pack"].bunnyland_plugins.__module__ = "bunnyland_extra_pack"
-    app = build_textual_wizard_app(enabled_plugins=("soft",))
-
-    async with app.run_test() as pilot:
-        imported = next(
-            checkbox
-            for checkbox in app.query(Checkbox)
-            if "bunnyland_extra_pack.soft" in str(checkbox.label)
-        )
-        assert imported.value is True
-        app.query_one("#domain", Input).value = "sandbox.example.com"
-        app.query_one("#data-dir", Input).value = "/var/lib/bunnyland"
-        app.query_one("#admin-user", Input).value = "editor"
-        app.query_one("#admin-password", Input).value = "secret"
-        app.query_one("#llm-enabled", Select).value = "no"
-        app.query_one("#character-chat", Select).value = "no"
-        await _advance_textual_wizard_to_review(app, pilot)
-        app.query_one("#save", Button).press()
-        await pilot.pause()
-
-    assert app.return_value.plugins.modules == ("bunnyland_extra_pack",)
-    assert "bunnyland_extra_pack.soft" in app.return_value.plugins.enabled
-
-
-async def test_textual_config_wizard_lists_unloaded_candidates_without_importing(
-    monkeypatch,
-) -> None:
-    from textual.widgets import Checkbox, Static
-
-    def fake_iter_modules():
-        return iter(
-            [
-                SimpleNamespace(name="bunnyland_safe_pack"),
-                SimpleNamespace(name="unrelated_pack"),
-            ]
-        )
-
-    monkeypatch.setattr("pkgutil.iter_modules", fake_iter_modules)
-    app = build_textual_wizard_app()
-
-    async with app.run_test() as pilot:
-        labels = [str(checkbox.label) for checkbox in app.query(Checkbox)]
-        suggestions = str(app.query_one("#plugin-suggestions", Static).render())
-        security_note = str(app.query_one("#plugin-security-note", Static).render())
-        await pilot.pause()
-
-    assert all("bunnyland_safe_pack" not in label for label in labels)
-    assert "rerun with --import bunnyland_safe_pack" in suggestions
-    assert "unrelated_pack" not in suggestions
-    assert "only import plugin modules you trust" in security_note
-
-
 def test_available_plugins_for_wizard_ignores_env_plugin_modules(monkeypatch) -> None:
     install_plugin_module(monkeypatch, "module_foo", [Plugin(id="bar", name="Bar")])
     monkeypatch.setenv("BUNNYLAND_PLUGIN_MODULES", "module_foo")
@@ -785,8 +706,7 @@ async def test_textual_config_wizard_reuse_admin_readiness() -> None:
 async def test_textual_config_wizard_direct_handler_branches(monkeypatch) -> None:
     from textual.widgets import Input
 
-    install_plugin_module(monkeypatch, "module_foo", [Plugin(id="bar", name="Bar")])
-    app = build_textual_wizard_app(modules=("module_foo",))
+    app = build_textual_wizard_app()
     monkeypatch.setattr(
         "bunnyland.config_wizard.choice",
         lambda values: tuple(values)[0],
@@ -799,8 +719,6 @@ async def test_textual_config_wizard_direct_handler_branches(monkeypatch) -> Non
         modal.dismiss = lambda value=None: dismissed.append(value)
         modal.action_close()
         assert dismissed == [None]
-
-        assert app._module_for_plugin("bunnyland.core_verbs") == ""
 
         app.random_world_prompt_pressed(SimpleNamespace())
         assert app.query_one("#seed", Input).value == WORLD_PROMPT_PRESETS[0]
@@ -1015,7 +933,7 @@ def test_config_wizard_main_uses_textual_when_tty(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setattr(
         "bunnyland.config_wizard.run_textual_wizard",
-        lambda path, *, modules, enabled_plugins: config,
+        lambda path, *, enabled_plugins: config,
     )
     monkeypatch.setattr(
         "bunnyland.config_wizard.run_setup",
@@ -1039,9 +957,8 @@ def test_run_textual_wizard_loads_initial_config(tmp_path: Path, monkeypatch) ->
         def run(self):
             return calls["initial"]
 
-    def fake_build_textual_wizard_app(initial, *, modules=(), enabled_plugins=None):
+    def fake_build_textual_wizard_app(initial, *, enabled_plugins=None):
         calls["initial"] = initial
-        calls["modules"] = modules
         calls["enabled_plugins"] = enabled_plugins
         return FakeApp()
 
@@ -1054,12 +971,7 @@ def test_run_textual_wizard_loads_initial_config(tmp_path: Path, monkeypatch) ->
     assert fresh_config.deployment.domain == "sandbox.example.com"
     assert fresh_config.auth.admin_user == "admin"
     assert str(UUID(fresh_config.auth.admin_password)) == fresh_config.auth.admin_password
-    run_textual_wizard(
-        tmp_path / "missing.yml",
-        modules=("module_foo",),
-        enabled_plugins=("bar",),
-    )
-    assert calls["modules"] == ("module_foo",)
+    run_textual_wizard(tmp_path / "missing.yml", enabled_plugins=("bar",))
     assert calls["enabled_plugins"] == ("bar",)
 
 
@@ -1068,7 +980,7 @@ def test_config_wizard_main_aborts_when_textual_returns_none(tmp_path: Path, mon
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setattr(
         "bunnyland.config_wizard.run_textual_wizard",
-        lambda path, *, modules, enabled_plugins: None,
+        lambda path, *, enabled_plugins: None,
     )
 
     result = main(["--config", str(tmp_path / "new.yml")])
@@ -1076,9 +988,7 @@ def test_config_wizard_main_aborts_when_textual_returns_none(tmp_path: Path, mon
     assert result == 1
 
 
-def test_config_wizard_main_falls_back_when_textual_missing(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_config_wizard_main_falls_back_when_textual_missing(tmp_path: Path, monkeypatch) -> None:
     config_path = tmp_path / "bunnyland.yml"
     BunnylandConfig(
         deployment=DeploymentConfig(domain="fallback.example.com", data_dir="/data")
@@ -1087,9 +997,7 @@ def test_config_wizard_main_falls_back_when_textual_missing(
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setattr(
         "bunnyland.config_wizard.run_textual_wizard",
-        lambda path, *, modules, enabled_plugins: (_ for _ in ()).throw(
-            ImportError("no textual")
-        ),
+        lambda path, *, enabled_plugins: (_ for _ in ()).throw(ImportError("no textual")),
     )
     monkeypatch.setattr(
         "bunnyland.config_wizard.run_setup",

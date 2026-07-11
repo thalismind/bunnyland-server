@@ -14,6 +14,7 @@ from bunnyland.core import (
 )
 from bunnyland.discord import assign_discord_controller
 from bunnyland.discord.bot import DiscordBot
+from bunnyland.foundation.history.mechanics import history_record_for_event
 from bunnyland.imagegen.affordance import ACK_EMOJI, DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
 from bunnyland.imagegen.components import EventImageComponent
 from bunnyland.imagegen.config import ImageGenConfig
@@ -25,7 +26,6 @@ from bunnyland.imagegen.media import MediaStore
 from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
 from bunnyland.imagegen.service import ImageGenService
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
-from bunnyland.mechanics.history import history_record_for_event
 
 
 class _FakeClient:

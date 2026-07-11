@@ -17,7 +17,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.core.events import CommandRejectedEvent, SpeechToldEvent
-from bunnyland.mechanics.policy import (
+from bunnyland.foundation.policy.mechanics import (
     BoundaryTag,
     CharacterBoundaryComponent,
     WorldPolicyComponent,
@@ -189,9 +189,7 @@ def test_install_policy_keeps_existing_world_policy():
     )
     install_policy(actor, enabled=frozenset({FLIRTING}))  # 173->178: skip spawning
     # the pre-existing policy is left untouched
-    assert target.get_component(WorldPolicyComponent).enabled == frozenset(
-        {BoundaryTag.ROMANCE}
-    )
+    assert target.get_component(WorldPolicyComponent).enabled == frozenset({BoundaryTag.ROMANCE})
 
 
 # -- gate in the command pipeline ------------------------------------------------------

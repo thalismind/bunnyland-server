@@ -42,8 +42,16 @@ from bunnyland.core.events import (
     StockpileCreatedEvent,
     StorageFilterChangedEvent,
 )
-from bunnyland.mechanics import colonysim
-from bunnyland.mechanics.colonysim import (
+from bunnyland.foundation.consumables.components import (
+    ConsumableComponent,
+    DrinkableComponent,
+    FoodComponent,
+)
+from bunnyland.foundation.meters.mechanics import Meter
+from bunnyland.foundation.needs.mechanics import FunNeedComponent
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
+from bunnyland.simpacks.colonysim import mechanics as colonysim
+from bunnyland.simpacks.colonysim.mechanics import (
     AllowedAreaComponent,
     AllowItemHandler,
     AssignedTo,
@@ -127,10 +135,6 @@ from bunnyland.mechanics.colonysim import (
     WorkstationComponent,
     colonysim_fragments,
 )
-from bunnyland.mechanics.consumables import ConsumableComponent, DrinkableComponent, FoodComponent
-from bunnyland.mechanics.meter import Meter
-from bunnyland.mechanics.needs import FunNeedComponent
-from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 3600.0
 
@@ -807,9 +811,10 @@ def test_colonysim_stockpile_helpers_cover_filter_and_container_branches():
     _install(scenario.actor)
     colonysim.install_colonysim(scenario.actor)
     colonysim.install_colonysim(scenario.actor)
-    assert len(
-        list(scenario.actor.world.query().with_all([ColonySimComponent]).execute_entities())
-    ) == 1
+    assert (
+        len(list(scenario.actor.world.query().with_all([ColonySimComponent]).execute_entities()))
+        == 1
+    )
 
     stockpile = scenario.actor.world.get_entity(_stockpile(scenario, allowed_types=()))
     stack = scenario.actor.world.get_entity(_stack(scenario, "wood", 2))
@@ -896,9 +901,10 @@ async def test_stockpile_filter_forbid_haul_split_and_merge_loop():
     assert (
         scenario.actor.world.get_entity(stack).get_component(ResourceStackComponent).quantity == 4
     )
-    assert scenario.actor.world.get_entity(new_stack_id).get_component(
-        ResourceStackComponent
-    ).quantity == 2
+    assert (
+        scenario.actor.world.get_entity(new_stack_id).get_component(ResourceStackComponent).quantity
+        == 2
+    )
 
     await scenario.actor.submit(
         _cmd(
@@ -991,9 +997,7 @@ async def test_gather_resource_decrements_node_and_adds_inventory_stack():
     gathered: list[ResourceGatheredEvent] = []
     scenario.actor.bus.subscribe(ResourceGatheredEvent, gathered.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "gather-resource", node_id=str(node), quantity=2)
-    )
+    await scenario.actor.submit(_cmd(scenario, "gather-resource", node_id=str(node), quantity=2))
     await scenario.actor.tick(HOUR)
 
     node_entity = scenario.actor.world.get_entity(node)
@@ -1011,9 +1015,7 @@ async def test_gather_resource_merges_existing_inventory_stack():
     gathered: list[ResourceGatheredEvent] = []
     scenario.actor.bus.subscribe(ResourceGatheredEvent, gathered.append)
 
-    await scenario.actor.submit(
-        _cmd(scenario, "gather-resource", node_id=str(node), quantity=2)
-    )
+    await scenario.actor.submit(_cmd(scenario, "gather-resource", node_id=str(node), quantity=2))
     await scenario.actor.tick(HOUR)
 
     stack = scenario.actor.world.get_entity(existing_stack)
@@ -1029,7 +1031,7 @@ async def test_resource_nodes_regenerate_to_maximum():
     node_entity = scenario.actor.world.get_entity(node)
     replace_component(
         node_entity,
-        ResourceNodeComponent(resource_type="wood", current=1, maximum=4, regen_per_day=2.0)
+        ResourceNodeComponent(resource_type="wood", current=1, maximum=4, regen_per_day=2.0),
     )
 
     await scenario.actor.tick(24 * 60 * 60)
@@ -1889,9 +1891,7 @@ async def test_claim_ownership_rejects_target_owned_by_someone_else():
 def test_colonysim_fragments_show_nearby_resources_and_recipes():
     scenario = build_scenario()
     node = _resource_node(scenario, "berries", current=5)
-    scenario.actor.world.get_entity(scenario.character).add_relationship(
-        Owns(since_epoch=0), node
-    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(Owns(since_epoch=0), node)
     _job(scenario, "haul", priority=2)
     spawn_entity(
         scenario.actor.world,
@@ -2174,14 +2174,16 @@ async def test_colonysim_catalogue_profile_jobs_prisoners_research_trade_and_sur
     )
     assert relation.get_component(FactionRelationComponent).goodwill == 3.0
     caravan_id = parse_entity_id(caravans[0].caravan_id)
-    assert scenario.actor.world.get_entity(caravan_id).get_component(
-        CaravanComponent
-    ).destination == "hill market"
+    assert (
+        scenario.actor.world.get_entity(caravan_id).get_component(CaravanComponent).destination
+        == "hill market"
+    )
     assert surgeries[0].part == "left paw"
     body_part_id = character.get_relationships(HasBodyPart)[0][1]
-    assert scenario.actor.world.get_entity(body_part_id).get_component(
-        BodyPartHealthComponent
-    ).missing is True
+    assert (
+        scenario.actor.world.get_entity(body_part_id).get_component(BodyPartHealthComponent).missing
+        is True
+    )
     assert surgery.get_component(SurgeryBillComponent).completed is True
     fragments = colonysim_fragments(scenario.actor.world, character)
     assert "Backstory: field medic." in fragments
@@ -2680,17 +2682,21 @@ def test_colonysim_catalogue_prompt_fragments_suppressed_states():
     assert BedRestComponent(started_at_epoch=0).prompt_fragments(external_ctx) == ()
     assert InfectionComponent(severity=0.5).prompt_fragments(external_ctx) == ()
     # Resolved/returned/completed states emit nothing even first-person.
-    assert ColonyIncidentComponent(incident_type="raid", resolved=True).prompt_fragments(
-        self_ctx
-    ) == ()
+    assert (
+        ColonyIncidentComponent(incident_type="raid", resolved=True).prompt_fragments(self_ctx)
+        == ()
+    )
     assert CaravanComponent(destination="town", returned=True).prompt_fragments(self_ctx) == ()
-    assert SurgeryBillComponent(part="arm", operation="repair", completed=True).prompt_fragments(
-        self_ctx
-    ) == ()
+    assert (
+        SurgeryBillComponent(part="arm", operation="repair", completed=True).prompt_fragments(
+            self_ctx
+        )
+        == ()
+    )
     # Active states emit a descriptive fragment.
-    assert ColonyIncidentComponent(incident_type="raid", severity=2).prompt_fragments(
-        self_ctx
-    ) == ("Colony incident: raid severity 2.",)
+    assert ColonyIncidentComponent(incident_type="raid", severity=2).prompt_fragments(self_ctx) == (
+        "Colony incident: raid severity 2.",
+    )
     assert CaravanComponent(destination="town").prompt_fragments(self_ctx) == (
         "Caravan bound for town.",
     )
@@ -2756,9 +2762,7 @@ def test_faction_relation_reuses_existing_record_on_trade():
     ctx = HandlerContext(world, scenario.actor.epoch)
     # A non-matching relation first forces the lookup loop to skip past it.
     spawn_entity(world, [FactionRelationComponent(faction_id="raiders", goodwill=-1.0)])
-    existing = spawn_entity(
-        world, [FactionRelationComponent(faction_id="traders", goodwill=2.0)]
-    )
+    existing = spawn_entity(world, [FactionRelationComponent(faction_id="traders", goodwill=2.0)])
     _stack(scenario, "wood", 5)
     offer = spawn_entity(
         world,
@@ -2814,9 +2818,7 @@ def test_body_part_entity_matches_existing_part_during_surgery():
     other_part = spawn_entity(world, [BodyPartHealthComponent(part="right paw", health=1.0)])
     character.add_relationship(HasBodyPart(), other_part.id)
     # Pre-existing body part so the surgery reuses it instead of spawning a new one.
-    existing_part = spawn_entity(
-        world, [BodyPartHealthComponent(part="left paw", health=0.3)]
-    )
+    existing_part = spawn_entity(world, [BodyPartHealthComponent(part="left paw", health=0.3)])
     character.add_relationship(HasBodyPart(), existing_part.id)
     surgery = spawn_entity(
         world,
@@ -2868,9 +2870,7 @@ def test_rescue_to_bed_handles_unroomed_and_already_sleeping_patient():
 
     result = RescueToBedHandler().execute(
         ctx,
-        _handler_cmd(
-            scenario, "rescue-to-bed", patient_id=str(patient.id), bed_id=str(bed.id)
-        ),
+        _handler_cmd(scenario, "rescue-to-bed", patient_id=str(patient.id), bed_id=str(bed.id)),
     )
 
     assert result.ok is True

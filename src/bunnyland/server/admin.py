@@ -83,9 +83,7 @@ def idle_generation_status(actor: WorldActor) -> WorldGenerationStatusResponse:
 
 def _count_world(actor: WorldActor) -> tuple[int, int]:
     rooms = len(list(actor.world.query().with_all([RoomComponent]).execute_entities()))
-    characters = len(
-        list(actor.world.query().with_all([CharacterComponent]).execute_entities())
-    )
+    characters = len(list(actor.world.query().with_all([CharacterComponent]).execute_entities()))
     return rooms, characters
 
 

@@ -10,6 +10,51 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from bunnyland.foundation.consumables.components import DrinkableComponent, FoodComponent
+from bunnyland.foundation.meters.mechanics import band as meter_band
+from bunnyland.foundation.needs.mechanics import (
+    ComfortNeedComponent,
+    FatigueComponent,
+    FunNeedComponent,
+    HungerComponent,
+    HygieneComponent,
+    PrivacyNeedComponent,
+    SafetyNeedComponent,
+    SocialNeedComponent,
+    ThirstComponent,
+)
+from bunnyland.foundation.persona.mechanics import (
+    GoalComponent,
+    PersonaProfileComponent,
+    PreferenceComponent,
+    TraitSetComponent,
+)
+from bunnyland.simpacks.lifesim.mechanics import (
+    AgeComponent,
+    AspirationComponent,
+    CareerComponent,
+    CharacterProfileComponent,
+    HouseholdComponent,
+    LifeStageComponent,
+    PregnancyComponent,
+    ReputationComponent,
+    SkillSetComponent,
+    WellRestedComponent,
+    WhimComponent,
+)
+from bunnyland.simpacks.toonsim.mechanics import (
+    ROOM_HEIGHT,
+    ROOM_WIDTH,
+    SpriteBoundsComponent,
+    SpriteImageComponent,
+    SpriteLayerComponent,
+    SpritePositionComponent,
+    SpriteScaleComponent,
+    ToonRoomComponent,
+    default_bounds_for,
+    default_layer_for,
+)
+
 from ..core.actions import ActionDefinition, action_definitions, action_icon_for
 from ..core.availability import (
     AvailabilityResult,
@@ -59,50 +104,6 @@ from ..core.edges import Contains, ControlledBy, ExitTo, HasInjury, HasThought, 
 from ..core.events import DomainEvent
 from ..core.world_actor import WorldActor
 from ..imagegen.components import PortraitImageComponent
-from ..mechanics.consumables import DrinkableComponent, FoodComponent
-from ..mechanics.lifesim import (
-    AgeComponent,
-    AspirationComponent,
-    CareerComponent,
-    CharacterProfileComponent,
-    HouseholdComponent,
-    LifeStageComponent,
-    PregnancyComponent,
-    ReputationComponent,
-    SkillSetComponent,
-    WellRestedComponent,
-    WhimComponent,
-)
-from ..mechanics.meter import band as meter_band
-from ..mechanics.needs import (
-    ComfortNeedComponent,
-    FatigueComponent,
-    FunNeedComponent,
-    HungerComponent,
-    HygieneComponent,
-    PrivacyNeedComponent,
-    SafetyNeedComponent,
-    SocialNeedComponent,
-    ThirstComponent,
-)
-from ..mechanics.persona import (
-    GoalComponent,
-    PersonaProfileComponent,
-    PreferenceComponent,
-    TraitSetComponent,
-)
-from ..mechanics.toonsim import (
-    ROOM_HEIGHT,
-    ROOM_WIDTH,
-    SpriteBoundsComponent,
-    SpriteImageComponent,
-    SpriteLayerComponent,
-    SpritePositionComponent,
-    SpriteScaleComponent,
-    ToonRoomComponent,
-    default_bounds_for,
-    default_layer_for,
-)
 from ..persistence import WorldMeta
 from ..projections import PerceivedEntity, build_room_facts, perceive
 from .action_search import smart_action_search
@@ -1051,6 +1052,14 @@ def _action_view(
             focus=definition.cost.focus,
         ),
         arguments=arguments,
+        natural_patterns=[
+            {
+                "text": pattern.text,
+                "fixed_arguments": pattern.fixed_arguments,
+                "argument_aliases": pattern.argument_aliases,
+            }
+            for pattern in definition.natural_patterns
+        ],
     )
     if availability is not None:
         view.available = availability.available
@@ -1351,8 +1360,10 @@ def serialize_event(event: DomainEvent, registry: Any | None = None) -> dict[str
     event_type = event.__class__
     event_key = registry.event_key(event_type) if registry is not None else None
     if event_key is None:
-        provider = "bunnyland.core" if event_type.__module__.startswith("bunnyland.core") else (
-            event_type.__module__
+        provider = (
+            "bunnyland.core"
+            if event_type.__module__.startswith("bunnyland.core")
+            else (event_type.__module__)
         )
         event_key = f"{provider}:{event_type.__name__}"
     return {

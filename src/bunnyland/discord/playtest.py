@@ -305,8 +305,7 @@ class DiscordPlaytestHarness:
         missing = tuple(expected for expected in item.expect if expected not in rendered)
         if missing:
             raise AssertionError(
-                f"playtest input #{index} expected output containing {missing!r}, "
-                f"got {rendered!r}"
+                f"playtest input #{index} expected output containing {missing!r}, got {rendered!r}"
             )
         return PlaytestInputResult(
             input_index=index,

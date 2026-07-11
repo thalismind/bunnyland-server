@@ -19,9 +19,10 @@ from bunnyland.core import (
 from bunnyland.core.components import CharacterComponent
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
-from bunnyland.mechanics.barbariansim import CorruptionComponent, CorruptionGainedEvent
-from bunnyland.mechanics.colonysim import ResourceStackComponent, TechUnlockComponent
-from bunnyland.mechanics.voidsim import (
+from bunnyland.prompts import ComponentPromptContext, PromptPerspective
+from bunnyland.simpacks.barbariansim.mechanics import CorruptionComponent, CorruptionGainedEvent
+from bunnyland.simpacks.colonysim.mechanics import ResourceStackComponent, TechUnlockComponent
+from bunnyland.simpacks.voidsim.mechanics import (
     AcceptContractHandler,
     AcceptTradeProtocolHandler,
     AdjustGravityHandler,
@@ -193,7 +194,6 @@ from bunnyland.mechanics.voidsim import (
     install_voidsim,
     voidsim_fragments,
 )
-from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 60 * 60
 
@@ -487,18 +487,19 @@ def test_voidsim_parity_handlers_mutate_state_directly():
     assert entity(drone_id).get_component(DroneComponent).assigned_task == "patch"
     assert entity(ai_id).get_component(ShipAIComponent).hacked is True
     assert entity(data_id).get_component(DataSalvageComponent).encrypted is False
-    assert str(scenario.character) in entity(sample_id).get_component(
-        XenobiologySampleComponent
-    ).studied_by
+    assert (
+        str(scenario.character)
+        in entity(sample_id).get_component(XenobiologySampleComponent).studied_by
+    )
     assert entity(protocol_id).get_component(TradeProtocolComponent).accepted is True
     assert entity(emergency_id).get_component(EmergencyComponent).resolved is True
     assert entity(reactor_id).get_component(ReactorComponent).stability == 50
     assert entity(gravity_id).get_component(GravityComponent).enabled is False
     assert entity(threat_id).get_component(BoardingThreatComponent).repelled is True
     assert entity(passenger_id).get_component(PassengerComponent).delivered is True
-    assert str(scenario.character) in entity(survey_id).get_component(
-        SurveySiteComponent
-    ).surveyed_by
+    assert (
+        str(scenario.character) in entity(survey_id).get_component(SurveySiteComponent).surveyed_by
+    )
     assert entity(mining_id).get_component(MiningSiteComponent).remaining == 2
     assert entity(hold_id).get_component(CustomsHoldComponent).contraband_found is True
     assert entity(compartment_id).get_component(SmugglingCompartmentComponent).discovered is True
@@ -1905,9 +1906,7 @@ def test_voidsim_component_prompt_fragments_cover_alternate_branches():
     inactive_quarantine, inactive_quarantine_ctx = room_entity(
         "sample", "sample", QuarantineComponent(active=False)
     )
-    artifact, artifact_ctx = room_entity(
-        "idol", "artifact", AlienArtifactComponent(studied_by=())
-    )
+    artifact, artifact_ctx = room_entity("idol", "artifact", AlienArtifactComponent(studied_by=()))
 
     assert source.get_component(ChaosInfluenceComponent).prompt_fragments(source_ctx) == (
         "Chaos source warp crack: warp crack (1/hour).",
@@ -1917,19 +1916,16 @@ def test_voidsim_component_prompt_fragments_cover_alternate_branches():
         active_contract_ctx
     ) == ("Cargo contract cargo run: active.",)
     assert (
-        other_contract.get_component(ContractComponent).prompt_fragments(other_contract_ctx)
-        == ()
+        other_contract.get_component(ContractComponent).prompt_fragments(other_contract_ctx) == ()
     )
-    assert delivered_cargo.get_component(CargoComponent).prompt_fragments(
-        delivered_cargo_ctx
-    ) == ("Cargo delivered: ore crates.",)
+    assert delivered_cargo.get_component(CargoComponent).prompt_fragments(delivered_cargo_ctx) == (
+        "Cargo delivered: ore crates.",
+    )
     assert loaded_cargo.get_component(CargoComponent).prompt_fragments(loaded_cargo_ctx) == (
         "Cargo loaded on ship_1: med crates.",
     )
     assert (
-        claimed_salvage.get_component(SalvageClaimComponent).prompt_fragments(
-            claimed_salvage_ctx
-        )
+        claimed_salvage.get_component(SalvageClaimComponent).prompt_fragments(claimed_salvage_ctx)
         == ()
     )
     assert contacted.get_component(FirstContactComponent).prompt_fragments(contacted_ctx) == ()
@@ -1957,14 +1953,17 @@ def test_voidsim_component_prompt_fragments_cover_alternate_branches():
             ],
         )
     )
-    assert studied_artifact.get_component(AlienArtifactComponent).prompt_fragments(
-        ComponentPromptContext.for_entity(
-            world,
-            studied_artifact,
-            perspective=self_ctx.perspective,
-            target=character,
+    assert (
+        studied_artifact.get_component(AlienArtifactComponent).prompt_fragments(
+            ComponentPromptContext.for_entity(
+                world,
+                studied_artifact,
+                perspective=self_ctx.perspective,
+                target=character,
+            )
         )
-    ) == ()
+        == ()
+    )
     assert studied_artifact.get_component(AlienArtifactComponent).prompt_fragments(
         observer_ctx(studied_artifact)
     ) == ("Alien artifact ready for study: tablet.",)
@@ -2025,9 +2024,7 @@ def _ship_in(scenario, room_id, **fields):
 def _jump_route(scenario, *, fuel_cost=10.0, hazard="none", jump_seconds=1):
     origin = scenario.actor.world.get_entity(scenario.room_a)
     origin.add_relationship(
-        JumpRoute(
-            fuel_cost=fuel_cost, hazard=hazard, jump_seconds=jump_seconds, label="moss lane"
-        ),
+        JumpRoute(fuel_cost=fuel_cost, hazard=hazard, jump_seconds=jump_seconds, label="moss lane"),
         scenario.room_b,
     )
 
@@ -2207,9 +2204,7 @@ async def test_scan_detects_then_answer_distress_signal():
     scanned = scenario.actor.world.get_entity(signal.id).get_component(DistressSignalComponent)
     assert scanned.detected
 
-    await scenario.actor.submit(
-        _cmd(scenario, "answer-distress-signal", signal_id=str(signal.id))
-    )
+    await scenario.actor.submit(_cmd(scenario, "answer-distress-signal", signal_id=str(signal.id)))
     await scenario.actor.tick(HOUR)
     answered = scenario.actor.world.get_entity(signal.id).get_component(DistressSignalComponent)
     assert answered.answered is True
@@ -2507,9 +2502,7 @@ def _make_shift(scenario, *, name="alpha", start_hour=8, end_hour=16, role="engi
         scenario.actor.world,
         [
             IdentityComponent(name=f"{name} watch", kind="shift"),
-            DutyShiftComponent(
-                name=name, start_hour=start_hour, end_hour=end_hour, role=role
-            ),
+            DutyShiftComponent(name=name, start_hour=start_hour, end_hour=end_hour, role=role),
         ],
     ).id
 
@@ -2588,9 +2581,7 @@ def test_crew_duty_consequence_handles_overnight_watch_and_skips_unrostered_crew
         Contains(mode=ContainmentMode.ROOM_CONTENT), bystander.id
     )
     assert consequence.process(scenario.actor.world, 9 * HOUR) == []
-    assert not scenario.actor.world.get_entity(bystander.id).has_component(
-        CrewDutyStatusComponent
-    )
+    assert not scenario.actor.world.get_entity(bystander.id).has_component(CrewDutyStatusComponent)
 
 
 def test_crew_shift_handlers_reject_invalid_directly():
@@ -2627,13 +2618,9 @@ def test_crew_shift_handlers_reject_invalid_directly():
     assert "target is not a duty shift" in reasons
     assert "not assigned to this shift" in reasons
 
-    assert assign.execute(
-        ctx, _handler_cmd(scenario, "assign-crew-shift", shift_id=str(shift))
-    ).ok
+    assert assign.execute(ctx, _handler_cmd(scenario, "assign-crew-shift", shift_id=str(shift))).ok
     assert (
-        assign.execute(
-            ctx, _handler_cmd(scenario, "assign-crew-shift", shift_id=str(shift))
-        ).reason
+        assign.execute(ctx, _handler_cmd(scenario, "assign-crew-shift", shift_id=str(shift))).reason
         == "already assigned to this shift"
     )
 
@@ -2676,9 +2663,7 @@ def _inventory_resource(scenario, resource_type, quantity):
 
 
 def _unlock_tech(scenario, tech_id):
-    return _spawn_in_room_a(
-        scenario, [TechUnlockComponent(tech_id=tech_id, unlocked_at_epoch=0)]
-    )
+    return _spawn_in_room_a(scenario, [TechUnlockComponent(tech_id=tech_id, unlocked_at_epoch=0)])
 
 
 def test_voidsim_inventory_resource_spending_helper_covers_edge_cases():
@@ -2748,16 +2733,10 @@ async def test_fabricate_consumes_colony_resource_inputs():
 
     assert fabricated[0].resource_inputs == (("scrap", 2), ("crystal", 1))
     assert (
-        scenario.actor.world.get_entity(scrap)
-        .get_component(ResourceStackComponent)
-        .quantity
-        == 1
+        scenario.actor.world.get_entity(scrap).get_component(ResourceStackComponent).quantity == 1
     )
     assert (
-        scenario.actor.world.get_entity(crystal)
-        .get_component(ResourceStackComponent)
-        .quantity
-        == 0
+        scenario.actor.world.get_entity(crystal).get_component(ResourceStackComponent).quantity == 0
     )
 
 
@@ -3014,17 +2993,16 @@ async def test_alien_contact_translation_quarantine_diplomacy_and_artifact_study
     assert contacted[0].status == "contacted"
     assert scenario.actor.world.get_entity(contact).get_component(
         FirstContactComponent
-    ).contacted_by == (
-        str(scenario.character),
-    )
+    ).contacted_by == (str(scenario.character),)
 
     await scenario.actor.submit(
         _cmd(scenario, "attempt-translation", matrix_id=str(matrix), progress=25)
     )
     await scenario.actor.tick(HOUR)
-    assert scenario.actor.world.get_entity(matrix).get_component(
-        TranslationMatrixComponent
-    ).complete is True
+    assert (
+        scenario.actor.world.get_entity(matrix).get_component(TranslationMatrixComponent).complete
+        is True
+    )
     assert translated[0].progress == 100.0
 
     await scenario.actor.submit(
@@ -3042,22 +3020,16 @@ async def test_alien_contact_translation_quarantine_diplomacy_and_artifact_study
     )
     await scenario.actor.tick(HOUR)
     assert (
-        scenario.actor.world.get_entity(mission)
-        .get_component(DiplomaticMissionComponent)
-        .standing
+        scenario.actor.world.get_entity(mission).get_component(DiplomaticMissionComponent).standing
         == 3
     )
     assert diplomacy[0].standing == 3
 
-    await scenario.actor.submit(
-        _cmd(scenario, "study-alien-artifact", artifact_id=str(artifact))
-    )
+    await scenario.actor.submit(_cmd(scenario, "study-alien-artifact", artifact_id=str(artifact)))
     await scenario.actor.tick(HOUR)
     assert scenario.actor.world.get_entity(artifact).get_component(
         AlienArtifactComponent
-    ).studied_by == (
-        str(scenario.character),
-    )
+    ).studied_by == (str(scenario.character),)
     assert studied[0].insight == "harmony map"
 
     fragments = voidsim_fragments(
@@ -3108,22 +3080,30 @@ def test_contract_cargo_and_salvage_handlers_reject_bad_state_directly():
     deliver = DeliverCargoHandler()
     salvage = ClaimSalvageHandler()
 
-    assert accept.execute(
-        ctx, _handler_cmd(scenario, "accept-contract", character_id="x")
-    ).reason == "invalid character id"
-    assert accept.execute(
-        ctx, _handler_cmd(scenario, "accept-contract", contract_id=str(wrong))
-    ).reason == "target is the wrong kind"
+    assert (
+        accept.execute(ctx, _handler_cmd(scenario, "accept-contract", character_id="x")).reason
+        == "invalid character id"
+    )
+    assert (
+        accept.execute(
+            ctx, _handler_cmd(scenario, "accept-contract", contract_id=str(wrong))
+        ).reason
+        == "target is the wrong kind"
+    )
     assert accept.execute(
         ctx, _handler_cmd(scenario, "accept-contract", contract_id=str(contract))
     ).ok
-    assert accept.execute(
-        ctx, _handler_cmd(scenario, "accept-contract", contract_id=str(contract))
-    ).reason == "contract is not available"
+    assert (
+        accept.execute(
+            ctx, _handler_cmd(scenario, "accept-contract", contract_id=str(contract))
+        ).reason
+        == "contract is not available"
+    )
 
-    assert load.execute(
-        ctx, _handler_cmd(scenario, "load-cargo", character_id="x")
-    ).reason == "invalid character id"
+    assert (
+        load.execute(ctx, _handler_cmd(scenario, "load-cargo", character_id="x")).reason
+        == "invalid character id"
+    )
     inactive = _spawn_in_room_a(
         scenario,
         [
@@ -3131,26 +3111,32 @@ def test_contract_cargo_and_salvage_handlers_reject_bad_state_directly():
             ContractComponent(contract_type="cargo"),
         ],
     )
-    assert load.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "load-cargo",
-            contract_id=str(inactive),
-            cargo_id=str(cargo),
-            ship_id=str(ship),
-        ),
-    ).reason == "cargo contract is not active"
-    assert load.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "load-cargo",
-            contract_id=str(contract),
-            cargo_id=str(other_cargo),
-            ship_id=str(ship),
-        ),
-    ).reason == "cargo does not match contract"
+    assert (
+        load.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "load-cargo",
+                contract_id=str(inactive),
+                cargo_id=str(cargo),
+                ship_id=str(ship),
+            ),
+        ).reason
+        == "cargo contract is not active"
+    )
+    assert (
+        load.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "load-cargo",
+                contract_id=str(contract),
+                cargo_id=str(other_cargo),
+                ship_id=str(ship),
+            ),
+        ).reason
+        == "cargo does not match contract"
+    )
     delivered_contract = _spawn_in_room_a(
         scenario,
         [
@@ -3162,26 +3148,32 @@ def test_contract_cargo_and_salvage_handlers_reject_bad_state_directly():
             ),
         ],
     )
-    assert load.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "load-cargo",
-            contract_id=str(delivered_contract),
-            cargo_id=str(delivered_cargo),
-            ship_id=str(ship),
-        ),
-    ).reason == "cargo is already delivered"
-    assert load.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "load-cargo",
-            contract_id=str(contract),
-            cargo_id=str(cargo),
-            ship_id=str(wrong),
-        ),
-    ).reason == "target is the wrong kind"
+    assert (
+        load.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "load-cargo",
+                contract_id=str(delivered_contract),
+                cargo_id=str(delivered_cargo),
+                ship_id=str(ship),
+            ),
+        ).reason
+        == "cargo is already delivered"
+    )
+    assert (
+        load.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "load-cargo",
+                contract_id=str(contract),
+                cargo_id=str(cargo),
+                ship_id=str(wrong),
+            ),
+        ).reason
+        == "target is the wrong kind"
+    )
     assert load.execute(
         ctx,
         _handler_cmd(
@@ -3192,16 +3184,19 @@ def test_contract_cargo_and_salvage_handlers_reject_bad_state_directly():
             ship_id=str(ship),
         ),
     ).ok
-    assert load.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "load-cargo",
-            contract_id=str(contract),
-            cargo_id=str(cargo),
-            ship_id=str(ship),
-        ),
-    ).reason == "target is not reachable"
+    assert (
+        load.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "load-cargo",
+                contract_id=str(contract),
+                cargo_id=str(cargo),
+                ship_id=str(ship),
+            ),
+        ).reason
+        == "target is not reachable"
+    )
     flexible_contract = _spawn_in_room_a(
         scenario,
         [
@@ -3213,90 +3208,115 @@ def test_contract_cargo_and_salvage_handlers_reject_bad_state_directly():
             ),
         ],
     )
-    assert load.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "load-cargo",
-            contract_id=str(flexible_contract),
-            cargo_id=str(loaded_cargo),
-            ship_id=str(ship),
-        ),
-    ).reason == "cargo is already loaded"
+    assert (
+        load.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "load-cargo",
+                contract_id=str(flexible_contract),
+                cargo_id=str(loaded_cargo),
+                ship_id=str(ship),
+            ),
+        ).reason
+        == "cargo is already loaded"
+    )
 
-    assert deliver.execute(
-        ctx, _handler_cmd(scenario, "deliver-cargo", character_id="x")
-    ).reason == "invalid character id"
-    assert deliver.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "deliver-cargo",
-            contract_id=str(contract),
-            cargo_id="x",
-            ship_id=str(ship),
-        ),
-    ).reason == "invalid cargo or ship id"
-    assert deliver.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "deliver-cargo",
-            contract_id=str(inactive),
-            cargo_id=str(cargo),
-            ship_id=str(ship),
-        ),
-    ).reason == "cargo contract is not active"
-    assert deliver.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "deliver-cargo",
-            contract_id=str(contract),
-            cargo_id="entity_999",
-            ship_id=str(ship),
-        ),
-    ).reason == "cargo or ship does not exist"
-    assert deliver.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "deliver-cargo",
-            contract_id=str(contract),
-            cargo_id=str(wrong),
-            ship_id=str(ship),
-        ),
-    ).reason == "target is not cargo"
-    assert deliver.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "deliver-cargo",
-            contract_id=str(contract),
-            cargo_id=str(cargo),
-            ship_id=str(wrong),
-        ),
-    ).reason == "target is not a ship"
-    assert deliver.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "deliver-cargo",
-            contract_id=str(contract),
-            cargo_id=str(other_cargo),
-            ship_id=str(ship),
-        ),
-    ).reason == "cargo is not loaded on that ship"
-    assert deliver.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "deliver-cargo",
-            contract_id=str(contract),
-            cargo_id=str(cargo),
-            ship_id=str(ship),
-        ),
-    ).reason == "ship is not at the destination"
+    assert (
+        deliver.execute(ctx, _handler_cmd(scenario, "deliver-cargo", character_id="x")).reason
+        == "invalid character id"
+    )
+    assert (
+        deliver.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "deliver-cargo",
+                contract_id=str(contract),
+                cargo_id="x",
+                ship_id=str(ship),
+            ),
+        ).reason
+        == "invalid cargo or ship id"
+    )
+    assert (
+        deliver.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "deliver-cargo",
+                contract_id=str(inactive),
+                cargo_id=str(cargo),
+                ship_id=str(ship),
+            ),
+        ).reason
+        == "cargo contract is not active"
+    )
+    assert (
+        deliver.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "deliver-cargo",
+                contract_id=str(contract),
+                cargo_id="entity_999",
+                ship_id=str(ship),
+            ),
+        ).reason
+        == "cargo or ship does not exist"
+    )
+    assert (
+        deliver.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "deliver-cargo",
+                contract_id=str(contract),
+                cargo_id=str(wrong),
+                ship_id=str(ship),
+            ),
+        ).reason
+        == "target is not cargo"
+    )
+    assert (
+        deliver.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "deliver-cargo",
+                contract_id=str(contract),
+                cargo_id=str(cargo),
+                ship_id=str(wrong),
+            ),
+        ).reason
+        == "target is not a ship"
+    )
+    assert (
+        deliver.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "deliver-cargo",
+                contract_id=str(contract),
+                cargo_id=str(other_cargo),
+                ship_id=str(ship),
+            ),
+        ).reason
+        == "cargo is not loaded on that ship"
+    )
+    assert (
+        deliver.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "deliver-cargo",
+                contract_id=str(contract),
+                cargo_id=str(cargo),
+                ship_id=str(ship),
+            ),
+        ).reason
+        == "ship is not at the destination"
+    )
     missing_destination_contract = _spawn_in_room_a(
         scenario,
         [
@@ -3309,26 +3329,35 @@ def test_contract_cargo_and_salvage_handlers_reject_bad_state_directly():
             ),
         ],
     )
-    assert deliver.execute(
-        ctx,
-        _handler_cmd(
-            scenario,
-            "deliver-cargo",
-            contract_id=str(missing_destination_contract),
-            cargo_id=str(cargo),
-            ship_id=str(ship),
-        ),
-    ).reason == "destination does not exist"
+    assert (
+        deliver.execute(
+            ctx,
+            _handler_cmd(
+                scenario,
+                "deliver-cargo",
+                contract_id=str(missing_destination_contract),
+                cargo_id=str(cargo),
+                ship_id=str(ship),
+            ),
+        ).reason
+        == "destination does not exist"
+    )
 
-    assert salvage.execute(
-        ctx, _handler_cmd(scenario, "claim-salvage", character_id="x")
-    ).reason == "invalid character id"
-    assert salvage.execute(
-        ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(wrong))
-    ).reason == "target is the wrong kind"
-    assert salvage.execute(
-        ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(claim), contract_id=str(inactive))
-    ).reason == "salvage rights are not held"
+    assert (
+        salvage.execute(ctx, _handler_cmd(scenario, "claim-salvage", character_id="x")).reason
+        == "invalid character id"
+    )
+    assert (
+        salvage.execute(ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(wrong))).reason
+        == "target is the wrong kind"
+    )
+    assert (
+        salvage.execute(
+            ctx,
+            _handler_cmd(scenario, "claim-salvage", claim_id=str(claim), contract_id=str(inactive)),
+        ).reason
+        == "salvage rights are not held"
+    )
     rights_claim = _spawn_in_room_a(
         scenario,
         [
@@ -3339,15 +3368,17 @@ def test_contract_cargo_and_salvage_handlers_reject_bad_state_directly():
             ),
         ],
     )
-    assert salvage.execute(
-        ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(rights_claim))
-    ).reason == "salvage contract does not exist"
-    assert salvage.execute(
-        ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(claim))
-    ).ok
-    assert salvage.execute(
-        ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(claim))
-    ).reason == "salvage is already claimed"
+    assert (
+        salvage.execute(
+            ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(rights_claim))
+        ).reason
+        == "salvage contract does not exist"
+    )
+    assert salvage.execute(ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(claim))).ok
+    assert (
+        salvage.execute(ctx, _handler_cmd(scenario, "claim-salvage", claim_id=str(claim))).reason
+        == "salvage is already claimed"
+    )
 
 
 def test_fabrication_handlers_reject_bad_state_directly():
@@ -3545,9 +3576,7 @@ def test_inspect_handlers_can_handle_resolve_target_id_and_reject_unrelated():
     assert ship_inspect.can_handle(ctx, _handler_cmd(scenario, "inspect", system_id=str(system_id)))
     assert customs_inspect.can_handle(ctx, _handler_cmd(scenario, "inspect", hold_id=str(hold_id)))
     # No system_id/hold_id key: can_handle resolves via target_id (covers 1030-1031, 3051-3052).
-    assert ship_inspect.can_handle(
-        ctx, _handler_cmd(scenario, "inspect", target_id=str(system_id))
-    )
+    assert ship_inspect.can_handle(ctx, _handler_cmd(scenario, "inspect", target_id=str(system_id)))
     assert customs_inspect.can_handle(
         ctx, _handler_cmd(scenario, "inspect", target_id=str(hold_id))
     )
@@ -3592,9 +3621,7 @@ def test_alien_handlers_reject_invalid_character_and_wrong_kind():
     ]
     for handler, command_type, key, _fallback in cases:
         # invalid character id branch
-        bad = _handler_cmd(
-            scenario, command_type, character_id="not-an-id", **{key: str(wrong)}
-        )
+        bad = _handler_cmd(scenario, command_type, character_id="not-an-id", **{key: str(wrong)})
         assert handler.execute(ctx, bad).reason == "invalid character id"
         # reachable but wrong-kind target -> _reachable_component yields truthy error text
         assert (
@@ -3774,9 +3801,7 @@ def test_active_contract_for_rejects_non_owner_and_wrong_type():
         scenario,
         [
             IdentityComponent(name="not mine", kind="contract"),
-            ContractComponent(
-                contract_type="cargo", status="active", accepted_by="entity_424242"
-            ),
+            ContractComponent(contract_type="cargo", status="active", accepted_by="entity_424242"),
         ],
     )
     assert (
@@ -3862,9 +3887,7 @@ def test_reachable_entity_with_rejection_branches():
     # target has wrong component
     wrong = _reachable_wrong_kind(scenario)
     assert (
-        handler.execute(
-            ctx, _handler_cmd(scenario, "deploy-away-team", team_id=str(wrong))
-        ).reason
+        handler.execute(ctx, _handler_cmd(scenario, "deploy-away-team", team_id=str(wrong))).reason
         == "target has wrong component"
     )
     # already deployed
@@ -3916,17 +3939,15 @@ def test_economy_handlers_reject_already_done_and_bad_amount():
     )
     assert (
         PayMortgageHandler()
-        .execute(
-            ctx, _handler_cmd(scenario, "pay-mortgage", mortgage_id=str(mortgage), amount=0)
-        )
+        .execute(ctx, _handler_cmd(scenario, "pay-mortgage", mortgage_id=str(mortgage), amount=0))
         .reason
         == "mortgage payment must be positive"
     )
 
 
 def test_round_the_clock_shift_covers_any_hour():
-    from bunnyland.mechanics.voidsim import DutyShiftComponent as _Shift
-    from bunnyland.mechanics.voidsim import _shift_covers_hour
+    from bunnyland.simpacks.voidsim.mechanics import DutyShiftComponent as _Shift
+    from bunnyland.simpacks.voidsim.mechanics import _shift_covers_hour
 
     shift = _Shift(name="watch", start_hour=4, end_hour=4)
     assert _shift_covers_hour(shift, 0) is True
@@ -3949,9 +3970,7 @@ def test_voidsim_fragments_cover_crew_morale_mutiny_and_shift_edges():
     )
     character.add_relationship(WorksShift(station="helm"), shift_id)
     # An assignment to a reachable entity lacking the shift component (covers 3345->3341).
-    non_shift = _spawn_in_room_a(
-        scenario, [IdentityComponent(name="not a shift", kind="item")]
-    )
+    non_shift = _spawn_in_room_a(scenario, [IdentityComponent(name="not a shift", kind="item")])
     character.add_relationship(WorksShift(station=""), non_shift)
 
     lines = voidsim_fragments(world, character)
@@ -3980,7 +3999,10 @@ def test_chaos_consequence_covers_no_source_targets_and_no_change_paths():
     scenario = build_scenario()
     _install(scenario.actor)
     world = scenario.actor.world
-    from bunnyland.mechanics.voidsim import _chaos_targets_for_source, _ship_systems_near_source
+    from bunnyland.simpacks.voidsim.mechanics import (
+        _chaos_targets_for_source,
+        _ship_systems_near_source,
+    )
 
     # A chaos source with no reachable characters: the targets loop body never runs (2199->2193).
     detached_source = spawn_entity(
@@ -4043,9 +4065,7 @@ def test_fabricate_skips_dangling_inventory_and_respects_unrelated_tech():
     # _tech_unlocked loop iterates past a mismatch (covers 1069->1068) before finding a match.
     _unlock_tech(scenario, "unrelated-tech")
     _unlock_tech(scenario, "shield-tech")
-    blueprint = _blueprint(
-        scenario, required_tech="shield-tech", resource_inputs=(("scrap", 1),)
-    )
+    blueprint = _blueprint(scenario, required_tech="shield-tech", resource_inputs=(("scrap", 1),))
     _inventory_resource(scenario, "scrap", 2)
 
     result = FabricateHandler().execute(
@@ -4058,7 +4078,7 @@ def test_fabricate_skips_dangling_inventory_and_respects_unrelated_tech():
 
 
 def test_active_contract_for_returns_none_for_non_contract_entity():
-    from bunnyland.mechanics.voidsim import _active_contract_for
+    from bunnyland.simpacks.voidsim.mechanics import _active_contract_for
 
     scenario = build_scenario()
     world = scenario.actor.world
@@ -4121,7 +4141,7 @@ def test_load_and_accept_handle_uncontained_targets():
 
 
 def test_jump_route_scans_past_non_matching_destinations():
-    from bunnyland.mechanics.voidsim import _jump_route as _route_lookup
+    from bunnyland.simpacks.voidsim.mechanics import _jump_route as _route_lookup
 
     scenario = build_scenario()
     world = scenario.actor.world
@@ -4135,7 +4155,7 @@ def test_jump_route_scans_past_non_matching_destinations():
 
 
 def test_tech_unlocked_scans_past_non_matching_unlocks():
-    from bunnyland.mechanics.voidsim import _tech_unlocked
+    from bunnyland.simpacks.voidsim.mechanics import _tech_unlocked
 
     scenario = build_scenario()
     world = scenario.actor.world

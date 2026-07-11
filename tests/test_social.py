@@ -22,9 +22,9 @@ from bunnyland.core import (
 )
 from bunnyland.core.events import ConversationLineEvent, EventVisibility, SpeechToldEvent
 from bunnyland.core.handlers import HandlerContext
-from bunnyland.mechanics.meter import Meter
-from bunnyland.mechanics.needs import SocialNeedComponent
-from bunnyland.mechanics.social import (
+from bunnyland.foundation.meters.mechanics import Meter
+from bunnyland.foundation.needs.mechanics import SocialNeedComponent
+from bunnyland.foundation.social.mechanics import (
     GossipClaimComponent,
     GossipReactor,
     KnowsGossip,
@@ -51,6 +51,7 @@ from bunnyland.mechanics.social import (
     relationship_fragments,
 )
 from bunnyland.persistence import WorldMeta, load_world, save_world
+from bunnyland.plugins import PluginRegistry, bunnyland_plugins
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 3600.0
@@ -173,9 +174,7 @@ def test_interpret_speech_handles_missing_listener_and_suspicious_apology():
     scenario, hazel = _scenario_with_listener()
     world = scenario.actor.world
     wary = world.get_entity(hazel)
-    wary.add_component(
-        AffectComponent(current=AffectVector(fear=10.0, stress=10.0), labels=())
-    )
+    wary.add_component(AffectComponent(current=AffectVector(fear=10.0, stress=10.0), labels=()))
     adjust_bond(world, hazel, scenario.character, {"resentment": 0.6})
 
     missing_interpretation = interpret_speech_for_listener(
@@ -363,21 +362,21 @@ async def test_promise_speech_creates_persisted_obligation_prompt(tmp_path):
     assert obligation.status == "open"
     assert obligation_entity.get_relationships(ObligationDebtor)[0][1] == scenario.character
     assert obligation_entity.get_relationships(ObligationCreditor)[0][1] == hazel
-    assert obligation_for_source(
-        world, obligation.source_event_id, scenario.character, hazel
-    ) == obligation_entity
+    assert (
+        obligation_for_source(world, obligation.source_event_id, scenario.character, hazel)
+        == obligation_entity
+    )
     assert any(
         "You owe Hazel" in line
         for line in obligation_fragments(world, world.get_entity(scenario.character))
     )
     assert any(
-        "Juniper owes you" in line
-        for line in obligation_fragments(world, world.get_entity(hazel))
+        "Juniper owes you" in line for line in obligation_fragments(world, world.get_entity(hazel))
     )
 
     path = tmp_path / "world.json"
     save_world(scenario.actor, path, meta=WorldMeta(seed="obligation"))
-    loaded, _meta = load_world(path)
+    loaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
     loaded_obligations = obligations_for(loaded.world, scenario.character)
     assert len(loaded_obligations) == 1
     assert loaded_obligations[0][1].text == "I promise I will repair the latch."
