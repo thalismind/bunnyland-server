@@ -383,6 +383,69 @@ def _migrate_v1(snapshot: dict[str, Any]) -> dict[str, Any]:
         )
         _add_edge(relationships, "RefersToSubject", rumor_id, target_id)
 
+    guard_records = components.pop("GuardComponent", {})
+    if not isinstance(guard_records, dict):
+        raise WorldMigrationError("persisted type 'GuardComponent' must contain a mapping")
+    for guard_id, fields in sorted(guard_records.items()):
+        if not isinstance(fields, dict):
+            raise WorldMigrationError(f"GuardComponent fields for {guard_id!r} must be a mapping")
+        faction_id = _live_target_or_label(
+            entities,
+            components,
+            fields.get("faction_id"),
+            owner_id=guard_id,
+            component="GuardComponent",
+            field="faction_id",
+            target_component="FactionComponent",
+            label_field="name",
+        )
+        bribe_amount = fields.get("bribe_amount", 10)
+        if not isinstance(bribe_amount, int) or isinstance(bribe_amount, bool):
+            raise WorldMigrationError(
+                f"GuardComponent.bribe_amount for {guard_id!r} must be an integer"
+            )
+        _add_edge(
+            relationships,
+            "GuardsForFaction",
+            guard_id,
+            faction_id,
+            {"bribe_amount": bribe_amount},
+        )
+
+    jail_records = components.pop("JailComponent", {})
+    if not isinstance(jail_records, dict):
+        raise WorldMigrationError("persisted type 'JailComponent' must contain a mapping")
+    for character_id, fields in sorted(jail_records.items()):
+        if not isinstance(fields, dict):
+            raise WorldMigrationError(
+                f"JailComponent fields for {character_id!r} must be a mapping"
+            )
+        faction_id = _live_target_or_label(
+            entities,
+            components,
+            fields.get("faction_id"),
+            owner_id=character_id,
+            component="JailComponent",
+            field="faction_id",
+            target_component="FactionComponent",
+            label_field="name",
+        )
+        release_epoch = fields.get("release_epoch")
+        if not isinstance(release_epoch, int) or isinstance(release_epoch, bool):
+            raise WorldMigrationError(
+                f"JailComponent.release_epoch for {character_id!r} must be an integer"
+            )
+        _add_edge(
+            relationships,
+            "JailedByFaction",
+            character_id,
+            faction_id,
+            {
+                "release_epoch": release_epoch,
+                "reason": str(fields.get("reason", "sentence")),
+            },
+        )
+
     standing_maps = (
         (
             "FactionReputationComponent",

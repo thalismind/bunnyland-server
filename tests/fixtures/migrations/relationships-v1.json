@@ -24,6 +24,8 @@
     "RumorSourceComponent": {"entity_4": {"source_id": "entity_2"}},
     "RumorTargetComponent": {"entity_4": {"target_id": "entity_6"}},
     "FactionComponent": {"entity_2": {"name": "Moss Wardens", "ideology": ""}},
+    "GuardComponent": {"entity_6": {"faction_id": "Moss Wardens", "bribe_amount": 7}},
+    "JailComponent": {"entity_1": {"faction_id": "entity_2", "release_epoch": 20, "reason": "theft"}},
     "InstitutionComponent": {"entity_3": {"name": "Cartographers", "institution_type": "guild"}},
     "LawRegionComponent": {"entity_7": {"region_id": "moss-road", "fines": {}}},
     "FactionReputationComponent": {"entity_1": {"scores": {"Moss Wardens": 5}}},

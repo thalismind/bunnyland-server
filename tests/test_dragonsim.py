@@ -57,12 +57,12 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     GreatSoulAbsorbedEvent,
     GreatSoulComponent,
     GuardBribedEvent,
-    GuardComponent,
+    GuardsForFaction,
     HasPerk,
     HasStandingWithFaction,
     IdentifyArtifactHandler,
     InscribeVoicePhraseHandler,
-    JailComponent,
+    JailedByFaction,
     JailSentenceServedEvent,
     JoinFactionHandler,
     KnowsSpell,
@@ -1984,9 +1984,9 @@ async def test_change_rank_bribe_guard_serve_jail_and_pick_lock():
         [
             IdentityComponent(name="Moss Guard", kind="character"),
             CharacterComponent(species="bunny"),
-            GuardComponent(faction_id=str(faction), bribe_amount=10),
         ],
     )
+    guard.add_relationship(GuardsForFaction(bribe_amount=10), faction)
     lock = spawn_entity(
         scenario.actor.world,
         [
@@ -2020,10 +2020,10 @@ async def test_change_rank_bribe_guard_serve_jail_and_pick_lock():
     assert character.get_relationships(WantedByFaction) == [(WantedByFaction(amount=5), faction)]
 
     character.add_relationship(WantedByFaction(amount=5), faction)
-    character.add_component(JailComponent(faction_id=str(faction), release_epoch=0))
+    character.add_relationship(JailedByFaction(release_epoch=0), faction)
     await scenario.actor.submit(_cmd(scenario, "serve-jail-time"))
     await scenario.actor.tick(HOUR)
-    assert not character.has_component(JailComponent)
+    assert not character.get_relationships(JailedByFaction)
     assert not character.get_relationships(WantedByFaction)
     assert jailed[0].faction_id == str(faction)
 
@@ -2483,7 +2483,6 @@ def test_adventure_handlers_reject_missing_and_unreachable_ids_directly():
         [
             IdentityComponent(name="far guard", kind="character"),
             CharacterComponent(),
-            GuardComponent(faction_id="f1", bribe_amount=5),
         ],
     )
     distant_lock = spawn_entity(
@@ -2784,26 +2783,15 @@ def test_bribe_guard_branches_no_wanted_and_full_clear_directly():
         [
             IdentityComponent(name="Moss Guard", kind="character"),
             CharacterComponent(species="bunny"),
-            GuardComponent(faction_id=str(faction), bribe_amount=10),
         ],
     )
+    guard.add_relationship(GuardsForFaction(bribe_amount=10), faction)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), guard.id)
     bribe = BribeGuardHandler()
 
     # No WantedByFaction edge at all.
     assert bribe.execute(ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
     assert not character.get_relationships(WantedByFaction)
-
-    unscoped_guard = spawn_entity(
-        world,
-        [
-            IdentityComponent(name="Unscoped Guard", kind="character"),
-            CharacterComponent(species="bunny"),
-            GuardComponent(faction_id="not-an-entity", bribe_amount=10),
-        ],
-    )
-    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), unscoped_guard.id)
-    assert bribe.execute(ctx, _handler_cmd(scenario, "bribe", guard_id=str(unscoped_guard.id))).ok
 
     # Wanted by a different faction.
     other_faction = spawn_entity(
@@ -2828,19 +2816,18 @@ def test_serve_jail_time_branches_directly():
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
+    faction = _faction(scenario)
 
-    # Sentence not complete (line 1649).
-    character.add_component(JailComponent(faction_id="f1", release_epoch=ctx.epoch + 1000))
+    character.add_relationship(JailedByFaction(release_epoch=ctx.epoch + 1000), faction)
     assert (
         ServeJailTimeHandler().execute(ctx, _handler_cmd(scenario, "serve-jail-time")).reason
         == "sentence is not complete"
     )
 
     # Complete sentence, no WantedByFaction edge.
-    character.remove_component(JailComponent)
-    character.add_component(JailComponent(faction_id="f1", release_epoch=0))
+    character.add_relationship(JailedByFaction(release_epoch=0), faction)
     assert ServeJailTimeHandler().execute(ctx, _handler_cmd(scenario, "serve-jail-time")).ok
-    assert not character.has_component(JailComponent)
+    assert not character.get_relationships(JailedByFaction)
 
 
 def test_study_voice_inscription_when_word_already_known_skips_relationship():
@@ -2896,12 +2883,12 @@ def test_dragonsim_fragments_show_known_spell_and_jail():
     # A known spell not present in the room (fragments lines 2390-2395).
     spell = spawn_entity(world, [SpellComponent(name="Firebolt")])
     character.add_relationship(KnowsSpell(learned_at_epoch=0), spell.id)
-    # Jail fragment (line 2401).
-    character.add_component(JailComponent(faction_id="f1", release_epoch=99))
+    faction = _faction(scenario)
+    character.add_relationship(JailedByFaction(release_epoch=99), faction)
 
     lines = dragonsim_fragments(world, character)
     assert any("Spell learned: Firebolt" in line for line in lines)
-    assert any("Serving jail time for f1" in line for line in lines)
+    assert any("Serving jail time for Moss Wardens" in line for line in lines)
 
 
 def test_cast_spell_without_skill_name_skips_xp_directly():

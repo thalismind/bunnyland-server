@@ -35,6 +35,10 @@ components:
     entity_4: {target_id: entity_6}
   FactionComponent:
     entity_2: {name: Moss Wardens, ideology: ""}
+  GuardComponent:
+    entity_6: {faction_id: Moss Wardens, bribe_amount: 7}
+  JailComponent:
+    entity_1: {faction_id: entity_2, release_epoch: 20, reason: theft}
   InstitutionComponent:
     entity_3: {name: Cartographers, institution_type: guild}
   LawRegionComponent:

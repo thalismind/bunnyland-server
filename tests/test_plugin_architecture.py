@@ -208,6 +208,8 @@ def test_live_memberships_and_aggregate_relationships_remain_edges():
         "RegionalReputationComponent": "scores",
         "LegalReputationComponent": "scores",
         "WantedComponent": "amounts",
+        "GuardComponent": "faction_id",
+        "JailComponent": "faction_id",
     }
     edge_names = {
         "AllowedIn",
@@ -228,6 +230,8 @@ def test_live_memberships_and_aggregate_relationships_remain_edges():
         "HasStandingInRegion",
         "HasLegalStandingInRegion",
         "WantedByFaction",
+        "GuardsForFaction",
+        "JailedByFaction",
     }
     found_edges: set[str] = set()
     found_classes: set[str] = set()
@@ -251,6 +255,8 @@ def test_live_memberships_and_aggregate_relationships_remain_edges():
         "RegionalReputationComponent",
         "LegalReputationComponent",
         "WantedComponent",
+        "GuardComponent",
+        "JailComponent",
     }
     assert not removed_wrappers & found_classes
     assert (

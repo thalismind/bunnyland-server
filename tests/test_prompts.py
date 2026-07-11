@@ -78,7 +78,7 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     EncounterZoneComponent,
     FactionComponent,
     GreatSoulComponent,
-    JailComponent,
+    JailedByFaction,
     KnowsSpell,
     LockDifficultyComponent,
     LoreBookComponent,
@@ -796,10 +796,14 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
         )
         == ()
     )
-    assert JailComponent(faction_id="hold", release_epoch=10).prompt_fragments(other_ctx) == ()
-    assert JailComponent(faction_id="hold", release_epoch=10).prompt_fragments(self_ctx) == (
-        "Serving jail time for hold until 10.",
-    )
+    assert JailedByFaction(release_epoch=10).prompt_fragments(other_ctx) == ()
+    assert JailedByFaction(release_epoch=10).prompt_fragments(self_ctx) == ()
+    assert JailedByFaction(release_epoch=10).prompt_fragments(
+        ComponentPromptContext.for_entity(world, character, target=faction)
+    ) == ("Serving jail time for Companions until 10.",)
+    assert JailedByFaction(release_epoch=10).prompt_fragments(
+        ComponentPromptContext.for_entity(world, character, target=entity("holding cell"))
+    ) == ("Serving jail time for holding cell until 10.",)
     assert MemberOfFaction(rank="thane").prompt_fragments(self_ctx) == ()
     assert MemberOfFaction(rank="thane").prompt_fragments(
         ComponentPromptContext.for_entity(world, character, target=faction)

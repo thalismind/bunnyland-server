@@ -16,9 +16,9 @@ from .mechanics import (
     EncounterZoneComponent,
     FactionComponent,
     GreatSoulComponent,
-    GuardComponent,
+    GuardsForFaction,
     HasStandingWithFaction,
-    JailComponent,
+    JailedByFaction,
     LockDifficultyComponent,
     LoreBookComponent,
     MagicComponent,
@@ -104,14 +104,20 @@ class DragonGenerationEnricher:
             if generation_wants(ctx, "bunnyland.dragonsim.guard") or generation_mentions(
                 ctx, "guard"
             ):
-                add(GuardComponent(faction_id=generation_generated_id(ctx, "faction")))
-            if generation_wants(ctx, "bunnyland.dragonsim.jail"):
-                add(
-                    JailComponent(
-                        faction_id=generation_generated_id(ctx, "faction"),
-                        release_epoch=ctx.world_epoch,
+                faction_id = request.context.get("faction_id")
+                if faction_id:
+                    edges.append(
+                        GenerationEdge(GuardsForFaction(), GenerationTarget(str(faction_id)))
                     )
-                )
+            if generation_wants(ctx, "bunnyland.dragonsim.jail"):
+                faction_id = request.context.get("faction_id")
+                if faction_id:
+                    edges.append(
+                        GenerationEdge(
+                            JailedByFaction(release_epoch=ctx.world_epoch),
+                            GenerationTarget(str(faction_id)),
+                        )
+                    )
             if generation_wants(ctx, "bunnyland.dragonsim.great-soul"):
                 add(GreatSoulComponent(souls=1))
             if generation_wants(ctx, "bunnyland.dragonsim.stealth") or generation_mentions(
@@ -174,16 +180,11 @@ class DragonGenerationEnricher:
             if generation_wants(ctx, "bunnyland.dragonsim.guard") or generation_mentions(
                 ctx, "guard"
             ):
-                add(GuardComponent(faction_id=generation_generated_id(ctx, "faction")))
-            if generation_wants(ctx, "bunnyland.dragonsim.jail") or generation_mentions(
-                ctx, "jail"
-            ):
-                add(
-                    JailComponent(
-                        faction_id=generation_generated_id(ctx, "faction"),
-                        release_epoch=ctx.world_epoch,
+                faction_id = request.context.get("faction_id")
+                if faction_id:
+                    edges.append(
+                        GenerationEdge(GuardsForFaction(), GenerationTarget(str(faction_id)))
                     )
-                )
             if generation_wants(ctx, "bunnyland.dragonsim.perk"):
                 add(PerkComponent(name=name, skill_name=generation_resource_type(ctx)))
             if generation_wants(ctx, "bunnyland.dragonsim.ancient-beast") or generation_mentions(

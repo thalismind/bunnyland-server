@@ -214,21 +214,28 @@ class HasStandingWithFaction(Edge):
 
 
 @dataclass(frozen=True)
-class GuardComponent(Component):
-    faction_id: str
+class GuardsForFaction(Edge):
+    """guard -> faction, carrying the amount accepted as a bribe."""
+
     bribe_amount: int = 10
 
 
 @dataclass(frozen=True)
-class JailComponent(Component):
-    faction_id: str
+class JailedByFaction(Edge):
+    """character -> faction, carrying the active sentence."""
+
     release_epoch: int
     reason: str = "sentence"
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if not ctx.is_first_person:
+        if not ctx.is_first_person or ctx.target is None:
             return ()
-        return (f"Serving jail time for {self.faction_id} until {self.release_epoch}.",)
+        faction_name = (
+            ctx.target.get_component(FactionComponent).name
+            if ctx.target.has_component(FactionComponent)
+            else _name(ctx.target)
+        )
+        return (f"Serving jail time for {faction_name} until {self.release_epoch}.",)
 
 
 @dataclass(frozen=True)
@@ -1432,6 +1439,14 @@ def _faction_bounty(character: Entity, faction_id: EntityId) -> WantedByFaction 
     )
 
 
+def _guard_assignment(guard: Entity) -> tuple[GuardsForFaction, EntityId] | None:
+    return next(iter(guard.get_relationships(GuardsForFaction)), None)
+
+
+def _jail_sentence(character: Entity) -> tuple[JailedByFaction, EntityId] | None:
+    return next(iter(character.get_relationships(JailedByFaction)), None)
+
+
 def _awake_witnesses(world: World, room_id: EntityId, thief_id: EntityId) -> list[EntityId]:
     """Awake, conscious characters sharing the room who could see a crime."""
     witnesses: list[EntityId] = []
@@ -1651,7 +1666,7 @@ class BribeGuardHandler:
         return (
             guard_id is not None
             and ctx.world.has_entity(guard_id)
-            and ctx.entity(guard_id).has_component(GuardComponent)
+            and bool(ctx.entity(guard_id).get_relationships(GuardsForFaction))
         )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
@@ -1665,17 +1680,16 @@ class BribeGuardHandler:
         if guard_id not in reachable_ids(ctx.world, character):
             return rejected("guard is not reachable")
         guard = ctx.entity(guard_id)
-        if not guard.has_component(GuardComponent):
+        assignment = _guard_assignment(guard)
+        if assignment is None:
             return rejected("target is not a guard")
-        component = guard.get_component(GuardComponent)
-        faction_id = parse_entity_id(component.faction_id)
-        if faction_id is not None:
-            bounty = _faction_bounty(character, faction_id)
-            if bounty is not None:
-                amount = max(0, bounty.amount - component.bribe_amount)
-                character.remove_relationship(WantedByFaction, faction_id)
-                if amount:
-                    character.add_relationship(WantedByFaction(amount=amount), faction_id)
+        component, faction_id = assignment
+        bounty = _faction_bounty(character, faction_id)
+        if bounty is not None:
+            amount = max(0, bounty.amount - component.bribe_amount)
+            character.remove_relationship(WantedByFaction, faction_id)
+            if amount:
+                character.add_relationship(WantedByFaction(amount=amount), faction_id)
         return ok(
             GuardBribedEvent(
                 **ctx.event_base(
@@ -1684,7 +1698,7 @@ class BribeGuardHandler:
                     room_id=_room_id(ctx.world, character_id),
                     target_ids=(str(guard_id),),
                     guard_id=str(guard_id),
-                    faction_id=component.faction_id,
+                    faction_id=str(faction_id),
                     amount=component.bribe_amount,
                 )
             )
@@ -1699,15 +1713,14 @@ class ServeJailTimeHandler:
         if character_id is None:
             return rejected("invalid character id")
         character = ctx.entity(character_id)
-        if not character.has_component(JailComponent):
+        sentence_record = _jail_sentence(character)
+        if sentence_record is None:
             return rejected("not jailed")
-        sentence = character.get_component(JailComponent)
+        sentence, faction_id = sentence_record
         if ctx.epoch < sentence.release_epoch:
             return rejected("sentence is not complete")
-        character.remove_component(JailComponent)
-        faction_id = parse_entity_id(sentence.faction_id)
-        if faction_id is not None:
-            character.remove_relationship(WantedByFaction, faction_id)
+        character.remove_relationship(JailedByFaction, faction_id)
+        character.remove_relationship(WantedByFaction, faction_id)
         return ok(
             JailSentenceServedEvent(
                 **ctx.event_base(
@@ -1715,7 +1728,7 @@ class ServeJailTimeHandler:
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
                     character_id=str(character_id),
-                    faction_id=sentence.faction_id,
+                    faction_id=str(faction_id),
                 )
             )
         )
@@ -2448,8 +2461,12 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
         lines.extend(character.get_component(MagicComponent).prompt_fragments(ctx))
     if character.has_component(SurrenderComponent):
         lines.extend(character.get_component(SurrenderComponent).prompt_fragments(ctx))
-    if character.has_component(JailComponent):
-        lines.extend(character.get_component(JailComponent).prompt_fragments(ctx))
+    for edge, faction_id in character.get_relationships(JailedByFaction):
+        faction = world.get_entity(faction_id)
+        edge_ctx = ComponentPromptContext.for_entity(
+            world, character, perspective=ctx.perspective, target=faction
+        )
+        lines.extend(edge.prompt_fragments(edge_ctx))
 
     if _is_sneaking(character):
         lines.append("You are sneaking.")
@@ -2520,12 +2537,12 @@ __all__ = [
     "FactionRankChangedEvent",
     "HasStandingWithFaction",
     "GuardBribedEvent",
-    "GuardComponent",
+    "GuardsForFaction",
     "GreatSoulAbsorbedEvent",
     "GreatSoulComponent",
     "HasPerk",
     "JoinFactionHandler",
-    "JailComponent",
+    "JailedByFaction",
     "JailSentenceServedEvent",
     "KnowsWord",
     "KnowsSpell",

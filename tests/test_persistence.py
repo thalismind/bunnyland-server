@@ -443,6 +443,12 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v2(tmp_path, suffix)
         "HasStandingInRegion": ("entity_1", "entity_7", {"score": 2}),
         "HasLegalStandingInRegion": ("entity_1", "entity_7", {"score": -4}),
         "WantedByFaction": ("entity_1", "entity_2", {"amount": 10}),
+        "GuardsForFaction": ("entity_6", "entity_2", {"bribe_amount": 7}),
+        "JailedByFaction": (
+            "entity_1",
+            "entity_2",
+            {"release_epoch": 20, "reason": "theft"},
+        ),
     }
     for edge_name, (source_id, target_id, edge) in expected.items():
         record = migrated["relationships"][edge_name][source_id][0]
@@ -596,6 +602,60 @@ def test_schema_v1_standing_component_tables_must_be_mappings(component):
 
     with pytest.raises(WorldMigrationError, match=rf"persisted type '{component}'.*mapping"):
         migrate_snapshot(source)
+
+
+@pytest.mark.parametrize(
+    ("component", "value_field"),
+    [("GuardComponent", "bribe_amount"), ("JailComponent", "release_epoch")],
+)
+def test_schema_v1_faction_role_edges_reject_malformed_records(component, value_field):
+    malformed_table = _schema_v1_generated_quest_snapshot()
+    malformed_table["components"][component] = []
+    with pytest.raises(WorldMigrationError, match=rf"persisted type '{component}'.*mapping"):
+        migrate_snapshot(malformed_table)
+
+    malformed_fields = _schema_v1_generated_quest_snapshot()
+    malformed_fields["components"][component] = {"entity_1": []}
+    with pytest.raises(WorldMigrationError, match=rf"{component} fields.*mapping"):
+        migrate_snapshot(malformed_fields)
+
+    missing_target = _schema_v1_generated_quest_snapshot()
+    missing_target["components"][component] = {
+        "entity_1": {"faction_id": "missing", value_field: 1}
+    }
+    with pytest.raises(WorldMigrationError, match=rf"{component}\.faction_id.*'missing'"):
+        migrate_snapshot(missing_target)
+
+    wrong_type = _schema_v1_generated_quest_snapshot()
+    wrong_type["components"][component] = {"entity_1": {"faction_id": "entity_2", value_field: 1}}
+    with pytest.raises(WorldMigrationError, match="entity_2.*without FactionComponent"):
+        migrate_snapshot(wrong_type)
+
+    malformed_value = _schema_v1_generated_quest_snapshot()
+    malformed_value["components"]["FactionComponent"] = {"entity_2": {"name": "Wardens"}}
+    malformed_value["components"][component] = {
+        "entity_1": {"faction_id": "entity_2", value_field: "many"}
+    }
+    with pytest.raises(WorldMigrationError, match=rf"{component}\.{value_field}.*integer"):
+        migrate_snapshot(malformed_value)
+
+
+def test_schema_v1_faction_role_edges_apply_default_properties():
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"]["FactionComponent"] = {"entity_2": {"name": "Wardens"}}
+    source["components"]["GuardComponent"] = {"entity_3": {"faction_id": "Wardens"}}
+    source["components"]["JailComponent"] = {
+        "entity_1": {"faction_id": "Wardens", "release_epoch": 12}
+    }
+
+    migrated = migrate_snapshot(source)
+
+    assert migrated["relationships"]["GuardsForFaction"]["entity_3"] == [
+        {"target": "entity_2", "edge": {"bribe_amount": 10}}
+    ]
+    assert migrated["relationships"]["JailedByFaction"]["entity_1"] == [
+        {"target": "entity_2", "edge": {"release_epoch": 12, "reason": "sentence"}}
+    ]
 
 
 def test_schema_v1_migration_handles_collisions_and_unaccepted_generated_quests():

@@ -26,7 +26,8 @@ from bunnyland.simpacks.dinosim.mechanics import (
 from bunnyland.simpacks.dragonsim.mechanics import (
     ArtifactComponent,
     BribeGuardHandler,
-    GuardComponent,
+    FactionComponent,
+    GuardsForFaction,
     IdentifyArtifactHandler,
 )
 from bunnyland.simpacks.gardensim.mechanics import (
@@ -98,6 +99,12 @@ def _item_id(entity):
 def test_shared_verb_handlers_accept_target_id_for_matching_components():
     scenario = build_scenario()
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    faction = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Hold", kind="faction"), FactionComponent(name="Hold")],
+    )
+    guard = _room_entity(scenario, "guard", "guard", [])
+    guard.add_relationship(GuardsForFaction(), faction.id)
     cases = [
         (
             InspectCropHandler(),
@@ -196,9 +203,7 @@ def test_shared_verb_handlers_accept_target_id_for_matching_components():
         (
             BribeGuardHandler(),
             "bribe",
-            _target_id(
-                _room_entity(scenario, "guard", "guard", [GuardComponent(faction_id="hold")])
-            ),
+            _target_id(guard),
         ),
         (
             IdentifyArtifactHandler(),
