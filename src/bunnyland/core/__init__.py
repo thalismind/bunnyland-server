@@ -154,6 +154,7 @@ from .generation import (
     GenerationPipeline,
     GenerationPlan,
     GenerationRequest,
+    GenerationTarget,
 )
 from .handlers import (
     CloseHandler,
@@ -256,6 +257,7 @@ __all__ = [
     "GenerationPipeline",
     "GenerationPlan",
     "GenerationRequest",
+    "GenerationTarget",
     "EntityInspectedEvent",
     "EntityLockedEvent",
     "EntityUnlockedEvent",

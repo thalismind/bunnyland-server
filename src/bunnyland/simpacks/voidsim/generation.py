@@ -1,6 +1,64 @@
-"""voidsim generation contribution compatibility surface."""
+"""Declarative voidsim generation contributions."""
 
-from ...worldgen.enrichment import ComponentPlanEnricher, VoidWorldgenHook
+from ...core.generation import GenerationDelta, GenerationRequest
+from ...worldgen.enrichment import (
+    GenerationContext,
+    generation_mentions,
+    generation_orbital_body_type,
+    generation_resource_type,
+    generation_wants,
+)
+from .mechanics import (
+    AirlockComponent,
+    AlienArtifactComponent,
+    AlienSpeciesComponent,
+    AstrogationComponent,
+    AwayTeamComponent,
+    BlueprintComponent,
+    BoardingThreatComponent,
+    CargoComponent,
+    ContractComponent,
+    CustomsHoldComponent,
+    DataSalvageComponent,
+    DiplomaticMissionComponent,
+    DistressSignalComponent,
+    DroneComponent,
+    EmergencyComponent,
+    FabricatorComponent,
+    FirstContactComponent,
+    FuelComponent,
+    GravityComponent,
+    HabitatModuleComponent,
+    InsurancePolicyComponent,
+    JumpDriveComponent,
+    LifeSupportComponent,
+    MiningSiteComponent,
+    MoraleComponent,
+    MortgageComponent,
+    MutinyComponent,
+    NavigationRouteComponent,
+    OrbitalBodyComponent,
+    OrbitComponent,
+    OxygenComponent,
+    PassengerComponent,
+    PowerGridComponent,
+    PressurizedComponent,
+    QuarantineComponent,
+    ReactorComponent,
+    SalvageClaimComponent,
+    SensorComponent,
+    ShipAIComponent,
+    ShipComponent,
+    ShipSystemComponent,
+    ShipUpgradeComponent,
+    SmugglingCompartmentComponent,
+    StarSystemComponent,
+    StationComponent,
+    SurveySiteComponent,
+    TradeProtocolComponent,
+    TranslationMatrixComponent,
+    XenobiologySampleComponent,
+)
 
 CAPABILITIES = (
     "bunnyland.voidsim.airlock",
@@ -48,6 +106,7 @@ CAPABILITIES = (
     "bunnyland.voidsim.translation-matrix",
     "bunnyland.voidsim.xenobiology-sample",
 )
+
 ALIASES = {
     "airlock": "bunnyland.voidsim.airlock",
     "alien-artifact": "bunnyland.voidsim.alien-artifact",
@@ -94,6 +153,157 @@ ALIASES = {
     "translation-matrix": "bunnyland.voidsim.translation-matrix",
     "xenobiology-sample": "bunnyland.voidsim.xenobiology-sample",
 }
-GENERATION_ENRICHER = ComponentPlanEnricher(VoidWorldgenHook, provided_capabilities=CAPABILITIES)
 
-__all__ = ["GENERATION_ENRICHER", "VoidWorldgenHook"]
+
+class VoidGenerationEnricher:
+    capabilities: tuple[str, ...] = ()
+
+    def enrich(self, request: GenerationRequest) -> GenerationDelta:
+        ctx = GenerationContext.from_request(request)
+        components = {}
+
+        def add(component):
+            components[type(component)] = component
+
+        if ctx.is_room:
+            name = ctx.name
+            if generation_wants(ctx, "ship") or generation_mentions(ctx, "ship", "starship"):
+                add(ShipComponent(name=name))
+                add(PowerGridComponent())
+            if generation_wants(ctx, "station") or generation_mentions(ctx, "station"):
+                add(StationComponent(name=name))
+            if generation_wants(ctx, "habitat-module", "ship") or generation_mentions(
+                ctx, "module", "airlock", "ship"
+            ):
+                add(HabitatModuleComponent(module_type=ctx.biome))
+                add(PressurizedComponent())
+                add(LifeSupportComponent())
+                add(OxygenComponent(last_updated_epoch=ctx.world_epoch))
+            if generation_wants(ctx, "airlock") or generation_mentions(ctx, "airlock"):
+                add(AirlockComponent())
+            if generation_wants(ctx, "star-system"):
+                add(StarSystemComponent(name=name))
+            if generation_wants(ctx, "orbital-body") or generation_mentions(
+                ctx, "planet", "moon", "asteroid"
+            ):
+                add(OrbitalBodyComponent(body_type=generation_orbital_body_type(ctx)))
+            if generation_wants(ctx, "survey-site") or generation_mentions(ctx, "survey site"):
+                add(SurveySiteComponent(resource=generation_resource_type(ctx)))
+            if generation_wants(ctx, "mining-site") or generation_mentions(
+                ctx, "mining site", "asteroid mine"
+            ):
+                add(MiningSiteComponent(resource_type=generation_resource_type(ctx)))
+            if generation_wants(ctx, "salvage-claim") or generation_mentions(
+                ctx, "salvage site", "derelict"
+            ):
+                add(SalvageClaimComponent(site_id=ctx.entity_id))
+            if generation_wants(ctx, "contract"):
+                add(ContractComponent(contract_type=generation_resource_type(ctx)))
+            if generation_wants(ctx, "emergency") or generation_mentions(ctx, "emergency"):
+                add(EmergencyComponent(emergency_type=generation_resource_type(ctx)))
+            if generation_wants(ctx, "reactor") or generation_mentions(ctx, "reactor"):
+                add(ReactorComponent())
+            if generation_wants(ctx, "gravity"):
+                add(GravityComponent())
+        elif ctx.is_character:
+            pass
+        else:
+            name = ctx.name
+            resource_type = generation_resource_type(ctx)
+            if generation_wants(ctx, "ship-system"):
+                add(ShipSystemComponent(system_type=ctx.entity_kind))
+            if generation_wants(ctx, "jump-drive") or generation_mentions(ctx, "jump drive"):
+                add(JumpDriveComponent())
+            if generation_wants(ctx, "fuel") or generation_mentions(ctx, "fuel"):
+                add(FuelComponent())
+            if generation_wants(ctx, "sensor") or generation_mentions(ctx, "sensor"):
+                add(SensorComponent())
+            if generation_wants(ctx, "distress-signal") or generation_mentions(
+                ctx, "distress signal"
+            ):
+                add(DistressSignalComponent(text=ctx.intent or "distress signal"))
+            if generation_wants(ctx, "fabricator") or generation_mentions(ctx, "fabricator"):
+                add(FabricatorComponent())
+            if generation_wants(ctx, "blueprint") or generation_mentions(ctx, "blueprint"):
+                add(BlueprintComponent(name=name, system_type=resource_type))
+            if generation_wants(ctx, "ship-upgrade"):
+                add(ShipUpgradeComponent(system_type=resource_type))
+            if generation_wants(ctx, "contract") or generation_mentions(ctx, "contract"):
+                add(ContractComponent(contract_type=resource_type))
+            if generation_wants(ctx, "cargo"):
+                add(CargoComponent(cargo_type=resource_type))
+            if generation_wants(ctx, "salvage-claim") or generation_mentions(ctx, "salvage claim"):
+                add(SalvageClaimComponent(site_id=ctx.entity_id))
+            if generation_wants(ctx, "alien-species") or generation_mentions(ctx, "alien species"):
+                add(AlienSpeciesComponent(name=name))
+            if generation_wants(ctx, "first-contact"):
+                add(FirstContactComponent(species_id=ctx.entity_id))
+            if generation_wants(ctx, "translation-matrix"):
+                add(TranslationMatrixComponent(species_id=ctx.entity_id))
+            if generation_wants(ctx, "quarantine") or generation_mentions(ctx, "quarantine"):
+                add(QuarantineComponent(reason=ctx.intent or name))
+            if generation_wants(ctx, "diplomatic-mission"):
+                add(DiplomaticMissionComponent(species_id=ctx.entity_id))
+            if generation_wants(ctx, "alien-artifact") or generation_mentions(
+                ctx, "alien artifact"
+            ):
+                add(AlienArtifactComponent(species_id=ctx.entity_id))
+            if generation_wants(ctx, "xenobiology-sample"):
+                add(XenobiologySampleComponent(species_id=ctx.entity_id))
+            if generation_wants(ctx, "trade-protocol"):
+                add(TradeProtocolComponent(species_id=ctx.entity_id))
+            if generation_wants(ctx, "drone"):
+                add(DroneComponent(drone_type=resource_type))
+            if generation_wants(ctx, "ship-ai") or generation_mentions(ctx, "ship ai"):
+                add(ShipAIComponent(name=name))
+            if generation_wants(ctx, "data-salvage") or generation_mentions(ctx, "data salvage"):
+                add(DataSalvageComponent(data_type=resource_type))
+            if generation_wants(ctx, "away-team"):
+                add(AwayTeamComponent(mission=resource_type))
+            if generation_wants(ctx, "morale"):
+                add(MoraleComponent())
+            if generation_wants(ctx, "mutiny"):
+                add(MutinyComponent())
+            if generation_wants(ctx, "emergency"):
+                add(EmergencyComponent(emergency_type=resource_type))
+            if generation_wants(ctx, "reactor") or generation_mentions(ctx, "reactor"):
+                add(ReactorComponent())
+            if generation_wants(ctx, "gravity"):
+                add(GravityComponent())
+            if generation_wants(ctx, "boarding-threat") or generation_mentions(
+                ctx, "boarding threat"
+            ):
+                add(BoardingThreatComponent())
+            if generation_wants(ctx, "passenger"):
+                add(PassengerComponent())
+            if generation_wants(ctx, "survey-site"):
+                add(SurveySiteComponent(resource=resource_type))
+            if generation_wants(ctx, "mining-site"):
+                add(MiningSiteComponent(resource_type=resource_type))
+            if generation_wants(ctx, "customs-hold"):
+                add(CustomsHoldComponent())
+            if generation_wants(ctx, "smuggling-compartment"):
+                add(SmugglingCompartmentComponent())
+            if generation_wants(ctx, "insurance-policy"):
+                add(InsurancePolicyComponent(insured_entity_id=ctx.entity_id))
+            if generation_wants(ctx, "mortgage"):
+                add(MortgageComponent())
+            if generation_wants(ctx, "orbital-body"):
+                add(OrbitalBodyComponent(body_type=generation_orbital_body_type(ctx)))
+            if generation_wants(ctx, "orbit"):
+                add(OrbitComponent(body_id=ctx.entity_id))
+            if generation_wants(ctx, "navigation-route"):
+                add(NavigationRouteComponent(destination_id=ctx.entity_id))
+            if generation_wants(ctx, "astrogation"):
+                add(AstrogationComponent())
+        return GenerationDelta(
+            components=tuple(components.values()),
+            satisfies=tuple(
+                capability for capability in request.capabilities if capability in CAPABILITIES
+            ),
+        )
+
+
+GENERATION_ENRICHER = VoidGenerationEnricher()
+
+__all__ = ["GENERATION_ENRICHER", "VoidGenerationEnricher"]

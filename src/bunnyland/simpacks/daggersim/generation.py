@@ -1,6 +1,67 @@
-"""daggersim generation contribution compatibility surface."""
+"""Declarative daggersim generation contributions."""
 
-from ...worldgen.enrichment import ComponentPlanEnricher, DaggerWorldgenHook
+from ...core.generation import GenerationDelta, GenerationRequest
+from ...worldgen.enrichment import (
+    GenerationContext,
+    generation_expansion_trigger,
+    generation_generated_id,
+    generation_mentions,
+    generation_wants,
+)
+from .mechanics import (
+    AfflictionStigmaComponent,
+    AutomapComponent,
+    BankComponent,
+    BountyComponent,
+    CampingComponent,
+    ClassTemplateComponent,
+    ConversationToneComponent,
+    CreatureLanguageComponent,
+    CustomClassComponent,
+    CustomSpellComponent,
+    DialogueApproachComponent,
+    DungeonComponent,
+    DungeonObjectiveComponent,
+    DungeonRoomComponent,
+    EnchantedItemComponent,
+    EtiquetteSkillComponent,
+    ExpansionHookComponent,
+    FeedingNeedComponent,
+    HostilityComponent,
+    IngredientComponent,
+    InstitutionComponent,
+    InstitutionDuesComponent,
+    InstitutionReputationComponent,
+    InstitutionServiceComponent,
+    LanguageSkillComponent,
+    LawRegionComponent,
+    LegalReputationComponent,
+    LodgingComponent,
+    PotionMakerComponent,
+    ProceduralSiteComponent,
+    PropertyDeedComponent,
+    RecallAnchorComponent,
+    RechargeServiceComponent,
+    RegionalReputationComponent,
+    RestRiskComponent,
+    RumorComponent,
+    RumorReliabilityComponent,
+    RumorSourceComponent,
+    RumorTargetComponent,
+    SecretDoorComponent,
+    ServiceAccessComponent,
+    SocialRegisterComponent,
+    SpellTemplateComponent,
+    StreetwiseSkillComponent,
+    SupernaturalAfflictionComponent,
+    TravelHubComponent,
+    TravelInterruptionComponent,
+    TravelModeComponent,
+    TravelSupplyComponent,
+    UnrealizedLocationComponent,
+)
+
+_DEFAULT_EXPANSION_GENERATOR = "worldgen.recursive"
 
 CAPABILITIES = (
     "bunnyland.daggersim.affliction-stigma",
@@ -57,6 +118,7 @@ CAPABILITIES = (
     "bunnyland.daggersim.travel-supply",
     "bunnyland.daggersim.unrealized-location",
 )
+
 ALIASES = {
     "affliction-stigma": "bunnyland.daggersim.affliction-stigma",
     "automap": "bunnyland.daggersim.automap",
@@ -112,6 +174,175 @@ ALIASES = {
     "travel-supply": "bunnyland.daggersim.travel-supply",
     "unrealized-location": "bunnyland.daggersim.unrealized-location",
 }
-GENERATION_ENRICHER = ComponentPlanEnricher(DaggerWorldgenHook, provided_capabilities=CAPABILITIES)
 
-__all__ = ["GENERATION_ENRICHER", "DaggerWorldgenHook"]
+
+class DaggerGenerationEnricher:
+    capabilities: tuple[str, ...] = ()
+
+    def enrich(self, request: GenerationRequest) -> GenerationDelta:
+        ctx = GenerationContext.from_request(request)
+        components = {}
+
+        def add(component):
+            components[type(component)] = component
+
+        if ctx.is_room:
+            name = ctx.name
+            if generation_wants(ctx, "procedural-site"):
+                add(ProceduralSiteComponent(site_type=ctx.biome, seed=ctx.seed))
+            if generation_wants(ctx, "unrealized-location") or generation_mentions(
+                ctx, "unrealized location"
+            ):
+                add(
+                    UnrealizedLocationComponent(summary=ctx.intent or name, region_id=ctx.entity_id)
+                )
+            if generation_wants(ctx, "expansion-hook"):
+                add(
+                    ExpansionHookComponent(
+                        trigger=generation_expansion_trigger(ctx),
+                        generator_plugin_id=_DEFAULT_EXPANSION_GENERATOR,
+                    )
+                )
+            if generation_wants(ctx, "dungeon") or generation_mentions(
+                ctx, "dungeon", "crypt", "vault"
+            ):
+                add(
+                    DungeonComponent(
+                        dungeon_id=ctx.room_key,
+                        theme=ctx.biome,
+                        seed=ctx.seed,
+                        entry_room_id=ctx.entity_id,
+                    )
+                )
+                add(DungeonRoomComponent(dungeon_id=ctx.room_key, discovered=True))
+            if generation_wants(ctx, "travel-hub") or generation_mentions(
+                ctx, "crossroads", "station"
+            ):
+                add(TravelHubComponent(name=name))
+            if generation_wants(ctx, "travel-mode"):
+                add(TravelModeComponent(mode=ctx.biome or "foot"))
+            if generation_wants(ctx, "institution") or generation_mentions(
+                ctx, "guild", "temple", "bank"
+            ):
+                add(InstitutionComponent(name=name))
+            if generation_wants(ctx, "institution-service"):
+                add(InstitutionServiceComponent(service_name=name))
+            if generation_wants(ctx, "institution-dues"):
+                add(InstitutionDuesComponent(amount_due=10))
+            if generation_wants(ctx, "bank") or generation_mentions(ctx, "bank"):
+                add(BankComponent(name=name, region_id=ctx.entity_id))
+            if generation_wants(ctx, "law-region"):
+                add(LawRegionComponent(region_id=ctx.entity_id, fines={"trespass": 5}))
+            if generation_wants(ctx, "property-deed"):
+                add(PropertyDeedComponent(property_id=ctx.entity_id, region_id=ctx.entity_id))
+            if generation_wants(ctx, "lodging") or generation_mentions(ctx, "inn", "lodging"):
+                add(LodgingComponent(price=5))
+            if generation_wants(ctx, "camping") or generation_mentions(ctx, "camp"):
+                add(CampingComponent(risk="low", started_at_epoch=ctx.world_epoch))
+            if generation_wants(ctx, "travel-supply"):
+                add(TravelSupplyComponent(quantity=3))
+            if generation_wants(ctx, "travel-interruption"):
+                add(TravelInterruptionComponent(reason=ctx.intent or "worldgen"))
+            if generation_wants(ctx, "rest-risk"):
+                add(RestRiskComponent(band="uneasy", note=ctx.intent or name))
+        elif ctx.is_character:
+            name = ctx.name
+            if generation_wants(ctx, "bounty"):
+                add(BountyComponent(amount=10, region_id=ctx.room_id))
+            if generation_wants(ctx, "regional-reputation"):
+                add(RegionalReputationComponent(scores={ctx.room_id: 1}))
+            if generation_wants(ctx, "institution-reputation"):
+                add(
+                    InstitutionReputationComponent(
+                        scores={generation_generated_id(ctx, "institution"): 1}
+                    )
+                )
+            if generation_wants(ctx, "legal-reputation"):
+                add(LegalReputationComponent(scores={ctx.room_id: 0}))
+            if generation_wants(ctx, "service-access"):
+                add(ServiceAccessComponent(service_ids=(generation_generated_id(ctx, "service"),)))
+            if generation_wants(ctx, "class-template"):
+                add(ClassTemplateComponent(class_name=name, primary_skills=tuple(ctx.tags)))
+            if generation_wants(ctx, "custom-class"):
+                add(CustomClassComponent(class_name=name, primary_skills=tuple(ctx.tags)))
+            if generation_wants(ctx, "language-skill"):
+                add(LanguageSkillComponent(languages={ctx.species: 1}))
+            if generation_wants(ctx, "supernatural-affliction"):
+                add(
+                    SupernaturalAfflictionComponent(
+                        affliction_type=ctx.intent or "worldgen",
+                        contracted_at_epoch=ctx.world_epoch,
+                    )
+                )
+            if generation_wants(ctx, "affliction-stigma"):
+                add(AfflictionStigmaComponent(region_id=ctx.room_id))
+            if generation_wants(ctx, "feeding-need"):
+                add(FeedingNeedComponent(current=1.0, last_updated_epoch=ctx.world_epoch))
+            if generation_wants(ctx, "recall-anchor"):
+                add(RecallAnchorComponent(room_id=ctx.room_id))
+            if generation_wants(ctx, "dialogue-approach"):
+                add(DialogueApproachComponent(last_approach="worldgen"))
+            if generation_wants(ctx, "etiquette-skill"):
+                add(EtiquetteSkillComponent(level=1))
+            if generation_wants(ctx, "streetwise-skill"):
+                add(StreetwiseSkillComponent(level=1))
+            if generation_wants(ctx, "social-register"):
+                add(SocialRegisterComponent(register=ctx.species))
+            if generation_wants(ctx, "conversation-tone"):
+                add(ConversationToneComponent(tone="curious", last_reaction=ctx.intent or name))
+        else:
+            name = ctx.name
+            if generation_wants(ctx, "expansion-hook"):
+                add(
+                    ExpansionHookComponent(
+                        trigger=generation_expansion_trigger(ctx),
+                        generator_plugin_id=_DEFAULT_EXPANSION_GENERATOR,
+                    )
+                )
+            if generation_wants(ctx, "rumor") or generation_mentions(ctx, "rumor"):
+                add(RumorComponent(text=ctx.intent or name))
+            if generation_wants(ctx, "rumor-source"):
+                add(RumorSourceComponent(source_id=ctx.room_id))
+            if generation_wants(ctx, "rumor-reliability"):
+                add(RumorReliabilityComponent(score=0.75))
+            if generation_wants(ctx, "rumor-target"):
+                add(RumorTargetComponent(target_id=ctx.room_id or ctx.entity_id))
+            if generation_wants(ctx, "bank") or generation_mentions(ctx, "bank"):
+                add(BankComponent(name=name, region_id=ctx.room_id or ""))
+            if generation_wants(ctx, "spell-template"):
+                add(SpellTemplateComponent(spell_name=name, effect_type="worldgen", magnitude=1.0))
+            if generation_wants(ctx, "custom-spell"):
+                add(CustomSpellComponent(spell_name=name, effect_type="worldgen", magnitude=1.0))
+            if generation_wants(ctx, "enchanted-item"):
+                add(EnchantedItemComponent(spell_name=name, effect_type="worldgen", magnitude=1.0))
+            if generation_wants(ctx, "potion-maker"):
+                add(PotionMakerComponent(recipe_name=name, output_item_name=f"{name} potion"))
+            if generation_wants(ctx, "recharge-service"):
+                add(RechargeServiceComponent(charge_amount=1))
+            if generation_wants(ctx, "ingredient"):
+                add(IngredientComponent(ingredient_name=name, effect=ctx.intent or "worldgen"))
+            if generation_wants(ctx, "creature-language"):
+                add(CreatureLanguageComponent(language=ctx.entity_kind))
+            if generation_wants(ctx, "hostility"):
+                add(HostilityComponent(hostile=True))
+            if generation_wants(ctx, "dungeon-objective"):
+                add(
+                    DungeonObjectiveComponent(
+                        objective_kind=ctx.entity_kind, description=ctx.intent or name
+                    )
+                )
+            if generation_wants(ctx, "secret-door") or generation_mentions(ctx, "secret door"):
+                add(SecretDoorComponent(target_room_id=ctx.room_id or ctx.entity_id, hint=name))
+            if generation_wants(ctx, "automap"):
+                add(AutomapComponent(marked_rooms=(ctx.room_id,) if ctx.room_id else ()))
+        return GenerationDelta(
+            components=tuple(components.values()),
+            satisfies=tuple(
+                capability for capability in request.capabilities if capability in CAPABILITIES
+            ),
+        )
+
+
+GENERATION_ENRICHER = DaggerGenerationEnricher()
+
+__all__ = ["GENERATION_ENRICHER", "DaggerGenerationEnricher"]

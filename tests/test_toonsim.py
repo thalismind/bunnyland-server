@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from conftest import build_scenario
 
 from bunnyland.core import (
@@ -215,10 +213,24 @@ async def test_install_registers_consequence_and_runs_on_tick():
     assert room.get_component(SpriteLayerComponent).layer == LAYER_BACKGROUND
 
 
-async def test_worldgen_hook_places_items_on_table_without_changing_containment():
+async def test_declarative_worldgen_places_items_before_publishing_events():
+    from bunnyland.core import parse_entity_id
+    from bunnyland.core.events import ObjectGeneratedEvent
+
     scenario = build_scenario()
     actor = scenario.actor
     apply_plugins([toonsim_plugin()], actor)
+    observed = []
+
+    def observe_generated(event):
+        if event.object_key == "apple":
+            entity = actor.world.get_entity(parse_entity_id(event.entity_id))
+            observed.append(
+                entity.has_component(SpritePositionComponent)
+                and bool(entity.get_relationships(PlacedOn))
+            )
+
+    actor.bus.subscribe(ObjectGeneratedEvent, observe_generated)
     proposal = WorldProposal(
         seed="toon table",
         rooms=[RoomSpec(key="room", title="Breakfast Nook")],
@@ -248,6 +260,7 @@ async def test_worldgen_hook_places_items_on_table_without_changing_containment(
     assert room.has_relationship(Contains, table.id)
     assert room.has_relationship(Contains, apple.id)
     assert apple.has_relationship(PlacedOn, table.id)
+    assert observed == [True]
 
     table_pos = table.get_component(SpritePositionComponent)
     table_bounds = table.get_component(SpriteBoundsComponent)
@@ -303,6 +316,13 @@ def test_generated_positions_cover_directions_and_floor_fallback():
     unnamed_door = spawn_entity(
         world, [DoorComponent(), SpriteBoundsComponent(width=10.0, height=8.0)]
     )
+    desk = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="desk", kind="desk"),
+            SpriteBoundsComponent(width=22.0, height=12.0, solid=True),
+        ],
+    )
 
     assert 30.0 <= toonsim._generated_position(world, character, room, "c").x <= 70.0
     assert toonsim._generated_position(world, north, room, "n").y == 4.0
@@ -310,6 +330,8 @@ def test_generated_positions_cover_directions_and_floor_fallback():
     assert toonsim._generated_position(world, east, room, "e").x == 95.0
     assert toonsim._generated_position(world, west, room, "w").x == 5.0
     assert 5.0 <= toonsim._generated_position(world, unnamed_door, room, "u").x <= 95.0
+    assert toonsim.default_bounds_for(desk).width == 22.0
+    assert 11.0 <= toonsim._generated_position(world, desk, room, "desk").x <= 89.0
 
     pos = toonsim._generated_position(world, floor_item, room, "floor")
     assert 2.0 <= pos.x <= 98.0
@@ -345,117 +367,86 @@ def test_generated_surface_position_preserves_existing_placed_on_edge():
     assert unplaced.has_relationship(PlacedOn, surface.id)
 
 
-def test_worldgen_hook_ignores_invalid_or_non_room_events():
-    scenario = build_scenario()
-    hook = toonsim.ToonWorldgenHook()
-    hook.actor = scenario.actor
-    room = scenario.actor.world.get_entity(scenario.room_a)
+def test_declarative_generation_preserves_explicit_parts_and_skips_abstract_defaults():
+    from bunnyland.core.components import RoomComponent
+    from bunnyland.core.generation import GenerationRequest
+    from bunnyland.simpacks.toonsim.generation import ToonGenerationEnricher
 
-    hook._on_room(SimpleNamespace(entity_id="bad-id"))
-    hook._on_object(SimpleNamespace(entity_id="bad-id", room_id=None, container_id=None))
-    hook._on_object(
-        SimpleNamespace(
-            entity_id=str(scenario.character),
-            room_id=str(scenario.room_a),
-            container_id=str(scenario.character),
-            object_key="nested",
+    explicit = (
+        IdentityComponent(name="apple", kind="food"),
+        PortableComponent(),
+        SpriteImageComponent(url="https://cdn/apple.png"),
+        SpriteScaleComponent(scale=2.0),
+        SpriteBoundsComponent(width=9.0, height=9.0),
+        SpritePositionComponent(x=22.0, y=33.0),
+    )
+    delta = ToonGenerationEnricher().enrich(
+        GenerationRequest(
+            entity_kind="food",
+            source_key="apple",
+            context={"base_components": explicit},
         )
     )
-    hook._on_object(
-        SimpleNamespace(
-            entity_id=str(scenario.character),
-            room_id="entity_999",
-            container_id="entity_999",
-            object_key="missing",
+    assert {type(component) for component in delta.components} == {SpriteLayerComponent}
+
+    abstract = ToonGenerationEnricher().enrich(
+        GenerationRequest(
+            entity_kind="faction",
+            source_key="faction",
+            context={"base_components": (IdentityComponent(name="The Warren", kind="faction"),)},
         )
     )
-    hook._on_character(SimpleNamespace(entity_id="entity_999", room_id=str(scenario.room_a)))
+    assert {type(component) for component in abstract.components} == {
+        SpriteImageComponent,
+        SpriteScaleComponent,
+    }
 
-    assert not room.has_component(ToonRoomComponent)
-
-
-def test_worldgen_hook_preserves_explicit_renderable_parts():
-    scenario = build_scenario()
-    actor = scenario.actor
-    hook = toonsim.ToonWorldgenHook()
-    hook.actor = actor
-    room = actor.world.get_entity(scenario.room_a)
-    room.add_component(ToonRoomComponent(default_start=True))
-    room.add_component(SpritePositionComponent(x=12.0, y=34.0))
-    entity = spawn_entity(
-        actor.world,
-        [
-            IdentityComponent(name="apple", kind="food"),
-            PortableComponent(),
-            SpriteImageComponent(url="https://cdn/apple.png"),
-            SpriteScaleComponent(scale=2.0),
-            SpriteBoundsComponent(width=9.0, height=9.0),
-            SpritePositionComponent(x=22.0, y=33.0),
-        ],
-    )
-    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
-
-    hook._on_room(SimpleNamespace(entity_id=str(room.id)))
-    hook._on_object(
-        SimpleNamespace(
-            entity_id=str(entity.id),
-            room_id=str(room.id),
-            container_id=str(room.id),
-            object_key="apple",
+    character = ToonGenerationEnricher().enrich(
+        GenerationRequest(
+            entity_kind="character",
+            source_key="juniper",
+            context={
+                "base_components": (
+                    CharacterComponent(),
+                    SpritePositionComponent(x=42.0, y=24.0),
+                )
+            },
         )
     )
-    hook._on_character(
-        SimpleNamespace(
-            entity_id=str(scenario.character),
-            room_id=str(room.id),
-            character_key="juniper",
+    assert not any(isinstance(value, SpritePositionComponent) for value in character.components)
+
+    room = ToonGenerationEnricher().enrich(
+        GenerationRequest(
+            entity_kind="room",
+            source_key="room",
+            context={
+                "base_components": (
+                    RoomComponent(title="Room"),
+                    ToonRoomComponent(default_start=True),
+                )
+            },
         )
     )
+    assert not any(isinstance(value, ToonRoomComponent) for value in room.components)
 
-    assert room.get_component(ToonRoomComponent).default_start is True
-    assert room.get_component(SpritePositionComponent).x == 12.0
-    assert entity.get_component(SpriteImageComponent).url == "https://cdn/apple.png"
-    assert entity.get_component(SpriteScaleComponent).scale == 2.0
-    assert entity.get_component(SpritePositionComponent).x == 22.0
-
-
-def test_worldgen_hook_keeps_existing_character_position():
-    scenario = build_scenario()
-    actor = scenario.actor
-    hook = toonsim.ToonWorldgenHook()
-    hook.actor = actor
-    character = actor.world.get_entity(scenario.character)
-    character.add_component(SpritePositionComponent(x=42.0, y=24.0))
-
-    hook._on_character(
-        SimpleNamespace(
-            entity_id=str(scenario.character),
-            room_id=str(scenario.room_a),
-            character_key="juniper",
+    def door_position(description):
+        delta = ToonGenerationEnricher().enrich(
+            GenerationRequest(
+                entity_kind="door",
+                description=description,
+                source_key=description or "door",
+                context={"base_components": (DoorComponent(),)},
+            )
         )
-    )
+        return next(
+            value for value in delta.components if isinstance(value, SpritePositionComponent)
+        )
 
-    # Already-positioned character is left where it sits (430->exit false branch).
-    assert character.get_component(SpritePositionComponent).x == 42.0
-    assert character.get_component(SpritePositionComponent).y == 24.0
-
-
-def test_ensure_renderable_skips_layer_and_bounds_for_non_renderable_entity():
-    scenario = build_scenario()
-    actor = scenario.actor
-    hook = toonsim.ToonWorldgenHook()
-    hook.actor = actor
-    # A faction is not renderable: default_layer_for and default_bounds_for both
-    # return None, so the layer guard (375->377) and bounds guard (383->exit) both
-    # take their false path -- only SpriteImageComponent/SpriteScaleComponent get attached.
-    faction = spawn_entity(actor.world, [IdentityComponent(name="The Warren", kind="faction")])
-
-    hook._ensure_renderable(faction)
-
-    assert not faction.has_component(SpriteLayerComponent)
-    assert not faction.has_component(SpriteBoundsComponent)
-    assert faction.has_component(SpriteImageComponent)
-    assert faction.has_component(SpriteScaleComponent)
+    assert door_position("north door").y == 4.0
+    assert door_position("south door").y == 96.0
+    assert door_position("east door").x == 95.0
+    assert door_position("west door").x == 5.0
+    assert 5.0 <= door_position("").x <= 95.0
 
 
 def test_backfill_skips_bounds_when_default_is_missing(monkeypatch):

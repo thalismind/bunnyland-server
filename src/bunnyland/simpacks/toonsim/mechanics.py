@@ -34,13 +34,7 @@ from ...core.components import (
 )
 from ...core.ecs import container_of, parse_entity_id, replace_component
 from ...core.edges import Contains
-from ...core.events import (
-    CharacterGeneratedEvent,
-    DomainEvent,
-    EventVisibility,
-    ObjectGeneratedEvent,
-    RoomGeneratedEvent,
-)
+from ...core.events import DomainEvent, EventVisibility
 from ...core.handlers import HandlerContext, HandlerResult, ok, rejected
 
 # Draw layers, spaced so new tiers can slot between existing ones (spec: low draws
@@ -366,77 +360,6 @@ def _generated_position(
     )
 
 
-class ToonWorldgenHook:
-    """Attach deterministic toon placement to generated rooms, objects, and characters."""
-
-    def _ensure_renderable(self, entity: Entity) -> None:
-        layer = default_layer_for(entity)
-        if layer is not None and not entity.has_component(SpriteLayerComponent):
-            replace_component(entity, SpriteLayerComponent(layer=layer))
-        if not entity.has_component(SpriteImageComponent):
-            replace_component(entity, SpriteImageComponent())
-        if not entity.has_component(SpriteScaleComponent):
-            replace_component(entity, SpriteScaleComponent())
-        if not entity.has_component(SpriteBoundsComponent):
-            bounds = default_bounds_for(entity)
-            if bounds is not None:
-                replace_component(entity, bounds)
-
-    def _on_room(self, event: RoomGeneratedEvent) -> None:
-        entity_id = parse_entity_id(event.entity_id)
-        if entity_id is None or not self.actor.world.has_entity(entity_id):
-            return
-        room = self.actor.world.get_entity(entity_id)
-        self._ensure_renderable(room)
-        if not room.has_component(ToonRoomComponent):
-            replace_component(room, ToonRoomComponent())
-        if not room.has_component(SpritePositionComponent):
-            replace_component(room, SpritePositionComponent())
-
-    def _on_object(self, event: ObjectGeneratedEvent) -> None:
-        if event.room_id is None or event.container_id != event.room_id:
-            return
-        entity_id = parse_entity_id(event.entity_id)
-        room_id = parse_entity_id(event.room_id)
-        if (
-            entity_id is None
-            or room_id is None
-            or not self.actor.world.has_entity(entity_id)
-            or not self.actor.world.has_entity(room_id)
-        ):
-            return
-        entity = self.actor.world.get_entity(entity_id)
-        room = self.actor.world.get_entity(room_id)
-        self._ensure_renderable(entity)
-        if not entity.has_component(SpritePositionComponent) and entity.has_component(
-            SpriteBoundsComponent
-        ):
-            replace_component(
-                entity, _generated_position(self.actor.world, entity, room, event.object_key)
-            )
-
-    def _on_character(self, event: CharacterGeneratedEvent) -> None:
-        entity_id = parse_entity_id(event.entity_id)
-        room_id = parse_entity_id(event.room_id)
-        if (
-            entity_id is None
-            or room_id is None
-            or not self.actor.world.has_entity(entity_id)
-            or not self.actor.world.has_entity(room_id)
-        ):
-            return
-        entity = self.actor.world.get_entity(entity_id)
-        room = self.actor.world.get_entity(room_id)
-        self._ensure_renderable(entity)
-        if not entity.has_component(SpritePositionComponent) and entity.has_component(
-            SpriteBoundsComponent
-        ):
-            replace_component(
-                entity,
-                _generated_position(self.actor.world, entity, room, event.character_key),
-            )
-
-
 class SpriteMovedEvent(DomainEvent):
     """A character repositioned its sprite within its current room."""
 
@@ -527,7 +450,6 @@ __all__ = [
     "SpriteScaleComponent",
     "SURFACE_KINDS",
     "ToonRoomComponent",
-    "ToonWorldgenHook",
     "default_bounds_for",
     "default_layer_for",
     "install_toonsim",

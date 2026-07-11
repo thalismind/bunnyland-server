@@ -47,7 +47,6 @@ from .instantiate import (
     _apply_plan_edges,
     _character_components,
     _cooperative_components,
-    _finalize_generation,
     _generation_intent,
     _object_components,
     _wire_controller,
@@ -408,7 +407,6 @@ class RecursiveWorldGenerator:
                 indoor=spec.indoor,
             )
         )
-        await _finalize_generation(self.actor, event)
         await self.actor.bus.publish(event)
 
     async def _publish_object_generated(
@@ -434,7 +432,6 @@ class RecursiveWorldGenerator:
                 generation=generation,
             )
         )
-        await _finalize_generation(self.actor, event)
         await self.actor.bus.publish(event)
 
     async def _publish_character_generated(
@@ -453,7 +450,6 @@ class RecursiveWorldGenerator:
                 species=character.species,
             )
         )
-        await _finalize_generation(self.actor, event)
         await self.actor.bus.publish(event)
 
 

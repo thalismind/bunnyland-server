@@ -273,11 +273,9 @@ class PluginRegistry:
         self._normalizers.extend(
             (plugin.id, normalizer) for normalizer in plugin.content.intent_normalizers
         )
-        for enricher in plugin.content.generation_enrichers:
-            bind_components = getattr(enricher, "bind_components", None)
-            if bind_components is not None:
-                enricher = bind_components(plugin.ecs.components)
-            self._enrichers.append((plugin.id, enricher))
+        self._enrichers.extend(
+            (plugin.id, enricher) for enricher in plugin.content.generation_enrichers
+        )
 
     def event_key(self, event_type: type) -> str | None:
         owner = self._event_owners.get(event_type)

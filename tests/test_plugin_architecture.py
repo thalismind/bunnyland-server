@@ -16,6 +16,7 @@ from bunnyland.core import (
     GenerationError,
     GenerationPipeline,
     GenerationRequest,
+    GenerationTarget,
     WorldActor,
 )
 from bunnyland.core.events import DomainEvent, EventBus, ReactionCascadeLimitedEvent, event_base
@@ -1005,125 +1006,16 @@ async def test_generation_plan_edge_application_validates_string_and_entity_refe
     with pytest.raises(GenerationError, match="missing entity"):
         _validate_plan_edges(actor, invalid)
 
-
-async def test_declarative_generation_finalizer_applies_owned_components_and_edges():
-    from bunnyland.core import spawn_entity
-    from bunnyland.core.events import GeneratedEntityEvent
-    from bunnyland.worldgen.instantiate import _finalize_generation
-
-    actor = WorldActor()
-    source = spawn_entity(actor.world, [])
-    target = spawn_entity(actor.world, [])
-
-    class Finalizer:
-        capabilities = ()
-
-        def enrich(self, request):
-            return GenerationDelta()
-
-        async def finalize(self, actor, event):
-            return GenerationDelta(
-                components=(MarkerComponent("final"),),
-                edges=(GenerationEdge(MarkerEdge(), target.id),),
-            )
-
-    apply_plugins(
-        [
-            Plugin(
-                id="pack.final",
-                name="Final",
-                ecs=EcsContribution(components=(MarkerComponent,), edges=(MarkerEdge,)),
-                content=ContentContribution(generation_enrichers=(Finalizer(),)),
-            )
-        ],
-        actor,
-    )
-    event = GeneratedEntityEvent(
-        **event_base(
-            0,
-            seed="seed",
-            entity_id=str(source.id),
-            entity_key="one",
-            entity_kind="item",
-        )
-    )
-    await _finalize_generation(actor, event)
-    assert source.get_component(MarkerComponent).value == "final"
+    symbolic = type(
+        "Plan",
+        (),
+        {"edges": (GenerationEdge(MarkerEdge("symbolic"), GenerationTarget("target")),)},
+    )()
+    _validate_plan_edges(actor, symbolic, frozenset({"target"}))
+    _apply_plan_edges(actor, source, symbolic, {"target": target.id})
     assert source.has_relationship(MarkerEdge, target.id)
-
-
-async def test_generation_finalizer_rejects_invalid_deltas_and_ownership():
-    from bunnyland.core import spawn_entity
-    from bunnyland.core.events import GeneratedEntityEvent
-    from bunnyland.worldgen.instantiate import _finalize_generation
-
-    async def run(finalizers, *, ecs=None):
-        actor = WorldActor()
-        source = spawn_entity(actor.world, [])
-        apply_plugins(
-            [
-                Plugin(
-                    id="pack.final-errors",
-                    name="Final Errors",
-                    ecs=ecs or EcsContribution(),
-                    content=ContentContribution(generation_enrichers=tuple(finalizers)),
-                )
-            ],
-            actor,
-        )
-        event = GeneratedEntityEvent(
-            **event_base(
-                0,
-                seed="seed",
-                entity_id=str(source.id),
-                entity_key="one",
-                entity_kind="item",
-            )
-        )
-        await _finalize_generation(actor, event)
-
-    class WrongResult:
-        def enrich(self, request):
-            return GenerationDelta()
-
-        def finalize(self, actor, event):
-            return object()
-
-    with pytest.raises(GenerationError, match="expected GenerationDelta"):
-        await run((WrongResult(),))
-
-    class ComponentFinalizer:
-        def enrich(self, request):
-            return GenerationDelta()
-
-        def finalize(self, actor, event):
-            return GenerationDelta(components=(MarkerComponent(),))
-
-    with pytest.raises(GenerationError, match="cannot finalize component"):
-        await run((ComponentFinalizer(),))
-    with pytest.raises(GenerationError, match="conflicting finalized component"):
-        await run(
-            (ComponentFinalizer(), ComponentFinalizer()),
-            ecs=EcsContribution(components=(MarkerComponent,)),
-        )
-
-    class EdgeFinalizer:
-        def __init__(self, target):
-            self.target = target
-
-        def enrich(self, request):
-            return GenerationDelta()
-
-        def finalize(self, actor, event):
-            return GenerationDelta(edges=(GenerationEdge(MarkerEdge(), self.target),))
-
-    with pytest.raises(GenerationError, match="cannot finalize edge"):
-        await run((EdgeFinalizer("missing"),))
-    with pytest.raises(GenerationError, match="missing entity"):
-        await run(
-            (EdgeFinalizer("missing"),),
-            ecs=EcsContribution(edges=(MarkerEdge,)),
-        )
+    with pytest.raises(GenerationError, match="unknown source key"):
+        _validate_plan_edges(actor, symbolic)
 
 
 def test_type_registries_ignore_unowned_loaded_subclasses():
@@ -1173,6 +1065,13 @@ def test_bundled_generation_uses_declarative_enrichers_not_runtime_hooks():
         "bunnyland.dragonsim",
         "bunnyland.daggersim",
     } <= providers
+    source_root = Path(__file__).parents[1] / "src" / "bunnyland"
+    sources = "\n".join(path.read_text() for path in source_root.rglob("*.py"))
+    assert "ComponentPlanEnricher" not in sources
+    assert "WorldgenHook" not in sources
+    assert "_finalize_generation" not in sources
+    enrichment_source = (source_root / "worldgen" / "enrichment.py").read_text()
+    assert "bunnyland.simpacks" not in enrichment_source
 
 
 def test_actor_action_catalogue_contains_only_enabled_plugin_actions():

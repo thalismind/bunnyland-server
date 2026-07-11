@@ -37,6 +37,13 @@ class GenerationEdge:
 
 
 @dataclass(frozen=True)
+class GenerationTarget:
+    """Symbolic reference to another entity in the same generation batch."""
+
+    source_key: str
+
+
+@dataclass(frozen=True)
 class GenerationChild:
     """A child entity request and its explicit relationship from the parent."""
 
@@ -304,5 +311,6 @@ __all__ = [
     "GenerationPipeline",
     "GenerationPlan",
     "GenerationRequest",
+    "GenerationTarget",
     "CoreGenerationEnricher",
 ]
