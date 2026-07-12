@@ -186,7 +186,7 @@ class _RecordingAgent(ScriptedAgent):
         super().__init__(calls)
         self.prompts: list[str] = []
 
-    def decide(
+    async def decide(
         self,
         prompt,
         context,
@@ -197,7 +197,7 @@ class _RecordingAgent(ScriptedAgent):
         tools: list[dict] | None = None,
     ):
         self.prompts.append(prompt)
-        return super().decide(
+        return await super().decide(
             prompt,
             context,
             character_id=character_id,
@@ -675,7 +675,8 @@ async def test_character_controller_lifecycle_e2e():
 
     agent = _RecordingAgent([ToolCall("wait", {})])
     dispatch = ControllerDispatch(actor, PromptBuilder(world), agent)
-    decisions = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
     assert len(agent.prompts) == 1
     assert "Juniper" in agent.prompts[0]
     assert len(decisions) == 1

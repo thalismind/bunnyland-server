@@ -14,7 +14,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Awaitable, Iterable
+from collections.abc import Iterable
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
 from typing import Literal, Protocol
@@ -202,7 +202,7 @@ class CharacterAgent(Protocol):
     per-character conversation history across turns.
     """
 
-    def decide(
+    async def decide(
         self,
         prompt: str,
         context: PromptContext,
@@ -211,7 +211,7 @@ class CharacterAgent(Protocol):
         model: str | None = None,
         provider: str | None = None,
         tools: list[dict] | None = None,
-    ) -> ToolCall | None | Awaitable[ToolCall | None]: ...
+    ) -> ToolCall | None: ...
 
 
 class ScriptedAgent:
@@ -226,7 +226,7 @@ class ScriptedAgent:
         self._loop = loop
         self._index = 0
 
-    def decide(
+    async def decide(
         self,
         prompt: str,
         context: PromptContext,
@@ -328,7 +328,7 @@ class GoalDirectedAgent:
     to resolve and validate. It never reads or writes ECS state directly.
     """
 
-    def decide(
+    async def decide(
         self,
         prompt: str,
         context: PromptContext,
@@ -380,7 +380,7 @@ class BehaviorProfileAgent:
         self.profile = profile
         self._goal_agent = goal_agent or GoalDirectedAgent()
 
-    def decide(
+    async def decide(
         self,
         prompt: str,
         context: PromptContext,
@@ -389,8 +389,8 @@ class BehaviorProfileAgent:
         model: str | None = None,
         provider: str | None = None,
         tools: list[dict] | None = None,
-    ) -> ToolCall | None | Awaitable[ToolCall | None]:
-        goal_decision = self._goal_agent.decide(
+    ) -> ToolCall | None:
+        goal_decision = await self._goal_agent.decide(
             prompt,
             context,
             character_id=character_id,
@@ -931,7 +931,7 @@ class ProviderRouterAgent:
         self._providers = dict(providers)
         self._default_provider = default_provider
 
-    def decide(
+    async def decide(
         self,
         prompt: str,
         context: PromptContext,
@@ -940,7 +940,7 @@ class ProviderRouterAgent:
         model: str | None = None,
         provider: str | None = None,
         tools: list[dict] | None = None,
-    ) -> ToolCall | None | Awaitable[ToolCall | None]:
+    ) -> ToolCall | None:
         selected = provider or self._default_provider
         agent = self._providers.get(selected)
         if agent is None:
@@ -948,7 +948,7 @@ class ProviderRouterAgent:
             raise RuntimeError(
                 f"no LLM agent configured for provider {selected!r}; available: {available}"
             )
-        return agent.decide(
+        return await agent.decide(
             prompt,
             context,
             character_id=character_id,

@@ -309,6 +309,12 @@ controller turn hanging off it:
   `llm.system_prompt_chars`, `llm.tokens.available`, input/output token counts as
   `llm.tokens.prompt`/`.completion`, `llm.tokens.total`, and `llm.cost.available`.
   Provider-reported `llm.cost` is attached when the SDK/API exposes cost metadata.
+  Behavioral agents also add `behavior_tree.name` and nest `behavior_tree.tick` followed
+  by the evaluated `behavior_tree.node` hierarchy. Node spans carry their kind, leaf name,
+  status, child count where applicable, and selected tool; branches not evaluated by a
+  sequence or selector do not emit spans.
+  Every agent implements the same asynchronous decision contract and runs in a background
+  task inside this boundary, so no controller can block the game loop.
 - `command.submit` at the single submission chokepoint, so every queued command (API,
   MCP, Discord, or autonomous dispatch) is tied back to its originating trace.
 - `world.generate` at startup, with child `worldgen.llm.request` spans when recursive

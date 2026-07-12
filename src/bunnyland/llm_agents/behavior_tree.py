@@ -11,10 +11,11 @@ through the registry below.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 
+from .. import telemetry
 from ..prompts.builder import PromptContext
 from .agent import _command_available, _first_unlocked_exit
 from .specs import BehaviorNodeSpec, BehaviorTreeSpec
@@ -43,9 +44,22 @@ class Condition(Node):
     """Succeeds (without acting) when its predicate holds, fails otherwise."""
 
     predicate: Callable[[PromptContext], bool]
+    ref: str | None = None
 
     def tick(self, context: PromptContext) -> Result:
-        return (Status.SUCCESS, None) if self.predicate(context) else (Status.FAILURE, None)
+        attributes = {
+            "behavior_tree.node.kind": "condition",
+            "behavior_tree.node.name": self.ref
+            or getattr(self.predicate, "__name__", type(self.predicate).__name__),
+        }
+        with telemetry.span("behavior_tree.node", attributes) as node_span:
+            result = (
+                (Status.SUCCESS, None)
+                if self.predicate(context)
+                else (Status.FAILURE, None)
+            )
+            _annotate_result(node_span, result)
+            return result
 
 
 @dataclass(frozen=True)
@@ -53,10 +67,19 @@ class Action(Node):
     """Succeeds with a tool call when its chooser produces one; fails when it returns None."""
 
     chooser: Callable[[PromptContext], ToolCall | None]
+    ref: str | None = None
 
     def tick(self, context: PromptContext) -> Result:
-        call = self.chooser(context)
-        return (Status.SUCCESS, call) if call is not None else (Status.FAILURE, None)
+        attributes = {
+            "behavior_tree.node.kind": "action",
+            "behavior_tree.node.name": self.ref
+            or getattr(self.chooser, "__name__", type(self.chooser).__name__),
+        }
+        with telemetry.span("behavior_tree.node", attributes) as node_span:
+            call = self.chooser(context)
+            result = (Status.SUCCESS, call) if call is not None else (Status.FAILURE, None)
+            _annotate_result(node_span, result)
+            return result
 
 
 class Sequence(Node):
@@ -71,13 +94,23 @@ class Sequence(Node):
         self.children = children
 
     def tick(self, context: PromptContext) -> Result:
-        for child in self.children:
-            status, call = child.tick(context)
-            if status is Status.FAILURE:
-                return (Status.FAILURE, None)
-            if call is not None:
-                return (Status.SUCCESS, call)
-        return (Status.FAILURE, None)
+        with telemetry.span(
+            "behavior_tree.node",
+            {
+                "behavior_tree.node.kind": "sequence",
+                "behavior_tree.node.children": len(self.children),
+            },
+        ) as node_span:
+            result: Result = (Status.FAILURE, None)
+            for child in self.children:
+                status, call = child.tick(context)
+                if status is Status.FAILURE:
+                    break
+                if call is not None:
+                    result = (Status.SUCCESS, call)
+                    break
+            _annotate_result(node_span, result)
+            return result
 
 
 class Selector(Node):
@@ -87,11 +120,28 @@ class Selector(Node):
         self.children = children
 
     def tick(self, context: PromptContext) -> Result:
-        for child in self.children:
-            status, call = child.tick(context)
-            if status is Status.SUCCESS:
-                return (Status.SUCCESS, call)
-        return (Status.FAILURE, None)
+        with telemetry.span(
+            "behavior_tree.node",
+            {
+                "behavior_tree.node.kind": "selector",
+                "behavior_tree.node.children": len(self.children),
+            },
+        ) as node_span:
+            result: Result = (Status.FAILURE, None)
+            for child in self.children:
+                status, call = child.tick(context)
+                if status is Status.SUCCESS:
+                    result = (Status.SUCCESS, call)
+                    break
+            _annotate_result(node_span, result)
+            return result
+
+
+def _annotate_result(span, result: Result) -> None:
+    status, call = result
+    span.set_attribute("behavior_tree.node.status", status.value)
+    if call is not None:
+        span.set_attribute("decision.tool", call.name)
 
 
 @dataclass(frozen=True)
@@ -116,7 +166,7 @@ class BehaviorTreeAgent:
     def tree(self) -> BehaviorTree:
         return self._tree
 
-    def decide(
+    async def decide(
         self,
         prompt: str,
         context: PromptContext,
@@ -125,9 +175,15 @@ class BehaviorTreeAgent:
         model: str | None = None,
         provider: str | None = None,
         tools: list[dict] | None = None,
-    ) -> ToolCall | None | Awaitable[ToolCall | None]:
-        del prompt, character_id, model, provider, tools
-        return self._tree.decide(context)
+    ) -> ToolCall | None:
+        del prompt, model, provider, tools
+        with telemetry.span(
+            "behavior_tree.tick",
+            {"behavior_tree.name": self._tree.name, "character.id": character_id},
+        ) as tree_span:
+            call = self._tree.decide(context)
+            tree_span.set_attribute("decision.tool", call.name if call is not None else "wait")
+            return call
 
 
 # -- leaf choosers ------------------------------------------------------------------------
@@ -334,13 +390,13 @@ def _compile_node(spec: BehaviorNodeSpec) -> Node:
         if factory is None:
             available = ", ".join(sorted(CONDITION_LIBRARY)) or "(none)"
             raise ValueError(f"unknown condition {spec.ref!r}; available: {available}")
-        return Condition(factory(spec.params))
+        return Condition(factory(spec.params), ref=spec.ref)
 
     factory = ACTION_LIBRARY.get(spec.ref)
     if factory is None:
         available = ", ".join(sorted(ACTION_LIBRARY)) or "(none)"
         raise ValueError(f"unknown action {spec.ref!r}; available: {available}")
-    return Action(factory(spec.params))
+    return Action(factory(spec.params), ref=spec.ref)
 
 
 def compile_behavior_tree(spec: BehaviorTreeSpec) -> BehaviorTree:

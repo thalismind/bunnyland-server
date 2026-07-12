@@ -548,14 +548,14 @@ def test_parse_natural_command_ignores_unsatisfiable_argument_aliases():
     )
 
 
-def test_scripted_agent_replays_then_waits():
+async def test_scripted_agent_replays_then_waits():
     agent = ScriptedAgent([ToolCall("wait", {})])
-    first = agent.decide("prompt", None, character_id="char_1")
+    first = await agent.decide("prompt", None, character_id="char_1")
     assert first is not None and first.name == "wait"
-    assert agent.decide("prompt", None, character_id="char_1") is None
+    assert await agent.decide("prompt", None, character_id="char_1") is None
 
 
-def test_goal_directed_agent_takes_goal_relevant_visible_object():
+async def test_goal_directed_agent_takes_goal_relevant_visible_object():
     scenario = build_scenario()
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
@@ -567,12 +567,12 @@ def test_goal_directed_agent_takes_goal_relevant_visible_object():
     )
     context = builder.build(scenario.character)
 
-    call = GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
+    call = await GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
 
     assert call == ToolCall("take", {"item_id": "silver key"})
 
 
-def test_goal_directed_agent_uses_recall_to_address_visible_character():
+async def test_goal_directed_agent_uses_recall_to_address_visible_character():
     scenario = build_scenario()
     world = scenario.actor.world
     hazel = spawn_entity(
@@ -588,14 +588,14 @@ def test_goal_directed_agent_uses_recall_to_address_visible_character():
         recall=("Hazel hid the basin key under the woven basket. [memory:m1 source:note]",),
     )
 
-    call = GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
+    call = await GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
 
     assert call is not None
     assert call.name == "say"
     assert call.arguments["text"].startswith("Hazel, I remember Hazel hid the basin key")
 
 
-def test_goal_directed_agent_uses_goal_to_address_visible_character():
+async def test_goal_directed_agent_uses_goal_to_address_visible_character():
     scenario = build_scenario()
     world = scenario.actor.world
     hazel = spawn_entity(
@@ -612,12 +612,12 @@ def test_goal_directed_agent_uses_goal_to_address_visible_character():
         persona_providers=collect_persona_fragments(bunnyland_plugins()),
     ).build(scenario.character)
 
-    call = GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
+    call = await GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
 
     assert call == ToolCall("say", {"text": "Hazel, I am working on ask Hazel about the bridge"})
 
 
-def test_goal_directed_agent_speaks_from_condition_signal_without_private_goal():
+async def test_goal_directed_agent_speaks_from_condition_signal_without_private_goal():
     scenario = build_scenario()
     world = scenario.actor.world
     hazel = spawn_entity(
@@ -632,12 +632,12 @@ def test_goal_directed_agent_speaks_from_condition_signal_without_private_goal()
         conditions=("Hazel looks distressed.",),
     )
 
-    call = GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
+    call = await GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
 
     assert call == ToolCall("say", {"text": "Hazel, I need to talk with you."})
 
 
-def test_goal_directed_agent_moves_only_when_goal_points_to_exploration():
+async def test_goal_directed_agent_moves_only_when_goal_points_to_exploration():
     scenario = build_scenario()
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
@@ -648,12 +648,12 @@ def test_goal_directed_agent_moves_only_when_goal_points_to_exploration():
     )
     context = builder.build(scenario.character)
 
-    assert GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) == (
+    assert await GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) == (
         ToolCall("move", {"direction": "north"})
     )
 
 
-def test_goal_directed_agent_records_memory_goal_when_no_target_matches():
+async def test_goal_directed_agent_records_memory_goal_when_no_target_matches():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -664,12 +664,12 @@ def test_goal_directed_agent_records_memory_goal_when_no_target_matches():
         commands=("take note",),
     )
 
-    assert GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) == (
+    assert await GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) == (
         ToolCall("take_note", {"text": "Goal matters: remember the cellar glyph"})
     )
 
 
-def test_goal_directed_agent_records_recall_when_no_target_matches():
+async def test_goal_directed_agent_records_recall_when_no_target_matches():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -680,12 +680,12 @@ def test_goal_directed_agent_records_recall_when_no_target_matches():
         commands=("take note",),
     )
 
-    assert GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) == (
+    assert await GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) == (
         ToolCall("take_note", {"text": "Recall matters: The cellar glyph opened the bridge"})
     )
 
 
-def test_goal_directed_agent_does_not_move_through_locked_exploration_exit():
+async def test_goal_directed_agent_does_not_move_through_locked_exploration_exit():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -695,14 +695,20 @@ def test_goal_directed_agent_does_not_move_through_locked_exploration_exit():
         commands=("take plain stone", "take note"),
     )
 
-    assert GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) is None
+    assert (
+        await GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
+        is None
+    )
 
 
-def test_goal_directed_agent_waits_without_goal_or_recall_signal():
+async def test_goal_directed_agent_waits_without_goal_or_recall_signal():
     scenario = build_scenario()
     context = PromptBuilder(scenario.actor.world).build(scenario.character)
 
-    assert GoalDirectedAgent().decide("", context, character_id=str(scenario.character)) is None
+    assert (
+        await GoalDirectedAgent().decide("", context, character_id=str(scenario.character))
+        is None
+    )
 
 
 def test_behavior_profile_agent_rejects_unknown_profile():
@@ -710,17 +716,17 @@ def test_behavior_profile_agent_rejects_unknown_profile():
         BehaviorProfileAgent("wanderer")
 
 
-def test_behavior_profile_agent_idle_waits_without_goal_signal():
+async def test_behavior_profile_agent_idle_waits_without_goal_signal():
     scenario = build_scenario()
     context = PromptBuilder(scenario.actor.world).build(scenario.character)
 
     assert (
-        BehaviorProfileAgent("idle").decide("", context, character_id=str(scenario.character))
+        await BehaviorProfileAgent("idle").decide("", context, character_id=str(scenario.character))
         is None
     )
 
 
-def test_behavior_profile_agent_social_speaks_to_visible_character():
+async def test_behavior_profile_agent_social_speaks_to_visible_character():
     scenario = build_scenario()
     world = scenario.actor.world
     hazel = spawn_entity(
@@ -732,7 +738,7 @@ def test_behavior_profile_agent_social_speaks_to_visible_character():
     )
     context = PromptBuilder(world).build(scenario.character)
 
-    assert BehaviorProfileAgent("social").decide(
+    assert await BehaviorProfileAgent("social").decide(
         "", context, character_id=str(scenario.character)
     ) == ToolCall(
         "say",
@@ -740,7 +746,7 @@ def test_behavior_profile_agent_social_speaks_to_visible_character():
     )
 
 
-def test_behavior_profile_agent_social_waits_without_visible_character():
+async def test_behavior_profile_agent_social_waits_without_visible_character():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -748,12 +754,14 @@ def test_behavior_profile_agent_social_waits_without_visible_character():
     )
 
     assert (
-        BehaviorProfileAgent("social").decide("", context, character_id=str(scenario.character))
+        await BehaviorProfileAgent("social").decide(
+            "", context, character_id=str(scenario.character)
+        )
         is None
     )
 
 
-def test_behavior_profile_agent_relationship_fear_prefers_avoidance():
+async def test_behavior_profile_agent_relationship_fear_prefers_avoidance():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -763,12 +771,12 @@ def test_behavior_profile_agent_relationship_fear_prefers_avoidance():
         commands=("move north", "say something to the room"),
     )
 
-    assert BehaviorProfileAgent("social").decide(
+    assert await BehaviorProfileAgent("social").decide(
         "", context, character_id=str(scenario.character)
     ) == ToolCall("move", {"direction": "north"})
 
 
-def test_behavior_profile_agent_relationship_fondness_prefers_warm_speech():
+async def test_behavior_profile_agent_relationship_fondness_prefers_warm_speech():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -777,7 +785,7 @@ def test_behavior_profile_agent_relationship_fondness_prefers_warm_speech():
         commands=("say something to the room",),
     )
 
-    assert BehaviorProfileAgent("social").decide(
+    assert await BehaviorProfileAgent("social").decide(
         "", context, character_id=str(scenario.character)
     ) == ToolCall(
         "say",
@@ -789,7 +797,7 @@ def test_behavior_profile_agent_relationship_fondness_prefers_warm_speech():
     )
 
 
-def test_behavior_profile_agent_relationship_resentment_prefers_cold_warning():
+async def test_behavior_profile_agent_relationship_resentment_prefers_cold_warning():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -798,7 +806,7 @@ def test_behavior_profile_agent_relationship_resentment_prefers_cold_warning():
         commands=("say something to the room",),
     )
 
-    assert BehaviorProfileAgent("social").decide(
+    assert await BehaviorProfileAgent("social").decide(
         "", context, character_id=str(scenario.character)
     ) == ToolCall(
         "say",
@@ -806,7 +814,7 @@ def test_behavior_profile_agent_relationship_resentment_prefers_cold_warning():
     )
 
 
-def test_behavior_profile_agent_relationship_fear_falls_back_to_request_speech():
+async def test_behavior_profile_agent_relationship_fear_falls_back_to_request_speech():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -816,7 +824,7 @@ def test_behavior_profile_agent_relationship_fear_falls_back_to_request_speech()
         commands=("say something to the room",),
     )
 
-    assert BehaviorProfileAgent("social").decide(
+    assert await BehaviorProfileAgent("social").decide(
         "", context, character_id=str(scenario.character)
     ) == ToolCall(
         "say",
@@ -828,7 +836,7 @@ def test_behavior_profile_agent_relationship_fear_falls_back_to_request_speech()
     )
 
 
-def test_behavior_profile_agent_fear_without_exit_or_speech_falls_through():
+async def test_behavior_profile_agent_fear_without_exit_or_speech_falls_through():
     scenario = build_scenario()
     # Fear line matches, but there is no unlocked exit and no speech command, so the fear
     # branch returns nothing (298->307) and the profile fallback runs.
@@ -841,12 +849,12 @@ def test_behavior_profile_agent_fear_without_exit_or_speech_falls_through():
         commands=("take work crate",),
     )
 
-    assert BehaviorProfileAgent("worker").decide(
+    assert await BehaviorProfileAgent("worker").decide(
         "", context, character_id=str(scenario.character)
     ) == ToolCall("take", {"item_id": "work crate"})
 
 
-def test_behavior_profile_agent_relationship_lines_without_speech_command_fall_through():
+async def test_behavior_profile_agent_relationship_lines_without_speech_command_fall_through():
     scenario = build_scenario()
     # Fond and resentment lines both match the visible character, but no speech command is
     # available, so neither relationship branch returns; the profile fallback runs instead.
@@ -858,7 +866,7 @@ def test_behavior_profile_agent_relationship_lines_without_speech_command_fall_t
         commands=("take work crate",),
     )
 
-    assert BehaviorProfileAgent("worker").decide(
+    assert await BehaviorProfileAgent("worker").decide(
         "", context, character_id=str(scenario.character)
     ) == ToolCall("take", {"item_id": "work crate"})
 
@@ -888,7 +896,7 @@ def test_autonomy_signals_speech_skips_lines_not_mentioning_name():
     assert signals.speech_for("Briar") == "Briar, I remember Briar tends the garden"
 
 
-def test_behavior_profile_agent_timid_leaves_when_someone_is_nearby():
+async def test_behavior_profile_agent_timid_leaves_when_someone_is_nearby():
     scenario = build_scenario()
     world = scenario.actor.world
     hazel = spawn_entity(
@@ -900,12 +908,12 @@ def test_behavior_profile_agent_timid_leaves_when_someone_is_nearby():
     )
     context = PromptBuilder(world).build(scenario.character)
 
-    assert BehaviorProfileAgent("timid").decide(
+    assert await BehaviorProfileAgent("timid").decide(
         "", context, character_id=str(scenario.character)
     ) == ToolCall("move", {"direction": "north"})
 
 
-def test_behavior_profile_agent_timid_waits_without_visible_character():
+async def test_behavior_profile_agent_timid_waits_without_visible_character():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -913,12 +921,14 @@ def test_behavior_profile_agent_timid_waits_without_visible_character():
     )
 
     assert (
-        BehaviorProfileAgent("timid").decide("", context, character_id=str(scenario.character))
+        await BehaviorProfileAgent("timid").decide(
+            "", context, character_id=str(scenario.character)
+        )
         is None
     )
 
 
-def test_behavior_profile_agent_timid_waits_without_unlocked_exit():
+async def test_behavior_profile_agent_timid_waits_without_unlocked_exit():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -928,12 +938,14 @@ def test_behavior_profile_agent_timid_waits_without_unlocked_exit():
     )
 
     assert (
-        BehaviorProfileAgent("timid").decide("", context, character_id=str(scenario.character))
+        await BehaviorProfileAgent("timid").decide(
+            "", context, character_id=str(scenario.character)
+        )
         is None
     )
 
 
-def test_behavior_profile_agent_aggressive_warns_visible_character():
+async def test_behavior_profile_agent_aggressive_warns_visible_character():
     scenario = build_scenario()
     world = scenario.actor.world
     hazel = spawn_entity(
@@ -945,7 +957,7 @@ def test_behavior_profile_agent_aggressive_warns_visible_character():
     )
     context = PromptBuilder(world).build(scenario.character)
 
-    assert BehaviorProfileAgent("aggressive").decide(
+    assert await BehaviorProfileAgent("aggressive").decide(
         "", context, character_id=str(scenario.character)
     ) == ToolCall(
         "say",
@@ -953,7 +965,7 @@ def test_behavior_profile_agent_aggressive_warns_visible_character():
     )
 
 
-def test_behavior_profile_agent_aggressive_waits_without_speech_command():
+async def test_behavior_profile_agent_aggressive_waits_without_speech_command():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -962,12 +974,14 @@ def test_behavior_profile_agent_aggressive_waits_without_speech_command():
     )
 
     assert (
-        BehaviorProfileAgent("aggressive").decide("", context, character_id=str(scenario.character))
+        await BehaviorProfileAgent("aggressive").decide(
+            "", context, character_id=str(scenario.character)
+        )
         is None
     )
 
 
-def test_behavior_profile_agent_worker_takes_available_object():
+async def test_behavior_profile_agent_worker_takes_available_object():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -975,12 +989,12 @@ def test_behavior_profile_agent_worker_takes_available_object():
         commands=("take work crate",),
     )
 
-    assert BehaviorProfileAgent("worker").decide(
+    assert await BehaviorProfileAgent("worker").decide(
         "", context, character_id=str(scenario.character)
     ) == ToolCall("take", {"item_id": "work crate"})
 
 
-def test_behavior_profile_agent_worker_moves_when_no_object_is_available():
+async def test_behavior_profile_agent_worker_moves_when_no_object_is_available():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -989,12 +1003,12 @@ def test_behavior_profile_agent_worker_moves_when_no_object_is_available():
         commands=("move north",),
     )
 
-    assert BehaviorProfileAgent("worker").decide(
+    assert await BehaviorProfileAgent("worker").decide(
         "", context, character_id=str(scenario.character)
     ) == ToolCall("move", {"direction": "north"})
 
 
-def test_behavior_profile_agent_worker_waits_without_work_or_exit():
+async def test_behavior_profile_agent_worker_waits_without_work_or_exit():
     scenario = build_scenario()
     context = replace(
         PromptBuilder(scenario.actor.world).build(scenario.character),
@@ -1004,12 +1018,14 @@ def test_behavior_profile_agent_worker_waits_without_work_or_exit():
     )
 
     assert (
-        BehaviorProfileAgent("worker").decide("", context, character_id=str(scenario.character))
+        await BehaviorProfileAgent("worker").decide(
+            "", context, character_id=str(scenario.character)
+        )
         is None
     )
 
 
-def test_behavior_profile_agent_prefers_goal_over_profile_fallback():
+async def test_behavior_profile_agent_prefers_goal_over_profile_fallback():
     scenario = build_scenario()
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
@@ -1021,7 +1037,7 @@ def test_behavior_profile_agent_prefers_goal_over_profile_fallback():
         persona_providers=collect_persona_fragments(bunnyland_plugins()),
     ).build(scenario.character)
 
-    assert BehaviorProfileAgent("worker").decide(
+    assert await BehaviorProfileAgent("worker").decide(
         "", context, character_id=str(scenario.character)
     ) == ToolCall("take", {"item_id": "silver key"})
 
@@ -1033,7 +1049,8 @@ async def test_dispatch_submits_behavior_profile_agent_command():
     builder = PromptBuilder(scenario.actor.world)
     dispatch = ControllerDispatch(scenario.actor, builder, BehaviorProfileAgent("worker"))
 
-    decisions = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
 
     assert len(decisions) == 1
     assert decisions[0].tool == "take"
@@ -1054,7 +1071,8 @@ async def test_dispatch_submits_goal_directed_agent_command():
     )
     dispatch = ControllerDispatch(scenario.actor, builder, GoalDirectedAgent())
 
-    decisions = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
 
     assert len(decisions) == 1
     assert decisions[0].tool == "take"
@@ -1068,7 +1086,8 @@ async def test_dispatch_submits_a_command_for_an_llm_character():
     agent = ScriptedAgent([ToolCall("move", {"direction": "north"})])
     dispatch = ControllerDispatch(scenario.actor, builder, agent)
 
-    decisions = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
 
     assert len(decisions) == 1
     assert decisions[0].tool == "move"
@@ -1094,7 +1113,8 @@ async def test_dispatch_throttles_controller_by_act_every_ticks():
 
     # Tick 1 is skipped (1 % 2 != 0); tick 2 is the controller's turn.
     assert await dispatch.run_once() == []
-    second = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    second = await dispatch.await_pending()
     assert [decision.tool for decision in second] == ["move"]
 
 
@@ -1122,7 +1142,8 @@ async def test_dispatch_uses_registered_autonomous_controller_factory():
         ScriptedAgent([]),
     )
 
-    decisions = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
 
     assert [decision.tool for decision in decisions] == ["move"]
 
@@ -1783,7 +1804,8 @@ async def test_dispatch_records_wait_when_agent_passes():
     builder = PromptBuilder(scenario.actor.world)
     dispatch = ControllerDispatch(scenario.actor, builder, ScriptedAgent([]))
 
-    decisions = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
 
     assert len(decisions) == 1
     assert decisions[0].tool is None
@@ -1826,7 +1848,9 @@ async def test_dispatch_skips_a_character_despawned_mid_run():
         def __init__(self) -> None:
             self.decided: list[str] = []
 
-        def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+        async def decide(
+            self, prompt, context, *, character_id, model=None, provider=None, tools=None
+        ):
             del prompt, context, model, provider, tools
             self.decided.append(character_id)
             for cid in (scenario.character, other.id):
@@ -1838,11 +1862,13 @@ async def test_dispatch_skips_a_character_despawned_mid_run():
     dispatch = ControllerDispatch(scenario.actor, PromptBuilder(world), agent)
 
     # The despawned character is skipped rather than crashing the loop.
-    decisions = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
 
     assert len(agent.decided) == 1
-    assert len(decisions) == 1
-    assert decisions[0].character_id == agent.decided[0]
+    assert len(decisions) == 2
+    assert any(decision.character_id == agent.decided[0] for decision in decisions)
+    assert any("removed" in decision.summary for decision in decisions)
 
 
 async def test_dispatch_follows_live_world_replacement():
@@ -1861,7 +1887,8 @@ async def test_dispatch_follows_live_world_replacement():
     builder = PromptBuilder(stale_world)
     dispatch = ControllerDispatch(new.actor, builder, ScriptedAgent([]))
 
-    decisions = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
 
     # The builder followed the swap and drove the live character (waits, here) instead of
     # crashing on build against the stale world.
@@ -1898,6 +1925,7 @@ async def test_dispatch_uses_controller_model_for_character_decision():
     dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
 
     await dispatch.run_once()
+    await dispatch.await_pending()
 
     assert agent.models == ["claude"]
 
@@ -1918,6 +1946,7 @@ async def test_dispatch_uses_controller_provider_for_character_decision():
     dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
 
     await dispatch.run_once()
+    await dispatch.await_pending()
 
     assert agent.providers == ["openrouter"]
 
@@ -2026,7 +2055,8 @@ async def test_dispatch_flags_persona_contradiction_without_blocking_valid_actio
     agent = ScriptedAgent([ToolCall("say", {"text": "I am Hazel."})])
     dispatch = ControllerDispatch(scenario.actor, builder, agent)
 
-    decisions = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
 
     assert decisions[0].tool == "say"
     assert decisions[0].persona_issues == ("name contradiction: claimed to be Hazel",)
@@ -2050,11 +2080,11 @@ async def test_openrouter_agent_passes_server_url_to_client(monkeypatch):
     }
 
 
-def test_provider_router_raises_for_unknown_provider():
+async def test_provider_router_raises_for_unknown_provider():
     router = ProviderRouterAgent({"ollama": _RecordingAgent([])})
 
     with pytest.raises(RuntimeError, match="no LLM agent configured for provider 'mystery'"):
-        router.decide("prompt", None, character_id="hazel", provider="mystery")
+        await router.decide("prompt", None, character_id="hazel", provider="mystery")
 
 
 async def test_provider_router_chat_uses_selected_agent():
@@ -2131,7 +2161,7 @@ async def test_provider_router_uses_selected_agent():
     openrouter = _RecordingAgent([ToolCall("wait", {})])
     router = ProviderRouterAgent({"ollama": ollama, "openrouter": openrouter})
 
-    call = router.decide(
+    call = await router.decide(
         "prompt",
         None,
         character_id="hazel",
@@ -2248,7 +2278,9 @@ class _RecordingAgent:
         self.tools: list[list[dict] | None] = []
         self._index = 0
 
-    def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+    async def decide(
+        self, prompt, context, *, character_id, model=None, provider=None, tools=None
+    ):
         self.prompts.append(prompt)
         self.models.append(model)
         self.providers.append(provider)
@@ -2266,6 +2298,7 @@ async def test_dispatch_passes_registry_tools_and_state_examples_to_agent():
     dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
 
     await dispatch.run_once()
+    await dispatch.await_pending()
 
     schemas = {
         schema["function"]["name"]: schema["function"] for schema in agent.tools[0] or ()
@@ -2351,11 +2384,13 @@ async def test_dispatch_progressively_exposes_discovered_native_action_schema():
     )
     dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
 
-    first = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    first = await dispatch.await_pending()
     assert first[0].summary == "discovered practice_skill"
     assert scenario.actor._inbox.empty()
 
     await dispatch.run_once()
+    await dispatch.await_pending()
     second_tools = {
         schema["function"]["name"]: schema["function"] for schema in agent.tools[1] or ()
     }
@@ -2371,7 +2406,8 @@ async def test_dispatch_rejects_invalid_action_discovery_without_submission():
     agent = _RecordingAgent([ToolCall(DISCOVER_ACTION_TOOL, {"action_name": "not_real"})])
     dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
 
-    decisions = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
 
     assert decisions[0].summary == "invalid action discovery"
     assert scenario.actor._inbox.empty()
@@ -2385,12 +2421,14 @@ async def test_dispatch_feeds_did_you_mean_back_to_the_agent():
     agent = _RecordingAgent([ToolCall("take", {"item_id": "basket"}), None])
     dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
 
-    first = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    first = await dispatch.await_pending()
     assert first[0].tool == "take"
     assert "did you mean" in first[0].summary.lower()
     assert scenario.actor._inbox.empty()  # nothing submitted
 
     await dispatch.run_once()  # second turn carries the feedback as a prompt warning
+    await dispatch.await_pending()
     assert "woven basket" in agent.prompts[1]
 
 
@@ -2405,6 +2443,7 @@ async def test_dispatch_resolves_item_names_to_ids_before_submitting():
     dispatch = ControllerDispatch(scenario.actor, builder, agent)
 
     await dispatch.run_once()
+    await dispatch.await_pending()
     await scenario.actor.tick(3600.0)
 
     # "Mar" resolved to the journal, which is now in the character's inventory.
@@ -2416,13 +2455,15 @@ async def test_dispatch_rejects_unknown_agent_tools_without_crashing():
     agent = _RecordingAgent([ToolCall("read", {}), None])
     dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
 
-    first = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    first = await dispatch.await_pending()
 
     assert first[0].tool == "read"
     assert "unknown tool" in first[0].summary
     assert scenario.actor._inbox.empty()
 
     await dispatch.run_once()
+    await dispatch.await_pending()
     assert "Choose one of the available tools exactly as named" in agent.prompts[1]
 
 
@@ -2439,16 +2480,15 @@ class _GatedAsyncAgent:
         self.contexts: list[object] = []
         self._call = call if call is not None else ToolCall("move", {"direction": "north"})
 
-    def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+    async def decide(
+        self, prompt, context, *, character_id, model=None, provider=None, tools=None
+    ):
         del prompt, model, provider, tools
         self.prompts.append(character_id)
         self.contexts.append(context)
 
-        async def _decide():
-            await self.gate.wait()
-            return self._call
-
-        return _decide()
+        await self.gate.wait()
+        return self._call
 
 
 class _ConcurrencyProbeAgent:
@@ -2459,27 +2499,25 @@ class _ConcurrencyProbeAgent:
         self.active = 0
         self.max_active = 0
 
-    def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+    async def decide(
+        self, prompt, context, *, character_id, model=None, provider=None, tools=None
+    ):
         del prompt, context, character_id, model, provider, tools
 
-        async def _decide():
-            self.active += 1
-            self.max_active = max(self.max_active, self.active)
-            await self.gate.wait()
-            self.active -= 1
-            return None
-
-        return _decide()
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        await self.gate.wait()
+        self.active -= 1
+        return None
 
 
 class _FailingAsyncAgent:
-    def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+    async def decide(
+        self, prompt, context, *, character_id, model=None, provider=None, tools=None
+    ):
         del prompt, context, character_id, model, provider, tools
 
-        async def _decide():
-            raise RuntimeError("provider exploded")
-
-        return _decide()
+        raise RuntimeError("provider exploded")
 
 
 def _add_second_llm_character(scenario, name: str = "Bramble"):

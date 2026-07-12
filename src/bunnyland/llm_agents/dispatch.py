@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import difflib
-import inspect
 import json
 import logging
 import re
@@ -363,9 +362,10 @@ class ControllerDispatch:
         # Decisions completed by background tasks since the last ``run_once``, surfaced (and
         # cleared) on the next pass so observers still see what autonomous agents chose.
         self._completed: list[Decision] = []
-        # Serializes the actual provider call so there is never more than one in-flight
-        # request to Ollama/OpenRouter at a time, even with many actable characters.
-        self._llm_lock = asyncio.Lock()
+        # Serialize decisions in actable-character order. Provider calls stay bounded to one
+        # at a time, and immediate agents preserve the deterministic order they had before
+        # the uniform async contract.
+        self._decision_lock = asyncio.Lock()
 
     async def run_once(self) -> list[Decision]:
         self._tick += 1
@@ -389,13 +389,8 @@ class ControllerDispatch:
                 # is finally delivered reflects the most recent state, never a stale one.
                 if self._has_pending(cid):
                     continue
-                # The actable list is snapshotted before the per-character awaits below; a
-                # character can also be removed mid-loop by an in-place edit (admin patch or a
-                # player interaction) at an await point. Skip ones already gone, and guard the
-                # rest so a removal that races the prompt build/submit skips the character
-                # instead of crashing the game loop.
-                if not self.actor.world.has_entity(character_id):
-                    continue
+                # Prompt building can still remove a character through an in-place edit;
+                # guard that boundary so the dispatch loop continues safely.
                 try:
                     decision = await self._decide_for(character_id)
                 except EntityNotFoundError:
@@ -406,6 +401,10 @@ class ControllerDispatch:
                 if decision is not None:
                     decisions.append(decision)
             run_span.set_attribute("dispatch.decision_count", len(decisions))
+        # Give every newly scheduled decision one event-loop turn to begin. Immediate
+        # deterministic agents can finish before the next world tick, while provider-backed
+        # agents suspend naturally without delaying this dispatch pass.
+        await asyncio.sleep(0)
         return decisions
 
     def _has_pending(self, cid: str) -> bool:
@@ -537,6 +536,8 @@ class ControllerDispatch:
             "agent.kind": type(agent).__name__,
         }
         span_attrs = {**metric_attrs, "character.id": cid, "decision.prompted": prompted}
+        if isinstance(agent, BehaviorTreeAgent):
+            span_attrs["behavior_tree.name"] = agent.tree.name
         if prompted and telemetry.enabled():
             span_attrs["decision.prompt"] = telemetry.attr_text(prompt)
             span_attrs["decision.prompt_chars"] = len(prompt)
@@ -563,39 +564,26 @@ class ControllerDispatch:
                 )
             )
             schemas.extend(filter(None, (discovery,)))
-        decision = agent.decide(
-            prompt,
-            context,
-            character_id=cid,
-            model=model,
-            provider=provider,
-            tools=schemas,
-        )
-        if inspect.isawaitable(decision):
-            # Run the provider call (and its follow-up submit) off the dispatch path so the
-            # game loop is free to keep ticking the world while the model thinks.
-            task = asyncio.ensure_future(
-                self._await_decision(
-                    character_id,
-                    controller_id,
-                    generation,
-                    context,
-                    decision,
-                    span_attrs,
-                    metric_attrs,
-                )
+        # Every agent follows the same async contract. Run the decision (and its follow-up
+        # submit) off the dispatch path so no controller can block the world tick.
+        task = asyncio.ensure_future(
+            self._await_decision(
+                character_id,
+                controller_id,
+                generation,
+                context,
+                agent,
+                prompt,
+                model,
+                provider,
+                schemas,
+                span_attrs,
+                metric_attrs,
             )
-            self._inflight[cid] = task
-            task.add_done_callback(lambda finished, key=cid: self._forget(key, finished))
-            return None
-
-        with (
-            telemetry.record_duration(telemetry.record_llm_decision, metric_attrs),
-            telemetry.span("agent.decide", span_attrs) as dspan,
-        ):
-            call = decision
-            self._annotate_decision_span(dspan, call)
-        return await self._finalize_decision(character_id, controller_id, generation, context, call)
+        )
+        self._inflight[cid] = task
+        task.add_done_callback(lambda finished, key=cid: self._forget(key, finished))
+        return None
 
     async def _await_decision(
         self,
@@ -603,7 +591,11 @@ class ControllerDispatch:
         controller_id: EntityId,
         generation: int,
         context,
-        pending,
+        agent: CharacterAgent,
+        prompt: str,
+        model: str | None,
+        provider: str | None,
+        tools: list[dict],
         span_attrs: dict,
         metric_attrs: dict,
     ) -> Decision:
@@ -615,12 +607,22 @@ class ControllerDispatch:
         """
         cid = str(character_id)
         try:
-            async with self._llm_lock:
+            async with self._decision_lock:
+                # Another decision may remove this character while its task waits for the
+                # provider lock. Do not invoke an agent for an entity that no longer exists.
+                self.actor.world.get_entity(character_id)
                 with (
                     telemetry.record_duration(telemetry.record_llm_decision, metric_attrs),
                     telemetry.span("agent.decide", span_attrs) as dspan,
                 ):
-                    call = await pending
+                    call = await agent.decide(
+                        prompt,
+                        context,
+                        character_id=cid,
+                        model=model,
+                        provider=provider,
+                        tools=tools,
+                    )
                     self._annotate_decision_span(dspan, call)
             decision = await self._finalize_decision(
                 character_id, controller_id, generation, context, call

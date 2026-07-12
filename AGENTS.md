@@ -213,6 +213,19 @@ For a completed Bunnyland code change, aim to have:
 - `scripts/test-all`, Ruff, and `git diff --check` passing before a final handoff or
   commit, unless you clearly explain why a check could not be run.
 
+## 10. Async Contracts Are Uniform
+
+An async interface must be async in every implementation and at every call site.
+
+- Do not return `T | Awaitable[T]` or use runtime awaitability inspection.
+- Do not add execution-mode flags or adapter branches to preserve synchronous
+  implementations. Migrate implementations and callers to the async contract.
+- Keep scheduling policy in the caller and apply it uniformly.
+- Open telemetry spans before invoking async methods and await those methods inside the
+  span. Background runners receive the agent and arguments, not a pre-created coroutine.
+- Update implementations, direct callers, test doubles, and tests together when migrating
+  an interface.
+
 These guidelines are working if diffs stay focused, implementation follows existing
 mechanics patterns, and test failures point to real behavior rather than avoidable
 fixture or command mistakes.

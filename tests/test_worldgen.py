@@ -213,10 +213,10 @@ async def test_hungry_courier_agent_handles_invalid_done_and_hungry_states():
     courier_id = str(world.characters["courier"])
     courier = actor.world.get_entity(world.characters["courier"])
 
-    assert agent.decide("", None, character_id="not-an-entity") is None
-    assert agent.decide("", None, character_id="entity_999999") is None
+    assert await agent.decide("", None, character_id="not-an-entity") is None
+    assert await agent.decide("", None, character_id="entity_999999") is None
 
-    decision = agent.decide("", None, character_id=courier_id)
+    decision = await agent.decide("", None, character_id=courier_id)
     assert decision is not None
     assert decision.name == "say"
     assert "cannot just declare myself fed" in decision.arguments["text"]
@@ -225,7 +225,7 @@ async def test_hungry_courier_agent_handles_invalid_done_and_hungry_states():
     readable = ledger.get_component(ReadableComponent)
     replace_component(ledger, replace(readable, text=f"{readable.text}\n{DELIVERY_MARK}"))
 
-    assert agent.decide("", None, character_id=courier_id) is None
+    assert await agent.decide("", None, character_id=courier_id) is None
     assert agent._room(courier) is not None
 
 
@@ -241,13 +241,13 @@ async def test_hungry_courier_agent_branches_on_real_world_state():
     _feed_character(courier)
     _move_entity(actor, letter.id, world.rooms["apple_hedge"])
 
-    missing_letter = agent.decide("", None, character_id=courier_id)
+    missing_letter = await agent.decide("", None, character_id=courier_id)
     assert missing_letter is not None
     assert missing_letter.name == "say"
     assert "letter is not where I can reach it" in missing_letter.arguments["text"]
 
     _move_entity(actor, letter.id, world.rooms["crossing"])
-    take_letter = agent.decide("", None, character_id=courier_id)
+    take_letter = await agent.decide("", None, character_id=courier_id)
     assert take_letter is not None
     assert take_letter.name == "take"
 
@@ -255,14 +255,14 @@ async def test_hungry_courier_agent_branches_on_real_world_state():
     courier.add_relationship(Contains(mode=ContainmentMode.INVENTORY), letter.id)
     _move_entity(actor, courier.id, world.rooms["crossing"])
 
-    move = agent.decide("", None, character_id=courier_id)
+    move = await agent.decide("", None, character_id=courier_id)
     assert move is not None
     assert move.name == "move"
     assert move.arguments["direction"] == "south"
 
     _move_entity(actor, courier.id, world.rooms["cottage"])
     _move_entity(actor, ledger.id, world.rooms["apple_hedge"])
-    drop = agent.decide("", None, character_id=courier_id)
+    drop = await agent.decide("", None, character_id=courier_id)
     assert drop is not None
     assert drop.name == "drop"
 
@@ -279,7 +279,7 @@ async def test_hungry_courier_agent_branches_on_real_world_state():
     assert agent._room_title(plain_room) == str(plain_room.id)
     _move_entity(actor, courier.id, plain_room.id)
 
-    confused = agent.decide("", None, character_id=courier_id)
+    confused = await agent.decide("", None, character_id=courier_id)
     assert confused is not None
     assert confused.name == "say"
     assert "need a route" in confused.arguments["text"]

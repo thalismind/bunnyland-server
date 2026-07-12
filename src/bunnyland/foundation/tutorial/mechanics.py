@@ -41,7 +41,7 @@ class HungryCourierAgent:
         self.dispatch = dispatch
         self.component = component
 
-    def decide(self, _prompt, _context, *, character_id: str, **_kwargs) -> ToolCall | None:
+    async def decide(self, _prompt, _context, *, character_id: str, **_kwargs) -> ToolCall | None:
         character_entity_id = parse_entity_id(character_id)
         if character_entity_id is None or not self.dispatch.actor.world.has_entity(
             character_entity_id

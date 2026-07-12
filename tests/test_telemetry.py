@@ -23,7 +23,9 @@ from bunnyland.core import (
     Lane,
     OnInsufficientPoints,
     build_submitted_command,
+    spawn_entity,
 )
+from bunnyland.core.controllers import BehaviorControllerComponent
 from bunnyland.engine import GameLoop
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.llm_agents.agent import (
@@ -407,7 +409,8 @@ async def test_dispatch_emits_agent_spans_and_decision_metric(otel_capture):
         PromptBuilder(scenario.actor.world),
         ScriptedAgent([ToolCall("move", {"direction": "north"})]),
     )
-    decisions = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
     assert [d.tool for d in decisions] == ["move"]
 
     spans = _spans_by_name(span_exporter)
@@ -423,7 +426,7 @@ async def test_dispatch_emits_agent_spans_and_decision_metric(otel_capture):
 
     run_once = spans["controller.run_once"]
     assert run_once.attributes["dispatch.actable_count"] == 1
-    assert run_once.attributes["dispatch.decision_count"] == 1
+    assert run_once.attributes["dispatch.decision_count"] == 0
     by_id = {s.context.span_id: s.name for s in span_exporter.get_finished_spans()}
     assert by_id[spans["agent.decide"].parent.span_id] == "controller.run_once"
     assert by_id[spans["agent.prompt.build"].parent.span_id] == "controller.run_once"
@@ -434,6 +437,63 @@ async def test_dispatch_emits_agent_spans_and_decision_metric(otel_capture):
 
     points = _metric_points(reader)
     assert "bunnyland.llm.decision.duration" in points
+
+
+@pytestmark_otel
+async def test_behavior_controller_traces_evaluated_tree_nodes(otel_capture):
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    controller = spawn_entity(
+        scenario.actor.world, [BehaviorControllerComponent(behavior_name="forager")]
+    )
+    scenario.actor.assign_controller(scenario.character, controller.id)
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        ScriptedAgent([]),
+    )
+
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
+
+    assert [decision.tool for decision in decisions] == ["move"]
+    spans = span_exporter.get_finished_spans()
+    by_name = _spans_by_name(span_exporter)
+    decide = by_name["agent.decide"]
+    tree = by_name["behavior_tree.tick"]
+    nodes = [span for span in spans if span.name == "behavior_tree.node"]
+    by_id = {span.context.span_id: span for span in spans}
+
+    assert decide.attributes["behavior_tree.name"] == "forager"
+    assert tree.attributes["behavior_tree.name"] == "forager"
+    assert tree.attributes["character.id"] == str(scenario.character)
+    assert tree.attributes["decision.tool"] == "move"
+    assert by_id[tree.parent.span_id].name == "agent.decide"
+
+    root = next(span for span in nodes if span.attributes["behavior_tree.node.kind"] == "selector")
+    sequence = next(
+        span for span in nodes if span.attributes["behavior_tree.node.kind"] == "sequence"
+    )
+    condition = next(
+        span
+        for span in nodes
+        if span.attributes.get("behavior_tree.node.name") == "_has_visible_objects"
+    )
+    move = next(
+        span
+        for span in nodes
+        if span.attributes.get("behavior_tree.node.name") == "_move_first_exit"
+    )
+    assert len(nodes) == 4
+    assert root.attributes["behavior_tree.node.status"] == "success"
+    assert sequence.attributes["behavior_tree.node.status"] == "failure"
+    assert condition.attributes["behavior_tree.node.status"] == "failure"
+    assert move.attributes["behavior_tree.node.status"] == "success"
+    assert move.attributes["decision.tool"] == "move"
+    assert by_id[root.parent.span_id].name == "behavior_tree.tick"
+    assert by_id[sequence.parent.span_id] is root
+    assert by_id[condition.parent.span_id] is sequence
+    assert by_id[move.parent.span_id] is root
 
 
 @pytestmark_otel
@@ -489,16 +549,11 @@ class _AsyncMoveAgent:
     def __init__(self, gate=None) -> None:
         self._gate = gate
 
-    def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+    async def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
         del prompt, context, character_id, model, provider, tools
-        gate = self._gate
-
-        async def _decide():
-            if gate is not None:
-                await gate.wait()
-            return ToolCall("move", {"direction": "north"})
-
-        return _decide()
+        if self._gate is not None:
+            await self._gate.wait()
+        return ToolCall("move", {"direction": "north"})
 
 
 @pytestmark_otel

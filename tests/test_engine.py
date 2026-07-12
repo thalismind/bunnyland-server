@@ -44,15 +44,14 @@ async def test_game_loop_keeps_ticking_while_a_decision_is_pending():
             self.gate = asyncio.Event()
             self.prompts = 0
 
-        def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+        async def decide(
+            self, prompt, context, *, character_id, model=None, provider=None, tools=None
+        ):
             del prompt, context, character_id, model, provider, tools
             self.prompts += 1
 
-            async def _decide():
-                await self.gate.wait()
-                return None
-
-            return _decide()
+            await self.gate.wait()
+            return None
 
     agent = SlowAgent()
     loop = GameLoop(
@@ -83,7 +82,9 @@ async def test_game_loop_stops_when_asked():
     loop = GameLoop(actor, None)  # dispatch set below so the agent can stop the loop
 
     class StoppingAgent:
-        def decide(self, prompt, context, *, character_id, model=None, provider=None, tools=None):
+        async def decide(
+            self, prompt, context, *, character_id, model=None, provider=None, tools=None
+        ):
             del model, provider, tools
             loop.stop()
             return None

@@ -143,21 +143,23 @@ def test_selector_fails_when_all_branches_fail():
 # -- built-in trees and the tree agent ----------------------------------------------------
 
 
-def test_idle_tree_always_waits():
+async def test_idle_tree_always_waits():
     scenario = build_scenario()
     agent = BehaviorTreeAgent(resolve_behavior_tree("idle"))
-    assert agent.decide("", _context(scenario), character_id=str(scenario.character)) is None
+    assert await agent.decide("", _context(scenario), character_id=str(scenario.character)) is None
 
 
-def test_wanderer_tree_takes_first_open_exit():
+async def test_wanderer_tree_takes_first_open_exit():
     scenario = build_scenario()
     agent = BehaviorTreeAgent(resolve_behavior_tree("wanderer"))
-    assert agent.decide("", _context(scenario), character_id=str(scenario.character)) == ToolCall(
+    assert await agent.decide(
+        "", _context(scenario), character_id=str(scenario.character)
+    ) == ToolCall(
         "move", {"direction": "north"}
     )
 
 
-def test_forager_tree_takes_a_visible_item_first():
+async def test_forager_tree_takes_a_visible_item_first():
     scenario = build_scenario()
     world = scenario.actor.world
     item = spawn_entity(
@@ -167,36 +169,38 @@ def test_forager_tree_takes_a_visible_item_first():
         Contains(mode=ContainmentMode.ROOM_CONTENT), item.id
     )
     agent = BehaviorTreeAgent(resolve_behavior_tree("forager"))
-    decision = agent.decide("", _context(scenario), character_id=str(scenario.character))
+    decision = await agent.decide("", _context(scenario), character_id=str(scenario.character))
     assert decision == ToolCall("take", {"item_id": "acorn"})
 
 
-def test_forager_tree_moves_when_nothing_to_take():
+async def test_forager_tree_moves_when_nothing_to_take():
     scenario = build_scenario()
     agent = BehaviorTreeAgent(resolve_behavior_tree("forager"))
-    assert agent.decide("", _context(scenario), character_id=str(scenario.character)) == ToolCall(
+    assert await agent.decide(
+        "", _context(scenario), character_id=str(scenario.character)
+    ) == ToolCall(
         "move", {"direction": "north"}
     )
 
 
-def test_guard_tree_warns_visitors_and_holds_alone():
+async def test_guard_tree_warns_visitors_and_holds_alone():
     scenario = build_scenario()
     agent = BehaviorTreeAgent(resolve_behavior_tree("guard"))
     alone = _context(scenario)
-    assert agent.decide("", alone, character_id=str(scenario.character)) is None
+    assert await agent.decide("", alone, character_id=str(scenario.character)) is None
     _add_visitor(scenario, "Hazel")
     context = _context(scenario)
-    assert agent.decide("", context, character_id=str(scenario.character)) == ToolCall(
+    assert await agent.decide("", context, character_id=str(scenario.character)) == ToolCall(
         "say", {"text": "Hazel, keep your distance.", "intent": "threat", "approach": "cold"}
     )
 
 
-def test_greeter_tree_greets_visitors():
+async def test_greeter_tree_greets_visitors():
     scenario = build_scenario()
     _add_visitor(scenario, "Hazel")
     context = _context(scenario)
     agent = BehaviorTreeAgent(resolve_behavior_tree("greeter"))
-    assert agent.decide("", context, character_id=str(scenario.character)) == ToolCall(
+    assert await agent.decide("", context, character_id=str(scenario.character)) == ToolCall(
         "say", {"text": "Hazel, good to see you.", "intent": "praise", "approach": "friendly"}
     )
 
@@ -287,22 +291,24 @@ def test_register_action_makes_factory_available():
 # -- scripted agent replay ----------------------------------------------------------------
 
 
-def test_scripted_agent_replays_then_waits():
+async def test_scripted_agent_replays_then_waits():
     agent = ScriptedAgent([ToolCall("move", {"direction": "north"})])
-    assert agent.decide("", None, character_id="c") == ToolCall("move", {"direction": "north"})
-    assert agent.decide("", None, character_id="c") is None
+    assert await agent.decide("", None, character_id="c") == ToolCall(
+        "move", {"direction": "north"}
+    )
+    assert await agent.decide("", None, character_id="c") is None
 
 
-def test_scripted_agent_loops_when_enabled():
+async def test_scripted_agent_loops_when_enabled():
     calls = [ToolCall("move", {"direction": "north"}), ToolCall("move", {"direction": "south"})]
     agent = ScriptedAgent(calls, loop=True)
-    seen = [agent.decide("", None, character_id="c") for _ in range(3)]
+    seen = [await agent.decide("", None, character_id="c") for _ in range(3)]
     assert seen == [calls[0], calls[1], calls[0]]
 
 
-def test_scripted_agent_empty_script_always_waits():
+async def test_scripted_agent_empty_script_always_waits():
     agent = ScriptedAgent([], loop=True)
-    assert agent.decide("", None, character_id="c") is None
+    assert await agent.decide("", None, character_id="c") is None
 
 
 # -- dispatch driving the new controller types --------------------------------------------
@@ -315,7 +321,8 @@ async def test_dispatch_drives_behavioral_controller():
         scenario.actor, PromptBuilder(scenario.actor.world), ScriptedAgent([])
     )
 
-    decisions = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
 
     assert [d.tool for d in decisions] == ["move"]
     assert not scenario.actor._inbox.empty()
@@ -332,9 +339,12 @@ async def test_dispatch_drives_scripted_controller_across_ticks():
         scenario.actor, PromptBuilder(scenario.actor.world), ScriptedAgent([])
     )
 
-    first = await dispatch.run_once()
-    second = await dispatch.run_once()
-    third = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    first = await dispatch.await_pending()
+    assert await dispatch.run_once() == []
+    second = await dispatch.await_pending()
+    assert await dispatch.run_once() == []
+    third = await dispatch.await_pending()
 
     assert [d.summary.split()[0] for d in first] == ["move"]
     assert "north" in first[0].summary
@@ -351,8 +361,10 @@ async def test_dispatch_loops_scripted_controller():
         scenario.actor, PromptBuilder(scenario.actor.world), ScriptedAgent([])
     )
 
-    assert (await dispatch.run_once())[0].tool == "move"
-    assert (await dispatch.run_once())[0].tool == "move"
+    await dispatch.run_once()
+    assert (await dispatch.await_pending())[0].tool == "move"
+    await dispatch.run_once()
+    assert (await dispatch.await_pending())[0].tool == "move"
 
 
 async def test_dispatch_reuses_cached_behavior_agent_across_ticks():
@@ -363,8 +375,10 @@ async def test_dispatch_reuses_cached_behavior_agent_across_ticks():
     )
 
     await dispatch.run_once()
+    await dispatch.await_pending()
     first_agent = dispatch._behavior_agents["wanderer"]
     await dispatch.run_once()
+    await dispatch.await_pending()
     second_agent = dispatch._behavior_agents["wanderer"]
 
     # The behavior agent is built once and then served from cache (the agent-not-None arc),
@@ -381,7 +395,8 @@ async def test_dispatch_throttles_behavioral_controller_by_act_every_ticks():
     )
 
     assert await dispatch.run_once() == []  # tick 1 skipped
-    assert [d.tool for d in await dispatch.run_once()] == ["move"]  # tick 2 acts
+    assert await dispatch.run_once() == []  # tick 2 schedules the decision
+    assert [d.tool for d in await dispatch.await_pending()] == ["move"]
 
 
 async def test_dispatch_waits_on_unknown_behavior_name_without_crashing():
@@ -408,10 +423,12 @@ async def test_dispatch_rebuilds_scripted_agent_when_script_changes():
     dispatch = ControllerDispatch(
         scenario.actor, PromptBuilder(scenario.actor.world), ScriptedAgent([])
     )
-    assert "north" in (await dispatch.run_once())[0].summary
+    await dispatch.run_once()
+    assert "north" in (await dispatch.await_pending())[0].summary
 
     _assign(scenario, ScriptedControllerComponent(script_name="beta"))
-    assert "south" in (await dispatch.run_once())[0].summary
+    await dispatch.run_once()
+    assert "south" in (await dispatch.await_pending())[0].summary
 
 
 # -- controller-kind detection ------------------------------------------------------------

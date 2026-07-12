@@ -62,7 +62,7 @@ def test_compile_and_register_script_spec():
     assert resolve_script("spec-north")[0].name == "move"
 
 
-def test_compile_behavior_tree_happy_path_drives_decision():
+async def test_compile_behavior_tree_happy_path_drives_decision():
     tree = compile_behavior_tree(_forager_spec("compiled-forager"))
     scenario = build_scenario()
     from bunnyland.llm_agents.behavior_tree import BehaviorTreeAgent
@@ -71,7 +71,11 @@ def test_compile_behavior_tree_happy_path_drives_decision():
     context = PromptBuilder(scenario.actor.world).build(scenario.character)
     # No items in the room -> falls through to move.
     assert (
-        BehaviorTreeAgent(tree).decide("", context, character_id=str(scenario.character)).name
+        (
+            await BehaviorTreeAgent(tree).decide(
+                "", context, character_id=str(scenario.character)
+            )
+        ).name
         == "move"
     )
 
@@ -127,7 +131,7 @@ def test_compile_behavior_tree_rejects_invalid_specs(spec, message):
         compile_behavior_tree(spec)
 
 
-def test_say_action_compiles_with_text():
+async def test_say_action_compiles_with_text():
     tree = compile_behavior_tree(
         BehaviorTreeSpec(
             name="speaker",
@@ -141,10 +145,15 @@ def test_say_action_compiles_with_text():
     from bunnyland.prompts.builder import PromptBuilder
 
     context = PromptBuilder(scenario.actor.world).build(scenario.character)
-    assert BehaviorTreeAgent(tree).decide("", context, character_id=str(scenario.character)) is None
+    assert (
+        await BehaviorTreeAgent(tree).decide(
+            "", context, character_id=str(scenario.character)
+        )
+        is None
+    )
 
 
-def test_address_library_actions_compile_and_speak():
+async def test_address_library_actions_compile_and_speak():
     from bunnyland.core import (
         CharacterComponent,
         ContainmentMode,
@@ -178,8 +187,12 @@ def test_address_library_actions_compile_and_speak():
             ),
         )
     )
-    greet = BehaviorTreeAgent(greeter).decide("", context, character_id=str(scenario.character))
-    warn = BehaviorTreeAgent(warner).decide("", context, character_id=str(scenario.character))
+    greet = await BehaviorTreeAgent(greeter).decide(
+        "", context, character_id=str(scenario.character)
+    )
+    warn = await BehaviorTreeAgent(warner).decide(
+        "", context, character_id=str(scenario.character)
+    )
     assert greet.arguments["text"] == "Hazel, good to see you."
     assert warn.arguments["text"] == "Hazel, leave now."
 
@@ -281,7 +294,8 @@ async def test_dispatch_drives_a_stored_scripted_controller(tmp_path):
     dispatch = ControllerDispatch(
         scenario.actor, PromptBuilder(scenario.actor.world), ScriptedAgent([])
     )
-    decisions = await dispatch.run_once()
+    assert await dispatch.run_once() == []
+    decisions = await dispatch.await_pending()
     assert [d.tool for d in decisions] == ["move"]
 
 
