@@ -207,6 +207,7 @@ from .demos import (
     STORM_LIGHTHOUSE_DEMO,
 )
 from .generation import CAPABILITIES, GENERATION_ENRICHER
+from .integration_3d import install_daggersim_3d
 from .resolution import RESOLUTION_RULES
 
 
@@ -217,6 +218,7 @@ def _definition() -> Plugin:
         dependencies=DependencyContribution(
             requires=(CORE_VERBS, DRAGONSIM),
             recommends=(WORLDGEN,),
+            integrates_with=("bunnyland.3d",),
         ),
         ecs=EcsContribution(
             components=(
@@ -409,7 +411,10 @@ def _definition() -> Plugin:
                 DungeonExitedEvent,
             ),
         ),
-        runtime=RuntimeContribution(service_factories=(install_daggersim,)),
+        runtime=RuntimeContribution(
+            service_factories=(install_daggersim,),
+            integration_factories=(install_daggersim_3d,),
+        ),
         content=ContentContribution(
             prompt_fragments=(daggersim_fragments,),
             generation_capabilities=CAPABILITIES,

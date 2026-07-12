@@ -190,6 +190,7 @@ from ...plugins.model import (
 from .actions import ACTION_DEFINITIONS
 from .demos import STAR_OPERA_DEMO, VOIDSIM_DEMO
 from .generation import CAPABILITIES, GENERATION_ENRICHER
+from .integration_3d import install_voidsim_3d
 
 
 def _definition() -> Plugin:
@@ -199,6 +200,7 @@ def _definition() -> Plugin:
         dependencies=DependencyContribution(
             requires=(CORE_VERBS, COLONYSIM, BARBARIANSIM),
             recommends=(WORLDGEN, ENVIRONMENT),
+            integrates_with=("bunnyland.3d",),
         ),
         ecs=EcsContribution(
             components=(
@@ -371,7 +373,10 @@ def _definition() -> Plugin:
                 MortgagePaidEvent,
             ),
         ),
-        runtime=RuntimeContribution(service_factories=(install_voidsim,)),
+        runtime=RuntimeContribution(
+            service_factories=(install_voidsim,),
+            integration_factories=(install_voidsim_3d,),
+        ),
         content=ContentContribution(
             prompt_fragments=(voidsim_fragments,),
             generation_capabilities=CAPABILITIES,

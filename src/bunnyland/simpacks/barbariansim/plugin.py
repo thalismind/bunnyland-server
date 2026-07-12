@@ -116,6 +116,7 @@ from .actions import ACTION_DEFINITIONS
 from .demos import BARBARIANSIM_DEMO
 from .generation import CAPABILITIES, GENERATION_ENRICHER
 from .incidents import BARBARIAN_RAID
+from .integration_3d import install_barbariansim_3d
 
 
 def _definition() -> Plugin:
@@ -124,7 +125,11 @@ def _definition() -> Plugin:
         name="Barbarian Sim",
         dependencies=DependencyContribution(
             requires=(CORE_VERBS,),
-            integrates_with=("bunnyland.colonysim", "bunnyland.storyteller"),
+            integrates_with=(
+                "bunnyland.colonysim",
+                "bunnyland.storyteller",
+                "bunnyland.3d",
+            ),
         ),
         ecs=EcsContribution(
             components=(
@@ -231,7 +236,10 @@ def _definition() -> Plugin:
                 ClimbingGatePassedEvent,
             ),
         ),
-        runtime=RuntimeContribution(service_factories=(install_barbariansim,)),
+        runtime=RuntimeContribution(
+            service_factories=(install_barbariansim,),
+            integration_factories=(install_barbariansim_3d,),
+        ),
         content=ContentContribution(
             prompt_fragments=(barbariansim_fragments,),
             generation_capabilities=CAPABILITIES,
