@@ -45,8 +45,11 @@ from .agent import CharacterAgent, ScriptedAgent
 from .behavior_tree import BehaviorTree, BehaviorTreeAgent, resolve_behavior_tree
 from .scripts import resolve_script
 from .tools import (
+    DISCOVER_ACTION_TOOL,
     ToolCall,
+    action_discovery_schema,
     command_from_tool_call,
+    contextual_action_definitions,
     reference_arg_keys,
     tool_schemas,
 )
@@ -342,6 +345,9 @@ class ControllerDispatch:
         # character_id -> a "did you mean..." note to surface on its next prompt, so an
         # agent that named something unreachable gets the same guidance a human does.
         self._feedback: dict[str, str] = {}
+        # Full action definitions explicitly requested through the progressive discovery
+        # tool, retained per character so later decisions receive their native schemas.
+        self._discovered_actions: dict[str, set[str]] = {}
         # Counts dispatch turns so a controller can act only every N ticks (the world still
         # ticks every iteration; only the agent's decisions are throttled).
         self._tick = 0
@@ -535,13 +541,35 @@ class ControllerDispatch:
             span_attrs["decision.prompt"] = telemetry.attr_text(prompt)
             span_attrs["decision.prompt_chars"] = len(prompt)
 
+        character = self.actor.world.get_entity(character_id)
+        all_definitions = self.actor.action_definitions()
+        contextual = contextual_action_definitions(self.actor, character)
+        contextual_names = {definition.name for definition in contextual}
+        discovered_names = self._discovered_actions.get(cid, set())
+        discovered = tuple(
+            definition
+            for definition in all_definitions
+            if definition.name in discovered_names and definition.name not in contextual_names
+        )
+        offered = (*contextual, *discovered)
+        offered_names = {definition.name for definition in offered}
+        schemas = tool_schemas(offered)
+        if prompted:
+            discovery = action_discovery_schema(
+                tuple(
+                    definition
+                    for definition in all_definitions
+                    if definition.name not in offered_names
+                )
+            )
+            schemas.extend(filter(None, (discovery,)))
         decision = agent.decide(
             prompt,
             context,
             character_id=cid,
             model=model,
             provider=provider,
-            tools=tool_schemas(self.actor.action_definitions()),
+            tools=schemas,
         )
         if inspect.isawaitable(decision):
             # Run the provider call (and its follow-up submit) off the dispatch path so the
@@ -632,6 +660,19 @@ class ControllerDispatch:
         if call is None:
             logger.info("character %s decided to wait", character_id)
             return Decision(cid, None, "wait")
+        if call.name == DISCOVER_ACTION_TOOL:
+            requested = call.arguments.get("action_name")
+            available = {
+                definition.name for definition in self.actor.action_definitions()
+            }
+            if not isinstance(requested, str) or requested not in available:
+                self._feedback[cid] = "Choose an action_name from the discovery tool enum."
+                return Decision(cid, call.name, "invalid action discovery")
+            self._discovered_actions.setdefault(cid, set()).add(requested)
+            self._feedback[cid] = (
+                f"The {requested} tool is now available. Call it on the next decision if it fits."
+            )
+            return Decision(cid, call.name, f"discovered {requested}")
         persona_issues = persona_contradictions(context, call)
         if persona_issues:
             logger.info(

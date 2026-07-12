@@ -48,10 +48,20 @@ from .scripts import (
     script_names,
 )
 from .specs import BehaviorNodeSpec, BehaviorTreeSpec, ScriptSpec, ToolCallSpec
-from .tools import REFERENCE_ARG_KEYS, ToolCall, command_from_tool_call, tool_names, tool_schemas
+from .tools import (
+    DISCOVER_ACTION_TOOL,
+    REFERENCE_ARG_KEYS,
+    ToolCall,
+    action_discovery_schema,
+    command_from_tool_call,
+    contextual_action_definitions,
+    tool_names,
+    tool_schemas,
+)
 
 __all__ = [
     "DEFAULT_MODEL",
+    "DISCOVER_ACTION_TOOL",
     "REFERENCE_ARG_KEYS",
     "Agent",
     "BACKGROUND_PROFILES",
@@ -75,8 +85,10 @@ __all__ = [
     "ToolCall",
     "ToolCallSpec",
     "action_library_names",
+    "action_discovery_schema",
     "behavior_tree_names",
     "command_from_tool_call",
+    "contextual_action_definitions",
     "compile_behavior_tree",
     "compile_script",
     "condition_library_names",

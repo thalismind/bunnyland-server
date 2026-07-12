@@ -30,6 +30,7 @@ from bunnyland.core import (
 from bunnyland.foundation.persona.mechanics import GoalComponent
 from bunnyland.foundation.social.mechanics import SocialBond
 from bunnyland.llm_agents import (
+    DISCOVER_ACTION_TOOL,
     BehaviorProfileAgent,
     ControllerDispatch,
     GoalDirectedAgent,
@@ -37,6 +38,8 @@ from bunnyland.llm_agents import (
     ProviderRouterAgent,
     ScriptedAgent,
     ToolCall,
+    action_discovery_schema,
+    contextual_action_definitions,
     did_you_mean,
     name_candidates,
     persona_contradictions,
@@ -2268,6 +2271,13 @@ async def test_dispatch_passes_registry_tools_and_state_examples_to_agent():
         schema["function"]["name"]: schema["function"] for schema in agent.tools[0] or ()
     }
     assert {"move", "wait"} <= schemas.keys()
+    assert "practice_skill" not in schemas
+    assert "accept_quest" not in schemas
+    assert DISCOVER_ACTION_TOOL in schemas
+    discoverable = schemas[DISCOVER_ACTION_TOOL]["parameters"]["properties"]["action_name"][
+        "enum"
+    ]
+    assert {"practice_skill", "accept_quest"} <= set(discoverable)
     assert schemas["move"] == next(
         definition.tool_schema()["function"]
         for definition in scenario.actor.action_definitions()
@@ -2279,6 +2289,92 @@ async def test_dispatch_passes_registry_tools_and_state_examples_to_agent():
         if definition.name == "wait"
     )
     assert "move north" in agent.prompts[0]
+
+
+def test_contextual_action_definitions_add_owner_for_live_character_state():
+    from bunnyland.simpacks.lifesim.mechanics import SkillSetComponent
+
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    baseline = {
+        definition.name
+        for definition in contextual_action_definitions(scenario.actor, character)
+    }
+
+    assert {"move", "wait", "take_note"} <= baseline
+    assert "practice_skill" not in baseline
+
+    character.add_component(SkillSetComponent(levels={"foraging": 1}))
+    expanded = {
+        definition.name
+        for definition in contextual_action_definitions(scenario.actor, character)
+    }
+
+    assert "practice_skill" in expanded
+    assert len(expanded) > len(baseline)
+
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
+        Contains, scenario.character
+    )
+    uncontained = {
+        definition.name
+        for definition in contextual_action_definitions(scenario.actor, character)
+    }
+    assert {"move", "wait", "take_note"} <= uncontained
+
+
+def test_contextual_action_definitions_preserve_manual_actor_catalogue():
+    from bunnyland.core import WorldActor
+
+    actor = WorldActor()
+    definition = ActionDefinition(command_type="wave", tool_name="wave")
+    actor.register_action_definition(definition)
+    character = spawn_entity(actor.world, [CharacterComponent()])
+
+    assert contextual_action_definitions(actor, character) == (definition,)
+
+
+def test_action_discovery_schema_is_typed_and_omitted_when_empty():
+    definition = ActionDefinition(command_type="practice-skill", tool_name="practice_skill")
+
+    assert action_discovery_schema(()) is None
+    schema = action_discovery_schema((definition,))["function"]
+    assert schema["name"] == DISCOVER_ACTION_TOOL
+    assert schema["parameters"]["required"] == ["action_name"]
+    assert schema["parameters"]["properties"]["action_name"]["enum"] == ["practice_skill"]
+
+
+async def test_dispatch_progressively_exposes_discovered_native_action_schema():
+    scenario = build_scenario()
+    agent = _RecordingAgent(
+        [ToolCall(DISCOVER_ACTION_TOOL, {"action_name": "practice_skill"}), None]
+    )
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    first = await dispatch.run_once()
+    assert first[0].summary == "discovered practice_skill"
+    assert scenario.actor._inbox.empty()
+
+    await dispatch.run_once()
+    second_tools = {
+        schema["function"]["name"]: schema["function"] for schema in agent.tools[1] or ()
+    }
+    assert "practice_skill" in second_tools
+    assert "practice_skill tool is now available" in agent.prompts[1]
+    assert "practice_skill" not in second_tools[DISCOVER_ACTION_TOOL]["parameters"]["properties"][
+        "action_name"
+    ]["enum"]
+
+
+async def test_dispatch_rejects_invalid_action_discovery_without_submission():
+    scenario = build_scenario()
+    agent = _RecordingAgent([ToolCall(DISCOVER_ACTION_TOOL, {"action_name": "not_real"})])
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    decisions = await dispatch.run_once()
+
+    assert decisions[0].summary == "invalid action discovery"
+    assert scenario.actor._inbox.empty()
 
 
 async def test_dispatch_feeds_did_you_mean_back_to_the_agent():
