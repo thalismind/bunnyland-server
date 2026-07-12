@@ -684,13 +684,13 @@ def test_story_event_proposal_accepts_common_severity_labels():
     event = StoryEventProposal.model_validate(
         {
             "title": "A harmless clue",
-            "severity": "minor",
+            "severity": "harmless",
             "budget_spent": "low",
             "stimulus_intensity": "high",
         }
     )
 
-    assert event.severity == 1.0
+    assert event.severity == 0.0
     assert event.budget_spent == 1.0
     assert event.stimulus_intensity == 3.0
 

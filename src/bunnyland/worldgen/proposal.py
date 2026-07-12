@@ -16,6 +16,7 @@ from ..llm_agents.agent import DEFAULT_MODEL
 
 _SEVERITY_LABELS = {
     "none": 0.0,
+    "harmless": 0.0,
     "trivial": 0.5,
     "minor": 1.0,
     "low": 1.0,
