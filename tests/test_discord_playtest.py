@@ -927,7 +927,6 @@ def _add_daggersim_dungeon_world(scenario):
                 dungeon_id="carrot-vault",
                 theme="ruin",
                 seed="cv-1",
-                entry_room_id=str(entry.id),
                 generated=False,
             ),
             dagger.ExpansionHookComponent(
@@ -935,17 +934,18 @@ def _add_daggersim_dungeon_world(scenario):
             ),
         ],
     )
+    scenario.actor.world.get_entity(dungeon).add_relationship(dagger.EnteredThroughRoom(), entry.id)
     door = spawn_entity(
         scenario.actor.world,
         [
             IdentityComponent(name="cracked tiles", kind="secret-door"),
             dagger.SecretDoorComponent(
-                target_room_id=str(deeper.id),
                 direction="down",
                 hint="a draft behind the tiles",
             ),
         ],
     )
+    door.add_relationship(dagger.OpensIntoRoom(), deeper.id)
     objective = spawn_entity(
         scenario.actor.world,
         [

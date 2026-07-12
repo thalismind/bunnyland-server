@@ -39,6 +39,21 @@ components:
     entity_6: {faction_id: Moss Wardens, bribe_amount: 7}
   JailComponent:
     entity_1: {faction_id: entity_2, release_epoch: 20, reason: theft}
+  RoomComponent:
+    entity_2: {title: Market}
+    entity_7: {title: Vault}
+  TravelHubComponent:
+    entity_2: {name: Market}
+  TravelPlanComponent:
+    entity_1: {destination_id: entity_2, started_at_epoch: 2, arrive_at_epoch: 8, mode: cart, route_label: road}
+  RecallAnchorComponent:
+    entity_1: {room_id: entity_2}
+  SecretDoorComponent:
+    entity_4: {target_room_id: entity_2, hint: draft}
+  DungeonComponent:
+    entity_3: {dungeon_id: vault, entry_room_id: entity_7, generated: true}
+  DungeonRoomComponent:
+    entity_7: {dungeon_id: vault, depth: 0}
   InstitutionComponent:
     entity_3: {name: Cartographers, institution_type: guild}
   LawRegionComponent:

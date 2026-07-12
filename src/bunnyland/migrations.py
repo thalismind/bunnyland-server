@@ -446,6 +446,114 @@ def _migrate_v1(snapshot: dict[str, Any]) -> dict[str, Any]:
             },
         )
 
+    travel_plans = components.pop("TravelPlanComponent", {})
+    if not isinstance(travel_plans, dict):
+        raise WorldMigrationError("persisted type 'TravelPlanComponent' must contain a mapping")
+    for character_id, fields in sorted(travel_plans.items()):
+        if not isinstance(fields, dict):
+            raise WorldMigrationError(
+                f"TravelPlanComponent fields for {character_id!r} must be a mapping"
+            )
+        destination_id = _live_target_or_label(
+            entities,
+            components,
+            fields.get("destination_id"),
+            owner_id=character_id,
+            component="TravelPlanComponent",
+            field="destination_id",
+            target_component="TravelHubComponent",
+            label_field="name",
+        )
+        edge_fields = {
+            "started_at_epoch": fields.get("started_at_epoch"),
+            "arrive_at_epoch": fields.get("arrive_at_epoch"),
+            "mode": str(fields.get("mode", "foot")),
+            "route_label": str(fields.get("route_label", "")),
+        }
+        for field_name in ("started_at_epoch", "arrive_at_epoch"):
+            value = edge_fields[field_name]
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise WorldMigrationError(
+                    f"TravelPlanComponent.{field_name} for {character_id!r} must be an integer"
+                )
+        _add_edge(
+            relationships,
+            "TravelingToDestination",
+            character_id,
+            destination_id,
+            edge_fields,
+        )
+
+    recall_anchors = components.pop("RecallAnchorComponent", {})
+    if not isinstance(recall_anchors, dict):
+        raise WorldMigrationError("persisted type 'RecallAnchorComponent' must contain a mapping")
+    for character_id, fields in sorted(recall_anchors.items()):
+        if not isinstance(fields, dict):
+            raise WorldMigrationError(
+                f"RecallAnchorComponent fields for {character_id!r} must be a mapping"
+            )
+        room_id = _live_target(
+            entities,
+            fields.get("room_id"),
+            owner_id=character_id,
+            component="RecallAnchorComponent",
+            field="room_id",
+        )
+        if room_id not in _records(components, "RoomComponent"):
+            raise WorldMigrationError(
+                f"schema-v1 entity {character_id!r} component RecallAnchorComponent.room_id "
+                f"refers to entity {room_id!r} without RoomComponent"
+            )
+        _add_edge(relationships, "AnchoredToRoom", character_id, room_id)
+
+    secret_doors = _records(components, "SecretDoorComponent")
+    for door_id, fields in sorted(secret_doors.items()):
+        if not isinstance(fields, dict):
+            raise WorldMigrationError(
+                f"SecretDoorComponent fields for {door_id!r} must be a mapping"
+            )
+        fields = dict(fields)
+        target = fields.pop("target_room_id", None)
+        secret_doors[door_id] = fields
+        target_room_id = _live_target(
+            entities,
+            target,
+            owner_id=door_id,
+            component="SecretDoorComponent",
+            field="target_room_id",
+        )
+        if target_room_id not in _records(components, "RoomComponent"):
+            raise WorldMigrationError(
+                f"schema-v1 entity {door_id!r} component SecretDoorComponent.target_room_id "
+                f"refers to entity {target_room_id!r} without RoomComponent"
+            )
+        _add_edge(relationships, "OpensIntoRoom", door_id, target_room_id)
+
+    dungeons = _records(components, "DungeonComponent")
+    for dungeon_id, fields in sorted(dungeons.items()):
+        if not isinstance(fields, dict):
+            raise WorldMigrationError(
+                f"DungeonComponent fields for {dungeon_id!r} must be a mapping"
+            )
+        fields = dict(fields)
+        entry = fields.pop("entry_room_id", None)
+        dungeons[dungeon_id] = fields
+        if entry is None:
+            continue
+        entry_room_id = _live_target(
+            entities,
+            entry,
+            owner_id=dungeon_id,
+            component="DungeonComponent",
+            field="entry_room_id",
+        )
+        if entry_room_id not in _records(components, "DungeonRoomComponent"):
+            raise WorldMigrationError(
+                f"schema-v1 entity {dungeon_id!r} component DungeonComponent.entry_room_id "
+                f"refers to entity {entry_room_id!r} without DungeonRoomComponent"
+            )
+        _add_edge(relationships, "EnteredThroughRoom", dungeon_id, entry_room_id)
+
     standing_maps = (
         (
             "FactionReputationComponent",

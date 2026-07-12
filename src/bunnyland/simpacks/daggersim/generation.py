@@ -9,6 +9,7 @@ from ...worldgen.enrichment import (
 )
 from .mechanics import (
     AfflictionStigmaComponent,
+    AnchoredToRoom,
     AutomapComponent,
     BankComponent,
     BountyComponent,
@@ -24,6 +25,7 @@ from .mechanics import (
     DungeonObjectiveComponent,
     DungeonRoomComponent,
     EnchantedItemComponent,
+    EnteredThroughRoom,
     EtiquetteSkillComponent,
     ExpansionHookComponent,
     FeedingNeedComponent,
@@ -39,11 +41,11 @@ from .mechanics import (
     LanguageSkillComponent,
     LawRegionComponent,
     LodgingComponent,
+    OpensIntoRoom,
     OriginatesFromSource,
     PotionMakerComponent,
     ProceduralSiteComponent,
     PropertyDeedComponent,
-    RecallAnchorComponent,
     RechargeServiceComponent,
     RefersToSubject,
     RestRiskComponent,
@@ -153,10 +155,10 @@ class DaggerGenerationEnricher:
                         dungeon_id=ctx.room_key,
                         theme=ctx.biome,
                         seed=ctx.seed,
-                        entry_room_id=ctx.entity_id,
                     )
                 )
                 add(DungeonRoomComponent(dungeon_id=ctx.room_key, discovered=True))
+                edges.append(GenerationEdge(EnteredThroughRoom(), GenerationTarget(ctx.room_key)))
             if generation_wants(ctx, "bunnyland.daggersim.travel-hub") or generation_mentions(
                 ctx, "crossroads", "station"
             ):
@@ -240,7 +242,8 @@ class DaggerGenerationEnricher:
             if generation_wants(ctx, "bunnyland.daggersim.feeding-need"):
                 add(FeedingNeedComponent(current=1.0, last_updated_epoch=ctx.world_epoch))
             if generation_wants(ctx, "bunnyland.daggersim.recall-anchor"):
-                add(RecallAnchorComponent(room_id=ctx.room_id))
+                if ctx.room_id:
+                    edges.append(GenerationEdge(AnchoredToRoom(), GenerationTarget(ctx.room_id)))
             if generation_wants(ctx, "bunnyland.daggersim.dialogue-approach"):
                 add(DialogueApproachComponent(last_approach="worldgen"))
             if generation_wants(ctx, "bunnyland.daggersim.etiquette-skill"):
@@ -303,7 +306,9 @@ class DaggerGenerationEnricher:
             if generation_wants(ctx, "bunnyland.daggersim.secret-door") or generation_mentions(
                 ctx, "secret door"
             ):
-                add(SecretDoorComponent(target_room_id=ctx.room_id or ctx.entity_id, hint=name))
+                add(SecretDoorComponent(hint=name))
+                if ctx.room_id:
+                    edges.append(GenerationEdge(OpensIntoRoom(), GenerationTarget(ctx.room_id)))
             if generation_wants(ctx, "bunnyland.daggersim.automap"):
                 add(AutomapComponent(marked_rooms=(ctx.room_id,) if ctx.room_id else ()))
         return GenerationDelta(

@@ -210,6 +210,10 @@ def test_live_memberships_and_aggregate_relationships_remain_edges():
         "WantedComponent": "amounts",
         "GuardComponent": "faction_id",
         "JailComponent": "faction_id",
+        "TravelPlanComponent": "destination_id",
+        "RecallAnchorComponent": "room_id",
+        "SecretDoorComponent": "target_room_id",
+        "DungeonComponent": "entry_room_id",
     }
     edge_names = {
         "AllowedIn",
@@ -232,6 +236,10 @@ def test_live_memberships_and_aggregate_relationships_remain_edges():
         "WantedByFaction",
         "GuardsForFaction",
         "JailedByFaction",
+        "TravelingToDestination",
+        "AnchoredToRoom",
+        "OpensIntoRoom",
+        "EnteredThroughRoom",
     }
     found_edges: set[str] = set()
     found_classes: set[str] = set()
@@ -257,6 +265,8 @@ def test_live_memberships_and_aggregate_relationships_remain_edges():
         "WantedComponent",
         "GuardComponent",
         "JailComponent",
+        "TravelPlanComponent",
+        "RecallAnchorComponent",
     }
     assert not removed_wrappers & found_classes
     assert (

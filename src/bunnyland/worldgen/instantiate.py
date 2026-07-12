@@ -515,8 +515,8 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
         for room in proposal.rooms:
             components, generation, plan = room_plans[room.key]
             entity = spawn_entity(world, components)
-            _apply_plan_edges(actor, entity, plan)
             result.rooms[room.key] = entity.id
+            _apply_plan_edges(actor, entity, plan, result.rooms)
             event = RoomGeneratedEvent(
                 **actor._event_base(
                     seed=proposal.seed,

@@ -2198,6 +2198,7 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
     )
     from bunnyland.simpacks.daggersim.mechanics import (
         AfflictionStigmaComponent,
+        AnchoredToRoom,
         AutomapComponent,
         BankComponent,
         BountyComponent,
@@ -2224,11 +2225,11 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         LanguageSkillComponent,
         LawRegionComponent,
         LodgingComponent,
+        OpensIntoRoom,
         OriginatesFromSource,
         PotionMakerComponent,
         ProceduralSiteComponent,
         PropertyDeedComponent,
-        RecallAnchorComponent,
         RechargeServiceComponent,
         RefersToSubject,
         RestRiskComponent,
@@ -2566,6 +2567,7 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         (OriginatesFromSource(), dagger_city.id)
     ]
     assert dagger_board.get_relationships(RefersToSubject) == [(RefersToSubject(), dagger_city.id)]
+    assert dagger_board.get_relationships(OpensIntoRoom) == [(OpensIntoRoom(), dagger_city.id)]
 
     dagger_scholar = actor.world.get_entity(result.characters["dagger_scholar"])
     for component_type in (
@@ -2577,7 +2579,6 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         AfflictionStigmaComponent,
         CureRequestComponent,
         FeedingNeedComponent,
-        RecallAnchorComponent,
         DialogueApproachComponent,
         EtiquetteSkillComponent,
         StreetwiseSkillComponent,
@@ -2585,6 +2586,7 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         ConversationToneComponent,
     ):
         assert dagger_scholar.has_component(component_type)
+    assert dagger_scholar.get_relationships(AnchoredToRoom) == [(AnchoredToRoom(), dagger_city.id)]
     assert dagger_scholar.get_relationships(HasStandingInRegion) == [
         (HasStandingInRegion(score=1), dagger_city.id)
     ]
@@ -2647,6 +2649,7 @@ async def test_builtin_generation_enrichers_cover_cross_package_mention_branches
     from bunnyland.simpacks.daggersim.mechanics import (
         DungeonComponent,
         DungeonRoomComponent,
+        EnteredThroughRoom,
         InstitutionComponent,
         ProceduralSiteComponent,
         RumorComponent,
@@ -2795,6 +2798,7 @@ async def test_builtin_generation_enrichers_cover_cross_package_mention_branches
     assert room.has_component(ProceduralSiteComponent)
     assert room.has_component(DungeonComponent)
     assert room.has_component(DungeonRoomComponent)
+    assert room.get_relationships(EnteredThroughRoom) == [(EnteredThroughRoom(), room.id)]
     assert room.has_component(TravelHubComponent)
     assert room.has_component(InstitutionComponent)
     assert room.has_component(QuestComponent)
@@ -3570,6 +3574,7 @@ def test_relationship_generation_requires_targets_and_emits_configured_access():
         HasLegalStandingInRegion,
         HasStandingInRegion,
         HasStandingWithInstitution,
+        SecretDoorComponent,
     )
     from bunnyland.simpacks.dragonsim.generation import DragonGenerationEnricher
     from bunnyland.simpacks.dragonsim.mechanics import (
@@ -3624,6 +3629,22 @@ def test_relationship_generation_requires_targets_and_emits_configured_access():
         )
     )
     assert unscoped_standing.edges == ()
+
+    unscoped_room_edges = dagger.enrich(
+        GenerationRequest(
+            entity_kind="character",
+            capabilities=("bunnyland.daggersim.recall-anchor",),
+        )
+    )
+    assert unscoped_room_edges.edges == ()
+    unscoped_door = dagger.enrich(
+        GenerationRequest(
+            entity_kind="object",
+            capabilities=("bunnyland.daggersim.secret-door",),
+        )
+    )
+    assert unscoped_door.components == (SecretDoorComponent(hint=""),)
+    assert unscoped_door.edges == ()
 
     dragon_standing = DragonGenerationEnricher().enrich(
         GenerationRequest(

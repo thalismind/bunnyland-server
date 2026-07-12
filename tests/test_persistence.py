@@ -449,6 +449,19 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v2(tmp_path, suffix)
             "entity_2",
             {"release_epoch": 20, "reason": "theft"},
         ),
+        "TravelingToDestination": (
+            "entity_1",
+            "entity_2",
+            {
+                "started_at_epoch": 2,
+                "arrive_at_epoch": 8,
+                "mode": "cart",
+                "route_label": "road",
+            },
+        ),
+        "AnchoredToRoom": ("entity_1", "entity_2", {}),
+        "OpensIntoRoom": ("entity_4", "entity_2", {}),
+        "EnteredThroughRoom": ("entity_3", "entity_7", {}),
     }
     for edge_name, (source_id, target_id, edge) in expected.items():
         record = migrated["relationships"][edge_name][source_id][0]
@@ -656,6 +669,105 @@ def test_schema_v1_faction_role_edges_apply_default_properties():
     assert migrated["relationships"]["JailedByFaction"]["entity_1"] == [
         {"target": "entity_2", "edge": {"release_epoch": 12, "reason": "sentence"}}
     ]
+
+
+@pytest.mark.parametrize("component", ["TravelPlanComponent", "RecallAnchorComponent"])
+def test_schema_v1_room_reference_wrapper_tables_must_be_mappings(component):
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"][component] = []
+    with pytest.raises(WorldMigrationError, match=rf"persisted type '{component}'.*mapping"):
+        migrate_snapshot(source)
+
+
+@pytest.mark.parametrize(
+    ("component", "field"),
+    [
+        ("TravelPlanComponent", "destination_id"),
+        ("RecallAnchorComponent", "room_id"),
+        ("SecretDoorComponent", "target_room_id"),
+        ("DungeonComponent", "entry_room_id"),
+    ],
+)
+def test_schema_v1_room_reference_edges_reject_missing_targets(component, field):
+    source = _schema_v1_generated_quest_snapshot()
+    fields = {field: "missing"}
+    if component == "TravelPlanComponent":
+        fields.update(started_at_epoch=0, arrive_at_epoch=1)
+    source["components"][component] = {"entity_1": fields}
+    with pytest.raises(WorldMigrationError, match=rf"{component}\.{field}.*'missing'"):
+        migrate_snapshot(source)
+
+
+@pytest.mark.parametrize(
+    "component",
+    [
+        "TravelPlanComponent",
+        "RecallAnchorComponent",
+        "SecretDoorComponent",
+        "DungeonComponent",
+    ],
+)
+def test_schema_v1_room_reference_records_must_be_mappings(component):
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"][component] = {"entity_1": []}
+    with pytest.raises(WorldMigrationError, match=rf"{component} fields.*mapping"):
+        migrate_snapshot(source)
+
+
+def test_schema_v1_travel_plan_rejects_wrong_target_type_and_timestamps():
+    wrong_target = _schema_v1_generated_quest_snapshot()
+    wrong_target["components"]["TravelPlanComponent"] = {
+        "entity_1": {
+            "destination_id": "entity_2",
+            "started_at_epoch": 0,
+            "arrive_at_epoch": 1,
+        }
+    }
+    with pytest.raises(WorldMigrationError, match="entity_2.*without TravelHubComponent"):
+        migrate_snapshot(wrong_target)
+
+    for field in ("started_at_epoch", "arrive_at_epoch"):
+        malformed = _schema_v1_generated_quest_snapshot()
+        malformed["components"]["TravelHubComponent"] = {"entity_2": {"name": "Market"}}
+        malformed["components"]["TravelPlanComponent"] = {
+            "entity_1": {
+                "destination_id": "entity_2",
+                "started_at_epoch": 0,
+                "arrive_at_epoch": 1,
+                field: "soon",
+            }
+        }
+        with pytest.raises(WorldMigrationError, match=rf"TravelPlanComponent\.{field}.*integer"):
+            migrate_snapshot(malformed)
+
+
+@pytest.mark.parametrize(
+    ("component", "field", "target_component"),
+    [
+        ("RecallAnchorComponent", "room_id", "RoomComponent"),
+        ("SecretDoorComponent", "target_room_id", "RoomComponent"),
+        ("DungeonComponent", "entry_room_id", "DungeonRoomComponent"),
+    ],
+)
+def test_schema_v1_room_reference_edges_reject_wrong_target_types(
+    component, field, target_component
+):
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"][component] = {"entity_1": {field: "entity_2"}}
+    with pytest.raises(WorldMigrationError, match=rf"entity_2.*without {target_component}"):
+        migrate_snapshot(source)
+
+
+def test_schema_v1_dungeon_without_entry_keeps_external_dungeon_key_only():
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"]["DungeonComponent"] = {
+        "entity_1": {"dungeon_id": "stable-key", "entry_room_id": None}
+    }
+
+    migrated = migrate_snapshot(source)
+
+    assert migrated["components"]["DungeonComponent"]["entity_1"] == {"dungeon_id": "stable-key"}
+    assert "EnteredThroughRoom" not in migrated["relationships"]
 
 
 def test_schema_v1_migration_handles_collisions_and_unaccepted_generated_quests():

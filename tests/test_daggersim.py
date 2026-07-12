@@ -33,6 +33,7 @@ from bunnyland.simpacks.daggersim.mechanics import (
     AfflictionIncubationProgressedEvent,
     AfflictionStigmaComponent,
     AfflictionStigmaMarkedEvent,
+    AnchoredToRoom,
     AskRumorHandler,
     AttemptPacifyHandler,
     AutomapComponent,
@@ -81,6 +82,7 @@ from bunnyland.simpacks.daggersim.mechanics import (
     EnchantItemHandler,
     EndTransformationHandler,
     EnterDungeonHandler,
+    EnteredThroughRoom,
     EtiquetteSkillComponent,
     ExpandSiteHandler,
     ExpansionHookComponent,
@@ -130,6 +132,7 @@ from bunnyland.simpacks.daggersim.mechanics import (
     MemberOfInstitution,
     OpenBankAccountHandler,
     OpenSecretDoorHandler,
+    OpensIntoRoom,
     OwnsProperty,
     PacificationAttemptedEvent,
     PacifiedComponent,
@@ -143,7 +146,6 @@ from bunnyland.simpacks.daggersim.mechanics import (
     PromoteInstitutionHandler,
     PropertyDeedComponent,
     PropertyPurchasedEvent,
-    RecallAnchorComponent,
     RecallAnchorSetEvent,
     RecallUsedEvent,
     RechargeEnchantedItemHandler,
@@ -188,10 +190,10 @@ from bunnyland.simpacks.daggersim.mechanics import (
     TravelCompletedEvent,
     TravelCompletionConsequence,
     TravelHubComponent,
+    TravelingToDestination,
     TravelInterruptionComponent,
     TravelInterruptionResolvedEvent,
     TravelModeComponent,
-    TravelPlanComponent,
     TravelRoute,
     TravelStartedEvent,
     TravelSuppliesBoughtEvent,
@@ -1773,12 +1775,12 @@ def test_expand_ask_rumor_and_travel_handlers_reject_bad_state_directly():
 
     traveling_scenario = build_scenario()
     traveling_character = traveling_scenario.actor.world.get_entity(traveling_scenario.character)
-    traveling_character.add_component(
-        TravelPlanComponent(
-            destination_id=str(traveling_scenario.room_b),
+    traveling_character.add_relationship(
+        TravelingToDestination(
             started_at_epoch=0,
             arrive_at_epoch=HOUR,
-        )
+        ),
+        traveling_scenario.room_b,
     )
     result = PlanTravelHandler().execute(
         HandlerContext(traveling_scenario.actor.world, traveling_scenario.actor.epoch),
@@ -1837,45 +1839,23 @@ def test_expand_ask_rumor_and_travel_handlers_reject_bad_state_directly():
     assert result.reason == "no travel route to destination"
 
 
-def test_travel_completion_covers_pending_invalid_and_originless_plans():
+def test_travel_completion_covers_pending_and_originless_plans():
     scenario = build_scenario()
     _install(scenario.actor)
     character = scenario.actor.world.get_entity(scenario.character)
     consequence = TravelCompletionConsequence()
 
-    character.add_component(
-        TravelPlanComponent(
-            destination_id=str(scenario.room_b),
+    character.add_relationship(
+        TravelingToDestination(
             started_at_epoch=0,
             arrive_at_epoch=HOUR,
             mode="walking",
             route_label="moss road",
-        )
+        ),
+        scenario.room_b,
     )
     assert consequence.process(scenario.actor.world, HOUR - 1) == []
 
-    replace_component(
-        character,
-        TravelPlanComponent(
-            destination_id="not-an-entity",
-            started_at_epoch=0,
-            arrive_at_epoch=HOUR,
-            mode="walking",
-            route_label="moss road",
-        ),
-    )
-    assert consequence.process(scenario.actor.world, HOUR) == []
-
-    replace_component(
-        character,
-        TravelPlanComponent(
-            destination_id=str(scenario.room_b),
-            started_at_epoch=0,
-            arrive_at_epoch=HOUR,
-            mode="walking",
-            route_label="moss road",
-        ),
-    )
     scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
         Contains,
         scenario.character,
@@ -3275,7 +3255,7 @@ async def test_plan_travel_moves_character_after_route_time():
 
     character = scenario.actor.world.get_entity(scenario.character)
     assert scenario.character_room() == scenario.room_a
-    assert character.has_component(TravelPlanComponent)
+    assert character.get_relationships(TravelingToDestination)
     assert started[0].destination_id == str(scenario.room_b)
 
     await scenario.actor.tick(HOUR)
@@ -3283,7 +3263,7 @@ async def test_plan_travel_moves_character_after_route_time():
 
     await scenario.actor.tick(HOUR)
     assert scenario.character_room() == scenario.room_b
-    assert not character.has_component(TravelPlanComponent)
+    assert not character.get_relationships(TravelingToDestination)
     assert completed[0].destination_id == str(scenario.room_b)
 
 
@@ -3301,7 +3281,7 @@ async def test_travel_mode_speed_shortens_route_time():
     await scenario.actor.tick(HOUR)
 
     assert scenario.character_room() == scenario.room_b
-    assert not character.has_component(TravelPlanComponent)
+    assert not character.get_relationships(TravelingToDestination)
 
 
 async def test_join_institution_and_use_member_service_grants_output_item():
@@ -3873,12 +3853,12 @@ def test_daggersim_fragments_show_heard_rumors():
 def test_daggersim_fragments_show_travel_plan():
     scenario = build_scenario()
     character = scenario.actor.world.get_entity(scenario.character)
-    character.add_component(
-        TravelPlanComponent(
-            destination_id=str(scenario.room_b),
+    character.add_relationship(
+        TravelingToDestination(
             started_at_epoch=0,
             arrive_at_epoch=HOUR,
-        )
+        ),
+        scenario.room_b,
     )
 
     fragments = daggersim_fragments(scenario.actor.world, character)
@@ -4046,7 +4026,7 @@ def test_daggersim_fragments_show_nearby_services_magic_law_and_character_state(
         )
     )
     character.add_component(FeedingNeedComponent(current=4.0, maximum=10.0))
-    character.add_component(RecallAnchorComponent(room_id=str(scenario.room_b)))
+    character.add_relationship(AnchoredToRoom(), scenario.room_b)
     nearby = [
         [
             IdentityComponent(name="Moss Bank", kind="bank"),
@@ -4111,7 +4091,7 @@ def test_daggersim_fragments_show_nearby_services_magic_law_and_character_state(
         ],
         [
             IdentityComponent(name="loose stone", kind="secret-door"),
-            SecretDoorComponent(target_room_id=str(scenario.room_b), hint="cold air", found=True),
+            SecretDoorComponent(hint="cold air", found=True),
         ],
         [
             IdentityComponent(name="moon key", kind="objective"),
@@ -4152,7 +4132,7 @@ def test_daggersim_fragments_show_nearby_services_magic_law_and_character_state(
     assert "Dungeon objective found: key." in fragments
     assert any("took your last approach faux-pas" in line for line in fragments)
     assert "Rest risk here: uneasy." in fragments
-    assert f"Recall anchor set at room {scenario.room_b}." in fragments
+    assert "Recall anchor set at North Tunnel." in fragments
     assert "Streetwise skill: 3." in fragments
     assert "Custom class: Night Gardener." in fragments
     assert "Affliction: moon-form (active)." in fragments
@@ -4186,7 +4166,6 @@ def test_daggersim_fragments_cover_suppressed_and_default_states(monkeypatch):
         [
             IdentityComponent(name="closed panel", kind="secret-door"),
             SecretDoorComponent(
-                target_room_id=str(scenario.room_b),
                 hint="cold air",
                 found=False,
             ),
@@ -4262,7 +4241,6 @@ def _dungeon(scenario, *, generated=True):
                 dungeon_id="carrot-vault",
                 theme="ruin",
                 seed="cv-1",
-                entry_room_id=str(entry_room.id),
                 generated=generated,
             ),
             ExpansionHookComponent(trigger="quest", generator_plugin_id="worldgen.recursive"),
@@ -4271,6 +4249,7 @@ def _dungeon(scenario, *, generated=True):
     world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), dungeon.id
     )
+    dungeon.add_relationship(EnteredThroughRoom(), entry_room.id)
     return dungeon.id, entry_room.id
 
 
@@ -4281,12 +4260,12 @@ def _secret_door(scenario, room_id, target_room_id):
         [
             IdentityComponent(name="cracked tiles", kind="secret-door"),
             SecretDoorComponent(
-                target_room_id=str(target_room_id),
                 direction="down",
                 hint="a draft behind the tiles",
             ),
         ],
     )
+    door.add_relationship(OpensIntoRoom(), target_room_id)
     world.get_entity(room_id).add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), door.id)
     return door.id
 
@@ -4323,7 +4302,6 @@ def test_dungeon_handlers_reject_bad_entities_and_components_directly():
                 dungeon_id="missing-entry",
                 theme="ruin",
                 seed="me",
-                entry_room_id="entity_999",
                 generated=True,
             ),
         ],
@@ -4337,16 +4315,16 @@ def test_dungeon_handlers_reject_bad_entities_and_components_directly():
                 dungeon_id="plain-entry",
                 theme="ruin",
                 seed="pe",
-                entry_room_id=str(plain_entry.id),
                 generated=True,
             ),
         ],
     )
+    plain_entry_dungeon.add_relationship(EnteredThroughRoom(), plain_entry.id)
     unfound_door = spawn_entity(
         scenario.actor.world,
         [
             IdentityComponent(name="unfound door", kind="secret-door"),
-            SecretDoorComponent(target_room_id=str(scenario.room_b), hint="cold air"),
+            SecretDoorComponent(hint="cold air"),
         ],
     )
     open_door = spawn_entity(
@@ -4354,7 +4332,6 @@ def test_dungeon_handlers_reject_bad_entities_and_components_directly():
         [
             IdentityComponent(name="open door", kind="secret-door"),
             SecretDoorComponent(
-                target_room_id=str(scenario.room_b),
                 hint="warm air",
                 found=True,
                 opened=True,
@@ -4365,16 +4342,19 @@ def test_dungeon_handlers_reject_bad_entities_and_components_directly():
         scenario.actor.world,
         [
             IdentityComponent(name="nowhere door", kind="secret-door"),
-            SecretDoorComponent(target_room_id="entity_999", hint="empty air", found=True),
+            SecretDoorComponent(hint="empty air", found=True),
         ],
     )
     distant_door = spawn_entity(
         scenario.actor.world,
         [
             IdentityComponent(name="distant door", kind="secret-door"),
-            SecretDoorComponent(target_room_id=str(scenario.room_b), hint="far air", found=True),
+            SecretDoorComponent(hint="far air", found=True),
         ],
     )
+    unfound_door.add_relationship(OpensIntoRoom(), scenario.room_b)
+    open_door.add_relationship(OpensIntoRoom(), scenario.room_b)
+    distant_door.add_relationship(OpensIntoRoom(), scenario.room_b)
     for entity_id in (
         missing_entry_dungeon.id,
         plain_entry_dungeon.id,
@@ -4515,12 +4495,11 @@ def test_dungeon_utility_handlers_reject_missing_room_or_state_directly():
     assert result.ok is False
     assert result.reason == "you have no map to view"
 
-    character.add_component(RecallAnchorComponent(room_id="entity_999"))
     result = UseRecallHandler().execute(ctx, _handler_cmd(scenario, "use-recall"))
     assert result.ok is False
-    assert result.reason == "recall anchor no longer exists"
+    assert result.reason == "no recall anchor is set"
 
-    replace_component(character, RecallAnchorComponent(room_id=str(scenario.room_a)))
+    character.add_relationship(AnchoredToRoom(), scenario.room_a)
     result = UseRecallHandler().execute(ctx, _handler_cmd(scenario, "use-recall"))
     assert result.ok is False
     assert result.reason == "already at the recall anchor"
@@ -4671,11 +4650,12 @@ async def test_recall_anchor_set_and_use_returns_to_anchor():
     used: list[RecallUsedEvent] = []
     scenario.actor.bus.subscribe(RecallAnchorSetEvent, anchors.append)
     scenario.actor.bus.subscribe(RecallUsedEvent, used.append)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_relationship(AnchoredToRoom(), scenario.room_b)
 
     await scenario.actor.submit(_cmd(scenario, "set-recall"))
     await scenario.actor.tick(HOUR)
-    character = scenario.actor.world.get_entity(scenario.character)
-    assert character.get_component(RecallAnchorComponent).room_id == str(scenario.room_a)
+    assert character.get_relationships(AnchoredToRoom) == [(AnchoredToRoom(), scenario.room_a)]
 
     scenario.actor.world.get_entity(scenario.room_a).remove_relationship(Contains, character.id)
     scenario.actor.world.get_entity(scenario.room_b).add_relationship(
@@ -5087,9 +5067,7 @@ def test_daggersim_first_person_only_fragments_hide_from_observers():
 
     cases = [
         (
-            TravelPlanComponent(
-                destination_id="d", started_at_epoch=0, arrive_at_epoch=10, mode="cart"
-            ),
+            TravelingToDestination(started_at_epoch=0, arrive_at_epoch=10, mode="cart"),
             "Traveling by cart; arrival due at epoch 10.",
         ),
         (
@@ -5121,10 +5099,6 @@ def test_daggersim_first_person_only_fragments_hide_from_observers():
             "Automap: 3 room(s) discovered.",
         ),
         (
-            RecallAnchorComponent(room_id="room_x"),
-            "Recall anchor set at room room_x.",
-        ),
-        (
             EtiquetteSkillComponent(level=7),
             "Etiquette skill: 7.",
         ),
@@ -5136,6 +5110,16 @@ def test_daggersim_first_person_only_fragments_hide_from_observers():
     for component, expected in cases:
         assert component.prompt_fragments(first) == (expected,), component
         assert component.prompt_fragments(observer) == (), component
+
+    anchor = AnchoredToRoom()
+    assert anchor.prompt_fragments(ComponentPromptContext.for_entity(world, character)) == ()
+    assert anchor.prompt_fragments(observer) == ()
+    room = world.get_entity(scenario.room_b)
+    anchor_ctx = ComponentPromptContext.for_entity(world, character, target=room)
+    assert anchor.prompt_fragments(anchor_ctx) == ("Recall anchor set at North Tunnel.",)
+    prop = spawn_entity(world, [IdentityComponent(name="waystone", kind="prop")])
+    prop_ctx = ComponentPromptContext.for_entity(world, character, target=prop)
+    assert anchor.prompt_fragments(prop_ctx) == ("Recall anchor set at waystone.",)
 
 
 def test_daggersim_service_directory_and_membership_fragments():
@@ -5234,14 +5218,11 @@ def test_daggersim_dungeon_and_secret_door_fragments_state_dependent():
     ) == ("Dungeon objective found: idol.",)
 
     # SecretDoor shows only when found and not yet opened.
-    assert SecretDoorComponent(target_room_id="r").prompt_fragments(obj_ctx) == ()
-    assert SecretDoorComponent(target_room_id="r", found=True, hint="loose brick").prompt_fragments(
-        obj_ctx
-    ) == ("Secret door found here: loose brick.",)
-    assert (
-        SecretDoorComponent(target_room_id="r", found=True, opened=True).prompt_fragments(obj_ctx)
-        == ()
+    assert SecretDoorComponent().prompt_fragments(obj_ctx) == ()
+    assert SecretDoorComponent(found=True, hint="loose brick").prompt_fragments(obj_ctx) == (
+        "Secret door found here: loose brick.",
     )
+    assert SecretDoorComponent(found=True, opened=True).prompt_fragments(obj_ctx) == ()
 
 
 def test_daggersim_social_register_and_conversation_tone_fragments():
@@ -5566,7 +5547,7 @@ def test_daggersim_search_room_discovers_door_and_objective():
     dungeon_room = _put_character_in_dungeon_room(scenario)
     door = spawn_entity(
         world,
-        [SecretDoorComponent(target_room_id="r2", hint="cracked tile")],
+        [SecretDoorComponent(hint="cracked tile")],
     )
     objective = spawn_entity(
         world,
@@ -5598,7 +5579,7 @@ def test_daggersim_use_recall_moves_character_to_anchor():
     ctx = HandlerContext(world, scenario.actor.epoch)
     character = world.get_entity(scenario.character)
     anchor = world.get_entity(scenario.room_b)
-    character.add_component(RecallAnchorComponent(room_id=str(anchor.id)))
+    character.add_relationship(AnchoredToRoom(), anchor.id)
     result = UseRecallHandler().execute(ctx, _handler_cmd(scenario, "use-recall"))
     assert result.ok
     assert container_of(world.get_entity(scenario.character)) == anchor.id
@@ -5700,7 +5681,7 @@ def test_daggersim_use_recall_from_roomless_character():
     ctx = HandlerContext(world, scenario.actor.epoch)
     character = world.get_entity(scenario.character)
     anchor = world.get_entity(scenario.room_b)
-    character.add_component(RecallAnchorComponent(room_id=str(anchor.id)))
+    character.add_relationship(AnchoredToRoom(), anchor.id)
     # Detach the character from any room so _move_character sees no origin (3616->3618).
     world.get_entity(scenario.room_a).remove_relationship(Contains, character.id)
     result = UseRecallHandler().execute(ctx, _handler_cmd(scenario, "use-recall"))

@@ -295,6 +295,7 @@ async def gothic_count_example(actor, seed: str, options: GenOptions) -> Instant
     from bunnyland.core.components import IdentityComponent, PortableComponent, ReadableComponent
     from bunnyland.simpacks.daggersim.mechanics import (
         FeedingNeedComponent,
+        OpensIntoRoom,
         SecretDoorComponent,
         SupernaturalAfflictionComponent,
     )
@@ -412,18 +413,18 @@ async def gothic_count_example(actor, seed: str, options: GenOptions) -> Instant
             ),
             FeedingNeedComponent(current=6.0, maximum=10.0),
         )
-        _add(
+        door = _add(
             actor,
             hall,
             [
                 IdentityComponent(name="a hidden stair behind the portrait", kind="secret-door"),
                 SecretDoorComponent(
-                    target_room_id=str(crypt),
                     direction="behind portrait",
                     hint="The portrait frame is cleaner on one side.",
                 ),
             ],
         )
+        door.add_relationship(OpensIntoRoom(), crypt)
         _add(
             actor,
             crypt,
@@ -454,11 +455,13 @@ async def dungeon_vault_example(actor, seed: str, options: GenOptions) -> Instan
         ReadableComponent,
     )
     from bunnyland.simpacks.daggersim.mechanics import (
+        AnchoredToRoom,
         AutomapComponent,
         DungeonComponent,
         DungeonObjectiveComponent,
         DungeonRoomComponent,
-        RecallAnchorComponent,
+        EnteredThroughRoom,
+        OpensIntoRoom,
         RestRiskComponent,
         SecretDoorComponent,
     )
@@ -581,7 +584,7 @@ async def dungeon_vault_example(actor, seed: str, options: GenOptions) -> Instan
     world = await instantiate(actor, proposal)
 
     async with actor._lock:
-        _add(
+        dungeon = _add(
             actor,
             world.rooms["threshold"],
             [
@@ -592,12 +595,12 @@ async def dungeon_vault_example(actor, seed: str, options: GenOptions) -> Instan
                     seed=seed,
                     level_count=1,
                     objective_summary="recover the ember idol",
-                    entry_room_id=str(world.rooms["threshold"]),
                     generated=True,
                     entered=True,
                 ),
             ],
         )
+        dungeon.add_relationship(EnteredThroughRoom(), world.rooms["threshold"])
         room_meta = {
             "threshold": (0, "low", "The stair behind you climbs to black air."),
             "guardroom": (1, "medium", "Rusty spear racks point toward four exits."),
@@ -623,21 +626,23 @@ async def dungeon_vault_example(actor, seed: str, options: GenOptions) -> Instan
             actor,
             world.characters["delver"],
             AutomapComponent(discovered_rooms=(str(world.rooms["threshold"]),)),
-            RecallAnchorComponent(room_id=str(world.rooms["threshold"])),
         )
-        _add(
+        actor.world.get_entity(world.characters["delver"]).add_relationship(
+            AnchoredToRoom(), world.rooms["threshold"]
+        )
+        door = _add(
             actor,
             world.rooms["shrine"],
             [
                 IdentityComponent(name="hairline cracks behind the altar", kind="secret-door"),
                 SecretDoorComponent(
-                    target_room_id=str(world.rooms["vault"]),
                     direction="behind altar",
                     difficulty=2,
                     hint="Ash has been swept away from the rear flagstones.",
                 ),
             ],
         )
+        door.add_relationship(OpensIntoRoom(), world.rooms["vault"])
         replace_component(
             actor.world.get_entity(world.objects["chalk_map"]),
             ReadableComponent(
@@ -669,6 +674,8 @@ async def dungeon_maze_example(actor, seed: str, options: GenOptions) -> Instant
         DungeonComponent,
         DungeonObjectiveComponent,
         DungeonRoomComponent,
+        EnteredThroughRoom,
+        OpensIntoRoom,
         RestRiskComponent,
         SecretDoorComponent,
     )
@@ -794,7 +801,7 @@ async def dungeon_maze_example(actor, seed: str, options: GenOptions) -> Instant
     world = await instantiate(actor, proposal)
 
     async with actor._lock:
-        _add(
+        dungeon = _add(
             actor,
             world.rooms["stair"],
             [
@@ -805,12 +812,12 @@ async def dungeon_maze_example(actor, seed: str, options: GenOptions) -> Instant
                     seed=seed,
                     level_count=1,
                     objective_summary="find the true map fragment",
-                    entry_room_id=str(world.rooms["stair"]),
                     generated=True,
                     entered=True,
                 ),
             ],
         )
+        dungeon.add_relationship(EnteredThroughRoom(), world.rooms["stair"])
         for key, depth in {
             "stair": 0,
             "crossroads": 1,
@@ -843,19 +850,19 @@ async def dungeon_maze_example(actor, seed: str, options: GenOptions) -> Instant
                 title="Slate Map Fragment", text="A blocky map says: N, E, S, W are true only once."
             ),
         )
-        _add(
+        door = _add(
             actor,
             world.rooms["maproom"],
             [
                 IdentityComponent(name="a square shadow under the false map", kind="secret-door"),
                 SecretDoorComponent(
-                    target_room_id=str(world.rooms["cache"]),
                     direction="under map",
                     difficulty=1,
                     hint="The map stone rings hollow when tapped.",
                 ),
             ],
         )
+        door.add_relationship(OpensIntoRoom(), world.rooms["cache"])
         _add(
             actor,
             world.rooms["cache"],
@@ -884,6 +891,8 @@ async def dungeon_crypt_example(actor, seed: str, options: GenOptions) -> Instan
         DungeonComponent,
         DungeonObjectiveComponent,
         DungeonRoomComponent,
+        EnteredThroughRoom,
+        OpensIntoRoom,
         RestRiskComponent,
         SecretDoorComponent,
     )
@@ -998,7 +1007,7 @@ async def dungeon_crypt_example(actor, seed: str, options: GenOptions) -> Instan
     world = await instantiate(actor, proposal)
 
     async with actor._lock:
-        _add(
+        dungeon = _add(
             actor,
             world.rooms["chapel"],
             [
@@ -1009,12 +1018,12 @@ async def dungeon_crypt_example(actor, seed: str, options: GenOptions) -> Instan
                     seed=seed,
                     level_count=1,
                     objective_summary="recover the reliquary candle",
-                    entry_room_id=str(world.rooms["chapel"]),
                     generated=True,
                     entered=True,
                 ),
             ],
         )
+        dungeon.add_relationship(EnteredThroughRoom(), world.rooms["chapel"])
         for key, (depth, danger, text) in {
             "chapel": (0, "low", "Rain ticks through the roof in single-letter beats."),
             "ossuary": (1, "medium", "Names are carved alphabetically into every wall."),
@@ -1040,19 +1049,19 @@ async def dungeon_crypt_example(actor, seed: str, options: GenOptions) -> Instan
             world.characters["seeker"],
             AutomapComponent(discovered_rooms=(str(world.rooms["chapel"]),)),
         )
-        _add(
+        door = _add(
             actor,
             world.rooms["gate"],
             [
                 IdentityComponent(name="a saint's loose iron halo", kind="secret-door"),
                 SecretDoorComponent(
-                    target_room_id=str(world.rooms["reliquary"]),
                     direction="through halo",
                     difficulty=2,
                     hint="The halo turns a finger-width when the key is near.",
                 ),
             ],
         )
+        door.add_relationship(OpensIntoRoom(), world.rooms["reliquary"])
         replace_component(
             actor.world.get_entity(world.objects["epitaph"]),
             ReadableComponent(
@@ -1091,7 +1100,7 @@ async def storm_lighthouse_example(actor, seed: str, options: GenOptions) -> Ins
         TimeOfDayComponent,
         WeatherComponent,
     )
-    from bunnyland.simpacks.daggersim.mechanics import SecretDoorComponent
+    from bunnyland.simpacks.daggersim.mechanics import OpensIntoRoom, SecretDoorComponent
     from bunnyland.simpacks.dragonsim.mechanics import DiscoveryComponent, PointOfInterestComponent
 
     # Day 61 at 18:00 is an autumn rain day, so the deterministic weather cycle keeps the
@@ -1218,18 +1227,18 @@ async def storm_lighthouse_example(actor, seed: str, options: GenOptions) -> Ins
             PointOfInterestComponent(location_type="wrecker's niche", region="Gallows Point"),
             DiscoveryComponent(),
         )
-        _add(
+        door = _add(
             actor,
             lamp,
             [
                 IdentityComponent(name="a hatch under the lens pedestal", kind="secret-door"),
                 SecretDoorComponent(
-                    target_room_id=str(niche),
                     direction="under the pedestal",
                     hint="The brass pedestal sits a finger's width off the floor.",
                 ),
             ],
         )
+        door.add_relationship(OpensIntoRoom(), niche)
         _add(
             actor,
             niche,

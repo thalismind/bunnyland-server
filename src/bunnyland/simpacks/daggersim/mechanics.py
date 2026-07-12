@@ -15,7 +15,7 @@ from relics import Component, Edge, Entity, EntityId, World
 from bunnyland.foundation.history.mechanics import DeedReputationComponent
 
 from ...core.commands import SubmittedCommand
-from ...core.components import HealthComponent, IdentityComponent, PortableComponent
+from ...core.components import HealthComponent, IdentityComponent, PortableComponent, RoomComponent
 from ...core.ecs import (
     container_of,
     contents,
@@ -127,8 +127,9 @@ class TravelModeComponent(Component):
 
 
 @dataclass(frozen=True)
-class TravelPlanComponent(Component):
-    destination_id: str
+class TravelingToDestination(Edge):
+    """traveler -> destination, carrying the active travel plan."""
+
     started_at_epoch: int
     arrive_at_epoch: int
     mode: str = "foot"
@@ -645,7 +646,6 @@ class DungeonComponent(Component):
     seed: str = ""
     level_count: int = 1
     objective_summary: str = ""
-    entry_room_id: str | None = None
     generated: bool = False
     entered: bool = False
 
@@ -670,6 +670,13 @@ class DungeonRoomComponent(Component):
 
 
 @dataclass(frozen=True)
+class EnteredThroughRoom(Edge):
+    """dungeon entity -> its entry room."""
+
+    pass
+
+
+@dataclass(frozen=True)
 class DungeonObjectiveComponent(Component):
     objective_kind: str
     description: str = ""
@@ -684,7 +691,6 @@ class DungeonObjectiveComponent(Component):
 
 @dataclass(frozen=True)
 class SecretDoorComponent(Component):
-    target_room_id: str
     direction: str = "secret passage"
     found: bool = False
     difficulty: int = 1
@@ -699,6 +705,13 @@ class SecretDoorComponent(Component):
 
 
 @dataclass(frozen=True)
+class OpensIntoRoom(Edge):
+    """secret door -> destination room."""
+
+    pass
+
+
+@dataclass(frozen=True)
 class AutomapComponent(Component):
     discovered_rooms: tuple[str, ...] = ()
     marked_rooms: tuple[str, ...] = ()
@@ -710,13 +723,18 @@ class AutomapComponent(Component):
 
 
 @dataclass(frozen=True)
-class RecallAnchorComponent(Component):
-    room_id: str
+class AnchoredToRoom(Edge):
+    """character -> room used as its recall anchor."""
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if not ctx.is_first_person:
+        if not ctx.is_first_person or ctx.target is None:
             return ()
-        return (f"Recall anchor set at room {self.room_id}.",)
+        room_name = (
+            ctx.target.get_component(RoomComponent).title
+            if ctx.target.has_component(RoomComponent)
+            else _name(ctx.target)
+        )
+        return (f"Recall anchor set at {room_name}.",)
 
 
 @dataclass(frozen=True)
@@ -1366,7 +1384,7 @@ class PlanTravelHandler:
             return rejected("destination does not exist")
 
         character = ctx.entity(character_id)
-        if character.has_component(TravelPlanComponent):
+        if character.get_relationships(TravelingToDestination):
             return rejected("character is already traveling")
         origin_id = container_of(character)
         if origin_id is None or not ctx.world.has_entity(origin_id):
@@ -1388,15 +1406,14 @@ class PlanTravelHandler:
         )
         travel_seconds = max(1, int(route.travel_seconds / max(0.1, mode.speed_multiplier)))
         arrive_at = ctx.epoch + travel_seconds
-        replace_component(
-            character,
-            TravelPlanComponent(
-                destination_id=str(destination_id),
+        character.add_relationship(
+            TravelingToDestination(
                 started_at_epoch=ctx.epoch,
                 arrive_at_epoch=arrive_at,
                 mode=mode.mode,
                 route_label=route.label,
             ),
+            destination_id,
         )
         return ok(
             TravelStartedEvent(
@@ -1416,33 +1433,30 @@ class PlanTravelHandler:
 class TravelCompletionConsequence:
     def process(self, world: World, epoch: int) -> list[DomainEvent]:
         events: list[DomainEvent] = []
-        for character in world.query().with_all([TravelPlanComponent]).execute_entities():
-            plan = character.get_component(TravelPlanComponent)
-            if epoch < plan.arrive_at_epoch:
-                continue
-            destination_id = parse_entity_id(plan.destination_id)
-            if destination_id is None or not world.has_entity(destination_id):
-                continue
-            origin_id = container_of(character)
-            if origin_id is not None and world.has_entity(origin_id):
-                world.get_entity(origin_id).remove_relationship(Contains, character.id)
-            world.get_entity(destination_id).add_relationship(
-                Contains(mode=ContainmentMode.ROOM_CONTENT), character.id
-            )
-            character.remove_component(TravelPlanComponent)
-            events.append(
-                TravelCompletedEvent(
-                    **_travel_event_base(
-                        epoch,
-                        visibility=EventVisibility.PRIVATE,
-                        actor_id=str(character.id),
-                        room_id=str(destination_id),
-                        target_ids=(str(destination_id),),
-                        destination_id=str(destination_id),
-                        mode=plan.mode,
+        for character in world.query().execute_entities():
+            for plan, destination_id in tuple(character.get_relationships(TravelingToDestination)):
+                if epoch < plan.arrive_at_epoch:
+                    continue
+                origin_id = container_of(character)
+                if origin_id is not None and world.has_entity(origin_id):
+                    world.get_entity(origin_id).remove_relationship(Contains, character.id)
+                world.get_entity(destination_id).add_relationship(
+                    Contains(mode=ContainmentMode.ROOM_CONTENT), character.id
+                )
+                character.remove_relationship(TravelingToDestination, destination_id)
+                events.append(
+                    TravelCompletedEvent(
+                        **_travel_event_base(
+                            epoch,
+                            visibility=EventVisibility.PRIVATE,
+                            actor_id=str(character.id),
+                            room_id=str(destination_id),
+                            target_ids=(str(destination_id),),
+                            destination_id=str(destination_id),
+                            mode=plan.mode,
+                        )
                     )
                 )
-            )
         return events
 
 
@@ -3387,9 +3401,10 @@ class EnterDungeonHandler:
         if not dungeon.generated:
             return rejected("dungeon has not been generated yet")
 
-        entry_room_id = parse_entity_id(dungeon.entry_room_id)
-        if entry_room_id is None or not ctx.world.has_entity(entry_room_id):
+        entry = next(iter(dungeon_entity.get_relationships(EnteredThroughRoom)), None)
+        if entry is None:
             return rejected("dungeon has no entry room")
+        _entry_edge, entry_room_id = entry
         entry_room = ctx.entity(entry_room_id)
         if not entry_room.has_component(DungeonRoomComponent):
             return rejected("entry is not a dungeon room")
@@ -3517,9 +3532,10 @@ class OpenSecretDoorHandler:
             return rejected("door has not been found yet")
         if door.opened:
             return rejected("door is already open")
-        target_room_id = parse_entity_id(door.target_room_id)
-        if target_room_id is None or not ctx.world.has_entity(target_room_id):
+        destination = next(iter(door_entity.get_relationships(OpensIntoRoom)), None)
+        if destination is None:
             return rejected("door leads nowhere")
+        _door_edge, target_room_id = destination
 
         replace_component(door_entity, replace(door, opened=True))
         ctx.entity(room_id).add_relationship(ExitTo(direction=door.direction), target_room_id)
@@ -3588,7 +3604,9 @@ class SetRecallHandler:
         room_id = container_of(character)
         if room_id is None or not ctx.world.has_entity(room_id):
             return rejected("character is not in a room")
-        replace_component(character, RecallAnchorComponent(room_id=str(room_id)))
+        for _edge, anchor_id in tuple(character.get_relationships(AnchoredToRoom)):
+            character.remove_relationship(AnchoredToRoom, anchor_id)
+        character.add_relationship(AnchoredToRoom(), room_id)
         return ok(
             RecallAnchorSetEvent(
                 **ctx.event_base(
@@ -3609,11 +3627,10 @@ class UseRecallHandler:
         if character_id is None:
             return rejected("invalid character id")
         character = ctx.entity(character_id)
-        if not character.has_component(RecallAnchorComponent):
+        anchor = next(iter(character.get_relationships(AnchoredToRoom)), None)
+        if anchor is None:
             return rejected("no recall anchor is set")
-        anchor_id = parse_entity_id(character.get_component(RecallAnchorComponent).room_id)
-        if anchor_id is None or not ctx.world.has_entity(anchor_id):
-            return rejected("recall anchor no longer exists")
+        _anchor_edge, anchor_id = anchor
         if container_of(character) == anchor_id:
             return rejected("already at the recall anchor")
         _move_character(ctx.world, character, anchor_id)
@@ -3735,7 +3752,6 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
             lines.extend(current_room.get_component(CampingComponent).prompt_fragments(room_ctx))
     for component_type in (
         AutomapComponent,
-        RecallAnchorComponent,
         EtiquetteSkillComponent,
         StreetwiseSkillComponent,
         CustomClassComponent,
@@ -3744,10 +3760,15 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         CureRequestComponent,
         FeedingNeedComponent,
         WereformComponent,
-        TravelPlanComponent,
     ):
         if character.has_component(component_type):
             lines.extend(character.get_component(component_type).prompt_fragments(ctx))
+    for edge_type in (AnchoredToRoom, TravelingToDestination):
+        for edge, target_id in character.get_relationships(edge_type):
+            edge_ctx = ComponentPromptContext.for_entity(
+                world, character, perspective=ctx.perspective, target=world.get_entity(target_id)
+            )
+            lines.extend(edge.prompt_fragments(edge_ctx))
     for edge_type in (
         HasStandingInRegion,
         HasStandingWithInstitution,
@@ -3996,7 +4017,7 @@ __all__ = [
     "TravelInterruptionComponent",
     "TravelInterruptionResolvedEvent",
     "TravelModeComponent",
-    "TravelPlanComponent",
+    "TravelingToDestination",
     "TravelRoute",
     "TravelSupplyComponent",
     "TravelSuppliesBoughtEvent",
@@ -4013,9 +4034,11 @@ __all__ = [
     "AutomapComponent",
     "DungeonComponent",
     "DungeonRoomComponent",
+    "EnteredThroughRoom",
     "DungeonObjectiveComponent",
     "SecretDoorComponent",
-    "RecallAnchorComponent",
+    "OpensIntoRoom",
+    "AnchoredToRoom",
     "RestRiskComponent",
     "DungeonRequestedEvent",
     "DungeonGeneratedEvent",
