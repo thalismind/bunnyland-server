@@ -479,6 +479,66 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v2(tmp_path, suffix)
     assert saved[metadata_key]["schema_version"] == 2
 
 
+@pytest.mark.parametrize("suffix", ["json", "yaml"])
+def test_schema_v1_3d_decoration_roles_migrate_to_namespaced_values(suffix):
+    import yaml
+
+    source = Path(__file__).parent / "fixtures" / "migrations" / f"decorations-3d-v1.{suffix}"
+    before = source.read_text()
+    raw = json.loads(before) if suffix == "json" else yaml.safe_load(before)
+
+    migrated = migrate_snapshot(raw)
+
+    assert source.read_text() == before
+    assert migrated["components"]["DecorationSource3DComponent"]["entity_2"]["role"] == (
+        "bunnyland.3d/particles"
+    )
+    edge = migrated["relationships"]["HasDecoration3D"]["entity_1"][0]
+    assert edge["edge"]["role"] == "bunnyland.3d/particles"
+
+
+def test_schema_v1_3d_decoration_roles_preserve_namespaced_values():
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"]["DecorationSource3DComponent"] = {
+        "entity_1": {"role": "vendor.pack/trees"}
+    }
+
+    migrated = migrate_snapshot(source)
+
+    assert migrated["components"]["DecorationSource3DComponent"]["entity_1"]["role"] == (
+        "vendor.pack/trees"
+    )
+
+
+@pytest.mark.parametrize(
+    "components, relationships, message",
+    [
+        ({"DecorationSource3DComponent": {"entity_1": []}}, {}, "must be a mapping"),
+        (
+            {"DecorationSource3DComponent": {"entity_1": {"role": "unknown"}}},
+            {},
+            "unknown decoration role",
+        ),
+        ({}, {"HasDecoration3D": {"entity_1": {}}}, "must be a list"),
+        ({}, {"HasDecoration3D": {"entity_1": [[]]}}, "must be a mapping"),
+        (
+            {},
+            {"HasDecoration3D": {"entity_1": [{"edge": {"role": "unknown"}}]}},
+            "unknown decoration role",
+        ),
+    ],
+)
+def test_schema_v1_3d_decoration_roles_reject_malformed_values(
+    components, relationships, message
+):
+    source = _schema_v1_generated_quest_snapshot()
+    source["components"].update(components)
+    source["relationships"].update(relationships)
+
+    with pytest.raises(WorldMigrationError, match=message):
+        migrate_snapshot(source)
+
+
 @pytest.mark.parametrize(
     ("component", "field"),
     [

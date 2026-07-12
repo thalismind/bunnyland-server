@@ -118,6 +118,18 @@ def _score_map(fields: Any, *, owner_id: str, component: str, field: str) -> dic
     return normalized
 
 
+def _canonical_decoration_role(value: Any, *, owner_id: str, persisted_type: str) -> str:
+    role = str(value or "")
+    if "/" in role:
+        return role
+    if role in {"flora", "detail", "light", "particles"}:
+        return f"bunnyland.3d/{role}"
+    raise WorldMigrationError(
+        f"schema-v1 entity {owner_id!r} persisted type {persisted_type}.role "
+        f"contains unknown decoration role {role!r}"
+    )
+
+
 def _quest_index(components: dict[str, Any]) -> dict[str, str]:
     index: dict[str, str] = {}
     for type_name in ("QuestComponent", "GeneratedQuestComponent"):
@@ -170,6 +182,38 @@ def _migrate_v1(snapshot: dict[str, Any]) -> dict[str, Any]:
     quest_index = _quest_index(components)
     states = _records(components, "QuestStateComponent")
     quests = _records(components, "QuestComponent")
+
+    if "DecorationSource3DComponent" in components:
+        decoration_sources = _records(components, "DecorationSource3DComponent")
+        for entity_id, fields in decoration_sources.items():
+            if not isinstance(fields, dict):
+                raise WorldMigrationError(
+                    f"DecorationSource3DComponent fields for {entity_id!r} must be a mapping"
+                )
+            fields["role"] = _canonical_decoration_role(
+                fields.get("role"),
+                owner_id=entity_id,
+                persisted_type="DecorationSource3DComponent",
+            )
+
+    if "HasDecoration3D" in relationships:
+        decoration_edges = _records(relationships, "HasDecoration3D")
+        for source_id, edges in decoration_edges.items():
+            if not isinstance(edges, list):
+                raise WorldMigrationError(
+                    f"HasDecoration3D edges for {source_id!r} must be a list"
+                )
+            for record in edges:
+                if not isinstance(record, dict) or not isinstance(record.get("edge"), dict):
+                    raise WorldMigrationError(
+                        f"HasDecoration3D edge for {source_id!r} must be a mapping"
+                    )
+                fields = record["edge"]
+                fields["role"] = _canonical_decoration_role(
+                    fields.get("role"),
+                    owner_id=source_id,
+                    persisted_type="HasDecoration3D",
+                )
 
     recipes = _records(components, "PotionRecipeComponent")
     for recipe_id, fields in sorted(recipes.items()):

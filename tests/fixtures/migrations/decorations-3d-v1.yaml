@@ -1,0 +1,31 @@
+metadata:
+  version: "1.0"
+  epoch: 0
+bunnyland:
+  schema_version: 1
+  plugins:
+    - bunnyland.3d
+prefabs:
+  entity:
+    components: {}
+entities:
+  entity_1:
+    prefab: entity
+    created_epoch: 0
+  entity_2:
+    prefab: entity
+    created_epoch: 0
+components:
+  DecorationSource3DComponent:
+    entity_2:
+      room_id: entity_1
+      recipe_key: town
+      role: particles
+      recipe_version: 1
+relationships:
+  HasDecoration3D:
+    entity_1:
+      - target: entity_2
+        edge:
+          role: particles
+relics: []
