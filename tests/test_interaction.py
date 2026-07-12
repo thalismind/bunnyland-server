@@ -35,6 +35,8 @@ from bunnyland.core import (
 )
 from bunnyland.core.events import ItemUsedEvent, PhysicalWriteEvent
 from bunnyland.core.handlers.base import HandlerContext
+from bunnyland.foundation.meters.mechanics import Meter
+from bunnyland.foundation.needs.mechanics import HungerComponent, need_fragments
 
 HOUR = 3600.0
 
@@ -211,6 +213,21 @@ async def test_look_and_inspect_emit_private_description_events():
     assert "blank sign" in looked[0].summary
     assert inspected[0].name == "blank sign"
     assert inspected[0].text == "Meet at dawn"
+
+
+async def test_inspecting_self_emits_detailed_scored_component_facts():
+    scenario = interaction_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HungerComponent(meter=Meter(value=0.0)))
+    scenario.actor.prompt_fragment_providers = (need_fragments,)
+    inspected = collect(scenario.actor, EntityInspectedEvent)
+
+    await scenario.actor.submit(target_cmd(scenario, "inspect", scenario.character))
+    await scenario.actor.tick(0.0)
+
+    assert inspected[0].facts == (
+        {"key": "needs.hunger", "text": "You are not hungry.", "detail": 30},
+    )
 
 
 def test_inspect_rejects_unreachable_target_directly():

@@ -152,6 +152,9 @@ class WorldActor:
         self.persistence = WorldPersistenceContext()
         #: Populated by the plugin loader without making core import plugin modules.
         self.plugins: Any | None = None
+        #: Prompt providers are registered by the plugin loader. Core handlers access them
+        #: through ``project_prompt_facts`` without importing plugin-owned mechanics.
+        self.prompt_fragment_providers: tuple[Any, ...] = ()
 
         self.world.register_system(WorldClockSystem())
         self.world.register_system(ActionFocusRegenSystem())
@@ -170,6 +173,18 @@ class WorldActor:
 
     def action_definitions(self) -> tuple[ActionDefinition, ...]:
         return tuple(self._action_definitions.values())
+
+    def project_prompt_facts(self, entity, *, viewer, cutoff: int):
+        """Project registered component facts with the requested disclosure cutoff."""
+        from ..prompts.facts import collect_prompt_facts
+
+        return collect_prompt_facts(
+            self.world,
+            entity,
+            self.prompt_fragment_providers,
+            cutoff=cutoff,
+            viewer=viewer,
+        )
 
     def register_consequence(self, consequence: Consequence) -> None:
         """Add a post-command consequence pass (spec 5.6 phase 6)."""

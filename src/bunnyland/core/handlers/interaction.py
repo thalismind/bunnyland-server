@@ -224,7 +224,7 @@ class InspectHandler:
     command_type = "inspect"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        _character, target_id, target, error = _reachable_target(ctx, command)
+        character, target_id, target, error = _reachable_target(ctx, command)
         if error is not None:
             return error
         name, kind = _entity_label(target)
@@ -246,6 +246,19 @@ class InspectHandler:
             and target.get_component(LockableComponent).locked
         ):
             states.append("locked")
+        facts: tuple[dict[str, object], ...] = ()
+        if ctx.actor is not None:
+            from ...prompts import DETAILED_DETAIL_CUTOFF
+
+            projected = ctx.actor.project_prompt_facts(
+                target,
+                viewer=character,
+                cutoff=DETAILED_DETAIL_CUTOFF,
+            )
+            facts = tuple(
+                {"key": fact.key, "text": fact.text, "detail": fact.detail}
+                for fact in projected
+            )
         return ok(
             EntityInspectedEvent(
                 **ctx.event_base(
@@ -258,6 +271,7 @@ class InspectHandler:
                     description=_description_text(target),
                     text=readable.text if readable else "",
                     state=", ".join(states),
+                    facts=facts,
                 )
             )
         )

@@ -30,7 +30,7 @@ from ...core.handlers import (
     require_character,
     require_reachable_entity,
 )
-from ...prompts import ComponentPromptContext, PerspectivePhrase
+from ...prompts import ComponentPromptContext, PerspectivePhrase, PromptFact, PromptPerspective
 
 SECONDS_PER_HOUR = 3600.0
 
@@ -46,9 +46,14 @@ class HungerComponent(Component):
     metabolism: float = 1.0  # hunger points gained per game hour
     last_ate_epoch: int | None = None
 
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        phrase = _need_phrase(ctx, _HUNGER_PROMPT_PHRASES.get(band(self.meter)))
-        return (phrase,) if phrase else ()
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[PromptFact, ...]:
+        return _meter_fact(
+            ctx,
+            self.meter,
+            "needs.hunger",
+            _HUNGER_PROMPT_PHRASES,
+            observable_cutoff=10,
+        )
 
 
 @dataclass(frozen=True)
@@ -57,9 +62,14 @@ class ThirstComponent(Component):
     hydration_loss_rate: float = 1.5  # thirst points gained per game hour
     last_drank_epoch: int | None = None
 
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        phrase = _need_phrase(ctx, _THIRST_PROMPT_PHRASES.get(band(self.meter)))
-        return (phrase,) if phrase else ()
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[PromptFact, ...]:
+        return _meter_fact(
+            ctx,
+            self.meter,
+            "needs.thirst",
+            _THIRST_PROMPT_PHRASES,
+            observable_cutoff=10,
+        )
 
 
 @dataclass(frozen=True)
@@ -69,7 +79,7 @@ class FatigueComponent(Component):
     recovery_rate: float = 12.0
     last_recovered_epoch: int | None = None
 
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[PromptFact, ...]:
         return _daily_need_fragments(ctx, self)
 
 
@@ -79,7 +89,7 @@ class HygieneComponent(Component):
     decay_rate: float = 0.75
     last_cleaned_epoch: int | None = None
 
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[PromptFact, ...]:
         return _daily_need_fragments(ctx, self)
 
 
@@ -89,7 +99,7 @@ class ComfortNeedComponent(Component):
     decay_rate: float = 0.5
     last_comforted_epoch: int | None = None
 
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[PromptFact, ...]:
         return _daily_need_fragments(ctx, self)
 
 
@@ -99,7 +109,7 @@ class FunNeedComponent(Component):
     decay_rate: float = 0.5
     last_played_epoch: int | None = None
 
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[PromptFact, ...]:
         return _daily_need_fragments(ctx, self)
 
 
@@ -109,7 +119,7 @@ class SocialNeedComponent(Component):
     decay_rate: float = 0.5
     last_social_epoch: int | None = None
 
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[PromptFact, ...]:
         return _daily_need_fragments(ctx, self)
 
 
@@ -119,7 +129,7 @@ class PrivacyNeedComponent(Component):
     decay_rate: float = 0.25
     last_private_epoch: int | None = None
 
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[PromptFact, ...]:
         return _daily_need_fragments(ctx, self)
 
 
@@ -129,7 +139,7 @@ class SafetyNeedComponent(Component):
     decay_rate: float = 0.25
     last_safe_epoch: int | None = None
 
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[PromptFact, ...]:
         return _daily_need_fragments(ctx, self)
 
 
@@ -507,6 +517,7 @@ _DAILY_NEED_PHRASES = {
     },
 }
 _HUNGER_PROMPT_PHRASES = {
+    "calm": PerspectivePhrase("I am not hungry.", "You are not hungry.", "They are not hungry."),
     "warning": PerspectivePhrase(
         "I am getting hungry.",
         _HUNGER_PHRASES["warning"],
@@ -524,6 +535,7 @@ _HUNGER_PROMPT_PHRASES = {
     ),
 }
 _THIRST_PROMPT_PHRASES = {
+    "calm": PerspectivePhrase("I am not thirsty.", "You are not thirsty.", "They are not thirsty."),
     "warning": PerspectivePhrase(
         "My mouth is dry.",
         _THIRST_PHRASES["warning"],
@@ -542,6 +554,7 @@ _THIRST_PROMPT_PHRASES = {
 }
 _DAILY_NEED_PROMPT_PHRASES = {
     FatigueComponent: {
+        "calm": PerspectivePhrase("I feel rested.", "You feel rested.", "They feel rested."),
         "warning": PerspectivePhrase(
             "I am getting tired.",
             _DAILY_NEED_PHRASES[FatigueComponent]["warning"],
@@ -559,6 +572,7 @@ _DAILY_NEED_PROMPT_PHRASES = {
         ),
     },
     HygieneComponent: {
+        "calm": PerspectivePhrase("I feel clean.", "You feel clean.", "They feel clean."),
         "warning": PerspectivePhrase(
             "I feel a little grimy.",
             _DAILY_NEED_PHRASES[HygieneComponent]["warning"],
@@ -576,6 +590,9 @@ _DAILY_NEED_PROMPT_PHRASES = {
         ),
     },
     ComfortNeedComponent: {
+        "calm": PerspectivePhrase(
+            "I feel comfortable.", "You feel comfortable.", "They feel comfortable."
+        ),
         "warning": PerspectivePhrase(
             "I want somewhere more comfortable.",
             _DAILY_NEED_PHRASES[ComfortNeedComponent]["warning"],
@@ -593,6 +610,7 @@ _DAILY_NEED_PROMPT_PHRASES = {
         ),
     },
     FunNeedComponent: {
+        "calm": PerspectivePhrase("I feel engaged.", "You feel engaged.", "They feel engaged."),
         "warning": PerspectivePhrase(
             "I could use something fun to do.",
             _DAILY_NEED_PHRASES[FunNeedComponent]["warning"],
@@ -610,6 +628,11 @@ _DAILY_NEED_PROMPT_PHRASES = {
         ),
     },
     SocialNeedComponent: {
+        "calm": PerspectivePhrase(
+            "I feel socially fulfilled.",
+            "You feel socially fulfilled.",
+            "They feel socially fulfilled.",
+        ),
         "warning": PerspectivePhrase(
             "I could use some company.",
             _DAILY_NEED_PHRASES[SocialNeedComponent]["warning"],
@@ -627,6 +650,9 @@ _DAILY_NEED_PROMPT_PHRASES = {
         ),
     },
     PrivacyNeedComponent: {
+        "calm": PerspectivePhrase(
+            "I have enough privacy.", "You have enough privacy.", "They have enough privacy."
+        ),
         "warning": PerspectivePhrase(
             "I could use a little privacy.",
             _DAILY_NEED_PHRASES[PrivacyNeedComponent]["warning"],
@@ -644,6 +670,7 @@ _DAILY_NEED_PROMPT_PHRASES = {
         ),
     },
     SafetyNeedComponent: {
+        "calm": PerspectivePhrase("I feel safe.", "You feel safe.", "They feel safe."),
         "warning": PerspectivePhrase(
             "I feel a little unsafe.",
             _DAILY_NEED_PHRASES[SafetyNeedComponent]["warning"],
@@ -663,22 +690,66 @@ _DAILY_NEED_PROMPT_PHRASES = {
 }
 
 
-def _need_phrase(ctx: ComponentPromptContext, phrase: PerspectivePhrase | None) -> str | None:
-    if phrase is None:
-        return None
+def _need_phrase(ctx: ComponentPromptContext, phrase: PerspectivePhrase) -> str:
     return phrase.render(ctx.perspective)
 
 
-def _daily_need_fragments(ctx: ComponentPromptContext, component: Component) -> tuple[str, ...]:
-    phrases = _DAILY_NEED_PROMPT_PHRASES[type(component)].get(band(component.meter))
-    phrase = _need_phrase(ctx, phrases)
-    return (phrase,) if phrase else ()
+_DETAIL_BY_BAND = {"crisis": 0, "urgent": 10, "warning": 20, "calm": 30}
 
 
-def need_fragments(world, character) -> list[str]:
+def _meter_fact(
+    ctx: ComponentPromptContext,
+    meter: Meter,
+    key: str,
+    phrases: dict[str, PerspectivePhrase],
+    observable_cutoff: int | None = None,
+) -> tuple[PromptFact, ...]:
+    current_band = band(meter)
+    detail = _DETAIL_BY_BAND[current_band]
+    if not ctx.includes_detail(detail):
+        return ()
+    if not ctx.is_first_person and (
+        observable_cutoff is None or detail > observable_cutoff
+    ):
+        return ()
+    phrase = _need_phrase(ctx, phrases[current_band])
+    return (PromptFact(key=key, text=phrase, detail=detail),)
+
+
+def _daily_need_fragments(
+    ctx: ComponentPromptContext, component: Component
+) -> tuple[PromptFact, ...]:
+    component_name = type(component).__name__.removesuffix("Component").lower()
+    return _meter_fact(
+        ctx,
+        component.meter,
+        f"needs.{component_name}",
+        _DAILY_NEED_PROMPT_PHRASES[type(component)],
+    )
+
+
+def need_fragments(
+    world,
+    character,
+    *,
+    detail_cutoff: int = 10,
+    viewer=None,
+) -> list[PromptFact]:
     """Prompt phrases for this character's pressing needs (spec 16.3, 27.1)."""
-    fragments: list[str] = []
-    ctx = ComponentPromptContext.for_entity(world, character)
+    fragments: list[PromptFact] = []
+    ctx = ComponentPromptContext.for_entity(
+        world,
+        character,
+        perspective=PromptPerspective(
+            viewer=viewer or character,
+            perspective=(
+                "second-person"
+                if viewer is None or viewer.id == character.id
+                else "third-person"
+            ),
+        ),
+        detail_cutoff=detail_cutoff,
+    )
     if character.has_component(HungerComponent):
         fragments.extend(character.get_component(HungerComponent).prompt_fragments(ctx))
     if character.has_component(ThirstComponent):

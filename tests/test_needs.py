@@ -213,7 +213,10 @@ async def test_daily_need_recovery_verbs_use_reachable_affordances_and_prompt_fr
     assert char.get_component(FunNeedComponent).meter.value == pytest.approx(35.0)
     assert char.get_component(PrivacyNeedComponent).meter.value == pytest.approx(30.0)
     assert char.get_component(SafetyNeedComponent).meter.value == pytest.approx(30.0)
-    assert any("company" in line for line in need_fragments(scenario.actor.world, char))
+    assert any(
+        "company" in fact.text
+        for fact in need_fragments(scenario.actor.world, char, detail_cutoff=30)
+    )
 
 
 def test_daily_need_recovery_handler_rejects_invalid_missing_and_unreachable_targets():
@@ -275,8 +278,8 @@ def test_need_fragments_include_hunger_and_thirst_pressure():
 
     fragments = need_fragments(scenario.actor.world, char)
 
-    assert any("starving" in line.lower() for line in fragments)
-    assert any("dehydrated" in line.lower() for line in fragments)
+    assert any("starving" in fact.text.lower() for fact in fragments)
+    assert any("dehydrated" in fact.text.lower() for fact in fragments)
 
 
 def test_need_component_fragments_preserve_thresholds_and_support_perspective():
@@ -294,15 +297,39 @@ def test_need_component_fragments_preserve_thresholds_and_support_perspective():
     )
 
     assert HungerComponent(meter=Meter(value=10.0)).prompt_fragments(first) == ()
-    assert HungerComponent(meter=Meter(value=95.0)).prompt_fragments(first) == (
-        "I am starving and feel weak.",
+    hunger = HungerComponent(meter=Meter(value=95.0)).prompt_fragments(first)
+    assert [(fact.key, fact.text, fact.detail) for fact in hunger] == [
+        ("needs.hunger", "I am starving and feel weak.", 0)
+    ]
+    thirst = ThirstComponent(meter=Meter(value=75.0)).prompt_fragments(third)
+    assert [(fact.text, fact.detail) for fact in thirst] == [
+        ("They are thirsty; they should find clean water soon.", 10)
+    ]
+    fatigue = FatigueComponent(meter=Meter(value=40.0)).prompt_fragments(first)
+    assert fatigue == ()
+
+    detailed = ComponentPromptContext.for_entity(
+        scenario.actor.world,
+        char,
+        perspective=PromptPerspective(viewer=char, perspective="first-person"),
+        detail_cutoff=30,
     )
-    assert ThirstComponent(meter=Meter(value=75.0)).prompt_fragments(third) == (
-        "They are thirsty; they should find clean water soon.",
+    calm = HungerComponent(meter=Meter(value=10.0)).prompt_fragments(detailed)
+    assert [(fact.key, fact.text, fact.detail) for fact in calm] == [
+        ("needs.hunger", "I am not hungry.", 30)
+    ]
+    warning = FatigueComponent(meter=Meter(value=40.0)).prompt_fragments(detailed)
+    assert [(fact.text, fact.detail) for fact in warning] == [("I am getting tired.", 20)]
+
+    observer = spawn_entity(scenario.actor.world)
+    observed_detail = ComponentPromptContext.for_entity(
+        scenario.actor.world,
+        char,
+        perspective=PromptPerspective(viewer=observer, perspective="third-person"),
+        detail_cutoff=30,
     )
-    assert FatigueComponent(meter=Meter(value=40.0)).prompt_fragments(first) == (
-        "I am getting tired.",
-    )
+    assert FatigueComponent(meter=Meter(value=95.0)).prompt_fragments(observed_detail) == ()
+    assert HungerComponent(meter=Meter(value=10.0)).prompt_fragments(observed_detail) == ()
 
 
 async def test_suspended_character_does_not_get_hungry():

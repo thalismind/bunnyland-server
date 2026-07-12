@@ -28,9 +28,15 @@ from ..core.ecs import container_of, parse_entity_id
 from ..core.edges import Contains, ControlledBy, Holding, Wearing
 from ..projections import RecentContextProjection, RoomSummaryProjection, perceive
 from ..projections.room_summary import RoomExit
+from .facts import (
+    STANDARD_DETAIL_CUTOFF,
+    PromptFact,
+    PromptFactLike,
+    collect_prompt_facts,
+)
 
 # A fragment provider returns extra status lines for a character (e.g. needs).
-FragmentProvider = Callable[[World, Entity], list[str]]
+FragmentProvider = Callable[[World, Entity], Sequence[PromptFactLike]]
 
 
 @dataclass(frozen=True)
@@ -50,6 +56,7 @@ class PromptContext:
     worn: tuple[str, ...] = ()
     persona: tuple[str, ...] = ()
     conditions: tuple[str, ...] = ()  # domain fragments: needs, weather, relationships, ...
+    facts: tuple[PromptFact, ...] = ()
     feelings: tuple[str, ...] = ()
     social_cues: tuple[str, ...] = ()
     recent: tuple[str, ...] = ()
@@ -117,7 +124,13 @@ class PromptBuilder:
         self.world = world
         self.room_summary = RoomSummaryProjection(world).attach()
 
-    def build(self, character_id: EntityId, *, epoch: int = 0) -> PromptContext:
+    def build(
+        self,
+        character_id: EntityId,
+        *,
+        epoch: int = 0,
+        detail_cutoff: int = STANDARD_DETAIL_CUTOFF,
+    ) -> PromptContext:
         character = self.world.get_entity(character_id)
         identity = (
             character.get_component(IdentityComponent)
@@ -152,12 +165,21 @@ class PromptBuilder:
             if character.has_component(AffectComponent)
             else ()
         )
-        conditions: list[str] = []
-        for provider in self.fragment_providers:
-            conditions.extend(provider(self.world, character))
+        condition_facts = collect_prompt_facts(
+            self.world,
+            character,
+            self.fragment_providers,
+            cutoff=detail_cutoff,
+        )
+        conditions = [fact.text for fact in condition_facts]
         persona = self._persona_facts(character, identity)
-        for provider in self.persona_providers:
-            persona.extend(provider(self.world, character))
+        persona_facts = collect_prompt_facts(
+            self.world,
+            character,
+            self.persona_providers,
+            cutoff=detail_cutoff,
+        )
+        persona.extend(fact.text for fact in persona_facts)
 
         recent = ()
         if self.recent_context is not None and room_id is not None:
@@ -199,6 +221,7 @@ class PromptBuilder:
             worn=worn,
             persona=tuple(dict.fromkeys(persona)),
             conditions=tuple(conditions),
+            facts=(*persona_facts, *condition_facts),
             feelings=feelings,
             social_cues=social_cues,
             recent=tuple(recent),

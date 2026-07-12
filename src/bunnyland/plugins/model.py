@@ -67,7 +67,7 @@ class ContentContribution(BaseModel):
     scripts: tuple[Any, ...] = ()
     #: Named ``WorldGenerator`` strategies, selectable at runtime by name.
     world_generators: tuple[Any, ...] = ()
-    #: Prompt fragment providers ``(world, character) -> list[str]`` (spec 16.3).
+    #: Prompt fact providers ``(world, character) -> Sequence[PromptFact]`` (spec 16.3).
     prompt_fragments: tuple[Any, ...] = ()
     #: Stable persona fragment providers for identity, role, bonds, and boundaries.
     persona_fragments: tuple[Any, ...] = ()

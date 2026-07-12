@@ -3,13 +3,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from enum import StrEnum
 
 from relics import Component, Entity, World
 
 from ..core.ecs import container_of, contents
+from .facts import STANDARD_DETAIL_CUTOFF
 
-PerspectiveName = Literal["first-person", "second-person", "third-person"]
+
+class PerspectiveName(StrEnum):
+    FIRST_PERSON = "first-person"
+    SECOND_PERSON = "second-person"
+    THIRD_PERSON = "third-person"
+
+
+class PromptAccess(StrEnum):
+    """Authority for facts, kept separate from grammatical perspective."""
+
+    PLAYER = "player"
+    ADMIN = "admin"
 
 
 @dataclass(frozen=True)
@@ -17,13 +29,18 @@ class PromptPerspective:
     """Who the prompt is for, and how component text should address them."""
 
     viewer: Entity | None = None
-    perspective: PerspectiveName = "second-person"
+    perspective: PerspectiveName = PerspectiveName.SECOND_PERSON
+    access: PromptAccess = PromptAccess.PLAYER
     language: str = "en"
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "perspective", PerspectiveName(self.perspective))
+        object.__setattr__(self, "access", PromptAccess(self.access))
+
     def choose(self, *, first: str, second: str, third: str) -> str:
-        if self.perspective == "first-person":
+        if self.perspective is PerspectiveName.FIRST_PERSON:
             return first
-        if self.perspective == "third-person":
+        if self.perspective is PerspectiveName.THIRD_PERSON:
             return third
         return second
 
@@ -36,13 +53,17 @@ class PerspectivePhrase:
     second: str
     third: str
 
-    def render(self, perspective: PromptPerspective | PerspectiveName, **values: object) -> str:
+    def render(
+        self, perspective: PromptPerspective | PerspectiveName | str, **values: object
+    ) -> str:
         style = (
-            perspective.perspective if isinstance(perspective, PromptPerspective) else perspective
+            perspective.perspective
+            if isinstance(perspective, PromptPerspective)
+            else PerspectiveName(perspective)
         )
-        if style == "first-person":
+        if style is PerspectiveName.FIRST_PERSON:
             text = self.first
-        elif style == "third-person":
+        elif style is PerspectiveName.THIRD_PERSON:
             text = self.third
         else:
             text = self.second
@@ -64,6 +85,7 @@ class ComponentPromptContext:
     entity: Entity
     room: Entity | None = None
     target: Entity | None = None
+    detail_cutoff: int = STANDARD_DETAIL_CUTOFF
     _world: World | None = field(default=None, repr=False, compare=False)
     _sibling_cache: dict[type[Component] | None, tuple[Entity, ...]] = field(
         default_factory=dict, repr=False, compare=False
@@ -81,6 +103,7 @@ class ComponentPromptContext:
         perspective: PromptPerspective | None = None,
         room: Entity | None = None,
         target: Entity | None = None,
+        detail_cutoff: int = STANDARD_DETAIL_CUTOFF,
     ) -> ComponentPromptContext:
         if room is None:
             room_id = container_of(entity)
@@ -91,8 +114,15 @@ class ComponentPromptContext:
             entity=entity,
             room=room,
             target=target,
+            detail_cutoff=detail_cutoff,
             _world=world,
         )
+
+    def includes_detail(self, detail: int) -> bool:
+        """Whether a fact at ``detail`` belongs in this projection."""
+        if isinstance(detail, bool) or not isinstance(detail, int) or detail < 0:
+            raise ValueError("prompt fact detail must be a non-negative integer")
+        return detail <= self.detail_cutoff
 
     @property
     def viewer(self) -> Entity | None:
@@ -101,7 +131,11 @@ class ComponentPromptContext:
     @property
     def is_first_person(self) -> bool:
         """Whether this context describes the prompt viewer's own entity."""
-        return self.viewer is None or self.viewer.id == self.entity.id
+        return (
+            self.perspective.access is PromptAccess.ADMIN
+            or self.viewer is None
+            or self.viewer.id == self.entity.id
+        )
 
     @property
     def can_view_private_state(self) -> bool:
@@ -149,5 +183,6 @@ __all__ = [
     "ComponentPromptContext",
     "PerspectiveName",
     "PerspectivePhrase",
+    "PromptAccess",
     "PromptPerspective",
 ]

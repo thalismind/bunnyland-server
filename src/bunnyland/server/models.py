@@ -413,6 +413,12 @@ class ActionSearchResponse(BaseModel):
     actions: list[ClientActionView] = Field(default_factory=list)
 
 
+class PromptFactView(BaseModel):
+    key: str
+    text: str
+    detail: int = Field(ge=0)
+
+
 class ExamineResponse(BaseModel):
     ok: bool = True
     schema_version: int = 1
@@ -423,6 +429,7 @@ class ExamineResponse(BaseModel):
     is_character: bool = False
     is_self: bool = False
     details: dict[str, Any] = Field(default_factory=dict)
+    facts: list[PromptFactView] = Field(default_factory=list)
     status: list[str] = Field(default_factory=list)
     points: ClientPointsView | None = None
 
@@ -799,6 +806,7 @@ __all__ = [
     "DmRoomProjectionView",
     "EventImageRequest",
     "FeatureStatusResponse",
+    "PromptFactView",
     "QueuedCommandView",
     "RecentEventsResponse",
     "RoomProjectionEntityView",

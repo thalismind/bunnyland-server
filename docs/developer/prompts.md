@@ -65,7 +65,7 @@ characters/objects/exits, omitted high-salience event summaries, and scenario vo
 Component prompt methods receive a `ComponentPromptContext`:
 
 ```python
-def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[PromptFact, ...]:
     ...
 ```
 
@@ -76,6 +76,8 @@ The context deliberately stays small:
 - `ctx.room`: the current room for `ctx.entity`, when known.
 - `ctx.target`: an optional relationship target for edge-scoped formatting.
 - `ctx.perspective`: prose style and future localization metadata.
+- `ctx.detail_cutoff`: the greatest fact detail score requested by this projection.
+- `ctx.includes_detail(score)`: validates a score and tests it against the cutoff.
 - `ctx.can_view_private_state`: true when private component state is scoped to the
   prompt viewer, either because `ctx.entity` is the viewer or because `ctx.target` is.
 - `ctx.room_siblings(component_type=None)`: lazy direct contents of `ctx.room`, excluding
@@ -121,6 +123,31 @@ Component methods own formatting:
   genuinely needed;
 - return `()` when no line should be visible.
 
+## Progressive Disclosure
+
+Component-owned state is projected as `PromptFact(key, text, detail)`. Lower detail scores
+are more important, and a projection includes a fact when `fact.detail <= cutoff`. Keys are
+stable, namespaced identifiers for the underlying fact; they must not change when the state
+or wording changes.
+
+Use these conventional bands while allowing intermediate non-negative integer scores:
+
+- `0`: essential or critical state;
+- `10`: relevant state included in the standard turn prompt;
+- `20`: informative state shown after closer inspection;
+- `30`: exhaustive state, including calm/default values such as "not hungry."
+
+Standard turns request cutoff `10`; detailed status and inspection request cutoff `30`.
+Choose the score from the current state rather than assigning one fixed score to the whole
+component. For example, one stable `needs.hunger` fact may be critical at `0`, urgent at
+`10`, mild at `20`, or calm at `30`. Disclosure never overrides perspective, privacy,
+perception, reachability, or knowledge checks.
+
+`PerspectiveName` is a `StrEnum` containing first-, second-, and third-person grammar.
+Administrative visibility is deliberately separate: `PromptAccess.ADMIN` grants private
+fact access while retaining whichever grammatical perspective the caller requested. Never
+encode authority as a fourth grammatical perspective.
+
 Do not put `World` queries, reachability rules, relationship traversal, or mutation inside
 component prompt methods. If a line needs unrelated entities, broad aggregates, or id
 resolution, keep it in the provider or a projection/helper.
@@ -132,7 +159,7 @@ private plans, hidden attitudes, and similar data. These should usually be visib
 the prompt viewer is the same entity being described:
 
 ```python
-def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[PromptFact, ...]:
     if not ctx.is_first_person:
         return ()
     ...

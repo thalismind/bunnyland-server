@@ -2174,7 +2174,8 @@ def test_serialize_examine_self_needs_and_targets(scenario):
         FocusPointsComponent,
     )
     from bunnyland.core.components import AffectComponent, DoorComponent, SleepingComponent
-    from bunnyland.foundation.needs.mechanics import HungerComponent
+    from bunnyland.foundation.meters.mechanics import Meter
+    from bunnyland.foundation.needs.mechanics import HungerComponent, need_fragments
     from bunnyland.server.serialization import serialize_examine
 
     world = scenario.actor.world
@@ -2201,6 +2202,10 @@ def test_serialize_examine_self_needs_and_targets(scenario):
     assert "hunger" in me_view.details
     assert me_view.details["affect"]["labels"] == ["content"]
     assert me_view.status == ["feeling peckish"]
+    assert len(me_view.facts) == 1
+    assert me_view.facts[0].key.endswith(".fact-0")
+    assert me_view.facts[0].text == "feeling peckish"
+    assert me_view.facts[0].detail == 10
     assert me_view.points.action == 3.0
 
     # A sleeping neighbour: outward condition is visible, private needs are not.
@@ -2214,10 +2219,39 @@ def test_serialize_examine_self_needs_and_targets(scenario):
         ],
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), sleeper.id)
-    sleeper_view = serialize_examine(scenario.actor, str(me.id), str(sleeper.id))
+    sleeper_view = serialize_examine(
+        scenario.actor,
+        str(me.id),
+        str(sleeper.id),
+        fragment_providers=[need_fragments],
+    )
     assert sleeper_view.is_self is False
     assert "asleep" in sleeper_view.details["condition"]
     assert "hunger" not in sleeper_view.details  # private state stays hidden
+    assert sleeper_view.facts == []  # calm internal state is not outwardly observable
+
+    starving = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Gaunt", kind="character"),
+            CharacterComponent(species="bunny"),
+            HungerComponent(meter=Meter(value=95.0)),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), starving.id)
+    starving_view = serialize_examine(
+        scenario.actor,
+        str(me.id),
+        str(starving.id),
+        fragment_providers=[need_fragments],
+    )
+    assert [fact.model_dump() for fact in starving_view.facts] == [
+        {
+            "key": "needs.hunger",
+            "text": "They are starving and feel weak.",
+            "detail": 0,
+        }
+    ]
 
     door = spawn_entity(world, [IdentityComponent(name="hatch", kind="door"), DoorComponent()])
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), door.id)

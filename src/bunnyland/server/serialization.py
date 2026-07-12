@@ -106,6 +106,7 @@ from ..core.world_actor import WorldActor
 from ..imagegen.components import PortraitImageComponent
 from ..persistence import WorldMeta
 from ..projections import PerceivedEntity, build_room_facts, perceive
+from ..prompts.facts import DETAILED_DETAIL_CUTOFF, collect_prompt_facts
 from .action_search import smart_action_search
 from .models import (
     ActionSearchResponse,
@@ -133,6 +134,7 @@ from .models import (
     DmProjectionResponse,
     DmRoomProjectionView,
     ExamineResponse,
+    PromptFactView,
     RoomProjectionEntityView,
     RoomProjectionResponse,
     RoomProjectionRoomView,
@@ -1224,6 +1226,12 @@ _EXAMINE_SELF_COMPONENTS: tuple[tuple[type, str], ...] = _EXAMINE_PUBLIC_COMPONE
     (HungerComponent, "hunger"),
     (ThirstComponent, "thirst"),
     (FatigueComponent, "fatigue"),
+    (HygieneComponent, "hygiene"),
+    (ComfortNeedComponent, "comfort"),
+    (FunNeedComponent, "fun"),
+    (SocialNeedComponent, "social"),
+    (PrivacyNeedComponent, "privacy"),
+    (SafetyNeedComponent, "safety"),
     (AffectComponent, "affect"),
 )
 _EXAMINE_CONDITIONS: tuple[tuple[type, str], ...] = (
@@ -1281,11 +1289,15 @@ def serialize_examine(
 
     entity = actor.world.get_entity(resolved)
     is_self = resolved == character.id
-    status: list[str] = []
+    facts = collect_prompt_facts(
+        actor.world,
+        entity,
+        fragment_providers,
+        cutoff=DETAILED_DETAIL_CUTOFF,
+        viewer=character,
+    )
     points = None
     if is_self:
-        for provider in fragment_providers:
-            status.extend(provider(actor.world, entity))
         points = _points_view(entity)
     return ExamineResponse(
         world_epoch=actor.epoch,
@@ -1295,7 +1307,8 @@ def serialize_examine(
         is_character=entity.has_component(CharacterComponent),
         is_self=is_self,
         details=_examine_details(entity, is_self=is_self),
-        status=status,
+        facts=[PromptFactView(key=fact.key, text=fact.text, detail=fact.detail) for fact in facts],
+        status=[fact.text for fact in facts],
         points=points,
     )
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
 from conftest import build_scenario
 
 from bunnyland.core import (
@@ -40,12 +41,20 @@ from bunnyland.plugins import bunnyland_plugins, collect_persona_fragments
 from bunnyland.projections import RecentContextProjection, RoomSummaryProjection
 from bunnyland.prompts import (
     ComponentPromptContext,
+    PerspectiveName,
     PerspectivePhrase,
+    PromptAccess,
     PromptBuilder,
+    PromptFact,
     PromptPerspective,
     render_prompt,
 )
 from bunnyland.prompts.builder import _status
+from bunnyland.prompts.facts import (
+    coerce_prompt_facts,
+    collect_prompt_facts,
+    visible_prompt_facts,
+)
 from bunnyland.simpacks.dinosim.mechanics import (
     ApexPredatorComponent,
     ArmyResponseComponent,
@@ -126,6 +135,119 @@ def test_build_context_has_core_sections():
     assert "north" in ctx.exits
     assert "move north" in ctx.commands
     assert "take note" in ctx.commands
+
+
+def test_prompt_facts_validate_keys_scores_and_numeric_cutoffs():
+    facts = (
+        PromptFact(key="test.essential", text="essential", detail=0),
+        PromptFact(key="test.intermediate", text="intermediate", detail=15),
+        PromptFact(key="test.exhaustive", text="exhaustive", detail=30),
+    )
+
+    assert [fact.key for fact in visible_prompt_facts(facts, cutoff=15)] == [
+        "test.essential",
+        "test.intermediate",
+    ]
+    with pytest.raises(ValueError, match="namespaced"):
+        PromptFact(key="missing-namespace", text="invalid")
+    with pytest.raises(ValueError, match="must not be empty"):
+        PromptFact(key="test.empty", text="  ")
+    for invalid in (-1, 1.5, True):
+        with pytest.raises(ValueError, match="non-negative"):
+            PromptFact(key="test.invalid", text="invalid", detail=invalid)
+        with pytest.raises(ValueError, match="non-negative"):
+            visible_prompt_facts(facts, cutoff=invalid)
+    with pytest.raises(ValueError, match="duplicate"):
+        coerce_prompt_facts(
+            (
+                PromptFact(key="test.same", text="one"),
+                PromptFact(key="test.same", text="two"),
+            ),
+            namespace="test.provider",
+        )
+    assert coerce_prompt_facts(["legacy"], namespace="!!!")[0].key == "provider.fact-0"
+
+
+def test_fact_collection_enforces_viewer_awareness_and_global_key_uniqueness():
+    entity = SimpleNamespace(id="entity-1")
+    other = SimpleNamespace(id="entity-2")
+
+    def hidden(_world, _entity):
+        raise AssertionError("viewer-unaware provider must not inspect another entity")
+
+    def aware(_world, _entity, *, viewer):
+        assert viewer is other
+        return [PromptFact(key="test.aware", text="observable", detail=15)]
+
+    assert collect_prompt_facts(
+        None, entity, [hidden, aware], cutoff=15, viewer=other
+    ) == (PromptFact(key="test.aware", text="observable", detail=15),)
+
+    def duplicate_one(_world, _entity):
+        return [PromptFact(key="test.duplicate", text="one")]
+
+    def duplicate_two(_world, _entity):
+        return [PromptFact(key="test.duplicate", text="two")]
+
+    with pytest.raises(ValueError, match="duplicate prompt fact key"):
+        collect_prompt_facts(None, entity, [duplicate_one, duplicate_two], cutoff=10)
+    for invalid in (-1, 1.5, True):
+        with pytest.raises(ValueError, match="non-negative"):
+            collect_prompt_facts(None, entity, [], cutoff=invalid)
+
+
+def test_component_prompt_context_validates_detail_scores():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    context = ComponentPromptContext.for_entity(scenario.actor.world, character)
+
+    assert context.includes_detail(10) is True
+    assert context.includes_detail(11) is False
+    for invalid in (-1, 1.5, True):
+        with pytest.raises(ValueError, match="non-negative"):
+            context.includes_detail(invalid)
+
+
+def test_prompt_perspective_uses_grammar_and_access_enums_independently():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    observer = spawn_entity(scenario.actor.world)
+    perspective = PromptPerspective(
+        viewer=observer,
+        perspective="third-person",
+        access="admin",
+    )
+    context = ComponentPromptContext.for_entity(
+        scenario.actor.world,
+        character,
+        perspective=perspective,
+    )
+
+    assert perspective.perspective is PerspectiveName.THIRD_PERSON
+    assert perspective.access is PromptAccess.ADMIN
+    assert perspective.choose(first="I", second="You", third="They") == "They"
+    assert context.is_first_person is True
+    assert context.can_view_private_state is True
+    with pytest.raises(ValueError, match="not a valid PerspectiveName"):
+        PromptPerspective(perspective="god")
+
+
+def test_prompt_builder_uses_standard_cutoff_and_accepts_detailed_cutoff():
+    scenario = build_scenario()
+
+    def facts(_world, _character):
+        return [
+            PromptFact(key="test.relevant", text="relevant", detail=10),
+            PromptFact(key="test.quiet", text="quiet", detail=30),
+        ]
+
+    builder = PromptBuilder(scenario.actor.world, fragment_providers=[facts])
+
+    assert builder.build(scenario.character).conditions == ("relevant",)
+    assert builder.build(scenario.character, detail_cutoff=30).conditions == (
+        "relevant",
+        "quiet",
+    )
 
 
 def test_include_entity_ids_annotates_entities_and_commands_when_enabled():

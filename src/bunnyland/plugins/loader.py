@@ -207,6 +207,7 @@ def apply_plugins(
                     f"action definition for {handler.command_type!r}"
                 )
     actor.plugins = registry
+    actor.prompt_fragment_providers = tuple(collect_prompt_fragments(ordered))
     context = context or PluginRuntimeContext()
     context.plugins = registry
     for plugin in ordered:

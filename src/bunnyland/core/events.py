@@ -387,6 +387,7 @@ class EntityInspectedEvent(DomainEvent):
     description: str = ""
     text: str = ""
     state: str = ""
+    facts: tuple[dict[str, object], ...] = ()
 
 
 # --------------------------------------------------------------------------------------
