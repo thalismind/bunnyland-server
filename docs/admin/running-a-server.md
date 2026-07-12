@@ -163,7 +163,6 @@ uv run bunnyland serve --config bunnyland.yml
 | `--admin-client-id` | env         | Allow one admin `client_id`; repeat or pass comma-separated values. Defaults to `BUNNYLAND_ADMIN_CLIENT_IDS`; unset allows any admin client ID with the admin token. |
 | `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](./). |
 | `--starter-pack` | (none)         | Enable a startup preset: `peaceful`, `fantastic`, or `futuristic`. |
-| `--module`       | (none)         | Import an external plugin module; repeatable. See [admin](./).   |
 | `--verbose`      | off            | Log each decision and world-generation step at INFO.           |
 | `--load`         | (none)         | Resume a saved world instead of generating. See [persistence](../developer/persistence.md). |
 | `--load-paused`  | off            | Start the server tick cycle paused when used with `--load`.    |

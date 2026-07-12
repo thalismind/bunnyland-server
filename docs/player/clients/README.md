@@ -17,6 +17,16 @@ The clients can present different controls, but submitted commands still go thro
 same authoritative server checks. A menu entry or clickable target is a convenience, not a
 shortcut around reachability, permissions, points, or command validation.
 
+Remote clients share a claim-authenticated live update stream. Chat, character sheets, Toon,
+Web TUI, Web REPL, and their terminal counterparts refresh the selected character after
+perceivable events. During a disconnect they reconnect automatically and fall back to the
+character's recent activity feed; manual refresh remains available when you want an
+immediate resync.
+
+Action menus are built from the server's installed action registry and current target
+groups. If that metadata is temporarily unavailable, clients show an empty or disabled
+action state rather than an outdated built-in verb list.
+
 ## Quick comparison
 
 | Client | Played in | Best for | How you act |

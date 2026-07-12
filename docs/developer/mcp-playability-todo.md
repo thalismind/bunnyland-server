@@ -7,8 +7,8 @@ Findings below come from a live play session against `sandbox.bunnyland.dev` (cl
 look → move → use → say → take bun from vendor → eat bun). Each item names the likely
 target file.
 
-**Status (local, not yet deployed to the sandbox):** the keystone read-side surface and
-command feedback landed — see [`docs/developer/mcp-playability-todo`] items marked DONE.
+**Status (implemented and deployed):** the keystone read-side surface and command feedback
+are live on the sandbox. See the items marked DONE.
 New MCP tools: `character_view`, `room_view`, `character_commands`, `component_schema`,
 `perceived_events`; `agent_prompt` gained an opt-in `include_entity_ids`; `send_command`
 returns an outcome hint. Items marked FOLLOW-UP remain.
@@ -33,11 +33,10 @@ returns an outcome hint. Items marked FOLLOW-UP remain.
    It also fails fast: an unknown `command_type` is rejected at submit (pointing at
    `search_actions`) instead of being queued for a tick-later rejection.
 
-4. **[PARTIAL] No discoverable way to consume inventory items.**
-   `character_view` now lists every available action and `target_groups.reachableItems`
-   includes carried items, so a registered consume verb with an `item_id` arg is
-   discoverable. FOLLOW-UP: the catalogue still has no `eat`; the canonical `consume` vs
-   `use` ambiguity (Improve #11) is unresolved.
+4. **[DONE] Discoverable inventory consumption.**
+   `character_view` exposes carried items in `target_groups.reachableItems`, and the
+   canonical `eat` action is registered with an `item_id` argument. Agents can resolve it
+   through action search and submit it through the normal command path.
 
 ## Add (missing capability)
 
@@ -92,11 +91,10 @@ returns an outcome hint. Items marked FOLLOW-UP remain.
     now returns `resolves_at_epoch` (the next-tick epoch the command is expected to resolve
     at); `character_commands` reports it per queued command too.
 
-11. **[FOLLOW-UP] Disambiguate the consume verb.**
-    Confirm canonical food verb (`consume` vs `use`) and document it; the test queued both
-    so the winner is unknown. The vendor has a second steamed bun for a clean single-verb
-    test.
-    → `core/handlers/` + player docs.
+11. **[DONE] Canonical food verb.**
+    `eat(item_id)` is the registered food action; `use` remains generic affordance dispatch.
+    Action search, target groups, and the player hunger/inventory guides document the same
+    contract.
 
 12. **[DONE] Hunger feedback after eating.**
     The recent-context projection now logs `FoodEatenEvent`/`DrinkConsumedEvent` ("X ate

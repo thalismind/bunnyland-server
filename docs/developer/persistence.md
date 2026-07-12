@@ -1,7 +1,7 @@
 # Saving & reloading worlds
 
-A world can be saved to disk and reloaded later. A save is a **single JSON file** that holds
-both the Relics ECS snapshot (every entity, component, and edge) and the bunnyland
+A world can be saved to disk and reloaded later. A save is a **single JSON or YAML file**
+that holds both the Relics ECS snapshot (every entity, component, and edge) and the Bunnyland
 provenance that produced it — the **seed**, the literal **DM system prompt** the model was
 given (empty for the deterministic offline builder), and which **generator** built it.
 Reloading restores the world exactly: room graph, inventories, needs meters, moods,
@@ -65,16 +65,42 @@ If the request uses `"save": true`, the completed replacement is written to the 
 |--------------------------------------------------------|--------------------------------------------|
 | All entities, components, edges (rooms, items, characters, controllers) | Volatile command queues / inbox |
 | The game clock (epoch) and per-character needs/moods   | In-memory private notes and recall data |
-| Seed, generation prompt, and generator name            | Plugin code (re-applied from `--plugin`/`--module` on load) |
+| Seed, generation prompt, generator name, and schema version | Plugin code (discovered from installed package entry points on load) |
 | Shared world-history records and their actor/target links | Narration-only prose that was never committed to ECS |
 | Chroma private notes and recall data, when `--memory-backend=chroma` is configured | |
 
-Chroma memory is stored outside the world JSON file. If `--memory-backend=chroma` is used
+Chroma memory is stored outside the world file. If `--memory-backend=chroma` is used
 without `--memory-path`, and the server also has `--save worlds/marsh.json`, memory is
 persisted beside the save at `worlds/marsh.memory/chroma`. Set `--memory-path` to choose a
 different Chroma directory. The `in-memory` backend is still non-persistent. Plugins are
-*code*, not data: load re-applies the same plugins, so launch a reload with the same
-`--plugin`/`--module` flags you generated with.
+*code*, not data: install the same plugin wheels before loading. With no explicit
+`--plugin` selection, every discovered `default_enabled` plugin is applied; with an explicit
+selection, include every plugin id required by the save.
+
+## Schema v2 and schema-v1 migration
+
+Schema v2 stores repeatable live relationships as typed edges. The holder is the edge source,
+the referenced entity is the target, and per-target values live on the edge. Examples include
+`MemberOfFaction`, `MemberOfInstitution`, `MemberOfCaravan`, `MemberOfFestival`,
+`MemberOfAwayTeam`, `StoredIn`, `HasAccessToService`, `AllowedIn`, `WantedByFaction`, the
+standing edges, rumor source/subject/listener edges, `DescendsFromParent`, and
+`DependsOnIngredient`. Components remain for singleton state; immutable history/event
+snapshots and external identifiers may remain scalar values.
+
+Schema v2 is prerelease and is finalized in place. Schema-v1 input is copied and migrated
+before type deserialization; the source file is never modified. Migration covers moved quest
+records, `StealthComponent` to `SneakingComponent`, legacy relationship fields/maps, and
+legacy 3D decoration roles. Missing live targets or malformed records fail with the owning
+entity, persisted type, and field in the error rather than guessing.
+
+Use the explicit converter when you want a separate migrated file:
+
+```bash
+uv run bunnyland migrate-world worlds/marsh-v1.json worlds/marsh-v2.json
+```
+
+Loading v1 yields an in-memory v2 world; the next normal save writes v2. JSON and YAML
+migration fixtures cover the same conversion contract.
 
 World history is normal ECS state (`WorldHistoryRecordComponent`, `HistoryActor`, and
 `HistoryTarget`). Durable marks are normal ECS state too (`PhysicalMarkComponent` and
@@ -123,7 +149,7 @@ meta=...)` at any point — it stamps the current game epoch and wall-clock time
 
 ## Format notes
 
-The file is the layout Relics' own loader understands, so loading is just `relics.load`
-under the hood (which preserves entity ids, so edges survive). bunnyland flattens its nested
-value objects (needs meters, affect vectors) to plain JSON on save; pydantic rebuilds them on
-load. The provenance lives under a `bunnyland` key the Relics loader ignores.
+The file is the layout Relics' own loader understands, preserving entity ids so edges survive.
+Bunnyland flattens nested value objects to plain JSON/YAML values on save; Pydantic rebuilds
+them only after schema migration. JSON provenance lives under `bunnyland`; the compact YAML
+dialect uses its reserved Bunnyland metadata section.

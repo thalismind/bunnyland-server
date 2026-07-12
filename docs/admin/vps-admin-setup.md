@@ -67,16 +67,13 @@ the deployment from that typed config, and follows the Ubuntu container setup fl
 prompts for the required values, lets you choose Ollama or OpenRouter for world generation
 and character controllers, and starts the checked-in Compose files. The Textual wizard
 uses sectioned screens for server settings, admin access, world setup, web options, live
-services, plugin selection, add-ons, and review. The plugin screen lists built-in plugins
-and already-loaded plugin modules with checkboxes inside a scrollable list and a search
-field for narrowing by id or name. To inspect plugins from a module that is not already
-loaded, pass it explicitly, for example `uv run bunnyland config-wizard --import
-examples.plugins.motd_claim --plugin motd_claim`. Importing a Python module executes its
-code; only import modules you trust, even if their package name looks related to
-Bunnyland. The wizard may list unloaded module-name suggestions that contain `bunnyland`,
-but it does not import them for you. The wizard also prompts for an optional non-default
-Ollama or OpenRouter endpoint, and for an optional community Discord invite URL to surface
-in the web clients.
+services, plugin selection, add-ons, and review. The plugin screen lists plugins discovered
+from installed package entry points, with checkboxes and a search field for narrowing by id
+or name. Install trusted addon wheels before launching the wizard; it does not import source
+modules or sibling checkouts. You can preselect a discovered plugin with
+`uv run bunnyland config-wizard --plugin vendor.addon`. The wizard also prompts for an
+optional non-default Ollama or OpenRouter endpoint, and for an optional community Discord
+invite URL to surface in the web clients.
 
 ```bash
 sudo apt-get update

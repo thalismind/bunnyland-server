@@ -103,7 +103,13 @@ After your character moves through an exit, the REPL shows the destination-room 
 you can immediately decide what to do next.
 
 If a `--server` connection drops, the failure is reported once and a reconnect is noted
-when it recovers, rather than repeating every second.
+when it recovers, rather than repeating every second. While reconnecting, the REPL uses the
+claim-scoped recent-event feed and deduplicates entries already received from the live
+stream.
+
+Event fact lines follow progressive disclosure: important changes appear in the live log,
+while calm/default component state remains available through `look`, inspection, or a
+detailed character view instead of being repeated every turn.
 
 ## History
 

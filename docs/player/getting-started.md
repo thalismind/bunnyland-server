@@ -19,11 +19,18 @@ A simple first play sequence looks like this:
 !eat three berries
 !go north
 !look
+!inspect Juniper
 ```
 
 If a client gives you buttons, menus, clickable targets, or sprites, those controls still
 submit the same server-side verbs. Server validation decides whether the character can
 reach the target, spend the points, and complete the action.
+
+Room summaries and ordinary turns emphasize what matters now. Detailed inspection can show
+additional status facts that would be noise every turn—for example, a calm need meter or a
+normal mechanism state. Not seeing “not hungry” in the ordinary view does not mean the state
+is missing; inspect yourself or open a detailed character/status view when you want the full
+picture.
 
 ## Basic guides
 

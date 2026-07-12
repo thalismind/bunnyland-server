@@ -18,6 +18,10 @@ address and press **Connect Live**. Once the status reads connected, choose your
 from the **Player** menu. The view centres on the room your character is in, and your
 character's sprite is highlighted.
 
+The client keeps one player-scoped live connection for room activity, action results, and
+character refreshes. If it drops, the page reconnects and uses recent activity as a temporary
+fallback, so a short interruption should not require reloading the page or duplicate events.
+
 If a world was generated without sprite art, entities still appear: each falls back to an
 icon based on its kind, and rooms show their name as a labeled backdrop. Art can be filled
 in later without changing anything about how you play.
@@ -83,6 +87,10 @@ your points regenerate. Picking an affordable action does one of three things:
 
 The menu only enables what you can pay for; the server still has the final say and will
 refuse an action if the target is out of reach or the moment has passed.
+
+The menu is serialized from the server's installed action registry and current target
+groups. It does not carry its own fallback verb list; while that metadata is unavailable,
+the action area remains empty or disabled until the next live refresh.
 
 ## The same actions everywhere
 

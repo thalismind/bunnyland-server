@@ -13,6 +13,9 @@ synchronous rejection now returned by the command submit endpoint, and how to us
   immediately** with a `reason`, instead of always queuing. Surface that reason inline.
 - All new fields are additive with safe defaults; nothing breaks if you ignore them, but
   you should adopt both for a responsive UI.
+- The serialized `actions` and `target_groups` are the only frontend action catalogue. Do
+  not ship static verb lists or infer actions when registry metadata is unavailable; render
+  an empty/disabled action state until a fresh projection arrives.
 
 The availability flags are a **coarse hint** for the UI. The server (the command handler,
 on the next world tick) remains the source of truth and can still reject a command that
@@ -195,13 +198,20 @@ Don't treat `queued: true` as "it worked" — treat it as "accepted for processi
 
 ---
 
-## 4. Staleness / refresh
+## 4. Live updates, fallback, and staleness
 
 Availability is computed against the world at the moment the projection was built
 (`world_epoch`). Points regenerate, targets move, and state changes every tick, so:
 
-- Re-fetch the character projection after actions resolve (or on your existing
-  poll/refresh cadence) to keep the action bar accurate.
+- Prefer the claim-authenticated player stream at
+  `WS /world/character/{character_id}/updates`. Send the claim id and secret in the first
+  `authenticate` frame, never in the URL. Event, invalidation, resync, and heartbeat frames
+  tell the client when to refresh projections.
+- Reconnect with bounded backoff. While disconnected, use
+  `GET /world/character/{character_id}/events/recent` with the same claim proof, deduplicate
+  frames, and refresh the projection after meaningful events or invalidations.
+- Local clients may remain polling-only, but remote TUI, REPL, Toon, chat, and character
+  sheet surfaces should share this player-scoped stream/fallback behavior.
 - If you compare epochs, a newer `world_epoch` means availability may have changed.
 
 ---
@@ -222,4 +232,7 @@ Agents should read `reason`, fix the issue, and resend rather than waiting for a
 - [ ] Build argument pickers from `target_groups[argument.target_group]`.
 - [ ] On submit, branch on `CommandResponse.queued`; show `reason` when `false`.
 - [ ] Keep listening for async execution / `CommandRejectedEvent` on accepted commands.
+- [ ] Subscribe to the player-scoped stream; reconnect and use the recent-event fallback.
 - [ ] Refresh the projection after commands resolve to keep flags current.
+- [ ] Render no actions when registry-derived metadata is unavailable; never use a static
+      frontend verb catalogue.

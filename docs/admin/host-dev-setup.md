@@ -258,12 +258,13 @@ exec /opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve
 '
 ```
 
-Load an external plugin module and select one of its plugins:
+Install an external plugin wheel, then select one of its entry-point plugins:
 
 ```bash
-sudo -u bunnyland /opt/bunnyland/.local/bin/uv run --extra server bunnyland serve \
-  --import module_foo \
-  --plugin bar \
+sudo -u bunnyland /opt/bunnyland/.local/bin/uv pip install \
+  --python /opt/bunnyland/server/.venv/bin/python /path/to/module-foo.whl
+sudo -u bunnyland /opt/bunnyland/server/.venv/bin/bunnyland serve \
+  --plugin module_foo.bar \
   --plugin bunnyland.core_verbs \
   --plugin bunnyland.worldgen \
   --ticks 0 \
@@ -271,8 +272,8 @@ sudo -u bunnyland /opt/bunnyland/.local/bin/uv run --extra server bunnyland serv
   --api-port 8765
 ```
 
-Imported plugin ids are namespaced by module for world metadata, so
-`--import module_foo --plugin bar` is recorded as `module_foo.bar`.
+The wheel must declare `module_foo.bar` in the `bunnyland.plugins` entry-point group.
+The server never imports a sibling checkout or invents a namespace from a module alias.
 
 Resume an existing world:
 

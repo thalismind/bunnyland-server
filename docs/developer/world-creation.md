@@ -181,8 +181,10 @@ def bunnyland_plugins():
 Then load and select it:
 
 ```bash
-uv run bunnyland serve --module mygame.worldgen --generator arena
+uv pip install --python .venv/bin/python dist/mygame_worldgen-*.whl
+uv run bunnyland serve --plugin mygame.worldgen --generator arena
 ```
 
-See [admin & controllers](../admin/) for how `--module` and `--plugin` load external plugins.
+See [plugins](plugins.md) for packaging and entry-point discovery. `--plugin` selects an
+installed plugin id; it does not import source modules.
 The two builtins in `src/bunnyland/worldgen/generators.py` are worked examples.

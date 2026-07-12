@@ -19,6 +19,37 @@ tests, and reproducible playtests where a live model is unwanted.
 Both reference their behaviour by name and persist as just that string; the actual trees and
 scripts live in code-defined registries.
 
+## LLM tools and progressive disclosure
+
+LLM controllers receive provider-native function tools generated from the same
+`ActionDefinition` registry used by human clients. Ollama receives those schemas through
+its SDK `tools` argument; OpenRouter receives them through its SDK's async chat interface.
+The returned native tool call is normalized to `ToolCall`, then normal reference resolution,
+cost, reachability, controller-generation, and handler validation apply. Tool calling is the
+structured output contract for character decisions; do not add a parallel free-form JSON or
+Pydantic response format for the same decision.
+
+The initial tool set is contextual, not a static verb catalogue:
+
+- core and foundation actions are always considered;
+- sim/addon actions are included when their owning plugin has a component or relationship on
+  the character, current room, inventory, or another reachable entity;
+- command validation still uses the complete installed registry, so disclosure never removes
+  a valid action from the game;
+- omitted installed actions are available through the native `discover_action` meta-tool.
+  A successful discovery is remembered per character and exposes that action's full schema on
+  the next decision.
+
+This is contextual plugin ownership, not player ownership or authorization. It reduces token
+use without weakening the authoritative command path. `move` and `wait` remain available
+through the core action owner, and live provider tests assert that their definitions and
+examples reach the SDK and produce valid native tool calls.
+
+Provider calls are serialized so only one model request is in flight at a time, retried only
+for configured transient failures, and recorded with usage/cost telemetry when the SDK
+provides it. A slow request never blocks world ticks, and an invalid or unavailable tool is
+fed back to the character instead of being submitted through a compatibility adapter.
+
 ## Behavior trees
 
 A behavior tree is ticked once per dispatch turn and yields a single `ToolCall` (or `None` to

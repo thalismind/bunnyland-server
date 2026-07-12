@@ -118,10 +118,16 @@ This is the most *ownable* stakes engine you have. No other text game has both t
 Two audiences: the **new player** who must not drown or face an empty room, and the **admin** who must be able to stand up a populated, scenario-ready world fast.
 
 ### New-player onboarding
-- [ ] Build a **valid-actions endpoint**: given a character + current world state, return the currently-relevant verbs. Query-based affordances run server-side; add an endpoint for code-based ones. Do **not** check AP/FP here — those stay disabled client-side.
-- [ ] Build **valid-targets** resolution per action (reachable items, present characters, openable/lockable doors, writable surfaces) so the player never guesses at object names.
+- [x] Build a **valid-actions projection**: character views serialize registry-derived
+  actions with per-character availability, costs, requirements, and unavailable reasons;
+  action search progressively exposes the larger catalogue.
+- [x] Build **valid-targets** resolution per action: `target_groups` contains the reachable
+  exits, items, inventory, characters, and other entities named by each argument schema.
 - [ ] **Tiered verb reveal**: start with the core five (move, look, take, use, say); reveal more as the player uses adjacent ones or the scenario calls for them.
-- [ ] **Progressive disclosure of detail**: first/second/third-person prompt filters; `look` with levels of detail; `inspect` as `look++`, gated on familiarity/skill.
+- [x] **Progressive disclosure of detail**: component-owned facts carry numeric detail
+  scores (`0` most important); standard turns use cutoff `10` and detailed status/inspection
+  use cutoff `30`. First/second/third-person grammar remains separate from admin access,
+  privacy, perception, and reachability.
 - [ ] Collapse/hide advanced prompt sections (policy wall, deep needs, AP/FP accounting) for new characters until relevant.
 - [ ] **Contextual nudges**: if a new player stalls for N ticks, the DM offers a gentle in-fiction prompt.
 - [ ] **Context-aware help** in the existing threaded reply, keyed to the action just tried, not a generic manual.

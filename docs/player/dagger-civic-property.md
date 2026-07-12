@@ -64,7 +64,7 @@ reputation in that region by the fine amount. Pay the fine:
 !pay-fine crime_id="trespass charge"
 ```
 
-Paying marks the crime as paid, removes the active bounty component from that record, and
+Paying marks the crime as paid, removes the active `WantedByFaction` relationship from that record, and
 raises legal reputation back by the fine amount. Legal reputation appears as regional
 context, so repeated crimes and repayments can become story fuel.
 

@@ -57,7 +57,8 @@ queues, typed events + bus (subset §18); verbs `move`/`take`/`drop`/`put`/`eat`
 - **Done when:** a character renders the §16.2 example prompt from live ECS state.
 
 ### Phase 6 — Plugin architecture (§21)
-- `Plugin` / `*Contribution` models; `--module/--plugin` loader with dependency ordering.
+- `Plugin` / `*Contribution` models; installed entry-point discovery and `--plugin`
+  selection with dependency ordering.
 - Refactor `mechanics.install_needs` and core registration into plugins.
 - **Done when:** core/memory/lifesim load as plugins via CLI; disabling a plugin removes
   its components/systems/verbs.

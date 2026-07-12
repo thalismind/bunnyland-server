@@ -204,15 +204,19 @@ server under `/mcp`.
 
 ### Loading external plugins
 
-Point `--module` at any importable module exposing `bunnyland_plugins()`:
+Install an addon wheel that declares one or more `bunnyland.plugins` entry points. Startup
+discovers installed packages automatically; use `--plugin` only to select an explicit
+plugin id:
 
 ```bash
-uv run bunnyland serve --module mygame.content --generator arena
+uv pip install --python .venv/bin/python dist/mygame_content-*.whl
+uv run bunnyland serve --plugin mygame.content --generator arena
 ```
 
-This is how you add your own verbs, components, mechanics, or world generators. See
-[world creation](../developer/world-creation.md) for a generator example, and
-`src/bunnyland/plugins/builtin.py` for the builtin plugin definitions.
+Runtime module aliases and source-checkout imports are not supported. This keeps the same
+installed artifact in local tests, CI, containers, and production. See
+[plugins](../developer/plugins.md) for the entry-point declaration and
+[world creation](../developer/world-creation.md) for a generator example.
 
 ## Saving, autosaving, and resetting
 

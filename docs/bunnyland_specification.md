@@ -1443,10 +1443,9 @@ class NoiseComponent(Component):
 
 
 @dataclass(frozen=True)
-class StealthComponent(Component):
-    visibility_level: float = 1.0
-    hidden_threshold: float = 0.1
-    hiding: bool = False
+class SneakingComponent(Component):
+    sneaking: bool = False
+    since_epoch: int = 0
 ```
 
 MVP perception is simple; advanced stealth and overhearing can come later.
@@ -1569,7 +1568,7 @@ DefaultController     character -> controller
 HasThought            character -> thought
 HasGoal               character -> goal
 SocialBond            character -> character
-MemberOf              character -> faction
+MemberOfFaction       character -> faction
 ParticipatingIn       character -> conversation
 RecordedBy            character -> note/memory
 Targets               task/action/job -> entity
@@ -2577,25 +2576,23 @@ class Plugin(BaseModel):
 
 ### 21.3 Plugin loading
 
-The launcher can import Python modules through CLI args.
+The launcher discovers plugins from installed package entry points.
 
 Desired shape:
 
 ```text
 bunnyland serve \
-  --module my_custom_plugins \
-  --plugin my_custom_plugins.foo \
-  --plugin my_custom_plugins.bar
+  --plugin vendor.foo \
+  --plugin vendor.bar
 ```
 
 Semantics:
 
 ```text
---module imports a Python module.
-The module exposes an entrypoint function, such as bunnyland_plugins().
-The entrypoint returns one or more Plugin objects.
---plugin selects which plugin IDs to enable from loaded modules.
-If no --plugin is provided, load all default_enabled plugins from imported modules.
+Installed distributions declare the `bunnyland.plugins` entry-point group.
+An entry point returns one or more Plugin objects.
+--plugin selects which discovered plugin IDs to enable.
+If no --plugin is provided, load all discovered default_enabled plugins.
 ```
 
 Example:

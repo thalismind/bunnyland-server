@@ -104,6 +104,12 @@ The transcript shows command acknowledgements and recent events your character c
 perceive. High-frequency bookkeeping events are hidden so speech, movement, rejections,
 and meaningful world activity are easier to notice.
 
+**Connect Live** opens the claim-authenticated player stream. The client reconnects after a
+temporary interruption and uses the character-scoped recent-event endpoint as a fallback,
+deduplicating entries when the stream returns. Disclosed fact lines are perspective- and
+detail-filtered, so ordinary activity emphasizes important changes rather than repeating
+normal component state.
+
 If a command costs more action or focus points than you currently have, the Web REPL posts
 it with `on_insufficient_points=queue`, matching the Toon and terminal clients. The server
 decides whether to queue or reject it.

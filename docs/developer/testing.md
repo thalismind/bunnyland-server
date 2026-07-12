@@ -35,3 +35,17 @@ scripts/test-all
 uv run ruff check src tests
 git diff --check
 ```
+
+## Distribution gate
+
+CI runs packaging only after the test job succeeds. It builds both a wheel and source
+distribution, validates them with Twine, installs the wheel with all runtime extras into a
+clean virtual environment, discovers plugin entry points, and smoke-tests `bunnyland`,
+`bunnyland-tui`, and `bunnyland-repl`. It records `dist/SHA256SUMS` and uploads the exact
+artifacts as `python-distributions-${GITHUB_SHA}` for 14 days. Container builds depend on
+both the test and package jobs.
+
+External addons should test against that wheel artifact in an isolated environment. Do not
+add sibling checkout paths to `sys.path` or `PYTHONPATH`; checking out server source is
+acceptable only to build the artifact. PyPI publication remains deliberately disabled until
+a signed release/tag policy and Trusted Publisher are configured.

@@ -1,18 +1,29 @@
 # Plugins
 
-Python plugins expose `bunnyland_plugins()` and are loaded with `--import`. The MOTD claim
-example in `examples/plugins/motd_claim.py` shows two extension points:
+Python plugins are installed packages discovered through the canonical
+`bunnyland.plugins` entry-point group. There are no runtime module-import aliases: install
+the plugin wheel into the server environment, then use `--plugin` only when selecting an
+explicit subset of discovered plugin ids.
+
+```toml
+[project.entry-points."bunnyland.plugins"]
+"example.motd" = "example_motd.plugin:plugin"
+```
+
+The target may be a `Plugin`, a callable returning one, or a callable returning a sequence
+of plugins. Plugin ids are globally stable namespaced identifiers. Discovery validates the
+returned objects before dependency ordering or world loading begins.
+
+The MOTD claim example shows two extension points:
 
 - a runtime event listener subscribed to `CharacterClaimedEvent`
 - an ECS system contributed through `EcsContribution.systems`
 
-Run it with:
+After packaging the example with the entry point above, install its wheel and run it with:
 
 ```bash
-uv run bunnyland serve \
-  --import examples.plugins.motd_claim \
-  --plugin motd_claim \
-  --discord
+uv pip install --python .venv/bin/python dist/example_motd-*.whl
+uv run bunnyland serve --plugin example.motd --discord
 ```
 
 The claim event is controller-agnostic. The example checks whether the event's
@@ -50,3 +61,22 @@ plugin = Plugin(
     runtime=RuntimeContribution(service_factories=(install_greeting,)),
 )
 ```
+
+## Generation capabilities
+
+Generation capabilities are also stable namespaced identifiers. Proposals, child requests,
+prompt examples, and enrichers must use the exact registered capability; aliases are not
+expanded at runtime.
+
+```python
+plugin = Plugin(
+    id="example.forest",
+    name="Forest",
+    content=ContentContribution(
+        generation_capabilities=("example.forest/ancient-grove",),
+    ),
+)
+```
+
+An unmet or misspelled capability stays unmet, which makes generation failures explicit and
+keeps separately installed addons from accidentally claiming each other's content.

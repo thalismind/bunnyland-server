@@ -45,6 +45,10 @@ The left panel has three sections:
 - doors out of the room, each labeled by the direction it leads;
 - recent activity your character can perceive.
 
+Activity entries may include short disclosed fact lines from the same perspective-aware
+projection used by detailed inspection. Routine/default facts stay hidden during ordinary
+activity and become visible in a detailed status or inspection view.
+
 The TUI always shows your own character's room. A door names its direction, not where it
 leads — you learn that by going through it. When your character moves through an exit, the
 server sends a destination-room summary so the TUI immediately shows what is in the new room.
@@ -70,6 +74,10 @@ Only one action form is open at a time. The server still validates every submitt
 command. If the room changes, a target becomes
 unreachable, or a command is no longer valid, the server rejects it even if the TUI had
 shown the option.
+
+The list comes entirely from the server's current action registry. If action metadata is
+unavailable during connection or reconnection, the TUI disables the action area until a
+fresh character projection arrives; it does not fall back to a hard-coded verb list.
 
 ## Queued actions
 

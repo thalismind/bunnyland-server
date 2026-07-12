@@ -235,7 +235,8 @@ Use an external plugin repo for:
 - domain-specific moderation, economy, law, combat, magic, construction, or quest systems.
 
 An external plugin should expose `bunnyland_plugins()` and contribute ordinary plugin
-objects. It should be loadable with `--module` and should not require patching this repo.
+objects. It should be installable as a wheel with a `bunnyland.plugins` entry point and
+should not require patching this repo.
 
 ## What belongs in clients
 

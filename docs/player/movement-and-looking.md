@@ -50,6 +50,14 @@ Inspect a specific reachable object, character, or mechanism for more detail:
 Inspecting is useful when an object may have readable text, a lock, a mechanism state, a
 crafted mark, or other details that do not fit in the room summary.
 
+Inspection also requests a higher detail level. Bunnyland assigns each visible fact a
+non-negative detail score: `0` is critical, ordinary turns include through `10`, closer
+inspection includes informative facts around `20`, and detailed status includes through
+`30`. A need such as hunger can move between those bands as it becomes more important, so a
+calm “not hungry” fact stays out of normal turns but appears when you inspect yourself in
+detail. Privacy and perception still apply: inspecting another character does not reveal
+their private thoughts, memories, or hidden meters.
+
 ## Doors and locks
 
 Some exits are connected to doors or other mechanisms. If movement fails because a route
@@ -85,6 +93,11 @@ not currently in a room.
 Moving creates an in-world movement event and a short-lived movement noise in the
 destination room. Other systems can react to that. After the actor moves, clients should
 show the destination room so you can immediately choose the next interaction.
+
+Connected web and remote terminal clients receive player-scoped live updates. Speech,
+movement, action results, and disclosed event facts should appear without a manual refresh;
+if the live connection drops, clients reconnect and temporarily use the recent-activity
+fallback without duplicating events.
 
 ## Narration
 

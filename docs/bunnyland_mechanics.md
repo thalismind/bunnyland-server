@@ -661,9 +661,8 @@ PluginConfig
 
 ```bash
 bunnyland serve \
-  --module my_custom_plugins \
-  --plugin my_custom_plugins.foo \
-  --plugin my_custom_plugins.bar
+  --plugin vendor.foo \
+  --plugin vendor.bar
 ```
 
 ### Events
@@ -3463,7 +3462,7 @@ crime witnesses
 ### Components
 
 ```python
-StealthComponent
+SneakingComponent
 VisibilityComponent
 LockpickComponent
 LockDifficultyComponent
@@ -7159,7 +7158,7 @@ VisibilityComponent
 StimulusComponent
 AttentionComponent
 NoiseComponent
-StealthComponent
+SneakingComponent
 ```
 
 ### Systems
@@ -7591,7 +7590,7 @@ SocialBond
 RecordedBy
 HasThought
 HasGoal
-MemberOf
+MemberOfFaction
 ParentOf
 PartnerOf
 AssignedTo
