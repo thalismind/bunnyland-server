@@ -7,6 +7,7 @@ import types
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 import bunnyland.worldgen.generators as generator_module
 from bunnyland.core import (
@@ -398,7 +399,7 @@ async def test_ollama_world_agent_parses_json_response(monkeypatch):
         "headers": {"Authorization": "Bearer key"},
     }
     assert agent._client.calls[0]["model"] == "deepseek-v4-pro"
-    assert agent._client.calls[0]["format"] == "json"
+    assert agent._client.calls[0]["format"] == RoomNodeProposal.model_json_schema()
 
 
 async def test_ollama_world_agent_preserves_history(monkeypatch):
@@ -415,6 +416,21 @@ async def test_ollama_world_agent_preserves_history(monkeypatch):
     assert second[1]["role"] == "user"
     assert second[2]["role"] == "assistant"
     assert second[3]["role"] == "user"
+
+
+async def test_ollama_world_agent_rejects_response_outside_requested_schema(monkeypatch):
+    class InvalidOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, format, messages):
+            await super().chat(model=model, format=format, messages=messages)
+            return {"message": {"role": "assistant", "content": "{}"}}
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = InvalidOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaWorldAgent(model="deepseek-v4-pro")
+    with pytest.raises(ValidationError, match="title"):
+        await agent.propose_room("seed", behind=None, known_rooms={})
 
 
 class _FakeOpenRouterChat:
@@ -464,7 +480,13 @@ async def test_openrouter_world_agent_parses_json_response(monkeypatch):
     assert room.title == "Sky Atrium"
     assert agent._client.kwargs == {"api_key": "key"}
     assert agent._client.chat.calls[0]["model"] == "openai/gpt-4.1"
-    assert agent._client.chat.calls[0]["response_format"] == {"type": "json_object"}
+    response_format = agent._client.chat.calls[0]["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"] == {
+        "name": "RoomNodeProposal",
+        "strict": False,
+        "schema": RoomNodeProposal.model_json_schema(),
+    }
     assert agent._client.chat.sync_send_called is False
 
 
@@ -497,6 +519,29 @@ async def test_openrouter_world_agent_preserves_history(monkeypatch):
     assert second[1]["role"] == "user"
     assert second[2]["role"] == "assistant"
     assert second[3]["role"] == "user"
+
+
+async def test_openrouter_world_agent_rejects_response_outside_requested_schema(monkeypatch):
+    class InvalidOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, response_format):
+            await super().send_async(
+                model=model, messages=messages, response_format=response_format
+            )
+            message = types.SimpleNamespace(role="assistant", content="{}")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    class InvalidOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = InvalidOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = InvalidOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterWorldAgent(model="openai/gpt-4.1", api_key="key")
+    with pytest.raises(ValidationError, match="title"):
+        await agent.propose_room("seed", behind=None, known_rooms={})
 
 
 def test_room_node_proposal_repairs_common_live_numeric_labels():
@@ -566,10 +611,10 @@ async def test_ollama_world_agent_builds_each_proposal_from_json(monkeypatch):
 
     agent = object.__new__(OllamaWorldAgent)
 
-    async def fake_ask(self, instruction):
+    async def fake_ask(self, instruction, response_model):
         del self
         calls.append(instruction)
-        return responses.pop(0)
+        return response_model.model_validate(responses.pop(0))
 
     monkeypatch.setattr(agent, "_ask", fake_ask.__get__(agent, OllamaWorldAgent))
 

@@ -709,20 +709,22 @@ async def test_traced_generate_emits_world_generate_span_and_metric(otel_capture
 async def test_worldgen_llm_request_is_traced(otel_capture):
     pytest.importorskip("ollama")
     span_exporter, reader = otel_capture
+    from bunnyland.worldgen import RoomNodeProposal
     from bunnyland.worldgen.recursive_builder import OllamaWorldAgent
 
     class _FakeOllamaClient:
         async def chat(self, **kwargs):
             del kwargs
             return {
-                "message": {"role": "assistant", "content": "{}"},
+                "message": {"role": "assistant", "content": '{"title":"Moss Room"}'},
                 "prompt_eval_count": 11,
                 "eval_count": 7,
             }
 
     agent = OllamaWorldAgent(model="deepseek-test")
     agent._client = _FakeOllamaClient()
-    assert await agent._ask("describe the starting room") == {}
+    response = await agent._ask("describe the starting room", RoomNodeProposal)
+    assert response.title == "Moss Room"
 
     spans = _spans_by_name(span_exporter)
     assert "worldgen.llm.request" in spans
@@ -751,6 +753,7 @@ async def test_worldgen_llm_request_is_traced(otel_capture):
 @pytestmark_otel
 async def test_openrouter_worldgen_llm_request_records_provider_cost(otel_capture, monkeypatch):
     span_exporter, reader = otel_capture
+    from bunnyland.worldgen import RoomNodeProposal
     from bunnyland.worldgen.recursive_builder import OpenRouterWorldAgent
 
     class _FakeOpenRouterChat:
@@ -758,8 +761,11 @@ async def test_openrouter_worldgen_llm_request_records_provider_cost(otel_captur
             del kwargs
             message = types.SimpleNamespace(
                 role="assistant",
-                content="{}",
-                model_dump=lambda **_: {"role": "assistant", "content": "{}"},
+                content='{"title":"Moss Room"}',
+                model_dump=lambda **_: {
+                    "role": "assistant",
+                    "content": '{"title":"Moss Room"}',
+                },
             )
             usage = types.SimpleNamespace(
                 prompt_tokens=6,
@@ -781,7 +787,8 @@ async def test_openrouter_worldgen_llm_request_records_provider_cost(otel_captur
     monkeypatch.setitem(sys.modules, "openrouter", fake_module)
 
     agent = OpenRouterWorldAgent(model="openai/test", api_key="key")
-    assert await agent._ask("describe the starting room") == {}
+    response = await agent._ask("describe the starting room", RoomNodeProposal)
+    assert response.title == "Moss Room"
 
     request = _spans_by_name(span_exporter)["worldgen.llm.request"]
     assert request.attributes["provider"] == "openrouter"

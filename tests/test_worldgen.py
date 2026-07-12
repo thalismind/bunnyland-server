@@ -663,7 +663,8 @@ async def test_ollama_world_builder_propose_parses_chat_response(monkeypatch):
             self.calls.append(kwargs)
             return {
                 "message": {
-                    "content": '{"rooms": [{"key": "atrium", "title": "Atrium", '
+                    "content": '{"seed": "a quiet seed", "rooms": '
+                    '[{"key": "atrium", "title": "Atrium", '
                     '"intent": "a glassy atrium"}]}'
                 }
             }
@@ -676,7 +677,7 @@ async def test_ollama_world_builder_propose_parses_chat_response(monkeypatch):
     assert isinstance(proposal, WorldProposal)
     assert proposal.seed == "a quiet seed"
     assert builder._client.calls[0]["model"] == "world-model"
-    assert builder._client.calls[0]["format"] == "json"
+    assert builder._client.calls[0]["format"] == WorldProposal.model_json_schema()
 
 
 def test_story_event_proposal_accepts_common_severity_labels():

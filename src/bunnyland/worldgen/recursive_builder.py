@@ -12,9 +12,10 @@ worker thread).
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
-from typing import Protocol
+from typing import Protocol, TypeVar
+
+from pydantic import BaseModel, Field
 
 from .. import telemetry
 from ..llm_agents.agent import (
@@ -33,6 +34,16 @@ from .proposal import (
     RoomNodeProposal,
     StoryEventProposal,
 )
+
+ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
+
+
+class _DoorListResponse(BaseModel):
+    doors: list[DoorProposal] = Field(default_factory=list)
+
+
+class _ItemListResponse(BaseModel):
+    objects: list[ItemProposal] = Field(default_factory=list)
 
 
 class WorldAgent(Protocol):
@@ -289,7 +300,9 @@ class OllamaWorldAgent:
         self._model = model
         self._history: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
 
-    async def _ask(self, instruction: str) -> dict:
+    async def _ask(
+        self, instruction: str, response_model: type[ResponseModel]
+    ) -> ResponseModel:
         self._history.append({"role": "user", "content": instruction})
         attrs = {"provider": "ollama", "model": self._model}
         with (
@@ -310,12 +323,14 @@ class OllamaWorldAgent:
             ) as request_span,
         ):
             response = await self._client.chat(
-                model=self._model, format="json", messages=self._history
+                model=self._model,
+                format=response_model.model_json_schema(),
+                messages=self._history,
             )
             _annotate_worldgen_usage(request_span, "ollama", self._model, _ollama_usage(response))
         message = response["message"]
         self._history.append(dict(message))
-        return json.loads(message["content"])
+        return response_model.model_validate_json(message["content"])
 
     @staticmethod
     def _with_schema_context(instruction: str, schema_context: str) -> str:
@@ -347,8 +362,8 @@ class OllamaWorldAgent:
                 f"Existing room titles: {existing}. Choose a title that is not already used. "
                 "Describe it as JSON with keys title, biome, indoor, light, celsius, description."
             )
-        return RoomNodeProposal.model_validate(
-            await self._ask(self._with_schema_context(instruction, schema_context))
+        return await self._ask(
+            self._with_schema_context(instruction, schema_context), RoomNodeProposal
         )
 
     async def propose_doors(
@@ -360,8 +375,10 @@ class OllamaWorldAgent:
             '"hidden","beyond_hint"}]}. Most doors are bidirectional; mark slides, '
             "cliffs, and one-way portals bidirectional=false."
         )
-        data = await self._ask(self._with_schema_context(instruction, schema_context))
-        return [DoorProposal.model_validate(d) for d in data.get("doors", [])]
+        response = await self._ask(
+            self._with_schema_context(instruction, schema_context), _DoorListResponse
+        )
+        return response.doors
 
     async def resolve_dangling_door(
         self, door: DoorProposal, *, room: RoomNodeProposal, candidates: Mapping[str, str]
@@ -373,7 +390,7 @@ class OllamaWorldAgent:
             '"target_room_key": <key or null>}. Prefer seal, then drop, then link to one of '
             f"these existing rooms: {listing}."
         )
-        return DanglingResolution.model_validate(await self._ask(instruction))
+        return await self._ask(instruction, DanglingResolution)
 
     async def propose_contents(
         self,
@@ -389,8 +406,8 @@ class OllamaWorldAgent:
             '"renewable","open","writable","key_name","locked"}],'
             '"characters":[{"name","species","controller":"llm|suspended","llm_profile"}]}.'
         )
-        return RoomContentsProposal.model_validate(
-            await self._ask(self._with_schema_context(instruction, schema_context))
+        return await self._ask(
+            self._with_schema_context(instruction, schema_context), RoomContentsProposal
         )
 
     async def propose_character(
@@ -408,8 +425,8 @@ class OllamaWorldAgent:
             '{"name","species","controller":"llm|suspended","llm_profile","traits","goals"}. '
             "Use controller=suspended unless the request explicitly asks for an LLM character."
         )
-        return CharacterProposal.model_validate(
-            await self._ask(self._with_schema_context(instruction, schema_context))
+        return await self._ask(
+            self._with_schema_context(instruction, schema_context), CharacterProposal
         )
 
     async def propose_item(
@@ -428,8 +445,8 @@ class OllamaWorldAgent:
             '{"name","kind","portable","nutrition","satiety","hydration","renewable",'
             '"open","writable","key_name","locked"}.'
         )
-        return ItemProposal.model_validate(
-            await self._ask(self._with_schema_context(instruction, schema_context))
+        return await self._ask(
+            self._with_schema_context(instruction, schema_context), ItemProposal
         )
 
     async def propose_event(
@@ -453,8 +470,8 @@ class OllamaWorldAgent:
             "new physical entities. Use controller=suspended unless the request explicitly "
             "asks for an LLM character."
         )
-        return StoryEventProposal.model_validate(
-            await self._ask(self._with_schema_context(instruction, schema_context))
+        return await self._ask(
+            self._with_schema_context(instruction, schema_context), StoryEventProposal
         )
 
     async def propose_inventory(self, *, name: str, species: str) -> list[ItemProposal]:
@@ -462,16 +479,14 @@ class OllamaWorldAgent:
             f"What is {name} (a {species}) carrying? Reply JSON "
             '{"objects":[{"name","kind","portable"}]} (may be empty).'
         )
-        data = await self._ask(instruction)
-        return [ItemProposal.model_validate(o) for o in data.get("objects", [])]
+        return (await self._ask(instruction, _ItemListResponse)).objects
 
     async def propose_container_contents(self, *, name: str) -> list[ItemProposal]:
         instruction = (
             f"What is inside {name}? Reply JSON "
             '{"objects":[{"name","kind","portable"}]} (may be empty).'
         )
-        data = await self._ask(instruction)
-        return [ItemProposal.model_validate(o) for o in data.get("objects", [])]
+        return (await self._ask(instruction, _ItemListResponse)).objects
 
 
 class OpenRouterWorldAgent(OllamaWorldAgent):
@@ -501,7 +516,9 @@ class OpenRouterWorldAgent(OllamaWorldAgent):
         self._model = model
         self._history: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
 
-    async def _ask(self, instruction: str) -> dict:
+    async def _ask(
+        self, instruction: str, response_model: type[ResponseModel]
+    ) -> ResponseModel:
         self._history.append({"role": "user", "content": instruction})
         attrs = {"provider": "openrouter", "model": self._model}
         with (
@@ -524,7 +541,14 @@ class OpenRouterWorldAgent(OllamaWorldAgent):
             response = await self._client.chat.send_async(
                 model=self._model,
                 messages=self._history,
-                response_format={"type": "json_object"},
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": response_model.__name__.lstrip("_"),
+                        "strict": False,
+                        "schema": response_model.model_json_schema(),
+                    },
+                },
             )
             _annotate_worldgen_usage(
                 request_span,
@@ -535,7 +559,7 @@ class OpenRouterWorldAgent(OllamaWorldAgent):
         message = response.choices[0].message
         self._history.append(_message_to_history(message))
         content = getattr(message, "content", None) or "{}"
-        return json.loads(content)
+        return response_model.model_validate_json(content)
 
 
 def _annotate_worldgen_usage(request_span, provider: str, model: str, usage) -> None:

@@ -7,7 +7,6 @@ only the validated proposal is ever instantiated (the LLM never touches the ECS)
 
 from __future__ import annotations
 
-import json
 import logging
 
 from .defaults import DEFAULT_WORLDGEN_MODEL
@@ -57,16 +56,15 @@ class OllamaWorldBuilder:
     async def propose(self, seed: str) -> WorldProposal:
         response = await self._client.chat(
             model=self._model,
-            format="json",
+            format=WorldProposal.model_json_schema(),
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": f"Seed: {seed}"},
             ],
         )
         content = response["message"]["content"]
-        data = json.loads(content)
-        data.setdefault("seed", seed)
-        return repair_world_proposal(WorldProposal.model_validate(data))
+        proposal = WorldProposal.model_validate_json(content)
+        return repair_world_proposal(proposal.model_copy(update={"seed": seed}))
 
 
 def repair_world_proposal(proposal: WorldProposal) -> WorldProposal:
