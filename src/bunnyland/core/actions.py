@@ -111,11 +111,16 @@ class ActionDefinition:
         parameters: dict[str, Any] = {"type": "object", "properties": properties}
         if required:
             parameters["required"] = required
+        description = self.description or self.title or f"Character action: {self.name}"
+        examples = tuple(example.text.strip() for example in self.examples if example.text.strip())
+        if examples:
+            label = "Example" if len(examples) == 1 else "Examples"
+            description = f"{description} {label}: {', '.join(examples)}."
         return {
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": self.description or self.title or f"Character action: {self.name}",
+                "description": description,
                 "parameters": parameters,
             },
         }

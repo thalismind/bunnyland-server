@@ -390,10 +390,31 @@ def test_plugin_action_definitions_register_with_actor_and_tool_schema():
         for item in tool_schemas(actor.action_definitions())
         if item["function"]["name"] == "wave"
     )
-    assert schema["description"] == "Wave to a reachable character."
+    assert schema["description"] == "Wave to a reachable character. Example: wave to Hazel."
     assert schema["parameters"]["properties"]["target_id"]["description"] == (
         "The character to wave at."
     )
+
+
+def test_core_and_memory_plugins_expose_native_agent_tools_with_examples():
+    actor = WorldActor()
+    apply_plugins(
+        [plugin for plugin in bunnyland_plugins() if plugin.id in (CORE_VERBS, MEMORY)], actor
+    )
+
+    schemas = {
+        schema["function"]["name"]: schema["function"]
+        for schema in tool_schemas(actor.action_definitions())
+    }
+
+    assert {"move", "wait", "take_note", "remember", "forget", "reflect"} <= schemas.keys()
+    assert set(schemas["move"]["parameters"]["properties"]) == {"direction", "exit_id"}
+    assert schemas["wait"]["parameters"] == {"type": "object", "properties": {}}
+    assert "Example: go north." in schemas["move"]["description"]
+    assert "Example: wait." in schemas["wait"]["description"]
+    assert "Example: take note the north tunnel is flooded." in schemas["take_note"][
+        "description"
+    ]
 
 
 def test_plugin_handlers_without_owned_action_definitions_are_rejected():

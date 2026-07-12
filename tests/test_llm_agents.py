@@ -73,10 +73,16 @@ from bunnyland.llm_agents.agent import (
     normalize_model,
 )
 from bunnyland.plugins import PluginRegistry, bunnyland_plugins, collect_persona_fragments
+from bunnyland.plugins.ids import CORE_VERBS
 from bunnyland.prompts.builder import PromptBuilder
 
 ALL_ACTION_DEFINITIONS = tuple(
     definition for _owner, definition in PluginRegistry(bunnyland_plugins()).actions.values()
+)
+CORE_ACTION_DEFINITIONS = next(
+    plugin.commands.action_definitions
+    for plugin in bunnyland_plugins()
+    if plugin.id == CORE_VERBS
 )
 
 
@@ -1292,12 +1298,16 @@ async def test_ollama_agent_sends_system_prompt_and_tool_schemas(monkeypatch):
     fake_module.AsyncClient = _FakeOllamaClient
     monkeypatch.setitem(sys.modules, "ollama", fake_module)
 
-    tools = [{"type": "function", "function": {"name": "wait"}}]
+    tools = _tool_schemas(CORE_ACTION_DEFINITIONS)
     agent = OllamaAgent(model="llama3")
     await agent.decide("turn one", None, character_id="hazel", tools=tools)
 
     assert agent._client.calls[0][0] == {"role": "system", "content": CHARACTER_SYSTEM_PROMPT}
     assert agent._client.tools == [tools]
+    by_name = {schema["function"]["name"]: schema["function"] for schema in tools}
+    assert {"move", "wait"} <= by_name.keys()
+    assert "Example: go north." in by_name["move"]["description"]
+    assert "Example: wait." in by_name["wait"]["description"]
 
 
 async def test_ollama_agent_can_override_model_per_decision(monkeypatch):
@@ -1539,13 +1549,17 @@ async def test_openrouter_agent_sends_system_prompt_and_tool_schemas(monkeypatch
     fake_module.OpenRouter = _FakeOpenRouterClient
     monkeypatch.setitem(sys.modules, "openrouter", fake_module)
 
-    tools = [{"type": "function", "function": {"name": "wait"}}]
+    tools = _tool_schemas(CORE_ACTION_DEFINITIONS)
     agent = OpenRouterAgent(model="openai/gpt-4.1-mini", api_key="key")
     await agent.decide("turn one", None, character_id="hazel", tools=tools)
 
     call = agent._client.chat.calls[0]
     assert call["messages"][0] == {"role": "system", "content": CHARACTER_SYSTEM_PROMPT}
     assert call["tools"] == tools
+    by_name = {schema["function"]["name"]: schema["function"] for schema in call["tools"]}
+    assert {"move", "wait"} <= by_name.keys()
+    assert "Example: go north." in by_name["move"]["description"]
+    assert "Example: wait." in by_name["wait"]["description"]
 
 
 def test_openrouter_usage_includes_total_tokens_and_provider_cost():
@@ -2199,6 +2213,20 @@ def test_suggest_names_prefers_substring_then_fuzzy():
     assert suggest_names("dragon", candidates) == []  # nothing nearby
 
 
+def test_resolve_reference_args_drops_blank_optional_sdk_arguments():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+
+    resolved, unresolved = resolve_reference_args(
+        scenario.actor.world,
+        character,
+        {"direction": "north", "exit_id": ""},
+    )
+
+    assert resolved == {"direction": "north"}
+    assert unresolved == {}
+
+
 def test_did_you_mean_message():
     msg = did_you_mean({"item_id": "baskt"}, {"item_id": ["woven basket"]})
     assert "did you mean" in msg.lower() and "woven basket" in msg
@@ -2227,6 +2255,30 @@ class _RecordingAgent:
         call = self.calls[self._index]
         self._index += 1
         return call
+
+
+async def test_dispatch_passes_registry_tools_and_state_examples_to_agent():
+    scenario = build_scenario()
+    agent = _RecordingAgent([None])
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    await dispatch.run_once()
+
+    schemas = {
+        schema["function"]["name"]: schema["function"] for schema in agent.tools[0] or ()
+    }
+    assert {"move", "wait"} <= schemas.keys()
+    assert schemas["move"] == next(
+        definition.tool_schema()["function"]
+        for definition in scenario.actor.action_definitions()
+        if definition.name == "move"
+    )
+    assert schemas["wait"] == next(
+        definition.tool_schema()["function"]
+        for definition in scenario.actor.action_definitions()
+        if definition.name == "wait"
+    )
+    assert "move north" in agent.prompts[0]
 
 
 async def test_dispatch_feeds_did_you_mean_back_to_the_agent():

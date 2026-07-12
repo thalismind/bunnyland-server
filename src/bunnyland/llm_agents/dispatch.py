@@ -202,6 +202,9 @@ def resolve_reference_args(
         value = resolved.get(key)
         if not isinstance(value, str):
             continue
+        if not value.strip():
+            resolved.pop(key, None)
+            continue
         mapped = resolve_reference(value, candidates, world=world)
         resolved[key] = mapped
         parsed = parse_entity_id(mapped)

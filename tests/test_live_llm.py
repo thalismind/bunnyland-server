@@ -14,8 +14,6 @@ import pytest
 
 from bunnyland import telemetry
 from bunnyland.core import (
-    ActionArgument,
-    ActionDefinition,
     ActionPointsComponent,
     CharacterComponent,
     ContainmentMode,
@@ -26,11 +24,8 @@ from bunnyland.core import (
     IdentityComponent,
     InitiativeComponent,
     MemoryProfileComponent,
-    MoveHandler,
     PortableComponent,
     RoomComponent,
-    SayHandler,
-    TakeHandler,
     WorldActor,
     container_of,
     spawn_entity,
@@ -45,9 +40,8 @@ from bunnyland.foundation.persona.mechanics import (
 )
 from bunnyland.llm_agents import ControllerDispatch, OllamaAgent, OpenRouterAgent, tool_schemas
 from bunnyland.llm_agents.agent import CHARACTER_SYSTEM_PROMPT
-from bunnyland.memory import install_memory
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_persona_fragments
-from bunnyland.plugins.ids import CORE_VERBS
+from bunnyland.plugins.ids import CORE_VERBS, MEMORY
 from bunnyland.prompts.builder import PromptBuilder, render_prompt
 from bunnyland.server.app import create_app
 from bunnyland.server.character_chat import ALLOWED_CHAT_TOOLS, build_character_chat_service
@@ -213,7 +207,12 @@ def _metric_points(reader) -> dict[str, list]:
 
 
 def _wait_tool_schema() -> list[dict]:
-    return [schema for schema in tool_schemas() if schema["function"]["name"] == "wait"]
+    core = next(plugin for plugin in bunnyland_plugins() if plugin.id == CORE_VERBS)
+    return [
+        schema
+        for schema in tool_schemas(core.commands.action_definitions)
+        if schema["function"]["name"] == "wait"
+    ]
 
 
 def _assert_llm_usage_trace_attrs(attrs, provider: str, model: str, request_kind: str) -> None:
@@ -256,6 +255,7 @@ async def test_live_ollama_character_agent_can_call_wait_tool():
         "Call exactly one tool: wait. Do not call any other tool.",
         None,
         character_id="live-ollama",
+        tools=_wait_tool_schema(),
     )
 
     assert call is not None
@@ -280,6 +280,7 @@ async def test_live_openrouter_character_agent_can_call_wait_tool():
         "Call exactly one tool: wait. Do not call any other tool.",
         None,
         character_id="live-openrouter",
+        tools=_wait_tool_schema(),
     )
 
     assert call is not None
@@ -502,33 +503,7 @@ def _character_model(provider: str) -> str:
 
 def _gameplay_actor(provider: str) -> tuple[WorldActor, object, object, object, int]:
     actor = WorldActor()
-    actor.register_handler(MoveHandler())
-    actor.register_handler(TakeHandler())
-    actor.register_handler(SayHandler())
-    actor.register_action_definition(
-        ActionDefinition(
-            command_type="move",
-            tool_name="move",
-            description="Move through a visible exit by direction.",
-            arguments={"direction": ActionArgument(required=True)},
-        )
-    )
-    actor.register_action_definition(
-        ActionDefinition(
-            command_type="take",
-            tool_name="take",
-            description="Take a reachable item.",
-            arguments={"item_id": ActionArgument(kind="entity", required=True)},
-        )
-    )
-    actor.register_action_definition(
-        ActionDefinition(
-            command_type="say",
-            tool_name="say",
-            description="Say text aloud in the current room.",
-            arguments={"text": ActionArgument(required=True)},
-        )
-    )
+    apply_plugins([plugin for plugin in bunnyland_plugins() if plugin.id == CORE_VERBS], actor)
 
     room_a = spawn_entity(actor.world, [RoomComponent(title="Live Gameplay Burrow")])
     room_b = spawn_entity(actor.world, [RoomComponent(title="Live Gameplay Tunnel")])
@@ -570,8 +545,9 @@ def _gameplay_actor(provider: str) -> tuple[WorldActor, object, object, object, 
 
 def _chat_endpoint_actor(provider: str) -> tuple[WorldActor, object]:
     actor = WorldActor()
-    apply_plugins([plugin for plugin in bunnyland_plugins() if plugin.id == CORE_VERBS], actor)
-    install_memory(actor)
+    apply_plugins(
+        [plugin for plugin in bunnyland_plugins() if plugin.id in (CORE_VERBS, MEMORY)], actor
+    )
 
     room = spawn_entity(
         actor.world,

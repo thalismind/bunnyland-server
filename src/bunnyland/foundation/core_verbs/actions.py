@@ -29,6 +29,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "move",
         ("direction", "exit_id"),
         tool_name="move",
+        description="Move through an available exit by direction or exit id.",
         patterns=(
             "go {direction}",
             "move {direction}",
@@ -161,6 +162,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     define_action(
         "wait",
         tool_name="wait",
+        description="Wait without taking another action this turn.",
         cost=FREE_COST,
         patterns=(ActionPattern("wait", {}), ActionPattern("yield", {})),
         examples=("wait",),
