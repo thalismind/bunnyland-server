@@ -175,6 +175,12 @@ class EventNarrator:
                 name = name_for(str(value))
                 if name is not None:
                     details.append(name)
+            elif key == "facts" and isinstance(value, list | tuple):
+                details.extend(
+                    str(fact.get("text", "")).strip()
+                    for fact in value
+                    if isinstance(fact, dict) and str(fact.get("text", "")).strip()
+                )
             else:
                 details.append(f"{key.replace('_', ' ')} {value}")
         line = f"{actor}: {label}" if actor else label

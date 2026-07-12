@@ -395,6 +395,36 @@ def test_event_narrator_uses_normal_style_for_activity_and_dim_for_system():
     assert shown[2].style == "dim"
 
 
+def test_event_narrator_renders_inspection_fact_text_without_raw_records():
+    world = World.parse(_snapshot())
+    narrator = EventNarrator()
+    [shown] = narrator.drain_events(
+        [
+            _event(
+                "inspect",
+                event_type="EntityInspectedEvent",
+                visibility="private",
+                actor_id=PLAYER,
+                note="",
+                entity_id=PLAYER,
+                name="Pib",
+                facts=[
+                    {"key": "needs.hunger", "text": "You are not hungry.", "detail": 30}
+                ],
+            )
+        ],
+        player_id=PLAYER,
+        room_of=world.room_of,
+        name_for=lambda entity_id: (
+            entity_name(world.get(entity_id)) if world.get(entity_id) else None
+        ),
+    )
+
+    assert "You are not hungry." in shown.plain
+    assert "needs.hunger" not in shown.plain
+    assert "{'key'" not in shown.plain
+
+
 # ── lazy package exports ──────────────────────────────────────────────────────
 def test_tui_package_lazily_exports_app_symbols():
     import bunnyland.tui as tui
