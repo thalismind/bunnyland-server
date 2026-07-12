@@ -1,6 +1,8 @@
 # Core actions
 
 Core actions are the shared verbs every controller uses. In Discord, prefix them with `!`.
+The action menu groups them by effect into **World actions** and **Focus actions**. See
+[World actions, focus actions, and costs](action-points.md) for the reusable effort tiers.
 
 For first-time play, start with the focused guides:
 [Movement and looking](movement-and-looking.md),
@@ -109,7 +111,8 @@ Talk to the room or a present character:
 ```
 
 Speech is world state. Relationship and mood systems can react to what was said and how it
-was interpreted.
+was interpreted. Ordinary `say` and `tell` commands are free, although they still pass
+through the normal world scheduler.
 
 For quick back-and-forth scenes, start a focused conversation with one or more present
 characters, add lines in turn, then end it:

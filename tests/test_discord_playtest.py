@@ -1834,7 +1834,7 @@ async def test_discord_playtest_dragonsim_core_loop(scenario):
     objective = scenario.actor.world.get_entity(objective_id)
     reward = scenario.actor.world.get_entity(reward_id)
     assert rejected == []
-    assert result.ticks == 6
+    assert result.ticks == 14
     assert len(result.inputs) == 6
     assert poi.get_component(dragon.PointOfInterestComponent).discovered is True
     assert quest.get_component(dragon.QuestStateComponent).status == "completed"
@@ -1862,7 +1862,7 @@ async def test_discord_playtest_lifesim_core_loop(scenario):
     character = scenario.actor.world.get_entity(scenario.character)
     partner = scenario.actor.world.get_entity(partner_id)
     assert rejected == []
-    assert result.ticks == 17
+    assert result.ticks == 27
     assert len(result.inputs) == 16
     assert character.get_component(life.AspirationComponent).completed == ("meet a friend",)
     assert character.get_component(life.SkillSetComponent).levels["cooking"] == 1
@@ -2018,7 +2018,7 @@ async def test_discord_playtest_daggersim_magic_loop(scenario):
     character = scenario.actor.world.get_entity(scenario.character)
     creature = scenario.actor.world.get_entity(creature_id)
     assert rejected == []
-    assert result.ticks == 7
+    assert result.ticks == 9
     assert len(result.inputs) == 7
     assert character.get_component(dagger.CustomClassComponent).class_name == "Rainpath Scout"
     assert character.get_component(HealthComponent).current == 7.0

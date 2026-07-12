@@ -1,6 +1,9 @@
 """Action metadata owned by bunnyland.barbariansim."""
 
 from ...core.actions import (
+    EPIC_ACTION_COST,
+    EXTENDED_ACTION_COST,
+    MAJOR_ACTION_COST,
     ActionDefinition,
     define_action,
 )
@@ -18,28 +21,46 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     define_action("defend", ("stamina_cost", "reduction"), tool_name="defend"),
     define_action("challenge", ("target_id", "terms"), tool_name="challenge"),
-    define_action("fortify", ("target_id", "strength"), tool_name="fortify"),
-    define_action("claim-base", ("base_id", "clan"), tool_name="claim_base"),
+    define_action(
+        "fortify", ("target_id", "strength"), tool_name="fortify", cost=EXTENDED_ACTION_COST
+    ),
+    define_action(
+        "claim-base", ("base_id", "clan"), tool_name="claim_base", cost=MAJOR_ACTION_COST
+    ),
     define_action("place-trap", ("damage",), tool_name="place_trap"),
     define_action("disarm-trap", ("trap_id",), tool_name="disarm_trap"),
-    define_action("raid", ("target_id", "intensity"), tool_name="raid"),
+    define_action("raid", ("target_id", "intensity"), tool_name="raid", cost=MAJOR_ACTION_COST),
     define_action("bridge-survival-gap", ("gap_id",), tool_name="bridge_survival_gap"),
     define_action("decay-building", ("building_id", "amount"), tool_name="decay_building"),
     define_action(
         "upgrade-building",
         ("building_id", "integrity"),
         tool_name="upgrade_building",
+        cost=EXTENDED_ACTION_COST,
     ),
-    define_action("demolish-building", ("building_id",), tool_name="demolish_building"),
-    define_action("prepare-siege", ("base_id", "score"), tool_name="prepare_siege"),
-    define_action("start-purge-wave", ("base_id", "intensity"), tool_name="start_purge_wave"),
+    define_action(
+        "demolish-building",
+        ("building_id",),
+        tool_name="demolish_building",
+        cost=EXTENDED_ACTION_COST,
+    ),
+    define_action(
+        "prepare-siege", ("base_id", "score"), tool_name="prepare_siege", cost=MAJOR_ACTION_COST
+    ),
+    define_action(
+        "start-purge-wave",
+        ("base_id", "intensity"),
+        tool_name="start_purge_wave",
+        cost=EPIC_ACTION_COST,
+    ),
     define_action(
         "perform-ritual",
         ("shrine_id", "ritual_id"),
         tool_name="perform_ritual",
+        cost=EXTENDED_ACTION_COST,
     ),
     define_action("explore-danger-zone", ("zone_id",), tool_name="explore_danger_zone"),
-    define_action("defeat-boss", ("boss_id",), tool_name="defeat_boss"),
+    define_action("defeat-boss", ("boss_id",), tool_name="defeat_boss", cost=EPIC_ACTION_COST),
     define_action(
         "unlock-treasure",
         ("treasure_id", "key_id"),

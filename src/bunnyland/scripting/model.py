@@ -88,8 +88,8 @@ class Trigger(BaseModel):
 class CommandCostSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    action: int = 0
-    focus: int = 0
+    action: Literal[0, 1, 2, 3, 5] = 0
+    focus: Literal[0, 1, 2, 3] = 0
 
 
 class SubmitCommandAction(BaseModel):

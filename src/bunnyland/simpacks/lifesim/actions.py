@@ -1,10 +1,14 @@
 """Action metadata owned by bunnyland.lifesim."""
 
 from ...core.actions import (
+    EXTENDED_FOCUS_COST,
+    FOCUS_COST,
+    MAJOR_FOCUS_COST,
     ActionDefinition,
     ActionPattern,
     define_action,
 )
+from ...core.commands import Lane
 
 ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     define_action("eat", ("item_id",), tool_name="eat", patterns=("eat {item_id}",)),
@@ -36,20 +40,56 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     define_action(
         "seek-safety", ("target_id",), tool_name="seek_safety", patterns=("seek safety",)
     ),
-    define_action("choose-aspiration", ("name", "milestones"), tool_name="choose_aspiration"),
     define_action(
-        "complete-milestone", ("milestone", "reward_name"), tool_name="complete_milestone"
+        "choose-aspiration",
+        ("name", "milestones"),
+        tool_name="choose_aspiration",
+        lane=Lane.FOCUS,
+        cost=EXTENDED_FOCUS_COST,
     ),
-    define_action("practice-skill", ("skill", "xp"), tool_name="practice_skill"),
-    define_action("study-skill", ("skill", "xp"), tool_name="study_skill"),
+    define_action(
+        "complete-milestone",
+        ("milestone", "reward_name"),
+        tool_name="complete_milestone",
+        lane=Lane.FOCUS,
+        cost=MAJOR_FOCUS_COST,
+    ),
+    define_action(
+        "practice-skill",
+        ("skill", "xp"),
+        tool_name="practice_skill",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
+    ),
+    define_action(
+        "study-skill",
+        ("skill", "xp"),
+        tool_name="study_skill",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
+    ),
     define_action("mentor-skill", ("student_id", "skill", "xp"), tool_name="mentor_skill"),
     define_action(
         "update-profile",
         ("traits", "interests", "preferred_routine"),
         tool_name="update_profile",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
     ),
-    define_action("add-whim", ("want", "reward_xp"), tool_name="add_whim"),
-    define_action("complete-whim", ("whim_id",), tool_name="complete_whim"),
+    define_action(
+        "add-whim",
+        ("want", "reward_xp"),
+        tool_name="add_whim",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
+    ),
+    define_action(
+        "complete-whim",
+        ("whim_id",),
+        tool_name="complete_whim",
+        lane=Lane.FOCUS,
+        cost=EXTENDED_FOCUS_COST,
+    ),
     define_action("use-home-object", ("object_id",), tool_name="use_home_object"),
     define_action(
         "maintain-home-object",
@@ -67,6 +107,8 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
             "natural_death_checks",
         ),
         tool_name="configure_aging",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
     ),
     define_action(
         "find-job",
@@ -78,6 +120,8 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
             "shift_interval_seconds",
         ),
         tool_name="find_job",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
     ),
     define_action("go-to-work", ("performance_gain",), tool_name="go_to_work"),
     define_action("quit-job", tool_name="quit_job"),
@@ -138,7 +182,11 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         patterns=("claim room {room_id}", ActionPattern("claim room", {})),
     ),
     define_action(
-        "set-routine", ("activity", "interval_seconds", "next_due_epoch"), tool_name="set_routine"
+        "set-routine",
+        ("activity", "interval_seconds", "next_due_epoch"),
+        tool_name="set_routine",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
     ),
     define_action(
         "set-relationship-status", ("target_id", "status"), tool_name="set_relationship_status"

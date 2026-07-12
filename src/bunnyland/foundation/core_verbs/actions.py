@@ -22,6 +22,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "inspect",
         ("target_id",),
         tool_name="inspect",
+        cost=FREE_COST,
         patterns=("inspect {target_id}", "look at {target_id}", "examine {target_id}"),
         examples=("inspect woven basket",),
     ),

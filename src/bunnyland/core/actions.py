@@ -8,11 +8,39 @@ patterns, and future clients.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import IntEnum
 from typing import Any, Literal
 
 from .commands import CommandCost, Lane
 
 ArgumentKind = Literal["string", "number", "boolean", "entity"]
+
+
+class ActionEffort(IntEnum):
+    """Reusable point-cost tiers for player actions.
+
+    Values are the numeric AP/FP costs exposed on the wire.  The missing value ``4`` is
+    intentional: actions either remain major, or consume a character's complete normal
+    five-point world-action pool.
+    """
+
+    FREE = 0
+    ROUTINE = 1
+    EXTENDED = 2
+    MAJOR = 3
+    EPIC = 5
+
+
+def effort_cost(
+    *,
+    action: ActionEffort = ActionEffort.FREE,
+    focus: ActionEffort = ActionEffort.FREE,
+) -> CommandCost:
+    """Build a command cost from the documented action-effort tiers."""
+
+    if focus is ActionEffort.EPIC:
+        raise ValueError("focus effort cannot exceed the normal three-point focus pool")
+    return CommandCost(action=int(action), focus=int(focus))
 
 
 @dataclass(frozen=True)
@@ -92,6 +120,13 @@ class ActionDefinition:
     natural_patterns: tuple[ActionPattern, ...] = ()
     requirement: ActionRequirement = field(default_factory=ActionRequirement)
 
+    def __post_init__(self) -> None:
+        allowed = {int(effort) for effort in ActionEffort}
+        if self.cost.action not in allowed or self.cost.focus not in allowed:
+            raise ValueError("action costs must use a documented ActionEffort tier")
+        if self.cost.focus > int(ActionEffort.MAJOR):
+            raise ValueError("focus cost cannot exceed the normal three-point focus pool")
+
     @property
     def name(self) -> str:
         return self.tool_name or self.command_type.replace("-", "_")
@@ -126,10 +161,10 @@ class ActionDefinition:
         }
 
 
-_ACTION = CommandCost(action=1)
-_SPEECH = CommandCost(action=1, focus=1)
-_FOCUS = CommandCost(focus=1)
-_FREE = CommandCost()
+_ACTION = effort_cost(action=ActionEffort.ROUTINE)
+_SPEECH = effort_cost()
+_FOCUS = effort_cost(focus=ActionEffort.ROUTINE)
+_FREE = effort_cost()
 _NO_REQUIREMENT = ActionRequirement()
 
 ACTION_ICON_BY_COMMAND_TYPE: dict[str, str] = {
@@ -598,6 +633,11 @@ ACTION_COST = _ACTION
 SPEECH_COST = _SPEECH
 FOCUS_COST = _FOCUS
 FREE_COST = _FREE
+EXTENDED_ACTION_COST = effort_cost(action=ActionEffort.EXTENDED)
+MAJOR_ACTION_COST = effort_cost(action=ActionEffort.MAJOR)
+EPIC_ACTION_COST = effort_cost(action=ActionEffort.EPIC)
+EXTENDED_FOCUS_COST = effort_cost(focus=ActionEffort.EXTENDED)
+MAJOR_FOCUS_COST = effort_cost(focus=ActionEffort.MAJOR)
 define_action = _definition
 
 

@@ -1,6 +1,8 @@
 """Action metadata owned by bunnyland.gardensim."""
 
 from ...core.actions import (
+    EXTENDED_ACTION_COST,
+    MAJOR_ACTION_COST,
     ActionDefinition,
     define_action,
 )
@@ -46,13 +48,16 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="collect_machine_output",
     ),
     define_action("cancel-machine", ("machine_id",), tool_name="cancel_machine"),
-    define_action("repair-machine", ("machine_id",), tool_name="repair_machine"),
+    define_action(
+        "repair-machine", ("machine_id",), tool_name="repair_machine", cost=EXTENDED_ACTION_COST
+    ),
     define_action("feed-animal", ("animal_id", "feed_type"), tool_name="feed_animal"),
     define_action("pet-animal", ("animal_id",), tool_name="pet_animal"),
     define_action(
         "breed-animal",
         ("animal_id", "mate_id", "gestation_seconds"),
         tool_name="breed_animal",
+        cost=EXTENDED_ACTION_COST,
     ),
     define_action(
         "collect-animal-product",
@@ -65,7 +70,9 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     define_action("open-geode", ("geode_id",), tool_name="open_geode"),
     define_action("forage", ("forage_id",), tool_name="forage", patterns=("forage {forage_id}",)),
     define_action("give-gift", ("target_id", "item_id"), tool_name="give_gift"),
-    define_action("join-festival", ("festival_id",), tool_name="join_festival"),
+    define_action(
+        "join-festival", ("festival_id",), tool_name="join_festival", cost=MAJOR_ACTION_COST
+    ),
     define_action(
         "contribute-bundle",
         ("bundle_id", "resource_type", "quantity"),

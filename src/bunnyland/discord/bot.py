@@ -35,7 +35,7 @@ from ..claims import ClaimSecretRegistry
 from ..core.claim_timeout import (
     normalize_claim_timeout,
 )
-from ..core.commands import CommandCost, Lane, OnInsufficientPoints, build_submitted_command
+from ..core.commands import OnInsufficientPoints, build_submitted_command
 from ..core.components import ControllerOutboxMessageComponent, RoomComponent
 from ..core.controllers import DiscordControllerComponent
 from ..core.ecs import entity_name, parse_entity_id, replace_component
@@ -750,13 +750,23 @@ class DiscordBot:
                 definitions=self.actor.action_definitions(),
             )
         else:
+            definition = next(
+                (
+                    definition
+                    for definition in self.actor.action_definitions()
+                    if definition.command_type == action.command_type
+                ),
+                None,
+            )
+            if definition is None:
+                return None, f"{action.command_type.replace('-', ' ').title()} is unavailable."
             command = build_submitted_command(
                 character_id=str(character.id),
                 controller_id=str(controller_id),
                 controller_generation=generation,
                 command_type=action.command_type,
-                cost=CommandCost(action=1),
-                lane=Lane.WORLD,
+                cost=definition.cost,
+                lane=definition.lane,
                 payload=resolved,
                 submitted_at_epoch=self.actor.epoch,
             )

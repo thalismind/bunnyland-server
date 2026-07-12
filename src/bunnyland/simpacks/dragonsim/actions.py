@@ -1,10 +1,15 @@
 """Action metadata owned by bunnyland.dragonsim."""
 
 from ...core.actions import (
+    EXTENDED_ACTION_COST,
+    EXTENDED_FOCUS_COST,
+    FOCUS_COST,
+    MAJOR_FOCUS_COST,
     ActionDefinition,
     ActionRequirement,
     define_action,
 )
+from ...core.commands import Lane
 
 ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     define_action(
@@ -17,6 +22,8 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "mark-map",
         ("location_id", "label"),
         tool_name="mark_map",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
         patterns=("mark {location_id} on map",),
     ),
     define_action(
@@ -29,42 +36,56 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "accept-quest",
         ("quest_id",),
         tool_name="accept_quest",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
         patterns=("accept quest {quest_id}",),
     ),
     define_action(
         "complete-objective",
         ("objective_id",),
         tool_name="complete_objective",
+        lane=Lane.FOCUS,
+        cost=MAJOR_FOCUS_COST,
         patterns=("complete objective {objective_id}",),
     ),
     define_action(
         "join-faction",
         ("faction_id", "rank"),
         tool_name="join_faction",
+        lane=Lane.FOCUS,
+        cost=EXTENDED_FOCUS_COST,
         patterns=("join faction {faction_id}",),
     ),
     define_action(
         "leave-faction",
         ("faction_id",),
         tool_name="leave_faction",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
         patterns=("leave faction {faction_id}",),
     ),
     define_action(
         "unlock-perk",
         ("perk_id",),
         tool_name="unlock_perk",
+        lane=Lane.FOCUS,
+        cost=MAJOR_FOCUS_COST,
         patterns=("unlock perk {perk_id}",),
     ),
     define_action(
         "absorb-great-soul",
         ("beast_id",),
         tool_name="absorb_great_soul",
+        lane=Lane.FOCUS,
+        cost=MAJOR_FOCUS_COST,
         patterns=("absorb great soul {beast_id}",),
     ),
     define_action(
         "learn-word-of-power",
         ("word_id",),
         tool_name="learn_word_of_power",
+        lane=Lane.FOCUS,
+        cost=EXTENDED_FOCUS_COST,
         patterns=("learn word {word_id}",),
     ),
     define_action(
@@ -77,12 +98,15 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "inscribe-voice-phrase",
         ("target_id", "word_id", "phrase"),
         tool_name="inscribe_voice_phrase",
+        cost=EXTENDED_ACTION_COST,
         patterns=("inscribe {phrase} on {target_id}",),
     ),
     define_action(
         "study-voice-inscription",
         ("target_id",),
         tool_name="study_voice_inscription",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
         patterns=("study inscription on {target_id}",),
     ),
     define_action(
@@ -113,12 +137,16 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "read-lore-book",
         ("book_id",),
         tool_name="read_lore_book",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
         patterns=("read {book_id}",),
     ),
     define_action(
         "learn-spell",
         ("spell_id",),
         tool_name="learn_spell",
+        lane=Lane.FOCUS,
+        cost=EXTENDED_FOCUS_COST,
         requirement=ActionRequirement(character_components=("SkillSetComponent",)),
     ),
     define_action(
@@ -131,14 +159,29 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "brew-potion",
         ("recipe_id",),
         tool_name="brew_potion",
+        cost=EXTENDED_ACTION_COST,
         requirement=ActionRequirement(character_components=("SkillSetComponent",)),
     ),
-    define_action("track-quest", ("quest_id",), tool_name="track_quest"),
-    define_action("decline-quest", ("quest_id",), tool_name="decline_quest"),
+    define_action(
+        "track-quest",
+        ("quest_id",),
+        tool_name="track_quest",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
+    ),
+    define_action(
+        "decline-quest",
+        ("quest_id",),
+        tool_name="decline_quest",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
+    ),
     define_action(
         "choose-quest-branch",
         ("quest_id", "branch"),
         tool_name="choose_quest_branch",
+        lane=Lane.FOCUS,
+        cost=EXTENDED_FOCUS_COST,
     ),
     define_action("persuade", ("target_id", "amount"), tool_name="persuade"),
     define_action("surrender", ("target_id", "reason"), tool_name="surrender"),

@@ -1,6 +1,8 @@
 """Action metadata owned by bunnyland.dinosim."""
 
 from ...core.actions import (
+    EXTENDED_ACTION_COST,
+    MAJOR_ACTION_COST,
     ActionDefinition,
     define_action,
 )
@@ -11,7 +13,9 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("fossil_id",),
         tool_name="extract_ancient_sample",
     ),
-    define_action("prepare-clone", ("sample_id",), tool_name="prepare_clone"),
+    define_action(
+        "prepare-clone", ("sample_id",), tool_name="prepare_clone", cost=EXTENDED_ACTION_COST
+    ),
     define_action("lay-egg", ("parent_id",), tool_name="lay_egg"),
     define_action("fertilize-egg", ("egg_id", "parent_id"), tool_name="fertilize_egg"),
     define_action(
@@ -122,6 +126,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "build-enclosure",
         ("room_id", "name", "capacity", "feeding_pen", "quarantine"),
         tool_name="build_enclosure",
+        cost=MAJOR_ACTION_COST,
     ),
     define_action(
         "repair-fence",

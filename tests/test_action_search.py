@@ -8,9 +8,12 @@ import bunnyland.server.action_search as action_search_module
 from bunnyland.core.actions import (
     ActionArgument,
     ActionDefinition,
+    ActionEffort,
     ActionExample,
     ActionPattern,
+    effort_cost,
 )
+from bunnyland.core.commands import CommandCost
 from bunnyland.server.action_search import (
     ActionSearchEmbedding,
     ChromaActionSearchIndex,
@@ -153,3 +156,15 @@ def test_chroma_action_search_index_missing_extra_raises(monkeypatch):
     monkeypatch.setitem(sys.modules, "chromadb", None)
     with pytest.raises(RuntimeError, match="smart action search requires the 'chroma' extra"):
         ChromaActionSearchIndex()
+
+
+def test_action_effort_builds_typed_wire_costs_and_rejects_invalid_costs():
+    assert effort_cost(action=ActionEffort.EPIC) == CommandCost(action=5)
+    assert effort_cost(focus=ActionEffort.MAJOR) == CommandCost(focus=3)
+
+    with pytest.raises(ValueError, match="focus effort"):
+        effort_cost(focus=ActionEffort.EPIC)
+    with pytest.raises(ValueError, match="ActionEffort"):
+        ActionDefinition(command_type="invalid", cost=CommandCost(action=4))
+    with pytest.raises(ValueError, match="focus cost"):
+        ActionDefinition(command_type="invalid-focus", cost=CommandCost(focus=5))

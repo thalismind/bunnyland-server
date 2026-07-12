@@ -1,6 +1,8 @@
 """Action metadata owned by bunnyland.neonsim."""
 
 from ...core.actions import (
+    EXTENDED_ACTION_COST,
+    MAJOR_ACTION_COST,
     ActionDefinition,
     define_action,
 )
@@ -18,7 +20,9 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="show_credentials",
         patterns=("show credentials at {target_id}",),
     ),
-    define_action("claim-safehouse", ("target_id",), tool_name="claim_safehouse"),
+    define_action(
+        "claim-safehouse", ("target_id",), tool_name="claim_safehouse", cost=MAJOR_ACTION_COST
+    ),
     define_action(
         "case-location",
         ("target_id",),
@@ -71,7 +75,9 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="escalate_privileges",
         patterns=("escalate privileges on {target_id}",),
     ),
-    define_action("install-backdoor", ("target_id",), tool_name="install_backdoor"),
+    define_action(
+        "install-backdoor", ("target_id",), tool_name="install_backdoor", cost=EXTENDED_ACTION_COST
+    ),
     define_action(
         "exfiltrate-data",
         ("target_id",),
@@ -82,6 +88,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "sabotage-system",
         ("target_id",),
         tool_name="sabotage_system",
+        cost=EXTENDED_ACTION_COST,
         patterns=("sabotage {target_id}",),
     ),
     define_action("evade-trace", (), tool_name="evade_trace", patterns=("evade the trace",)),
@@ -123,6 +130,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "install-implant",
         ("implant_id", "clinic_id"),
         tool_name="install_implant",
+        cost=EXTENDED_ACTION_COST,
         patterns=("install {implant_id} at {clinic_id}",),
     ),
     define_action(

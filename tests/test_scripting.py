@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import build_scenario
+from pydantic import ValidationError
 
 from bunnyland.core import (
     CharacterComponent,
@@ -38,6 +39,7 @@ from bunnyland.plugins.ids import CORE_VERBS
 from bunnyland.scripting import (
     AddComponentPatch,
     AddEntityPatch,
+    CommandCostSpec,
     ComponentSpec,
     EntityQuery,
     ExecutionPolicy,
@@ -672,3 +674,8 @@ def test_trigger_without_predicate_is_rejected():
 
     with pytest.raises(pydantic.ValidationError, match="trigger must define a predicate"):
         Trigger()
+def test_script_command_costs_use_documented_effort_tiers():
+    with pytest.raises(ValidationError):
+        CommandCostSpec(action=4)
+    with pytest.raises(ValidationError):
+        CommandCostSpec(focus=5)

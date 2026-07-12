@@ -67,11 +67,11 @@ queued and runs as soon as your points regenerate.
 
 ## The action menu
 
-The right-hand panel lists the actions available to your character, grouped into **room
+The right-hand panel lists the actions available to your character, grouped into **world
 actions** and **focus actions**. At the top it shows your current points:
 
 - **Action points (AP)** pay for things you do in the world - moving between rooms, taking
-  and using items, eating, drinking, and speaking.
+  and using items, eating, drinking, crafting, and building. Ordinary speech is free.
 - **Focus points (FP)** pay for quiet, internal actions - taking notes, remembering,
   reflecting. Speaking costs a little of both.
 

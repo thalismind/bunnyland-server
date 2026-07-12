@@ -1,15 +1,25 @@
 """Action metadata owned by bunnyland.daggersim."""
 
 from ...core.actions import (
+    EXTENDED_FOCUS_COST,
+    FOCUS_COST,
+    FREE_COST,
     ActionDefinition,
     define_action,
 )
+from ...core.commands import Lane
 
 ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     define_action("expand-site", ("site_id", "generator_id", "trigger"), tool_name="expand_site"),
     define_action("ask-rumor", ("rumor_id",), tool_name="ask_rumor"),
     define_action("investigate-rumor", ("rumor_id",), tool_name="investigate_rumor"),
-    define_action("plan-travel", ("destination_id",), tool_name="plan_travel"),
+    define_action(
+        "plan-travel",
+        ("destination_id",),
+        tool_name="plan_travel",
+        lane=Lane.FOCUS,
+        cost=FOCUS_COST,
+    ),
     define_action("join-institution", ("institution_id", "rank"), tool_name="join_institution"),
     define_action("use-institution-service", ("service_id",), tool_name="use_institution_service"),
     define_action(
@@ -72,8 +82,16 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
             "disadvantages",
         ),
         tool_name="create_custom_class",
+        lane=Lane.FOCUS,
+        cost=EXTENDED_FOCUS_COST,
     ),
-    define_action("create-spell", ("template_id", "spell_name"), tool_name="create_spell"),
+    define_action(
+        "create-spell",
+        ("template_id", "spell_name"),
+        tool_name="create_spell",
+        lane=Lane.FOCUS,
+        cost=EXTENDED_FOCUS_COST,
+    ),
     define_action(
         "cast-spell",
         ("spell_id", "target_id"),
@@ -118,9 +136,9 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     define_action("enter-dungeon", ("dungeon_id",), tool_name="enter_dungeon"),
     define_action("search-room", tool_name="search_room"),
     define_action("open-secret-door", ("door_id",), tool_name="open_secret_door"),
-    define_action("mark-path", tool_name="mark_path"),
-    define_action("view-map", tool_name="view_map"),
-    define_action("set-recall", tool_name="set_recall"),
+    define_action("mark-path", tool_name="mark_path", lane=Lane.FOCUS, cost=FOCUS_COST),
+    define_action("view-map", tool_name="view_map", lane=Lane.FOCUS, cost=FREE_COST),
+    define_action("set-recall", tool_name="set_recall", lane=Lane.FOCUS, cost=FOCUS_COST),
     define_action("use-recall", tool_name="use_recall"),
     define_action("rest", tool_name="rest"),
     define_action("leave-dungeon", ("dungeon_id",), tool_name="leave_dungeon"),

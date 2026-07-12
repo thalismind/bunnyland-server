@@ -28,6 +28,7 @@ from bunnyland.core import (
     ActionExample,
     ActionPattern,
     CharacterComponent,
+    CommandCost,
     ContainerComponent,
     ContainmentMode,
     Contains,
@@ -35,6 +36,7 @@ from bunnyland.core import (
     ControllerOutboxMessageComponent,
     DiscordControllerComponent,
     IdentityComponent,
+    Lane,
     LLMControllerComponent,
     SayHandler,
     SuspendedComponent,
@@ -2762,6 +2764,21 @@ async def test_discord_bot_build_command_supports_plugin_verbs_without_tool(scen
     assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
     bot = _bot_for_scenario(scenario)
 
+    unavailable, unavailable_error = await bot._build_command(
+        123,
+        discord_bot.DiscordAction(command_type="smile", payload={}, tool=None),
+    )
+    assert unavailable is None
+    assert unavailable_error == "Smile is unavailable."
+
+    scenario.actor.register_action_definition(
+        ActionDefinition(
+            command_type="smile",
+            lane=Lane.FOCUS,
+            cost=CommandCost(focus=2),
+        )
+    )
+
     command, error = await bot._build_command(
         123,
         discord_bot.DiscordAction(
@@ -2774,8 +2791,8 @@ async def test_discord_bot_build_command_supports_plugin_verbs_without_tool(scen
     assert error is None
     assert command.command_type == "smile"
     assert command.payload == {"wide": True}
-    assert command.cost.action == 1
-    assert command.lane.value == "world"
+    assert command.cost == CommandCost(focus=2)
+    assert command.lane is Lane.FOCUS
 
 
 async def test_discord_bot_build_command_resumes_idle_claim(scenario):

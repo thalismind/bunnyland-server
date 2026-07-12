@@ -1,6 +1,9 @@
 """Action metadata owned by bunnyland.colonysim."""
 
 from ...core.actions import (
+    EPIC_ACTION_COST,
+    EXTENDED_ACTION_COST,
+    MAJOR_ACTION_COST,
     ActionDefinition,
     define_action,
 )
@@ -13,6 +16,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "create-stockpile",
         ("name", "capacity", "allowed_types"),
         tool_name="create_stockpile",
+        cost=EXTENDED_ACTION_COST,
     ),
     define_action(
         "set-storage-filter",
@@ -28,8 +32,14 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     define_action("split-stack", ("item_id", "quantity"), tool_name="split_stack"),
     define_action("merge-stack", ("source_id", "target_id"), tool_name="merge_stack"),
-    define_action("craft", ("recipe_id",), tool_name="craft"),
-    define_action("bake", ("recipe_id",), tool_name="bake", patterns=("bake {recipe_id}",)),
+    define_action("craft", ("recipe_id",), tool_name="craft", cost=EXTENDED_ACTION_COST),
+    define_action(
+        "bake",
+        ("recipe_id",),
+        tool_name="bake",
+        cost=EXTENDED_ACTION_COST,
+        patterns=("bake {recipe_id}",),
+    ),
     define_action("set-work-priority", ("work_type", "priority"), tool_name="set_work_priority"),
     define_action("set-allowed-area", ("room_ids",), tool_name="set_allowed_area"),
     define_action(
@@ -48,17 +58,24 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("prisoner_id", "progress"),
         tool_name="recruit_prisoner",
     ),
-    define_action("research-project", ("project_id", "work"), tool_name="research_project"),
+    define_action(
+        "research-project",
+        ("project_id", "work"),
+        tool_name="research_project",
+        cost=EXTENDED_ACTION_COST,
+    ),
     define_action("complete-trade", ("offer_id",), tool_name="complete_trade"),
     define_action(
         "form-caravan",
         ("destination", "cargo", "member_ids"),
         tool_name="form_caravan",
+        cost=MAJOR_ACTION_COST,
     ),
     define_action(
         "perform-surgery",
         ("patient_id", "surgery_id"),
         tool_name="perform_surgery",
+        cost=EXTENDED_ACTION_COST,
     ),
     define_action("tend-wound", ("patient_id", "injury_id", "medicine_id"), tool_name="tend_wound"),
     define_action("rescue-to-bed", ("patient_id", "bed_id"), tool_name="rescue_to_bed"),
@@ -76,7 +93,12 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="release_ownership",
         patterns=("release ownership {target_id}",),
     ),
-    define_action("resolve-colony-incident", ("incident_id",), tool_name="resolve_colony_incident"),
+    define_action(
+        "resolve-colony-incident",
+        ("incident_id",),
+        tool_name="resolve_colony_incident",
+        cost=EPIC_ACTION_COST,
+    ),
 )
 
 __all__ = ["ACTION_DEFINITIONS"]

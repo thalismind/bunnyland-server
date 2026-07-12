@@ -1,6 +1,9 @@
 """Action metadata owned by bunnyland.voidsim."""
 
 from ...core.actions import (
+    EPIC_ACTION_COST,
+    EXTENDED_ACTION_COST,
+    MAJOR_ACTION_COST,
     ActionDefinition,
     define_action,
 )
@@ -11,8 +14,18 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     define_action("seal-bulkhead", ("bulkhead_id",), tool_name="seal_bulkhead"),
     define_action("repair-system", ("system_id",), tool_name="repair_system"),
     define_action("reroute-power", ("grid_id", "system_id", "amount"), tool_name="reroute_power"),
-    define_action("fabricate", ("fabricator_id", "blueprint_id"), tool_name="fabricate"),
-    define_action("install-upgrade", ("upgrade_id", "system_id"), tool_name="install_upgrade"),
+    define_action(
+        "fabricate",
+        ("fabricator_id", "blueprint_id"),
+        tool_name="fabricate",
+        cost=EXTENDED_ACTION_COST,
+    ),
+    define_action(
+        "install-upgrade",
+        ("upgrade_id", "system_id"),
+        tool_name="install_upgrade",
+        cost=EXTENDED_ACTION_COST,
+    ),
     define_action("accept-contract", ("contract_id",), tool_name="accept_contract"),
     define_action("load-cargo", ("contract_id", "cargo_id", "ship_id"), tool_name="load_cargo"),
     define_action(
@@ -58,7 +71,9 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="relieve_crew_shift",
         patterns=("stand down from watch {shift_id}",),
     ),
-    define_action("deploy-away-team", ("team_id",), tool_name="deploy_away_team"),
+    define_action(
+        "deploy-away-team", ("team_id",), tool_name="deploy_away_team", cost=MAJOR_ACTION_COST
+    ),
     define_action("boost-morale", ("amount",), tool_name="boost_morale"),
     define_action("start-mutiny", tool_name="start_mutiny"),
     define_action("command-drone", ("drone_id", "task"), tool_name="command_drone"),
@@ -74,7 +89,9 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("protocol_id",),
         tool_name="accept_trade_protocol",
     ),
-    define_action("resolve-emergency", ("emergency_id",), tool_name="resolve_emergency"),
+    define_action(
+        "resolve-emergency", ("emergency_id",), tool_name="resolve_emergency", cost=EPIC_ACTION_COST
+    ),
     define_action(
         "stabilize-reactor",
         ("reactor_id", "amount"),

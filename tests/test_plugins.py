@@ -412,9 +412,23 @@ def test_core_and_memory_plugins_expose_native_agent_tools_with_examples():
     assert schemas["wait"]["parameters"] == {"type": "object", "properties": {}}
     assert "Example: go north." in schemas["move"]["description"]
     assert "Example: wait." in schemas["wait"]["description"]
-    assert "Example: take note the north tunnel is flooded." in schemas["take_note"][
-        "description"
-    ]
+    assert "Example: take note the north tunnel is flooded." in schemas["take_note"]["description"]
+
+
+def test_builtin_action_catalogue_uses_reviewed_lanes_and_effort_tiers():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    definitions = {definition.command_type: definition for definition in actor.action_definitions()}
+
+    assert definitions["say"].cost == CommandCost()
+    assert definitions["tell"].cost == CommandCost()
+    assert definitions["inspect"].cost == CommandCost()
+    assert definitions["unlock-perk"].lane is Lane.FOCUS
+    assert definitions["unlock-perk"].cost == CommandCost(focus=3)
+    allowed = {0, 1, 2, 3, 5}
+    for definition in definitions.values():
+        assert definition.cost.action in allowed
+        assert definition.cost.focus in allowed - {5}
 
 
 def test_plugin_handlers_without_owned_action_definitions_are_rejected():
