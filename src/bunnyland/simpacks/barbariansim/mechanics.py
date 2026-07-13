@@ -2172,12 +2172,20 @@ class RecruitFollowerHandler:
 
 
 class CommandFollowerHandler:
-    command_type = "command-follower"
+    command_type = "command"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        return (
+            target_id is not None
+            and ctx.world.has_entity(target_id)
+            and _master_of(ctx.entity(target_id)) is not None
+        )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         actor_id = parse_entity_id(command.character_id)
         target_id = parse_entity_id(command.payload.get("target_id"))
-        orders = str(command.payload.get("orders", "")).strip()
+        orders = str(command.payload.get("instruction", "")).strip()
         if actor_id is None or target_id is None:
             return rejected("invalid master or subordinate id")
         if not orders:

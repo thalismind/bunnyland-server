@@ -11,7 +11,7 @@ In Discord, prefix these commands with `!`.
 Claim a reachable settlement:
 
 ```text
-!claim-settlement settlement_id="Red Rocket burrow"
+!claim target_id="Red Rocket burrow"
 ```
 
 Claiming marks the settlement as yours. Settlement ownership is required before stripping
@@ -40,7 +40,7 @@ If the settlement also has barbarian-sim durability:
 Use scrap to build a water purifier at a claimed settlement:
 
 ```text
-!build-purifier settlement_id="Red Rocket burrow"
+!build target_id="Red Rocket burrow"
 ```
 
 Use fuel to power a reachable generator:
@@ -82,10 +82,10 @@ purified, or contaminated. If it is contaminated, purify it before drinking:
 ## Settlement loop
 
 ```text
-!claim-settlement settlement_id="Red Rocket burrow"
+!claim target_id="Red Rocket burrow"
 !salvage-settlement settlement_id="Red Rocket burrow"
 !scrap-item item_id="bent pressure cooker"
-!build-purifier settlement_id="Red Rocket burrow"
+!build target_id="Red Rocket burrow"
 !power-generator generator_id="patched generator"
 !identify target_id="dusty crate"
 !restore-tech tech_id="dusty crate"

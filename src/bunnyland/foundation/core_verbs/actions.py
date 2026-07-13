@@ -3,6 +3,7 @@
 from ...core.actions import (
     FOCUS_COST,
     FREE_COST,
+    MAJOR_ACTION_COST,
     SPEECH_COST,
     ActionDefinition,
     ActionPattern,
@@ -147,6 +148,27 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         patterns=("harvest {target_id}", "harvest sample {sample_type}"),
     ),
     define_action("bribe", ("target_id",), tool_name="bribe", patterns=("bribe {target_id}",)),
+    define_action(
+        "build",
+        ("target_id", "name", "capacity", "feeding_pen", "quarantine"),
+        tool_name="build",
+        cost=MAJOR_ACTION_COST,
+        patterns=("build at {target_id}",),
+    ),
+    define_action(
+        "claim",
+        ("target_id",),
+        tool_name="claim",
+        cost=MAJOR_ACTION_COST,
+        patterns=("claim {target_id}",),
+    ),
+    define_action(
+        "command",
+        ("target_id", "instruction", "command_target_id"),
+        tool_name="command",
+        required=("target_id", "instruction"),
+        patterns=("command {target_id} to {instruction}",),
+    ),
     define_action("sneak", tool_name="sneak", patterns=(ActionPattern("sneak", {}),)),
     define_action("drink", ("source_id",), tool_name="drink", patterns=("drink {source_id}",)),
     define_action(

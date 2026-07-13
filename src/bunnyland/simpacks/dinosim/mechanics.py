@@ -2726,18 +2726,26 @@ class MountCreatureHandler:
 
 
 class CommandCompanionHandler:
-    command_type = "command-companion"
+    command_type = "command"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        creature_id = parse_entity_id(command.payload.get("target_id"))
+        return (
+            creature_id is not None
+            and ctx.world.has_entity(creature_id)
+            and _is_creature(ctx.entity(creature_id))
+        )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
+        creature, error = _reachable_creature(ctx, character_id, command.payload.get("target_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
         if _companion_for_actor(creature, character_id) is None:
             return rejected("creature is not your companion")
-        command_name = str(command.payload.get("command_name") or "").strip()
+        command_name = str(command.payload.get("instruction") or "").strip()
         if not command_name:
             return rejected("command name is required")
         training = (
@@ -2748,7 +2756,7 @@ class CommandCompanionHandler:
         if command_name not in training.learned_commands:
             return rejected("command has not been trained")
 
-        target_id = str(command.payload.get("target_id") or "")
+        target_id = str(command.payload.get("command_target_id") or "")
         replace_component(
             creature,
             CommandComponent(
@@ -2826,13 +2834,24 @@ class RecallCreatureHandler:
 
 
 class BuildEnclosureHandler:
-    command_type = "build-enclosure"
+    command_type = "build"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None or not ctx.world.has_entity(character_id):
+            return False
+        room, _error = _current_or_requested_room(
+            ctx, character_id, command.payload.get("target_id")
+        )
+        return room is not None
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
-        room, error = _current_or_requested_room(ctx, character_id, command.payload.get("room_id"))
+        room, error = _current_or_requested_room(
+            ctx, character_id, command.payload.get("target_id")
+        )
         if room is None:
             return rejected(error if error else "room is required")
         if room.has_component(EnclosureComponent):

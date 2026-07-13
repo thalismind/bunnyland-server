@@ -9,6 +9,7 @@ publishes; points are spent only when a handler succeeds.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -17,6 +18,7 @@ from relics import EntityId, World
 from ..commands import SubmittedCommand
 from ..ecs import parse_entity_id, reachable_ids
 from ..events import DomainEvent, event_base
+from ..mutations import MutationPlan, execute_mutation_plan
 
 
 @dataclass(frozen=True)
@@ -24,6 +26,8 @@ class HandlerResult:
     ok: bool
     events: tuple[DomainEvent, ...] = ()
     reason: str = ""
+    plan: MutationPlan | None = None
+    event_factories: tuple[Callable[[], DomainEvent], ...] = ()
 
 
 def rejected(reason: str) -> HandlerResult:
@@ -34,6 +38,31 @@ def ok(*events: DomainEvent) -> HandlerResult:
     return HandlerResult(ok=True, events=tuple(events))
 
 
+def planned(
+    plan: MutationPlan,
+    *events: DomainEvent | Callable[[], DomainEvent],
+    ctx: HandlerContext | None = None,
+) -> HandlerResult:
+    """Return a plan, applying it immediately only for standalone handler calls."""
+
+    immediate = tuple(event for event in events if isinstance(event, DomainEvent))
+    factories = tuple(event for event in events if not isinstance(event, DomainEvent))
+    if ctx is not None and not ctx.defer_plans:
+        _summary, deferred = execute_mutation_plan(
+            ctx.world,
+            plan,
+            after_apply=lambda: tuple(factory() for factory in factories),
+        )
+        immediate = (*immediate, *deferred)
+        factories = ()
+    return HandlerResult(
+        ok=True,
+        events=immediate,
+        plan=plan,
+        event_factories=factories,
+    )
+
+
 @dataclass
 class HandlerContext:
     """What a handler needs to read and mutate the world during execution."""
@@ -41,6 +70,7 @@ class HandlerContext:
     world: World
     epoch: int
     actor: Any | None = None
+    defer_plans: bool = False
 
     def entity(self, entity_id: EntityId):
         return self.world.get_entity(entity_id)
@@ -111,6 +141,7 @@ __all__ = [
     "HandlerContext",
     "HandlerResult",
     "ok",
+    "planned",
     "rejected",
     "require_character",
     "require_entity",

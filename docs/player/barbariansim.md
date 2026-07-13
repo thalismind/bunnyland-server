@@ -119,7 +119,7 @@ You can also recruit a willing, conscious character in the same room as a follow
 Give a thrall a new task or a follower new orders:
 
 ```text
-!command-follower target_id=Ash orders="guard the burrow"
+!command target_id=Ash instruction="guard the burrow"
 ```
 
 Release a thrall or dismiss a follower when you no longer need them:

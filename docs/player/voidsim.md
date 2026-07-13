@@ -274,7 +274,7 @@ Deploy an away team, adjust morale, and handle mutiny pressure:
 Drone, ship AI, and data salvage hooks support light technical play:
 
 ```text
-!command-drone drone_id="repair drone" task="patch conduit"
+!command target_id="repair drone" instruction="patch conduit"
 !hack-ship-ai ai_id="ship mind"
 !salvage-data data_id="black box"
 ```

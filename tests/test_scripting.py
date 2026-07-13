@@ -572,6 +572,9 @@ async def test_script_runtime_rejects_unknown_action_object():
 def test_script_runtime_patch_validation_errors():
     scenario = build_scenario()
     runtime = ScriptRuntime()
+    entity_ids = {
+        entity.id for entity in scenario.actor.world.query().execute_entities()
+    }
 
     with pytest.raises(ScriptRuntimeError, match="contain_in expected one match, found 0"):
         runtime._add_entity(
@@ -587,6 +590,9 @@ def test_script_runtime_patch_validation_errors():
             ),
             {},
         )
+    assert {
+        entity.id for entity in scenario.actor.world.query().execute_entities()
+    } == entity_ids
 
     with pytest.raises(ScriptRuntimeError, match="unknown component MissingComponent"):
         runtime._patch_world(
@@ -645,6 +651,24 @@ def test_script_runtime_patch_validation_errors():
         bindings,
     )
     assert parse_entity_id(bindings["loose"]) is not None
+
+    runtime._add_entity(
+        scenario.actor,
+        AddEntityPatch(
+            components=(
+                ComponentSpec(
+                    type="IdentityComponent",
+                    fields={"name": "unbound item", "kind": "item"},
+                ),
+            ),
+        ),
+        bindings,
+    )
+    assert runtime._resolve_query(
+        scenario.actor,
+        EntityQuery(identity_name="unbound item"),
+        bindings,
+    )
 
     with pytest.raises(ScriptRuntimeError, match="unknown patch operation"):
         runtime._patch_world(

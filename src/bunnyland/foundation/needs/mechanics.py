@@ -25,11 +25,12 @@ from ...core.events import DomainEvent
 from ...core.handlers import (
     HandlerContext,
     HandlerResult,
-    ok,
+    planned,
     rejected,
     require_character,
     require_reachable_entity,
 )
+from ...core.mutations import MutationPlan, SetComponent
 from ...prompts import ComponentPromptContext, PerspectivePhrase, PromptFact, PromptPerspective
 
 SECONDS_PER_HOUR = 3600.0
@@ -347,12 +348,30 @@ def recover_daily_need(
     *,
     timestamp_field: str | None = None,
 ):
+    updated = recovered_daily_need(
+        entity,
+        component_type,
+        amount,
+        epoch,
+        timestamp_field=timestamp_field,
+    )
+    replace_component(entity, updated)
+    return updated
+
+
+def recovered_daily_need(
+    entity,
+    component_type,
+    amount: float,
+    epoch: int,
+    *,
+    timestamp_field: str | None = None,
+):
     component = entity.get_component(component_type)
     updates: dict[str, Any] = {"meter": changed(component.meter, -amount)}
     if timestamp_field is not None:
         updates[timestamp_field] = epoch
     updated = replace(component, **updates)
-    replace_component(entity, updated)
     return updated
 
 
@@ -392,14 +411,15 @@ class _RecoverNeedHandler:
                 return error
 
         recovery = self.amount + _affordance_bonus(target, self.need)
-        updated = recover_daily_need(
+        updated = recovered_daily_need(
             character,
             self.component_type,
             recovery,
             ctx.epoch,
             timestamp_field=self.timestamp_field,
         )
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(character_id, updated),)),
             DailyNeedRecoveredEvent(
                 **ctx.event_base(
                     actor_id=str(character_id),
@@ -418,6 +438,7 @@ class _RecoverNeedHandler:
                     band=band(updated.meter),
                 )
             ),
+            ctx=ctx,
         )
 
 

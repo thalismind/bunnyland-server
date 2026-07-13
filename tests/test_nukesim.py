@@ -1238,9 +1238,9 @@ async def test_claim_settlement_build_purifier_and_power_generator():
     scenario.actor.bus.subscribe(PurifierBuiltEvent, built.append)
     scenario.actor.bus.subscribe(GeneratorPoweredEvent, powered.append)
 
-    await scenario.actor.submit(_cmd(scenario, "claim-settlement", settlement_id=str(settlement)))
+    await scenario.actor.submit(_cmd(scenario, "claim", target_id=str(settlement)))
     await scenario.actor.tick(HOUR)
-    await scenario.actor.submit(_cmd(scenario, "build-purifier", settlement_id=str(settlement)))
+    await scenario.actor.submit(_cmd(scenario, "build", target_id=str(settlement)))
     await scenario.actor.tick(HOUR)
     await scenario.actor.submit(_cmd(scenario, "power-generator", generator_id=str(generator)))
     await scenario.actor.tick(HOUR)
@@ -1279,7 +1279,7 @@ async def test_salvage_settlement_outputs_resources_and_spends_durability():
     salvaged: list[SettlementSalvagedEvent] = []
     scenario.actor.bus.subscribe(SettlementSalvagedEvent, salvaged.append)
 
-    await scenario.actor.submit(_cmd(scenario, "claim-settlement", settlement_id=str(settlement)))
+    await scenario.actor.submit(_cmd(scenario, "claim", target_id=str(settlement)))
     await scenario.actor.tick(HOUR)
     await scenario.actor.submit(_cmd(scenario, "salvage-settlement", settlement_id=str(settlement)))
     await scenario.actor.tick(HOUR)
@@ -1318,7 +1318,7 @@ async def test_salvage_settlement_without_durability_skips_empty_outputs():
     salvaged: list[SettlementSalvagedEvent] = []
     scenario.actor.bus.subscribe(SettlementSalvagedEvent, salvaged.append)
 
-    await scenario.actor.submit(_cmd(scenario, "claim-settlement", settlement_id=str(settlement)))
+    await scenario.actor.submit(_cmd(scenario, "claim", target_id=str(settlement)))
     await scenario.actor.tick(HOUR)
     await scenario.actor.submit(_cmd(scenario, "salvage-settlement", settlement_id=str(settlement)))
     await scenario.actor.tick(HOUR)
@@ -1418,23 +1418,23 @@ def test_settlement_utility_handlers_reject_bad_state_directly():
     build = BuildPurifierHandler()
     power = PowerGeneratorHandler()
     assert (
-        claim.execute(ctx, _handler_cmd(scenario, "claim-settlement", character_id="x")).reason
+        claim.execute(ctx, _handler_cmd(scenario, "claim", character_id="x")).reason
         == "invalid character id"
     )
     assert (
         claim.execute(
-            ctx, _handler_cmd(scenario, "claim-settlement", settlement_id=str(rock))
+            ctx, _handler_cmd(scenario, "claim", target_id=str(rock))
         ).reason
         == "target is the wrong kind"
     )
     assert (
         claim.execute(
-            ctx, _handler_cmd(scenario, "claim-settlement", settlement_id=str(claimed))
+            ctx, _handler_cmd(scenario, "claim", target_id=str(claimed))
         ).reason
         == "settlement is already claimed"
     )
     assert claim.execute(
-        ctx, _handler_cmd(scenario, "claim-settlement", settlement_id=str(settlement))
+        ctx, _handler_cmd(scenario, "claim", target_id=str(settlement))
     ).ok
 
     assert (
@@ -1478,38 +1478,38 @@ def test_settlement_utility_handlers_reject_bad_state_directly():
     )
 
     assert (
-        build.execute(ctx, _handler_cmd(scenario, "build-purifier", character_id="x")).reason
+        build.execute(ctx, _handler_cmd(scenario, "build", character_id="x")).reason
         == "invalid character id"
     )
     assert (
-        build.execute(ctx, _handler_cmd(scenario, "build-purifier", settlement_id=str(rock))).reason
+        build.execute(ctx, _handler_cmd(scenario, "build", target_id=str(rock))).reason
         == "target is the wrong kind"
     )
     assert (
         build.execute(
-            ctx, _handler_cmd(scenario, "build-purifier", settlement_id=str(unclaimed_build))
+            ctx, _handler_cmd(scenario, "build", target_id=str(unclaimed_build))
         ).reason
         == "claim the settlement first"
     )
     assert (
         build.execute(
-            ctx, _handler_cmd(scenario, "build-purifier", settlement_id=str(built))
+            ctx, _handler_cmd(scenario, "build", target_id=str(built))
         ).reason
         == "purifier is already built"
     )
     assert (
         build.execute(
-            ctx, _handler_cmd(scenario, "build-purifier", settlement_id=str(claimed))
+            ctx, _handler_cmd(scenario, "build", target_id=str(claimed))
         ).reason
         == "not enough scrap to build purifier"
     )
     _scrap(scenario, 2)
     assert build.execute(
-        ctx, _handler_cmd(scenario, "build-purifier", settlement_id=str(claimed))
+        ctx, _handler_cmd(scenario, "build", target_id=str(claimed))
     ).ok
     _scrap(scenario, 2)
     assert build.execute(
-        ctx, _handler_cmd(scenario, "build-purifier", settlement_id=str(bare_claimed))
+        ctx, _handler_cmd(scenario, "build", target_id=str(bare_claimed))
     ).ok
     assert scenario.actor.world.get_entity(bare_claimed).get_component(WaterPurifierComponent).built
 

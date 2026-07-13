@@ -12,7 +12,14 @@ from .handlers import (
     RememberHandler,
     TakeNoteHandler,
 )
-from .store import InMemoryStore, MemoryDocument, MemoryEntry, MemoryStore
+from .store import (
+    InMemoryStore,
+    MemoryCheckpointResult,
+    MemoryDocument,
+    MemoryEntry,
+    MemoryStore,
+    quarantine_after_epoch,
+)
 
 if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
@@ -39,6 +46,7 @@ __all__ = [
     "ForgetHandler",
     "InMemoryStore",
     "MemoryDocument",
+    "MemoryCheckpointResult",
     "MemoryEntry",
     "MemoryStore",
     "ReflectHandler",
@@ -46,4 +54,5 @@ __all__ = [
     "RememberHandler",
     "TakeNoteHandler",
     "install_memory",
+    "quarantine_after_epoch",
 ]

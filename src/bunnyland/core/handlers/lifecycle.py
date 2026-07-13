@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from ..commands import SubmittedCommand
 from ..components import SleepingComponent
-from ..ecs import replace_component
-from .base import HandlerContext, HandlerResult, ok, rejected, require_character
+from ..mutations import MutationPlan, RemoveComponent, SetComponent
+from .base import HandlerContext, HandlerResult, planned, rejected, require_character
 
 
 class SleepHandler:
@@ -22,8 +22,12 @@ class SleepHandler:
             return error
         if character.has_component(SleepingComponent):
             return rejected("already asleep")
-        replace_component(character, SleepingComponent(started_at_epoch=ctx.epoch))
-        return ok()
+        return planned(
+            MutationPlan(
+                (SetComponent(character.id, SleepingComponent(started_at_epoch=ctx.epoch)),)
+            ),
+            ctx=ctx,
+        )
 
 
 class WakeHandler:
@@ -35,8 +39,10 @@ class WakeHandler:
             return error
         if not character.has_component(SleepingComponent):
             return rejected("not asleep")
-        character.remove_component(SleepingComponent)
-        return ok()
+        return planned(
+            MutationPlan((RemoveComponent(character.id, SleepingComponent),)),
+            ctx=ctx,
+        )
 
 
 class WaitHandler:
@@ -48,7 +54,7 @@ class WaitHandler:
         _, _, error = require_character(ctx, command.character_id)
         if error is not None:
             return error
-        return ok()
+        return planned(MutationPlan(), ctx=ctx)
 
 
 __all__ = ["SleepHandler", "WaitHandler", "WakeHandler"]

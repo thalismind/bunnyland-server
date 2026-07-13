@@ -19,9 +19,17 @@ from ..core.controllers import (
     ScriptedControllerComponent,
     SuspendedControllerComponent,
 )
-from ..core.ecs import container_of, parse_entity_id, replace_component, spawn_entity
+from ..core.ecs import container_of, parse_entity_id
 from ..core.edges import ContainmentMode, Contains, ControlledBy
 from ..core.events import DomainEvent
+from ..core.mutations import (
+    AddEdge,
+    AddEntity,
+    EntityReference,
+    MutationPlan,
+    SetComponent,
+    execute_mutation_plan,
+)
 from ..persistence import type_registries
 from ..plugins.contributions import collect_content_items
 from ..plugins.registry import PluginRegistry
@@ -217,22 +225,38 @@ class ScriptRuntime:
             if isinstance(operation, AddEntityPatch):
                 self._add_entity(actor, operation, bindings)
             elif isinstance(operation, AddComponentPatch):
-                for target in self._select(actor, operation.target, bindings):
+                targets = self._select(actor, operation.target, bindings)
+                mutations = []
+                for target in targets:
                     bindings[operation.target.bind] = str(target.id)
-                    replace_component(target, self._build_component(operation.component, bindings))
+                    mutations.append(
+                        SetComponent(
+                            target.id,
+                            self._build_component(operation.component, bindings),
+                        )
+                    )
+                execute_mutation_plan(actor.world, MutationPlan(tuple(mutations)))
             elif isinstance(operation, SetComponentFieldsPatch):
                 component_type = self._component_type(operation.component_type)
-                for target in self._select(actor, operation.target, bindings):
+                targets = self._select(actor, operation.target, bindings)
+                mutations = []
+                for target in targets:
                     bindings[operation.target.bind] = str(target.id)
                     if not target.has_component(component_type):
                         raise ScriptRuntimeError(
                             f"entity {target.id} lacks {operation.component_type}"
                         )
                     current = target.get_component(component_type)
-                    replace_component(
-                        target,
-                        replace(current, **self._resolve_mapping(operation.fields, bindings)),
+                    mutations.append(
+                        SetComponent(
+                            target.id,
+                            replace(
+                                current,
+                                **self._resolve_mapping(operation.fields, bindings),
+                            ),
+                        )
                     )
+                execute_mutation_plan(actor.world, MutationPlan(tuple(mutations)))
             else:
                 raise ScriptRuntimeError(f"unknown patch operation {operation!r}")
 
@@ -240,16 +264,26 @@ class ScriptRuntime:
         self, actor: WorldActor, operation: AddEntityPatch, bindings: dict[str, str]
     ) -> None:
         components = [self._build_component(spec, bindings) for spec in operation.components]
-        entity = spawn_entity(actor.world, components)
-        if operation.bind is not None:
-            bindings[operation.bind] = str(entity.id)
+        container_id = None
         if operation.contain_in is not None:
             containers = self._resolve_query(actor, operation.contain_in, bindings)
             if len(containers) != 1:
                 raise ScriptRuntimeError(f"contain_in expected one match, found {len(containers)}")
-            containers[0].add_relationship(
-                Contains(mode=ContainmentMode(operation.containment_mode)), entity.id
+            container_id = containers[0].id
+
+        reference = EntityReference()
+        mutations = [AddEntity(tuple(components), reference)]
+        if container_id is not None:
+            mutations.append(
+                AddEdge(
+                    container_id,
+                    reference,
+                    Contains(mode=ContainmentMode(operation.containment_mode)),
+                )
             )
+        execute_mutation_plan(actor.world, MutationPlan(tuple(mutations)))
+        if operation.bind is not None:
+            bindings[operation.bind] = str(reference.require())
 
     def _build_component(self, spec, bindings: Mapping[str, str]) -> Component:
         component_type = self._component_type(spec.type)

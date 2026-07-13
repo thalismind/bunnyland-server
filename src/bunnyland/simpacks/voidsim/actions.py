@@ -76,7 +76,6 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     define_action("boost-morale", ("amount",), tool_name="boost_morale"),
     define_action("start-mutiny", tool_name="start_mutiny"),
-    define_action("command-drone", ("drone_id", "task"), tool_name="command_drone"),
     define_action("hack-ship-ai", ("ai_id",), tool_name="hack_ship_ai"),
     define_action("salvage-data", ("data_id",), tool_name="salvage_data"),
     define_action(

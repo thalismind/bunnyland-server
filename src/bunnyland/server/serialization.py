@@ -100,7 +100,16 @@ from ..core.controllers import (
     WebControllerComponent,
 )
 from ..core.ecs import container_of, contents, entity_name, parse_entity_id
-from ..core.edges import Contains, ControlledBy, ExitTo, HasInjury, HasThought, Holding, Wearing
+from ..core.edges import (
+    Contains,
+    ControlledBy,
+    ExitTo,
+    HasInjury,
+    HasThought,
+    Holding,
+    KnowsRoom,
+    Wearing,
+)
 from ..core.events import DomainEvent
 from ..core.world_actor import WorldActor
 from ..imagegen.components import PortraitImageComponent
@@ -134,6 +143,7 @@ from .models import (
     DmProjectionResponse,
     DmRoomProjectionView,
     ExamineResponse,
+    KnownRoomView,
     PromptFactView,
     RoomProjectionEntityView,
     RoomProjectionResponse,
@@ -1199,6 +1209,19 @@ def serialize_character_projection(
         current_goal=_current_goal(character),
         suggested_actions=_first_run_suggestions(actor, character, room),
         checklist=_first_run_checklist(),
+        known_rooms=sorted(
+            (
+                KnownRoomView(
+                    id=str(room_id),
+                    label=edge.remembered_label,
+                    first_seen_epoch=edge.first_seen_epoch,
+                    last_seen_epoch=edge.last_seen_epoch,
+                )
+                for edge, room_id in character.get_relationships(KnowsRoom)
+                if actor.world.has_entity(room_id)
+            ),
+            key=lambda room: (room.label.lower(), room.id),
+        ),
         target_groups=groups,
         actions=[
             _action_view(

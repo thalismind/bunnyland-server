@@ -10,10 +10,11 @@ from relics import EntityId
 from ...projections.room_summary import build_room_facts, render_summary
 from ..commands import SubmittedCommand
 from ..components import NoiseComponent
-from ..ecs import container_of, parse_entity_id, spawn_entity
+from ..ecs import container_of, parse_entity_id
 from ..edges import ContainmentMode, Contains, ExitTo
 from ..events import ActorMovedEvent
-from .base import HandlerContext, HandlerResult, ok, rejected, require_character
+from ..mutations import AddEdge, AddEntity, MutationPlan, RemoveEdge
+from .base import HandlerContext, HandlerResult, planned, rejected, require_character
 
 
 class MoveHandler:
@@ -55,13 +56,16 @@ class MoveHandler:
         if not ctx.world.has_entity(destination_id):
             return rejected("destination does not exist")
 
-        # Transfer containment: remove from old room, add to new room.
-        current_room.remove_relationship(Contains, character_id)
-        destination = ctx.entity(destination_id)
-        destination.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), character_id)
-        spawn_entity(
-            ctx.world,
-            [
+        plan = MutationPlan(
+            (
+                RemoveEdge(current_room_id, character_id, Contains),
+                AddEdge(
+                    destination_id,
+                    character_id,
+                    Contains(mode=ContainmentMode.ROOM_CONTENT),
+                ),
+                AddEntity(
+                    (
                 NoiseComponent(
                     loudness=float(payload.get("noise", 1.0)),
                     text="movement",
@@ -69,21 +73,27 @@ class MoveHandler:
                     room_id=str(destination_id),
                     created_at_epoch=ctx.epoch,
                     expires_at_epoch=ctx.epoch + 60,
-                )
-            ],
+                        ),
+                    )
+                ),
+            )
         )
 
-        return ok(
-            ActorMovedEvent(
+        return planned(
+            plan,
+            lambda: ActorMovedEvent(
                 **ctx.event_base(
                     actor_id=str(character_id),
                     room_id=str(destination_id),
                     from_room_id=str(current_room_id),
                     to_room_id=str(destination_id),
                     direction=chosen_direction,
-                    arrival_summary=render_summary(build_room_facts(ctx.world, destination_id)),
+                    arrival_summary=render_summary(
+                        build_room_facts(ctx.world, destination_id)
+                    ),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 

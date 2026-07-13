@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import random
+from dataclasses import replace
 
 import pytest
 from conftest import build_scenario
@@ -26,14 +26,18 @@ from bunnyland.core import (
     ActionPointsComponent,
     CharacterComponent,
     CommandCost,
+    CommitStatus,
     ContainmentMode,
     Contains,
     ControlledBy,
     FocusPointsComponent,
     IdentityComponent,
     InitiativeComponent,
+    KnowsRoom,
     Lane,
+    MutationPlan,
     OnInsufficientPoints,
+    SetComponent,
     SuspendedComponent,
     WorldClockComponent,
     build_submitted_command,
@@ -74,6 +78,7 @@ from bunnyland.core.events import (
     EventBus,
     EventVisibility,
 )
+from bunnyland.core.handlers.base import planned
 from bunnyland.core.systems import ClaimTimeoutSystem
 
 HOUR = 3600.0
@@ -930,12 +935,124 @@ async def test_initiative_orders_execution_high_score_first():
     assert order == [str(other.id), str(scenario.character)]
 
 
-def test_initiative_tiebreak_is_randomized():
-    # Pure unit check of the ordering helper with tied scores and seeded RNG.
+def test_initiative_tiebreak_is_stable_for_legacy_empty_queues():
     scenario = build_scenario()
     actor = scenario.actor
-    actor._rng = random.Random(0)
     ids = ["entity_1", "entity_2", "entity_3"]
-    # No entities exist for these ids -> all score 0.0, so order is purely random jitter.
-    ordering = actor._initiative_order(ids)
-    assert sorted(ordering) == sorted(ids)
+    assert actor._initiative_order(ids) == ids
+
+
+async def test_expected_epoch_rejects_at_execution_and_returns_same_duplicate_receipt():
+    scenario = build_scenario()
+    command = move_command(scenario)
+    command = replace(
+        command,
+        command_id="epoch-guarded",
+        expected_epoch=scenario.actor.epoch,
+    )
+
+    first = await scenario.actor.submit(command)
+    assert first.accepted is True
+    await scenario.actor.tick(1.0)
+
+    receipt = scenario.actor.receipt_for(command.command_id)
+    assert receipt is not None
+    assert receipt.status is CommitStatus.REJECTED
+    assert receipt.reason == "world epoch changed"
+    assert scenario.character_room() == scenario.room_a
+
+    duplicate = await scenario.actor.submit(command)
+    assert duplicate.receipt is receipt
+    assert duplicate.accepted is False
+    assert duplicate.reason == "world epoch changed"
+
+
+async def test_duplicate_pending_command_is_not_enqueued_twice():
+    scenario = build_scenario()
+    command = move_command(scenario)
+
+    assert (await scenario.actor.submit(command)).accepted is True
+    assert (await scenario.actor.submit(command)).accepted is True
+    assert len(scenario.actor.pending_submissions()) == 1
+
+
+async def test_actor_executes_handler_mutation_plan_and_bounds_receipt_cache():
+    scenario = build_scenario()
+    scenario.actor._receipt_cache_size = 1
+    character = scenario.actor.world.get_entity(scenario.character)
+
+    class PlannedMove:
+        command_type = "move"
+
+        def execute(self, ctx, command):
+            identity = character.get_component(IdentityComponent)
+            return planned(
+                MutationPlan(
+                    (SetComponent(character.id, replace(identity, name="Plan Committed")),)
+                )
+            )
+
+    scenario.actor.register_handler(PlannedMove())
+    first = replace(move_command(scenario), command_id="planned-first")
+    await scenario.actor.submit(first)
+    await scenario.actor.tick(0)
+    assert character.get_component(IdentityComponent).name == "Plan Committed"
+    assert scenario.actor.receipt_for(first.command_id).status is CommitStatus.COMMITTED
+
+    second = replace(move_command(scenario), command_id="planned-second")
+    await scenario.actor.submit(second)
+    await scenario.actor.tick(0)
+    assert scenario.actor.receipt_for(first.command_id) is None
+    assert scenario.actor.receipt_for(second.command_id) is not None
+
+
+def test_room_knowledge_skips_unplaced_and_nonroom_containers():
+    scenario = build_scenario()
+    unplaced = spawn_entity(scenario.actor.world, [CharacterComponent()])
+    container = spawn_entity(scenario.actor.world)
+    nested = spawn_entity(scenario.actor.world, [CharacterComponent()])
+    container.add_relationship(Contains(), nested.id)
+
+    scenario.actor._reconcile_room_knowledge()
+
+    assert unplaced.get_relationships(KnowsRoom) == []
+    assert nested.get_relationships(KnowsRoom) == []
+
+
+async def test_plan_event_failure_rolls_back_state_and_point_cost():
+    scenario = build_scenario(action_current=5)
+    character = scenario.actor.world.get_entity(scenario.character)
+    original_identity = character.get_component(IdentityComponent)
+    original_points = character.get_component(ActionPointsComponent)
+
+    def fail_event():
+        raise RuntimeError("event projection failed")
+
+    class FailingPlannedMove:
+        command_type = "move"
+
+        def execute(self, ctx, command):
+            return planned(
+                MutationPlan(
+                    (
+                        SetComponent(
+                            character.id,
+                            replace(original_identity, name="must roll back"),
+                        ),
+                    )
+                ),
+                fail_event,
+                ctx=ctx,
+            )
+
+    scenario.actor.register_handler(FailingPlannedMove())
+    command = replace(move_command(scenario), command_id="failing-plan")
+    await scenario.actor.submit(command)
+    await scenario.actor.tick(0)
+
+    assert character.get_component(IdentityComponent) == original_identity
+    assert character.get_component(ActionPointsComponent) == original_points
+    receipt = scenario.actor.receipt_for(command.command_id)
+    assert receipt is not None
+    assert receipt.status is CommitStatus.REJECTED
+    assert receipt.reason == "mutation failed: event projection failed"

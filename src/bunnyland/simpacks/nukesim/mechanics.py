@@ -2094,14 +2094,22 @@ class RestoreTechHandler:
 
 
 class ClaimSettlementHandler:
-    command_type = "claim-settlement"
+    command_type = "claim"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        return (
+            target_id is not None
+            and ctx.world.has_entity(target_id)
+            and ctx.entity(target_id).has_component(SettlementComponent)
+        )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
         settlement, error = _reachable_component(
-            ctx.world, character_id, command.payload.get("settlement_id"), SettlementComponent
+            ctx.world, character_id, command.payload.get("target_id"), SettlementComponent
         )
         if settlement is None:
             return rejected(error if error else "target is not a settlement")
@@ -2182,14 +2190,22 @@ class SalvageSettlementHandler:
 
 
 class BuildPurifierHandler:
-    command_type = "build-purifier"
+    command_type = "build"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        return (
+            target_id is not None
+            and ctx.world.has_entity(target_id)
+            and ctx.entity(target_id).has_component(SettlementComponent)
+        )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
         settlement, error = _reachable_component(
-            ctx.world, character_id, command.payload.get("settlement_id"), SettlementComponent
+            ctx.world, character_id, command.payload.get("target_id"), SettlementComponent
         )
         if settlement is None:
             return rejected(error if error else "target is not a settlement")

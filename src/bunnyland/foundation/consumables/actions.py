@@ -27,9 +27,10 @@ from bunnyland.foundation.needs.mechanics import (
 )
 
 from ...core.commands import SubmittedCommand
-from ...core.ecs import container_of, parse_entity_id, replace_component
+from ...core.ecs import container_of, parse_entity_id
 from ...core.edges import Contains
-from ...core.handlers.base import HandlerContext, HandlerResult, ok, rejected
+from ...core.handlers.base import HandlerContext, HandlerResult, planned, rejected
+from ...core.mutations import DeleteEntity, MutationPlan, RemoveEdge, SetComponent
 
 
 def _reachable(ctx: HandlerContext, character, target_id) -> bool:
@@ -40,19 +41,20 @@ def _reachable(ctx: HandlerContext, character, target_id) -> bool:
     return holder == character.id or holder == container_of(character)
 
 
-def _consume_one_use(ctx: HandlerContext, item) -> None:
-    """Spend one use; destroy the item when uses run out. No-op without ConsumableComponent."""
+def _consume_one_use(item):
+    """Plan one spent use, including terminal deletion when uses run out."""
     if not item.has_component(ConsumableComponent):
-        return
+        return ()
     consumable = item.get_component(ConsumableComponent)
     remaining = consumable.current_uses - 1
     if remaining <= 0:
+        operations = []
         holder = container_of(item)
         if holder is not None:
-            ctx.entity(holder).remove_relationship(Contains, item.id)
-        ctx.world.remove(item.id)
-    else:
-        replace_component(item, replace(consumable, current_uses=remaining))
+            operations.append(RemoveEdge(holder, item.id, Contains))
+        operations.append(DeleteEntity(item.id))
+        return tuple(operations)
+    return (SetComponent(item.id, replace(consumable, current_uses=remaining)),)
 
 
 class EatHandler:
@@ -77,7 +79,15 @@ class EatHandler:
         food = item.get_component(FoodComponent)
         hunger = character.get_component(HungerComponent)
         new_meter = changed(hunger.meter, -food.satiety)
-        replace_component(character, replace(hunger, meter=new_meter, last_ate_epoch=ctx.epoch))
+        plan = MutationPlan(
+            (
+                SetComponent(
+                    character.id,
+                    replace(hunger, meter=new_meter, last_ate_epoch=ctx.epoch),
+                ),
+                *_consume_one_use(item),
+            )
+        )
 
         events = (
             FoodEatenEvent(
@@ -97,8 +107,7 @@ class EatHandler:
                 )
             ),
         )
-        _consume_one_use(ctx, item)
-        return ok(*events)
+        return planned(plan, *events, ctx=ctx)
 
 
 class DrinkHandler:
@@ -123,7 +132,15 @@ class DrinkHandler:
         drinkable = source.get_component(DrinkableComponent)
         thirst = character.get_component(ThirstComponent)
         new_meter = changed(thirst.meter, -drinkable.hydration)
-        replace_component(character, replace(thirst, meter=new_meter, last_drank_epoch=ctx.epoch))
+        plan = MutationPlan(
+            (
+                SetComponent(
+                    character.id,
+                    replace(thirst, meter=new_meter, last_drank_epoch=ctx.epoch),
+                ),
+                *_consume_one_use(source),
+            )
+        )
 
         events = (
             DrinkConsumedEvent(
@@ -143,8 +160,7 @@ class DrinkHandler:
                 )
             ),
         )
-        _consume_one_use(ctx, source)
-        return ok(*events)
+        return planned(plan, *events, ctx=ctx)
 
 
 __all__ = ["DrinkHandler", "EatHandler"]

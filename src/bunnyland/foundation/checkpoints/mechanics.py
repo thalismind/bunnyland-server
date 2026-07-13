@@ -13,7 +13,8 @@ from ...core.commands import CommandCost, SubmittedCommand
 from ...core.components import IdentityComponent, RoomComponent
 from ...core.ecs import container_of, parse_entity_id, reachable_ids
 from ...core.events import DomainEvent, EventVisibility, event_base
-from ...core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
+from ...core.mutations import MutationPlan
 from ...prompts import ComponentPromptContext
 
 LOG = logging.getLogger(__name__)
@@ -129,7 +130,8 @@ class SaveCheckpointHandler:
         from ...persistence import save_world
 
         stamped = save_world(ctx.actor, save_path, meta=_configured_meta(ctx))
-        return ok(
+        return planned(
+            MutationPlan(),
             CheckpointSavedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -141,7 +143,8 @@ class SaveCheckpointHandler:
                     path=str(save_path),
                     saved_at_epoch=stamped.saved_at_epoch,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -212,7 +215,8 @@ class ReloadCheckpointHandler:
                 path=str(save_path),
             )
         )
-        return ok(
+        return planned(
+            MutationPlan(),
             CheckpointReloadRequestedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -223,7 +227,8 @@ class ReloadCheckpointHandler:
                     checkpoint_id=str(checkpoint.id),
                     path=str(save_path),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 

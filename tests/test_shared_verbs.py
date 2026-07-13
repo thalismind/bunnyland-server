@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from conftest import build_scenario
 
 from bunnyland.core import (
@@ -16,6 +18,7 @@ from bunnyland.core import (
 )
 from bunnyland.simpacks.daggersim.mechanics import IdentifyIngredientHandler, IngredientComponent
 from bunnyland.simpacks.dinosim.mechanics import (
+    BuildEnclosureHandler,
     CreatureMilkComponent,
     EggComponent,
     FossilFragmentComponent,
@@ -58,6 +61,7 @@ from bunnyland.simpacks.nukesim.mechanics import (
     WaterPurityComponent,
 )
 from bunnyland.simpacks.voidsim.mechanics import (
+    CommandDroneHandler,
     CustomsHoldComponent,
     InspectCustomsHandler,
     InspectShipSystemHandler,
@@ -94,6 +98,26 @@ def _target_id(entity):
 
 def _item_id(entity):
     return {"item_id": str(entity.id)}
+
+
+def test_contextual_build_and_command_predicates_reject_unusable_context():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    invalid_character = replace(_cmd(scenario, "build"), character_id="not-an-id")
+    assert BuildEnclosureHandler().can_handle(ctx, invalid_character) is False
+
+    command_drone = CommandDroneHandler()
+    assert command_drone.can_handle(ctx, _cmd(scenario, "command")) is False
+    assert (
+        command_drone.can_handle(ctx, _cmd(scenario, "command", target_id="entity_999"))
+        is False
+    )
+    assert (
+        command_drone.can_handle(
+            ctx, _cmd(scenario, "command", target_id=str(scenario.room_a))
+        )
+        is False
+    )
 
 
 def test_shared_verb_handlers_accept_target_id_for_matching_components():

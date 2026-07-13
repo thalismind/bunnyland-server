@@ -50,6 +50,7 @@ from ..core.events import (
     ControllerChangedEvent,
     serialized_event_visible_to,
 )
+from ..core.perspective import PerspectiveQueryRequest, PerspectiveQueryResult
 from ..core.world_actor import CONTROL_COMMANDS, WorldActor
 from ..imagegen.components import PortraitImageComponent
 from ..imagegen.media import (
@@ -342,8 +343,10 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    stream = EventStream(actor)
     meta = meta or WorldMeta()
+    actor.world_id = meta.world_id
+    stream = EventStream(actor)
+    actor.event_stream = stream
     claim_secrets = claim_secrets or ClaimSecretRegistry()
     normalize_claimed_controllers_without_secrets(actor, claim_secrets)
     allowed_player_client_ids = configured_client_id_allowlist(
@@ -464,6 +467,34 @@ def create_app(
         with telemetry.span("character.queued_commands", {"character.id": id}):
             _require_claim_secret(id, claim_id=claim_id, claim_secret=claim_secret)
             return serialize_character_queued_commands(actor, id, **_runtime_timing())
+
+    @app.post(
+        "/world/character/{id}/query",
+        response_model=PerspectiveQueryResult,
+    )
+    async def world_character_query(
+        id: str,
+        request: PerspectiveQueryRequest,
+        claim_id: str | None = None,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+    ) -> PerspectiveQueryResult:
+        _require_claim_secret(
+            id,
+            claim_id=claim_id,
+            claim_secret=claim_secret,
+            require_claimed=True,
+        )
+        try:
+            return actor.perspective_queries.execute(
+                actor,
+                request.query,
+                request.arguments,
+                actor_id=id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/world/room/{id}", response_model=RoomProjectionResponse)
     async def world_room_projection(id: str) -> RoomProjectionResponse:
@@ -1556,6 +1587,10 @@ def create_app(
             await publish
         return _runtime_response()
 
+    @app.get("/admin/stream")
+    async def stream_status() -> dict[str, int | float]:
+        return stream.stats()
+
     @app.post("/world/commands", response_model=CommandResponse, status_code=202)
     async def submit_command(
         request: CommandRequest,
@@ -1839,11 +1874,16 @@ def create_app(
         await websocket.accept()
         subscription = stream.subscribe()
         try:
+            projection_started = time.perf_counter()
             with telemetry.span("websocket.snapshot"):
                 snapshot = serialize_world(actor, meta)
-            await websocket.send_json({"type": "snapshot", "data": snapshot})
+            stream.record_projection_latency(time.perf_counter() - projection_started)
+            await websocket.send_json(
+                subscription.frame(actor, {"type": "snapshot", "data": snapshot})
+            )
             while True:
-                await websocket.send_json(await next_websocket_update(actor, subscription))
+                message = await next_websocket_update(actor, subscription)
+                await websocket.send_json(subscription.frame(actor, message))
         except WebSocketDisconnect:
             pass
         finally:
@@ -1905,7 +1945,7 @@ def create_app(
             except HTTPException:
                 await websocket.close(code=1008)
                 return False
-            await websocket.send_json(frame)
+            await websocket.send_json(subscription.frame(actor, frame))
             return True
 
         try:

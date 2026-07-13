@@ -172,6 +172,28 @@ Pass criteria:
 - Residents, shared resources, and bulletin text imply overlapping needs or conflicts.
 - Multi-client or Discord observation matches the same world state.
 
+### Systemic story seeds
+
+Use the same save and seed for each controller under evaluation. These are unresolved
+world conditions, not scripted outcomes; intervene with ordinary actions and record what
+actually happens.
+
+- **Missing parcel:** find the misrouted parcel outside the mailroom, question or inform a
+  witness, return or keep it, then write the result in the incident log. Check Pip's open
+  obligation and relationship consequence before and after restart.
+- **Rooftop water shortage:** inspect the rationed rain barrel and limited community
+  pantry, respond to the need pressure through sharing, replenishment, or theft, and check
+  the Wick/Saffron obligation and persistent resource state after restart.
+- **Elevator/noise dispute:** inspect the elevator incident and music-room complaint,
+  involve Jun or Orla, perform available repair/social work, and write the outcome in the
+  incident log. Confirm routines and explanations reflect disruption after restart.
+
+Each run passes only if normal validated verbs drive it, at least three systems become
+observable, a human can change the trajectory, state survives checkpoint/reload, and the
+outcome remains recoverable rather than being forced by narration. Capture the bulletin,
+incident log, known-room map, obligations/relationships, recent activity, and player/admin
+explanations as evidence.
+
 Report:
 
 - Any navigation label that is confusing.
@@ -196,3 +218,6 @@ Record:
 
 Overall pass requires Apple Crossing golden path, Bell Green orientation, Clover City
 orientation, non-admin claim/play, feature-flag disclosure, and known-issues classification.
+The controlled preview additionally requires three reproducible systemic-story runs and a
+passing 40-client stream rehearsal; neither a focused green check nor later green legs can
+override a failed aggregate runner.

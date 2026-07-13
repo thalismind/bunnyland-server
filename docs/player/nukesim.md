@@ -137,7 +137,7 @@ your character context.
 Claim a reachable wasteland settlement before working its salvage:
 
 ```text
-!claim-settlement settlement_id="Red Rocket burrow"
+!claim target_id="Red Rocket burrow"
 ```
 
 If the settlement has a salvage component, strip useful materials from it:
@@ -155,7 +155,7 @@ Build a purifier or power a generator with resources from scavenging, scrapping,
 settlement salvage:
 
 ```text
-!build-purifier settlement_id="Red Rocket burrow"
+!build target_id="Red Rocket burrow"
 !power-generator generator_id="patched generator"
 ```
 
@@ -185,7 +185,7 @@ Brew chems and activate wasteland infrastructure:
 !scan-radiation target_id="cracked isotope case"
 !seal-radiation-source target_id="cracked isotope case"
 !take item_id="patched rad poncho"
-!claim-settlement settlement_id="Red Rocket burrow"
+!claim target_id="Red Rocket burrow"
 !salvage-settlement settlement_id="Red Rocket burrow"
 !scavenge site_id="pharmacy backroom cache"
 !scrap-item item_id="bent pressure cooker"

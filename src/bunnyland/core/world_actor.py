@@ -17,6 +17,7 @@ import asyncio
 import inspect
 import random
 import time
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -34,13 +35,21 @@ from .availability import (
     meets_requirement,
 )
 from .claim_timeout import record_claim_activity
-from .commands import Lane, OnInsufficientPoints, SubmittedCommand
+from .commands import (
+    CommitReceipt,
+    CommitStatus,
+    Lane,
+    OnInsufficientPoints,
+    SubmittedCommand,
+)
 from .components import (
     ActionPointsComponent,
+    CharacterComponent,
     DeadComponent,
     DownedComponent,
     FocusPointsComponent,
     InitiativeComponent,
+    RoomComponent,
     SleepingComponent,
     SuspendedComponent,
     WorldClockComponent,
@@ -64,8 +73,8 @@ from .controllers import (
     SuspendedControllerComponent,
     WebControllerComponent,
 )
-from .ecs import ensure_blank_prefab, parse_entity_id, replace_component, spawn_entity
-from .edges import ControlledBy
+from .ecs import container_of, ensure_blank_prefab, parse_entity_id, replace_component, spawn_entity
+from .edges import ControlledBy, KnowsRoom
 from .events import (
     ActionPointsChangedEvent,
     CharacterClaimedEvent,
@@ -83,6 +92,8 @@ from .events import (
 )
 from .handlers import CommandHandler, HandlerContext
 from .handlers.lifecycle import WakeHandler
+from .mutations import MutationPlan, SetComponent, execute_mutation_plan
+from .perspective import PerspectiveQueryRegistry
 from .queue import CommandQueues
 from .systems import ActionFocusRegenSystem, WorldClockSystem
 
@@ -102,6 +113,7 @@ class SubmissionOutcome:
     accepted: bool
     command_id: str
     reason: str = ""
+    receipt: CommitReceipt | None = None
 
 
 @dataclass(frozen=True)
@@ -125,7 +137,13 @@ class WorldPersistenceContext:
 class WorldActor:
     """Owns the Relics world and serializes all mutations through ticks."""
 
-    def __init__(self, world: World | None = None, *, rng: random.Random | None = None) -> None:
+    def __init__(
+        self,
+        world: World | None = None,
+        *,
+        rng: random.Random | None = None,
+        receipt_cache_size: int = 1000,
+    ) -> None:
         self.world = world or World()
         ensure_blank_prefab(self.world)
         self.bus = EventBus()
@@ -148,13 +166,18 @@ class WorldActor:
         self._definition_cache: dict[str, ActionDefinition] | None = None
         self._inbox: asyncio.Queue[SubmittedCommand] = asyncio.Queue()
         self._rng = rng or random.Random()
+        self._submission_sequence = 0
+        self._receipt_cache_size = receipt_cache_size
+        self._receipts: OrderedDict[str, CommitReceipt] = OrderedDict()
         self._lock = asyncio.Lock()
         self.persistence = WorldPersistenceContext()
+        self.world_id = ""
         #: Populated by the plugin loader without making core import plugin modules.
         self.plugins: Any | None = None
         #: Prompt providers are registered by the plugin loader. Core handlers access them
         #: through ``project_prompt_facts`` without importing plugin-owned mechanics.
         self.prompt_fragment_providers: tuple[Any, ...] = ()
+        self.perspective_queries = PerspectiveQueryRegistry()
 
         self.world.register_system(WorldClockSystem())
         self.world.register_system(ActionFocusRegenSystem())
@@ -260,6 +283,21 @@ class WorldActor:
             },
         ) as span:
             try:
+                receipt = self._receipts.get(command.command_id)
+                if receipt is not None:
+                    self._receipts.move_to_end(command.command_id)
+                    return SubmissionOutcome(
+                        accepted=receipt.status is CommitStatus.COMMITTED,
+                        command_id=command.command_id,
+                        reason=receipt.reason,
+                        receipt=receipt,
+                    )
+                if self._command_pending(command.command_id):
+                    return SubmissionOutcome(accepted=True, command_id=command.command_id)
+                self._submission_sequence += 1
+                object.__setattr__(
+                    command, "submission_sequence", self._submission_sequence
+                )
                 reason = self._validate_submission(command)
                 if reason is not None:
                     span.set_attribute("command.accepted", False)
@@ -277,6 +315,59 @@ class WorldActor:
                 span.record_exception(exc)
                 telemetry.mark_span_error(str(exc), span)
                 raise
+
+    def _command_pending(self, command_id: str) -> bool:
+        if any(command.command_id == command_id for command in self.pending_submissions()):
+            return True
+        return any(
+            command.command_id == command_id
+            for character_id in self.queues.characters_with_pending()
+            for command in self.queues.pending(character_id)
+        )
+
+    def receipt_for(self, command_id: str) -> CommitReceipt | None:
+        """Return a terminal receipt while it remains in the bounded retry cache."""
+
+        return self._receipts.get(command_id)
+
+    def _record_receipt(
+        self,
+        command: SubmittedCommand,
+        status: CommitStatus,
+        *,
+        reason: str = "",
+        event_ids: tuple[str, ...] = (),
+    ) -> CommitReceipt:
+        receipt = CommitReceipt(
+            command_id=command.command_id,
+            character_id=command.character_id,
+            command_type=command.command_type,
+            status=status,
+            submitted_at_epoch=command.submitted_at_epoch,
+            committed_at_epoch=self.epoch,
+            submission_sequence=command.submission_sequence,
+            reason=reason,
+            event_ids=event_ids,
+        )
+        self._receipts[command.command_id] = receipt
+        self._receipts.move_to_end(command.command_id)
+        while len(self._receipts) > self._receipt_cache_size:
+            self._receipts.popitem(last=False)
+        if self.persistence.save_path is not None:
+            from ..persistence import OperationalJournal
+
+            OperationalJournal(self.persistence.save_path).append(
+                "command_receipt",
+                receipt=receipt,
+                mutation_summary={"event_count": len(event_ids)},
+                event_range={
+                    "first": event_ids[0] if event_ids else None,
+                    "last": event_ids[-1] if event_ids else None,
+                },
+                rng_stream_state={"command_order": self._rng.getstate()},
+                world_epoch=self.epoch,
+            )
+        return receipt
 
     def _definition_for(self, command_type: str) -> ActionDefinition | None:
         if self._definition_cache is None:
@@ -368,8 +459,7 @@ class WorldActor:
             return command
 
     async def _publish_cancelled(self, command: SubmittedCommand) -> None:
-        await self._publish(
-            CommandCancelledEvent(
+        event = CommandCancelledEvent(
                 **self._event_base(
                     actor_id=command.character_id,
                     command_id=command.command_id,
@@ -377,6 +467,9 @@ class WorldActor:
                     lane=command.lane.value,
                 )
             )
+        await self._publish(event)
+        self._record_receipt(
+            command, CommitStatus.CANCELLED, reason="cancelled", event_ids=(event.event_id,)
         )
 
     # -- tick pipeline ------------------------------------------------------------------
@@ -400,6 +493,7 @@ class WorldActor:
                     # Phases 2-4: advance clock, regen Action/Focus, run passive systems.
                     with telemetry.span("tick.systems"):
                         self.world.tick(game_delta_seconds)
+                        self._reconcile_room_knowledge()
                     tick_span.set_attribute("tick.epoch", self.epoch)
                     # Phase 5: process queued commands in initiative order.
                     with telemetry.span("tick.commands"):
@@ -482,8 +576,19 @@ class WorldActor:
                 return entity.get_component(InitiativeComponent).score
             return 0.0
 
-        # Random jitter breaks ties freshly each tick (spec 5.5).
-        return sorted(character_ids, key=lambda cid: (key(cid), self._rng.random()), reverse=True)
+        # Submission chronology is the recorded tie-break. Character id is a stable final
+        # key for empty queues and legacy commands with sequence zero.
+        def oldest(cid: str) -> tuple[int, int]:
+            pending = self.queues.pending(cid)
+            if not pending:
+                return (0, 0)
+            command = min(
+                pending,
+                key=lambda item: (item.submitted_at_epoch, item.submission_sequence),
+            )
+            return (command.submitted_at_epoch, command.submission_sequence)
+
+        return sorted(character_ids, key=lambda cid: (-key(cid), *oldest(cid), cid))
 
     async def _drain_lane(
         self, character_id: str, lane: Lane, *, max_executions: int | None
@@ -524,8 +629,7 @@ class WorldActor:
         if command.expires_at_epoch is not None and self.epoch > command.expires_at_epoch:
             self.queues.pop(character_id, lane)
             telemetry.set_span_attributes({"command.outcome": "expired"})
-            await self._publish(
-                CommandExpiredEvent(
+            event = CommandExpiredEvent(
                     **self._event_base(
                         actor_id=character_id,
                         command_id=command.command_id,
@@ -533,7 +637,15 @@ class WorldActor:
                         payload=dict(command.payload),
                     )
                 )
+            await self._publish(event)
+            self._record_receipt(
+                command, CommitStatus.EXPIRED, reason="expired", event_ids=(event.event_id,)
             )
+            return _LaneOutcome(executed=False, stop_lane=False)
+
+        if command.expected_epoch is not None and command.expected_epoch != self.epoch:
+            self.queues.pop(character_id, lane)
+            await self._reject(command, "world epoch changed")
             return _LaneOutcome(executed=False, stop_lane=False)
 
         # Control verbs change the controller itself, so they bypass generation,
@@ -547,14 +659,16 @@ class WorldActor:
             if not applied:
                 await self._reject(command, reason)
                 return _LaneOutcome(executed=False, stop_lane=False)
-            await self._publish(
-                CommandExecutedEvent(
+            executed_event = CommandExecutedEvent(
                     **self._event_base(
                         actor_id=character_id,
                         command_id=command.command_id,
                         command_type=command.command_type,
                     )
                 )
+            await self._publish(executed_event)
+            self._record_receipt(
+                command, CommitStatus.COMMITTED, event_ids=(executed_event.event_id,)
             )
             telemetry.record_command_accepted(command.command_type)
             return _LaneOutcome(executed=True, stop_lane=False)
@@ -611,12 +725,18 @@ class WorldActor:
             return _LaneOutcome(executed=False, stop_lane=False)
 
         # Execute. Points are spent only if the handler succeeds.
-        ctx = HandlerContext(world=self.world, epoch=self.epoch, actor=self)
+        ctx = HandlerContext(
+            world=self.world,
+            epoch=self.epoch,
+            actor=self,
+            defer_plans=True,
+        )
         handler = self._handler_for(ctx, command, handlers)
         if handler is None:
             self.queues.pop(character_id, lane)
             await self._reject(command, f"no handler accepted {command.command_type}")
             return _LaneOutcome(executed=False, stop_lane=False)
+        transaction_point_events: tuple[DomainEvent, ...] = ()
         with (
             telemetry.record_duration(
                 telemetry.record_handler, {"command_type": command.command_type}
@@ -632,6 +752,34 @@ class WorldActor:
             ) as hspan,
         ):
             result = handler.execute(ctx, command)
+            if result.ok and result.plan is not None:
+                combined = MutationPlan(
+                    operations=(
+                        *result.plan.operations,
+                        *self._cost_operations(character, command),
+                    ),
+                    invariants=result.plan.invariants,
+                )
+                try:
+                    _summary, built = execute_mutation_plan(
+                        self.world,
+                        combined,
+                        after_apply=lambda: (
+                            tuple(factory() for factory in result.event_factories),
+                            self._point_events(character, command),
+                        ),
+                    )
+                except Exception as exc:  # noqa: BLE001 - transaction rejects atomically.
+                    self.queues.pop(character_id, lane)
+                    await self._reject(command, f"mutation failed: {exc}")
+                    return _LaneOutcome(executed=False, stop_lane=False)
+                deferred_events, transaction_point_events = built
+                result = replace(
+                    result,
+                    events=(*result.events, *deferred_events),
+                    plan=combined,
+                    event_factories=(),
+                )
             hspan.set_attribute("handler.ok", result.ok)
             if not result.ok and result.reason:
                 hspan.set_attribute("handler.reason", telemetry.attr_text(result.reason))
@@ -648,9 +796,12 @@ class WorldActor:
             }
             for event in result.events
         )
-        await self._spend(character, command)
-        await self._publish(
-            CommandExecutedEvent(
+        if result.plan is None:
+            await self._spend(character, command)
+        else:
+            for event in transaction_point_events:
+                await self._publish(event)
+        executed_event = CommandExecutedEvent(
                 **self._event_base(
                     actor_id=character_id,
                     command_id=command.command_id,
@@ -659,11 +810,57 @@ class WorldActor:
                     result_events=result_events,
                 )
             )
-        )
+        await self._publish(executed_event)
         telemetry.record_command_accepted(command.command_type)
         for event in result.events:
             await self._publish(event)
+        self._reconcile_room_knowledge(character)
+        self._record_receipt(
+            command,
+            CommitStatus.COMMITTED,
+            event_ids=(
+                *(event.event_id for event in transaction_point_events),
+                executed_event.event_id,
+                *(event.event_id for event in result.events),
+            ),
+        )
         return _LaneOutcome(executed=True, stop_lane=False)
+
+    def _reconcile_room_knowledge(self, character=None) -> None:
+        """Persist rooms directly perceived now; current perception wins stale labels."""
+
+        characters = (
+            (character,)
+            if character is not None
+            else self.world.query().with_all([CharacterComponent]).execute_entities()
+        )
+        for candidate in characters:
+            room_id = container_of(candidate)
+            if room_id is None or not self.world.has_entity(room_id):
+                continue
+            room = self.world.get_entity(room_id)
+            if not room.has_component(RoomComponent):
+                continue
+            label = room.get_component(RoomComponent).title
+            previous = next(
+                (
+                    edge
+                    for edge, target in candidate.get_relationships(KnowsRoom)
+                    if target == room_id
+                ),
+                None,
+            )
+            first_seen = previous.first_seen_epoch if previous is not None else self.epoch
+            if previous is not None:
+                candidate.remove_relationship(KnowsRoom, room_id)
+            candidate.add_relationship(
+                KnowsRoom(
+                    first_seen_epoch=first_seen,
+                    last_seen_epoch=self.epoch,
+                    remembered_label=label,
+                ),
+                room_id,
+            )
 
     def _handler_for(
         self,
@@ -701,6 +898,56 @@ class WorldActor:
     def _affordable(self, character, command: SubmittedCommand) -> bool:
         enough_action, enough_focus = affordable(character, command.cost)
         return enough_action and enough_focus
+
+    def _cost_operations(
+        self, character, command: SubmittedCommand
+    ) -> tuple[SetComponent, ...]:
+        operations = []
+        if command.cost.action and character.has_component(ActionPointsComponent):
+            points = character.get_component(ActionPointsComponent)
+            operations.append(
+                SetComponent(
+                    character.id,
+                    replace(points, current=points.current - command.cost.action),
+                )
+            )
+        if command.cost.focus and character.has_component(FocusPointsComponent):
+            points = character.get_component(FocusPointsComponent)
+            operations.append(
+                SetComponent(
+                    character.id,
+                    replace(points, current=points.current - command.cost.focus),
+                )
+            )
+        return tuple(operations)
+
+    def _point_events(
+        self, character, command: SubmittedCommand
+    ) -> tuple[DomainEvent, ...]:
+        events: list[DomainEvent] = []
+        if command.cost.action and character.has_component(ActionPointsComponent):
+            points = character.get_component(ActionPointsComponent)
+            events.append(
+                ActionPointsChangedEvent(
+                    **self._event_base(
+                        actor_id=command.character_id,
+                        current=points.current,
+                        maximum=points.maximum,
+                    )
+                )
+            )
+        if command.cost.focus and character.has_component(FocusPointsComponent):
+            points = character.get_component(FocusPointsComponent)
+            events.append(
+                FocusPointsChangedEvent(
+                    **self._event_base(
+                        actor_id=command.character_id,
+                        current=points.current,
+                        maximum=points.maximum,
+                    )
+                )
+            )
+        return tuple(events)
 
     async def _spend(self, character, command: SubmittedCommand) -> None:
         if command.cost.action and character.has_component(ActionPointsComponent):
@@ -841,8 +1088,7 @@ class WorldActor:
                 "command.reject_reason_text": telemetry.attr_text(reason),
             }
         )
-        await self._publish(
-            CommandRejectedEvent(
+        event = CommandRejectedEvent(
                 **self._event_base(
                     actor_id=command.character_id,
                     command_id=command.command_id,
@@ -850,6 +1096,9 @@ class WorldActor:
                     reason=reason,
                 )
             )
+        await self._publish(event)
+        self._record_receipt(
+            command, CommitStatus.REJECTED, reason=reason, event_ids=(event.event_id,)
         )
 
 

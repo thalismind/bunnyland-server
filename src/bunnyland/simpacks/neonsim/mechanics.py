@@ -609,7 +609,12 @@ class SneakCheckpointHandler:
 
 
 class ClaimSafehouseHandler:
-    command_type = "claim-safehouse"
+    command_type = "claim"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        return _can_handle_target_component(
+            ctx, command, SafehouseComponent, "target_id"
+        )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)

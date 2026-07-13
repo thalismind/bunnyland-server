@@ -33,6 +33,7 @@ class CommandRequest(BaseModel):
     lane: Lane = Lane.WORLD
     on_insufficient_points: OnInsufficientPoints = OnInsufficientPoints.QUEUE
     expires_at_epoch: int | None = None
+    expected_epoch: int | None = None
     command_id: str | None = None
 
     def to_submitted(self, *, submitted_at_epoch: int) -> SubmittedCommand:
@@ -48,6 +49,7 @@ class CommandRequest(BaseModel):
             on_insufficient_points=self.on_insufficient_points,
             submitted_at_epoch=submitted_at_epoch,
             expires_at_epoch=self.expires_at_epoch,
+            expected_epoch=self.expected_epoch,
         )
 
 
@@ -440,6 +442,13 @@ class ClientChecklistItemView(BaseModel):
     completed: bool = False
 
 
+class KnownRoomView(BaseModel):
+    id: str
+    label: str
+    first_seen_epoch: int
+    last_seen_epoch: int
+
+
 class CharacterProjectionResponse(BaseModel):
     ok: bool = True
     schema_version: int = 1
@@ -456,6 +465,7 @@ class CharacterProjectionResponse(BaseModel):
     current_goal: str = ""
     suggested_actions: list[str] = Field(default_factory=list)
     checklist: list[ClientChecklistItemView] = Field(default_factory=list)
+    known_rooms: list[KnownRoomView] = Field(default_factory=list)
     target_groups: dict[str, list[ClientTargetView]] = Field(default_factory=dict)
     actions: list[ClientActionView] = Field(default_factory=list)
 

@@ -775,7 +775,7 @@ async def test_claim_unclaimed_safehouse():
     claimed: list[SafehouseClaimedEvent] = []
     scenario.actor.bus.subscribe(SafehouseClaimedEvent, claimed.append)
 
-    await scenario.actor.submit(_cmd(scenario, "claim-safehouse", target_id=str(house)))
+    await scenario.actor.submit(_cmd(scenario, "claim", target_id=str(house)))
     await scenario.actor.tick(1.0)
 
     assert claimed[0].safehouse_id == str(house)
@@ -979,7 +979,7 @@ def test_handlers_reject_invalid_character_ids_directly():
         (ShowCredentialsHandler(), "show-credentials"),
         (BribeCheckpointHandler(), "bribe"),
         (SneakCheckpointHandler(), "sneak"),
-        (ClaimSafehouseHandler(), "claim-safehouse"),
+        (ClaimSafehouseHandler(), "claim"),
         (CaseLocationHandler(), "case-location"),
     ]
     for handler, command_type in cases:
@@ -1085,8 +1085,8 @@ async def test_claim_safehouse_rejects_non_safehouse():
     scenario = build_scenario()
     _install(scenario.actor)
     site = _room_entity(scenario, "plaza", "site", [CyberpunkSiteComponent()])
-    rejects = await _reject(scenario, _cmd(scenario, "claim-safehouse", target_id=str(site)))
-    assert any("wrong kind" in event.reason for event in rejects)
+    rejects = await _reject(scenario, _cmd(scenario, "claim", target_id=str(site)))
+    assert any("no handler accepted" in event.reason for event in rejects)
 
 
 async def test_claim_safehouse_rejects_when_claimed_by_other():
@@ -1095,7 +1095,7 @@ async def test_claim_safehouse_rejects_when_claimed_by_other():
     house = _room_entity(
         scenario, "den", "safehouse", [SafehouseComponent(claimed_by="someone-else")]
     )
-    rejects = await _reject(scenario, _cmd(scenario, "claim-safehouse", target_id=str(house)))
+    rejects = await _reject(scenario, _cmd(scenario, "claim", target_id=str(house)))
     assert any("already claimed" in event.reason for event in rejects)
 
 
@@ -1105,7 +1105,7 @@ async def test_claim_safehouse_rejects_when_already_yours():
     house = _room_entity(
         scenario, "den", "safehouse", [SafehouseComponent(claimed_by=str(scenario.character))]
     )
-    rejects = await _reject(scenario, _cmd(scenario, "claim-safehouse", target_id=str(house)))
+    rejects = await _reject(scenario, _cmd(scenario, "claim", target_id=str(house)))
     assert any("already hold this safehouse" in event.reason for event in rejects)
 
 
@@ -2171,7 +2171,7 @@ TARGET_COMMANDS = (
     "show-credentials",
     "bribe",
     "sneak",
-    "claim-safehouse",
+    "claim",
     "case-location",
     "inspect",
     "disable-camera",

@@ -16,14 +16,18 @@ resumes with empty queues.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
+import shutil
 from dataclasses import is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import telemetry
 from .core.queue import CommandQueues
@@ -36,6 +40,21 @@ from .plugins.registry import PluginRegistry
 
 SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
 PersistenceFormat = Literal["json", "yaml"]
+CHECKSUM_SUFFIX = ".sha256"
+DEFAULT_BACKUP_COUNT = 3
+DEFAULT_JOURNAL_RECORDS = 5000
+
+
+class MemoryManifest(BaseModel):
+    """Versioned authority boundary between world saves and rebuildable memory indexes."""
+
+    version: int = 1
+    world_namespace: str = "main"
+    backend: str = ""
+    checkpoint_epoch: int = 0
+    collection_namespace: str = "main"
+    embedding_implementation: str = ""
+    high_watermark: int = 0
 
 
 class WorldMeta(BaseModel):
@@ -48,6 +67,48 @@ class WorldMeta(BaseModel):
     plugins: tuple[str, ...] = ()  # plugin ids loaded for this world, e.g. module_foo.bar
     saved_at_epoch: int = 0  # bunnyland game epoch at save time
     saved_at: datetime | None = None  # wall-clock save time
+    world_id: str = Field(default_factory=lambda: uuid4().hex)
+    world_contract_version: int = 1
+    memory: MemoryManifest = Field(default_factory=MemoryManifest)
+    rng_stream_state: dict[str, Any] = Field(default_factory=dict)
+
+
+class OperationalJournal:
+    """Bounded append-only JSONL audit trail adjacent to a canonical snapshot."""
+
+    def __init__(self, save_path: str | Path, *, max_records: int = DEFAULT_JOURNAL_RECORDS):
+        save_path = Path(save_path)
+        self.path = save_path.with_name(f"{save_path.name}.journal.jsonl")
+        self.max_records = max_records
+
+    def append(self, record_type: str, **fields: Any) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "journal_version": 1,
+            "record_type": record_type,
+            "recorded_at": datetime.now(UTC).isoformat(),
+            **_jsonable(fields),
+        }
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, separators=(",", ":"), default=str) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        self._bound()
+
+    def records(self) -> list[dict[str, Any]]:
+        if not self.path.exists():
+            return []
+        return [json.loads(line) for line in self.path.read_text().splitlines() if line]
+
+    def _bound(self) -> None:
+        lines = self.path.read_text().splitlines(keepends=True)
+        if len(lines) <= self.max_records:
+            return
+        temporary = self.path.with_name(f".{self.path.name}.tmp")
+        temporary.write_text("".join(lines[-self.max_records :]))
+        _fsync_file(temporary)
+        os.replace(temporary, self.path)
+        _fsync_directory(self.path.parent)
 
 
 def _jsonable(value: Any) -> Any:
@@ -124,6 +185,7 @@ def save_world(
     *,
     meta: WorldMeta,
     format: PersistenceFormat | None = None,
+    backup_count: int = DEFAULT_BACKUP_COUNT,
 ) -> WorldMeta:
     """Write the world (ECS + provenance) to ``path``. Returns the stamped meta."""
     path = Path(path)
@@ -134,15 +196,45 @@ def save_world(
         telemetry.span("world.save", {**attrs, "path": str(path)}) as save_span,
     ):
         try:
+            memory = meta.memory.model_copy(
+                update={
+                    "checkpoint_epoch": actor.epoch,
+                    "high_watermark": max(meta.memory.high_watermark, actor.epoch),
+                }
+            )
             stamped = meta.model_copy(
-                update={"saved_at_epoch": actor.epoch, "saved_at": datetime.now(UTC)}
+                update={
+                    "saved_at_epoch": actor.epoch,
+                    "saved_at": datetime.now(UTC),
+                    "memory": memory,
+                    "rng_stream_state": {"command_order": _jsonable(actor._rng.getstate())},
+                }
             )
             path.parent.mkdir(parents=True, exist_ok=True)
             snapshot = _snapshot(actor, stamped)
+            temporary = path.with_name(f".{path.name}.tmp")
             if resolved_format == "yaml":
-                YAMLPersistenceDriver().save_snapshot(snapshot, path)
+                YAMLPersistenceDriver().save_snapshot(snapshot, temporary)
             else:
-                path.write_text(json.dumps(snapshot, indent=2, default=str))
+                temporary.write_text(json.dumps(snapshot, indent=2, default=str))
+            _fsync_file(temporary)
+            checksum = _checksum(temporary)
+            checksum_path = _checksum_path(path)
+            checksum_temporary = checksum_path.with_name(f".{checksum_path.name}.tmp")
+            checksum_temporary.write_text(f"{checksum}  {path.name}\n")
+            _fsync_file(checksum_temporary)
+            _rotate_backups(path, backup_count)
+            _rotate_backups(checksum_path, backup_count)
+            os.replace(temporary, path)
+            os.replace(checksum_temporary, checksum_path)
+            _fsync_directory(path.parent)
+            OperationalJournal(path).append(
+                "checkpoint",
+                world_epoch=actor.epoch,
+                checksum=checksum,
+                rng_stream_state=stamped.rng_stream_state,
+                memory_checkpoint_epoch=stamped.memory.checkpoint_epoch,
+            )
             if telemetry.enabled():
                 save_span.set_attribute(
                     "entity.count", len(list(actor.world.query().execute_entities()))
@@ -171,6 +263,7 @@ def load_world(
         telemetry.span("world.load", {**attrs, "path": str(path)}) as load_span,
     ):
         try:
+            _verify_checksum(path)
             yaml_driver = YAMLPersistenceDriver() if selected_format == "yaml" else None
             data = (
                 yaml_driver.read_snapshot(path)
@@ -197,6 +290,10 @@ def load_world(
                 edge_registry,
             )
             actor.bind_clock()  # the __init__ clock was cleared by load; rebind to the saved one
+            actor.world_id = meta.world_id
+            state = meta.rng_stream_state.get("command_order")
+            if state:
+                actor._rng.setstate(_tuples(state))
             if telemetry.enabled():
                 load_span.set_attribute(
                     "entity.count", len(list(actor.world.query().execute_entities()))
@@ -231,6 +328,7 @@ def reload_world(
         format=format,
     )
     actor.world = replacement.world
+    actor.world_id = loaded_meta.world_id
     actor.bind_clock()
     actor.queues = CommandQueues()
     actor._inbox = asyncio.Queue()
@@ -247,9 +345,64 @@ def reload_world(
     return meta
 
 
+def _checksum_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}{CHECKSUM_SUFFIX}")
+
+
+def _checksum(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _rotate_backups(path: Path, count: int) -> None:
+    if count <= 0 or not path.exists():
+        return
+    oldest = path.with_name(f"{path.name}.bak.{count}")
+    oldest.unlink(missing_ok=True)
+    for index in range(count - 1, 0, -1):
+        source = path.with_name(f"{path.name}.bak.{index}")
+        if source.exists():
+            os.replace(source, path.with_name(f"{path.name}.bak.{index + 1}"))
+    shutil.copy2(path, path.with_name(f"{path.name}.bak.1"))
+
+
+def _verify_checksum(path: Path) -> None:
+    checksum_path = _checksum_path(path)
+    if not checksum_path.exists():
+        return  # Backward compatibility for schema-v2 saves made before checksums.
+    expected = checksum_path.read_text().split(maxsplit=1)[0]
+    actual = _checksum(path)
+    if actual != expected:
+        raise ValueError(f"checksum mismatch for {path}")
+
+
+def _tuples(value: Any) -> Any:
+    if isinstance(value, list):
+        return tuple(_tuples(item) for item in value)
+    return value
+
+
 __all__ = [
     "SCHEMA_VERSION",
     "PersistenceFormat",
+    "MemoryManifest",
+    "OperationalJournal",
     "WorldMeta",
     "YAMLPersistenceDriver",
     "load_world",

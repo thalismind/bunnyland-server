@@ -21,7 +21,7 @@ from bunnyland.foundation.needs.mechanics import SocialNeedComponent, recover_da
 
 from ...core.commands import SubmittedCommand
 from ...core.components import AffectComponent, IdentityComponent
-from ...core.ecs import entity_name, parse_entity_id, replace_component, spawn_entity
+from ...core.ecs import entity_name, parse_entity_id, spawn_entity
 from ...core.events import (
     ConversationLineEvent,
     DomainEvent,
@@ -29,7 +29,8 @@ from ...core.events import (
     SpeechSaidEvent,
     SpeechToldEvent,
 )
-from ...core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
+from ...core.mutations import AddEdge, MutationPlan, SetComponent
 from ...prompts import ComponentPromptContext
 
 if TYPE_CHECKING:
@@ -188,13 +189,21 @@ def adjust_bond(
     world: World, source_id: EntityId, target_id: EntityId, deltas: dict[str, float]
 ) -> SocialBond:
     """Apply ``deltas`` to the source->target bond (created if absent), clamped to [-1, 1]."""
-    current = bond_between(world, source_id, target_id) or SocialBond()
-    updated = SocialBond(
-        **{field: _clamp(getattr(current, field) + deltas.get(field, 0.0)) for field in _FIELDS}
-    )
+    updated = adjusted_bond(world, source_id, target_id, deltas)
     # add_relationship overwrites an existing edge of the same type+target.
     world.get_entity(source_id).add_relationship(updated, target_id)
     return updated
+
+
+def adjusted_bond(
+    world: World, source_id: EntityId, target_id: EntityId, deltas: dict[str, float]
+) -> SocialBond:
+    """Build the adjusted bond value without mutating the relationship graph."""
+
+    current = bond_between(world, source_id, target_id) or SocialBond()
+    return SocialBond(
+        **{field: _clamp(getattr(current, field) + deltas.get(field, 0.0)) for field in _FIELDS}
+    )
 
 
 def known_gossip(world: World, character_id: EntityId) -> list[tuple[Entity, KnowsGossip]]:
@@ -627,9 +636,35 @@ class ResolveObligationHandler:
             resolved_at_epoch=ctx.epoch,
             resolution_note=note,
         )
-        replace_component(obligation_entity, updated)
-        _apply_obligation_resolution(ctx.world, debtor_id, creditor_id, status)
-        return ok(
+        operations = [SetComponent(obligation_id, updated)]
+        if status == "fulfilled":
+            operations.append(
+                AddEdge(
+                    creditor_id,
+                    debtor_id,
+                    adjusted_bond(
+                        ctx.world,
+                        creditor_id,
+                        debtor_id,
+                        {"trust": 0.1, "affinity": 0.05},
+                    ),
+                )
+            )
+        elif status == "failed":
+            operations.append(
+                AddEdge(
+                    creditor_id,
+                    debtor_id,
+                    adjusted_bond(
+                        ctx.world,
+                        creditor_id,
+                        debtor_id,
+                        {"trust": -0.15, "resentment": 0.08},
+                    ),
+                )
+            )
+        return planned(
+            MutationPlan(tuple(operations)),
             ObligationResolvedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.DIRECTED,
@@ -641,7 +676,8 @@ class ResolveObligationHandler:
                     creditor_id=str(creditor_id),
                     note=note,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -719,16 +755,6 @@ def _obligation_parties(entity: Entity) -> tuple[EntityId, EntityId]:
     debtor = entity.get_relationships(ObligationDebtor)[0][1]
     creditor = entity.get_relationships(ObligationCreditor)[0][1]
     return debtor, creditor
-
-
-def _apply_obligation_resolution(
-    world: World, debtor_id: EntityId, creditor_id: EntityId, status: str
-) -> None:
-    # Both parties are resolved from a live obligation's edges, so they exist here.
-    if status == "fulfilled":
-        adjust_bond(world, creditor_id, debtor_id, {"trust": 0.1, "affinity": 0.05})
-    elif status == "failed":
-        adjust_bond(world, creditor_id, debtor_id, {"trust": -0.15, "resentment": 0.08})
 
 
 def _clamp_confidence(value: float) -> float:

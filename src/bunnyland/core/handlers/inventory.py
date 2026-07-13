@@ -34,7 +34,8 @@ from ..events import (
     ItemUnheldEvent,
     ItemWornEvent,
 )
-from .base import HandlerContext, HandlerResult, ok, rejected, require_entity
+from ..mutations import AddEdge, MutationPlan, RemoveEdge
+from .base import HandlerContext, HandlerResult, planned, rejected, require_entity
 
 
 def _reachable_container_ids(ctx: HandlerContext, character) -> set[EntityId]:
@@ -104,10 +105,17 @@ class TakeHandler:
             if inventory.max_slots is not None and len(contents(character)) >= inventory.max_slots:
                 return rejected("inventory is full")
 
-        source.remove_relationship(Contains, item_id)
-        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
-
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    RemoveEdge(source_id, item_id, Contains),
+                    AddEdge(
+                        character_id,
+                        item_id,
+                        Contains(mode=ContainmentMode.INVENTORY),
+                    ),
+                )
+            ),
             ItemTakenEvent(
                 **ctx.event_base(
                     actor_id=str(character_id),
@@ -116,7 +124,8 @@ class TakeHandler:
                     item_id=str(item_id),
                     from_container_id=str(source_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -176,14 +185,17 @@ class PutHandler:
                 return rejected("container is full")
             mode = ContainmentMode.CONTAINER
 
-        # Drop equipment overlays before relocating the item.
+        operations = []
         if character.has_relationship(Holding, item_id):
-            character.remove_relationship(Holding, item_id)
+            operations.append(RemoveEdge(character_id, item_id, Holding))
         if character.has_relationship(Wearing, item_id):
-            character.remove_relationship(Wearing, item_id)
-
-        character.remove_relationship(Contains, item_id)
-        ctx.entity(target_id).add_relationship(Contains(mode=mode), item_id)
+            operations.append(RemoveEdge(character_id, item_id, Wearing))
+        operations.extend(
+            (
+                RemoveEdge(character_id, item_id, Contains),
+                AddEdge(target_id, item_id, Contains(mode=mode)),
+            )
+        )
 
         if is_drop:
             event = ItemDroppedEvent(
@@ -205,7 +217,7 @@ class PutHandler:
                     to_container_id=str(target_id),
                 )
             )
-        return ok(event)
+        return planned(MutationPlan(tuple(operations)), event, ctx=ctx)
 
 
 class DropHandler(PutHandler):
@@ -249,8 +261,10 @@ class HoldHandler:
         holdable = item.get_component(HoldableComponent)
         if character.has_relationship(Holding, item.id):
             return rejected("already holding item")
-        character.add_relationship(Holding(slot=holdable.slot), item.id)
-        return ok(
+        return planned(
+            MutationPlan(
+                (AddEdge(character.id, item.id, Holding(slot=holdable.slot)),)
+            ),
             ItemHeldEvent(
                 **ctx.event_base(
                     actor_id=command.character_id,
@@ -259,7 +273,8 @@ class HoldHandler:
                     item_id=str(item.id),
                     slot=holdable.slot,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -275,8 +290,8 @@ class UnholdHandler:
         ]
         if not held:
             return rejected("item is not held")
-        character.remove_relationship(Holding, item.id)
-        return ok(
+        return planned(
+            MutationPlan((RemoveEdge(character.id, item.id, Holding),)),
             ItemUnheldEvent(
                 **ctx.event_base(
                     actor_id=command.character_id,
@@ -285,7 +300,8 @@ class UnholdHandler:
                     item_id=str(item.id),
                     slot=held[0].slot,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -301,8 +317,10 @@ class WearHandler:
         wearable = item.get_component(WearableComponent)
         if character.has_relationship(Wearing, item.id):
             return rejected("already wearing item")
-        character.add_relationship(Wearing(slot=wearable.slot), item.id)
-        return ok(
+        return planned(
+            MutationPlan(
+                (AddEdge(character.id, item.id, Wearing(slot=wearable.slot)),)
+            ),
             ItemWornEvent(
                 **ctx.event_base(
                     actor_id=command.character_id,
@@ -311,7 +329,8 @@ class WearHandler:
                     item_id=str(item.id),
                     slot=wearable.slot,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -327,8 +346,8 @@ class RemoveHandler:
         ]
         if not worn:
             return rejected("item is not worn")
-        character.remove_relationship(Wearing, item.id)
-        return ok(
+        return planned(
+            MutationPlan((RemoveEdge(character.id, item.id, Wearing),)),
             ItemRemovedEvent(
                 **ctx.event_base(
                     actor_id=command.character_id,
@@ -337,7 +356,8 @@ class RemoveHandler:
                     item_id=str(item.id),
                     slot=worn[0].slot,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 

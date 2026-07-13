@@ -29,7 +29,8 @@ from ...core.components import (
 from ...core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
 from ...core.edges import Contains
 from ...core.events import DomainEvent, EventVisibility, event_base
-from ...core.handlers import HandlerContext, HandlerResult, ok, rejected, require_character
+from ...core.handlers import HandlerContext, HandlerResult, planned, rejected, require_character
+from ...core.mutations import MutationPlan, RemoveComponent, SetComponent
 from ...prompts import ComponentPromptContext
 
 if TYPE_CHECKING:
@@ -359,11 +360,19 @@ class IgniteHandler:
         intensity = float(command.payload.get("intensity", 1.0))
         if intensity <= 0:
             return rejected("fire intensity must be positive")
-        replace_component(
-            target,
-            FireComponent(intensity=intensity, fuel=fuel, last_updated_epoch=ctx.epoch),
-        )
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        target_id,
+                        FireComponent(
+                            intensity=intensity,
+                            fuel=fuel,
+                            last_updated_epoch=ctx.epoch,
+                        ),
+                    ),
+                )
+            ),
             FireStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -373,7 +382,8 @@ class IgniteHandler:
                     target_id=str(target_id),
                     intensity=intensity,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -394,8 +404,8 @@ class ExtinguishHandler:
         target = ctx.entity(target_id)
         if not target.has_component(FireComponent):
             return rejected("target is not burning")
-        target.remove_component(FireComponent)
-        return ok(
+        return planned(
+            MutationPlan((RemoveComponent(target_id, FireComponent),)),
             FireExtinguishedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -404,7 +414,8 @@ class ExtinguishHandler:
                     target_ids=(str(target_id),),
                     target_id=str(target_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 

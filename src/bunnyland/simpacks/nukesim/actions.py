@@ -64,16 +64,10 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         patterns=("restore {tech_id}",),
     ),
     define_action(
-        "claim-settlement", ("settlement_id",), tool_name="claim_settlement", cost=MAJOR_ACTION_COST
-    ),
-    define_action(
         "salvage-settlement",
         ("settlement_id",),
         tool_name="salvage_settlement",
         cost=MAJOR_ACTION_COST,
-    ),
-    define_action(
-        "build-purifier", ("settlement_id",), tool_name="build_purifier", cost=MAJOR_ACTION_COST
     ),
     define_action("power-generator", ("generator_id",), tool_name="power_generator"),
 )

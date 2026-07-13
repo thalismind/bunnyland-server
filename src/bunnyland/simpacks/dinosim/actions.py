@@ -2,7 +2,6 @@
 
 from ...core.actions import (
     EXTENDED_ACTION_COST,
-    MAJOR_ACTION_COST,
     ActionDefinition,
     define_action,
 )
@@ -112,21 +111,10 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         patterns=("mount {creature_id}",),
     ),
     define_action(
-        "command-companion",
-        ("creature_id", "command_name", "target_id"),
-        tool_name="command_companion",
-    ),
-    define_action(
         "recall-creature",
         ("creature_id",),
         tool_name="recall_creature",
         patterns=("recall {creature_id}",),
-    ),
-    define_action(
-        "build-enclosure",
-        ("room_id", "name", "capacity", "feeding_pen", "quarantine"),
-        tool_name="build_enclosure",
-        cost=MAJOR_ACTION_COST,
     ),
     define_action(
         "repair-fence",

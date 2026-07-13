@@ -1,5 +1,8 @@
 # Admin & controllers
 
+For preview incidents, restore drills, provider failures, and reconnect storms, use the
+[controlled preview runbook](controlled-preview-runbook.md).
+
 ## Controllers
 
 A **character** is a persistent entity. Who acts for it is a separate, swappable

@@ -11,9 +11,11 @@ from bunnyland.core import (
     Contains,
     IdentityComponent,
     Lane,
+    MutationPlan,
     SleepingComponent,
     build_submitted_command,
     container_of,
+    execute_mutation_plan,
     spawn_entity,
 )
 from bunnyland.core.handlers.base import HandlerContext
@@ -141,7 +143,7 @@ def test_recover_daily_need_without_timestamp_field_leaves_epoch_unchanged():
 
     updated = recover_daily_need(char, SocialNeedComponent, 25.0, epoch=99)
 
-    # timestamp_field is None: the meter drops but the stored epoch is untouched (353->355).
+    # timestamp_field is None: the meter drops but the stored epoch is untouched.
     assert updated.meter.value == pytest.approx(35.0)
     assert updated.last_social_epoch == 7
     assert char.get_component(SocialNeedComponent).meter.value == pytest.approx(35.0)
@@ -521,6 +523,9 @@ def test_consume_one_use_destroys_detached_spent_item():
         ],
     )
 
-    _consume_one_use(handler_context(scenario), item)
+    execute_mutation_plan(
+        scenario.actor.world,
+        MutationPlan(_consume_one_use(item)),
+    )
 
     assert not scenario.actor.world.has_entity(item.id)

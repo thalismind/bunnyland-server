@@ -85,7 +85,6 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     define_action("subdue", ("target_id", "task"), tool_name="subdue"),
     define_action("recruit-follower", ("target_id",), tool_name="recruit_follower"),
-    define_action("command-follower", ("target_id", "orders"), tool_name="command_follower"),
     define_action("release-thrall", ("target_id",), tool_name="release_thrall"),
 )
 

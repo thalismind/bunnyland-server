@@ -180,6 +180,8 @@ def apply_plugin(
         for handler in plugin.commands.action_handlers:
             instance = _instantiate(handler)
             actor.register_handler(instance)
+        for definition in plugin.runtime.perspective_queries:
+            actor.perspective_queries.register(_instantiate(definition), owner=plugin.id)
         for factory in (
             plugin.runtime.controller_factories
             + plugin.runtime.generator_factories

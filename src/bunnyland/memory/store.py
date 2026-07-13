@@ -79,6 +79,44 @@ class MemoryStore(Protocol):
     ) -> MemoryDocument | None: ...
 
 
+@dataclass(frozen=True)
+class MemoryCheckpointResult:
+    checkpoint_epoch: int
+    quarantined: int = 0
+    collections: tuple[str, ...] = ()
+
+
+def quarantine_after_epoch(
+    store: MemoryStore,
+    collections: tuple[str, ...],
+    *,
+    checkpoint_epoch: int,
+    world_namespace: str,
+) -> MemoryCheckpointResult:
+    """Move future source documents out of active collections after an older restore."""
+
+    quarantined = 0
+    for collection in collections:
+        destination = f"{world_namespace}:quarantine:{collection}"
+        for document in tuple(store.list_documents(collection)):
+            created_at = int(document.metadata.get("created_at_epoch", 0) or 0)
+            if created_at <= checkpoint_epoch:
+                continue
+            metadata = {
+                **document.metadata,
+                "quarantined_from": collection,
+                "quarantined_after_epoch": checkpoint_epoch,
+            }
+            store.create_document(destination, document=document.document, metadata=metadata)
+            store.delete(collection, document.id)
+            quarantined += 1
+    return MemoryCheckpointResult(
+        checkpoint_epoch=checkpoint_epoch,
+        quarantined=quarantined,
+        collections=collections,
+    )
+
+
 _STOPWORDS = frozenset(
     {
         "a",
@@ -291,6 +329,8 @@ __all__ = [
     "InMemoryStore",
     "MemoryDocument",
     "MemoryEntry",
+    "MemoryCheckpointResult",
     "MemoryStore",
     "normalize_tags",
+    "quarantine_after_epoch",
 ]

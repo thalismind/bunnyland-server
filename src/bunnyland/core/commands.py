@@ -48,6 +48,15 @@ class OnInsufficientPoints(StrEnum):
     QUEUE = "queue"
 
 
+class CommitStatus(StrEnum):
+    """Terminal outcome recorded for an idempotent command."""
+
+    COMMITTED = "committed"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+
+
 @dataclass(frozen=True)
 class CommandCost:
     action: int = 0
@@ -76,6 +85,23 @@ class SubmittedCommand:
     on_insufficient_points: OnInsufficientPoints
     submitted_at_epoch: int
     expires_at_epoch: int | None = None
+    expected_epoch: int | None = None
+    submission_sequence: int = 0
+
+
+@dataclass(frozen=True)
+class CommitReceipt:
+    """Stable terminal result returned for original and duplicate submissions."""
+
+    command_id: str
+    character_id: str
+    command_type: str
+    status: CommitStatus
+    submitted_at_epoch: int
+    committed_at_epoch: int
+    submission_sequence: int
+    reason: str = ""
+    event_ids: tuple[str, ...] = ()
 
 
 # --------------------------------------------------------------------------------------
@@ -123,6 +149,7 @@ def build_submitted_command(
     on_insufficient_points: OnInsufficientPoints = OnInsufficientPoints.QUEUE,
     submitted_at_epoch: int = 0,
     expires_at_epoch: int | None = None,
+    expected_epoch: int | None = None,
     command_id: str | None = None,
 ) -> SubmittedCommand:
     """Convenience factory for a command envelope (used by tests and controller layers)."""
@@ -138,6 +165,7 @@ def build_submitted_command(
         on_insufficient_points=on_insufficient_points,
         submitted_at_epoch=submitted_at_epoch,
         expires_at_epoch=expires_at_epoch,
+        expected_epoch=expected_epoch,
     )
 
 
@@ -145,6 +173,8 @@ __all__ = [
     "build_submitted_command",
     "Command",
     "CommandCost",
+    "CommitReceipt",
+    "CommitStatus",
     "Lane",
     "MoveCommand",
     "OnInsufficientPoints",

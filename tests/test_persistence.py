@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from dataclasses import dataclass
@@ -13,12 +14,15 @@ from pydantic import BaseModel
 from relics import EntityId, World
 
 from bunnyland.core import (
+    CommandCost,
     ContainmentMode,
     Contains,
     ExitTo,
+    Lane,
     RegionComponent,
     RoomComponent,
     WorldActor,
+    build_submitted_command,
     container_of,
     spawn_entity,
 )
@@ -31,6 +35,7 @@ from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.migrations import WorldMigrationError, migrate_snapshot
 from bunnyland.offline import advance_offline_life
 from bunnyland.persistence import (
+    OperationalJournal,
     WorldMeta,
     YAMLPersistenceDriver,
     _format_for_path,
@@ -1485,3 +1490,84 @@ def test_yaml_module_missing_extra_raises(monkeypatch):
     monkeypatch.setitem(sys.modules, "yaml", None)
     with pytest.raises(RuntimeError, match="YAML persistence requires PyYAML"):
         _yaml_module()
+
+
+@pytest.mark.parametrize("suffix", [".json", ".yaml"])
+def test_save_is_checksummed_rotated_and_restorable(tmp_path, suffix):
+    actor = WorldActor()
+    path = tmp_path / f"world{suffix}"
+
+    first = save_world(actor, path, meta=WorldMeta(seed="first"))
+    save_world(actor, path, meta=first.model_copy(update={"seed": "second"}))
+
+    checksum_path = path.with_name(f"{path.name}.sha256")
+    assert checksum_path.exists()
+    assert path.with_name(f"{path.name}.bak.1").exists()
+    loaded, meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+    assert loaded.epoch == actor.epoch
+    assert meta.seed == "second"
+    assert meta.memory.checkpoint_epoch == actor.epoch
+    assert meta.rng_stream_state["command_order"]
+
+    path.write_text(path.read_text() + "\ncorrupt")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+
+
+def test_pre_checksum_schema_v2_save_remains_loadable(tmp_path):
+    actor = WorldActor()
+    path = tmp_path / "legacy.json"
+    save_world(actor, path, meta=WorldMeta(seed="legacy"))
+    path.with_name(f"{path.name}.sha256").unlink()
+
+    _loaded, meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+    assert meta.seed == "legacy"
+
+
+def test_operational_journal_is_bounded_and_checkpointed(tmp_path):
+    actor = WorldActor()
+    path = tmp_path / "world.json"
+    save_world(actor, path, meta=WorldMeta(seed="journal"))
+
+    journal = OperationalJournal(path, max_records=2)
+    journal.append("epoch_transition", from_epoch=0, to_epoch=1)
+    journal.append("epoch_transition", from_epoch=1, to_epoch=2)
+
+    records = journal.records()
+    assert len(records) == 2
+    assert [record["to_epoch"] for record in records] == [1, 2]
+
+
+def test_operational_journal_empty_receipt_and_deeper_backup_rotation(tmp_path):
+    actor = WorldActor(receipt_cache_size=1)
+    path = tmp_path / "world.json"
+    journal = OperationalJournal(path)
+    assert journal.records() == []
+    meta = WorldMeta(seed="one")
+    meta = save_world(actor, path, meta=meta)
+    meta = save_world(actor, path, meta=meta.model_copy(update={"seed": "two"}))
+    save_world(actor, path, meta=meta.model_copy(update={"seed": "three"}))
+    assert path.with_name(f"{path.name}.bak.2").exists()
+
+    actor.configure_persistence(save_path=path, meta=meta)
+    command = build_submitted_command(
+        character_id="entity_999999",
+        controller_id="entity_999998",
+        controller_generation=0,
+        command_type="move",
+        cost=CommandCost(),
+        lane=Lane.WORLD,
+        command_id="journal-rejection",
+    )
+    outcome = asyncio.run(actor.submit(command))
+    assert outcome.accepted is False
+    assert any(
+        record["record_type"] == "command_receipt"
+        and record["receipt"]["command_id"] == "journal-rejection"
+        for record in journal.records()
+    )
+
+    no_backup = tmp_path / "no-backup.json"
+    save_world(actor, no_backup, meta=meta, backup_count=0)
+    save_world(actor, no_backup, meta=meta, backup_count=0)
+    assert not no_backup.with_name(f"{no_backup.name}.bak.1").exists()

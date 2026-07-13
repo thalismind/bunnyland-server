@@ -2,7 +2,6 @@
 
 from ...core.actions import (
     EXTENDED_ACTION_COST,
-    MAJOR_ACTION_COST,
     ActionDefinition,
     define_action,
 )
@@ -19,9 +18,6 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("target_id",),
         tool_name="show_credentials",
         patterns=("show credentials at {target_id}",),
-    ),
-    define_action(
-        "claim-safehouse", ("target_id",), tool_name="claim_safehouse", cost=MAJOR_ACTION_COST
     ),
     define_action(
         "case-location",

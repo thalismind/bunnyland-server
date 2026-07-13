@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
-from relics import Component, Edge
+from relics import Component, Edge, EntityId, RelicError
 
-from ..core.ecs import ensure_blank_prefab, parse_entity_id, replace_component
+from ..core.ecs import ensure_blank_prefab, parse_entity_id
+from ..core.mutations import (
+    AddComponent,
+    AddEdge,
+    AddEntity,
+    DeleteEntity,
+    EntityReference,
+    MutationError,
+    MutationPlan,
+    RemoveComponent,
+    RemoveEdge,
+    SetComponent,
+    execute_mutation_plan,
+)
 from ..core.world_actor import WorldActor
 from ..persistence import type_registries
 from .models import (
@@ -14,7 +27,6 @@ from .models import (
     AddEntityPatchRequest,
     DeleteEntityPatchRequest,
     RemoveComponentPatchRequest,
-    RemoveEdgePatchRequest,
     SetComponentPatchRequest,
     SetEdgePatchRequest,
     WorldPatchRequest,
@@ -39,15 +51,6 @@ def _edge_registry(actor: WorldActor) -> dict[str, type[Edge]]:
     return type_registries(actor.plugins)[1]
 
 
-def _entity_id(actor: WorldActor, raw: str, aliases: dict[str, Any] | None = None):
-    if aliases and raw in aliases:
-        return aliases[raw]
-    entity_id = parse_entity_id(raw)
-    if entity_id is None or not actor.world.has_entity(entity_id):
-        raise WorldPatchError(f"entity {raw!r} does not exist")
-    return entity_id
-
-
 def _preflight_entity_id(
     actor: WorldActor,
     raw: str,
@@ -64,8 +67,8 @@ def _preflight_entity_id(
     return entity_id
 
 
-def _component(actor: WorldActor, spec, *, fallback: type[Component] | None = None) -> Component:
-    component_type = fallback or _component_registry(actor).get(spec.type)
+def _component(actor: WorldActor, spec) -> Component:
+    component_type = _component_registry(actor).get(spec.type)
     if component_type is None:
         raise WorldPatchError(f"unknown component {spec.type!r}")
     try:
@@ -82,11 +85,6 @@ def _edge(actor: WorldActor, spec) -> Edge:
         return edge_type(**spec.fields)
     except Exception as exc:  # noqa: BLE001 - surface validation errors to the API caller.
         raise WorldPatchError(f"invalid {spec.type}: {exc}") from exc
-
-
-def _add_changed(changed: set[Any], entity_id: Any) -> None:
-    # Callers only ever pass resolved (non-None) entity ids.
-    changed.add(entity_id)
 
 
 def _preflight_world_patch(actor: WorldActor, request: WorldPatchRequest) -> None:
@@ -177,128 +175,93 @@ def _preflight_world_patch(actor: WorldActor, request: WorldPatchRequest) -> Non
                 raise WorldPatchError(f"unknown edge {operation.edge_type!r}")
 
 
-def _apply_add_entity(
-    actor: WorldActor,
-    operation: AddEntityPatchRequest,
-    changed: set[Any],
-    aliases: dict[str, Any],
-) -> None:
-    # Preflight already rejects duplicate client ids, so no re-check is needed here.
-    ensure_blank_prefab(actor.world)
-    entity = actor.world.spawn(operation.prefab)
-    for spec in operation.components:
-        entity.add_component(_component(actor, spec))
-    if operation.client_id is not None:
-        aliases[operation.client_id] = entity.id
-    _add_changed(changed, entity.id)
-
-
-def _apply_delete_entity(
-    actor: WorldActor,
-    operation: DeleteEntityPatchRequest,
-    changed: set[Any],
-    deleted: set[str],
-    aliases: dict[str, Any],
-) -> None:
-    entity_id = _entity_id(actor, operation.entity_id, aliases)
-    entity = actor.world.get_entity(entity_id)
-    for edge_type in _edge_registry(actor).values():
-        for source_id, _edge_value in entity.get_incoming_relationships(edge_type):
-            _add_changed(changed, source_id)
-    actor.world.remove(entity_id)
-    changed.discard(entity_id)
-    deleted.add(str(entity_id))
-
-
-def _apply_add_component(
-    actor: WorldActor,
-    operation: AddComponentPatchRequest,
-    changed: set[Any],
-    aliases: dict[str, Any],
-) -> None:
-    entity_id = _entity_id(actor, operation.entity_id, aliases)
-    actor.world.get_entity(entity_id).add_component(_component(actor, operation.component))
-    _add_changed(changed, entity_id)
-
-
-def _apply_set_component(
-    actor: WorldActor,
-    operation: SetComponentPatchRequest,
-    changed: set[Any],
-    aliases: dict[str, Any],
-) -> None:
-    entity_id = _entity_id(actor, operation.entity_id, aliases)
-    entity = actor.world.get_entity(entity_id)
-    fallback = None
-    registry = _component_registry(actor)
-    component_type = registry.get(operation.component.type)
-    if component_type is not None and entity.has_component(component_type):
-        fallback = type(entity.get_component(component_type))
-    replace_component(entity, _component(actor, operation.component, fallback=fallback))
-    _add_changed(changed, entity_id)
-
-
-def _apply_remove_component(
-    actor: WorldActor,
-    operation: RemoveComponentPatchRequest,
-    changed: set[Any],
-    aliases: dict[str, Any],
-) -> None:
-    entity_id = _entity_id(actor, operation.entity_id, aliases)
-    component_type = _component_registry(actor).get(operation.component_type)
-    if component_type is None:
-        raise WorldPatchError(f"unknown component {operation.component_type!r}")
-    actor.world.get_entity(entity_id).remove_component(component_type)
-    _add_changed(changed, entity_id)
-
-
-def _apply_set_edge(
-    actor: WorldActor,
-    operation: SetEdgePatchRequest,
-    changed: set[Any],
-    aliases: dict[str, Any],
-) -> None:
-    source_id = _entity_id(actor, operation.source_id, aliases)
-    target_id = _entity_id(actor, operation.target_id, aliases)
-    actor.world.get_entity(source_id).add_relationship(_edge(actor, operation.edge), target_id)
-    _add_changed(changed, source_id)
-
-
-def _apply_remove_edge(
-    actor: WorldActor,
-    operation: RemoveEdgePatchRequest,
-    changed: set[Any],
-    aliases: dict[str, Any],
-) -> None:
-    source_id = _entity_id(actor, operation.source_id, aliases)
-    target_id = _entity_id(actor, operation.target_id, aliases)
-    edge_type = _edge_registry(actor).get(operation.edge_type)
-    if edge_type is None:
-        raise WorldPatchError(f"unknown edge {operation.edge_type!r}")
-    actor.world.get_entity(source_id).remove_relationship(edge_type, target_id)
-    _add_changed(changed, source_id)
-
-
 def apply_world_patch(actor: WorldActor, request: WorldPatchRequest) -> WorldPatchResponse:
     _preflight_world_patch(actor, request)
-    changed: set[Any] = set()
-    deleted: set[str] = set()
-    aliases: dict[str, Any] = {}
+    ensure_blank_prefab(actor.world)
+    aliases: dict[str, EntityReference] = {}
+    operations = []
+    changed_targets = []
+    deleted_targets = []
+
+    def target(raw: str):
+        if raw in aliases:
+            return aliases[raw]
+        # The request-wide preflight has already proved every non-alias id is valid.
+        return cast(EntityId, parse_entity_id(raw))
+
     for operation in request.operations:
         if isinstance(operation, AddEntityPatchRequest):
-            _apply_add_entity(actor, operation, changed, aliases)
+            reference = EntityReference()
+            operations.append(
+                AddEntity(
+                    tuple(_component(actor, spec) for spec in operation.components),
+                    reference=reference,
+                    prefab=operation.prefab,
+                )
+            )
+            if operation.client_id is not None:
+                aliases[operation.client_id] = reference
+            changed_targets.append(reference)
         elif isinstance(operation, DeleteEntityPatchRequest):
-            _apply_delete_entity(actor, operation, changed, deleted, aliases)
+            entity_target = target(operation.entity_id)
+            operations.append(DeleteEntity(entity_target))
+            deleted_targets.append(entity_target)
         elif isinstance(operation, AddComponentPatchRequest):
-            _apply_add_component(actor, operation, changed, aliases)
+            entity_target = target(operation.entity_id)
+            operations.append(AddComponent(entity_target, _component(actor, operation.component)))
+            changed_targets.append(entity_target)
         elif isinstance(operation, SetComponentPatchRequest):
-            _apply_set_component(actor, operation, changed, aliases)
+            entity_target = target(operation.entity_id)
+            operations.append(SetComponent(entity_target, _component(actor, operation.component)))
+            changed_targets.append(entity_target)
         elif isinstance(operation, RemoveComponentPatchRequest):
-            _apply_remove_component(actor, operation, changed, aliases)
+            entity_target = target(operation.entity_id)
+            component_type = cast(
+                type[Component],
+                _component_registry(actor).get(operation.component_type),
+            )
+            operations.append(RemoveComponent(entity_target, component_type))
+            changed_targets.append(entity_target)
         elif isinstance(operation, SetEdgePatchRequest):
-            _apply_set_edge(actor, operation, changed, aliases)
+            source_target = target(operation.source_id)
+            operations.append(
+                AddEdge(
+                    source_target,
+                    target(operation.target_id),
+                    _edge(actor, operation.edge),
+                )
+            )
+            changed_targets.append(source_target)
         else:  # RemoveEdgePatchRequest -- the operations union is closed and discriminated.
-            _apply_remove_edge(actor, operation, changed, aliases)
+            source_target = target(operation.source_id)
+            edge_type = cast(type[Edge], _edge_registry(actor).get(operation.edge_type))
+            operations.append(RemoveEdge(source_target, target(operation.target_id), edge_type))
+            changed_targets.append(source_target)
+
+    def resolved(entity_target):
+        if isinstance(entity_target, EntityReference):
+            return entity_target.require()
+        return entity_target
+
+    def collect_changes():
+        changed = {resolved(entity_target) for entity_target in changed_targets}
+        deleted = {resolved(entity_target) for entity_target in deleted_targets}
+        for entity_id in deleted:
+            entity = actor.world.get_entity(entity_id)
+            for edge_type in _edge_registry(actor).values():
+                for source_id, _edge_value in entity.get_incoming_relationships(edge_type):
+                    changed.add(source_id)
+        changed.difference_update(deleted)
+        return changed, deleted
+
+    try:
+        _summary, (changed, deleted) = execute_mutation_plan(
+            actor.world,
+            MutationPlan(tuple(operations)),
+            after_apply=collect_changes,
+        )
+    except (MutationError, RelicError) as exc:
+        raise WorldPatchError(str(exc)) from exc
 
     changed_entities = [
         serialize_entity(actor, actor.world.get_entity(entity_id))
@@ -308,7 +271,7 @@ def apply_world_patch(actor: WorldActor, request: WorldPatchRequest) -> WorldPat
     return WorldPatchResponse(
         world_epoch=actor.epoch,
         changed_entities=changed_entities,
-        deleted_entities=sorted(deleted),
+        deleted_entities=sorted(str(entity_id) for entity_id in deleted),
     )
 
 

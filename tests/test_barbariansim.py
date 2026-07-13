@@ -1934,7 +1934,7 @@ async def test_recruit_follower_then_command_and_release():
     assert recruited
 
     await scenario.actor.submit(
-        _cmd(scenario, "command-follower", target_id=str(target), orders="guard the burrow")
+        _cmd(scenario, "command", target_id=str(target), instruction="guard the burrow")
     )
     await scenario.actor.tick(HOUR)
     assert (
@@ -1959,7 +1959,7 @@ def test_command_follower_rejects_non_master():
     )
 
     result = CommandFollowerHandler().execute(
-        ctx, _handler_cmd(scenario, "command-follower", target_id=str(target), orders="follow")
+        ctx, _handler_cmd(scenario, "command", target_id=str(target), instruction="follow")
     )
 
     assert not result.ok
@@ -2026,7 +2026,12 @@ def test_thrall_handlers_reject_bad_state_directly():
         case(RecruitFollowerHandler(), "already serves", target_id=str(served)),
         case(CommandFollowerHandler(), "invalid master", character_id="x"),
         case(CommandFollowerHandler(), "orders must not be empty", target_id=str(standing)),
-        case(CommandFollowerHandler(), "does not exist", target_id="ghost_999999", orders="go"),
+        case(
+            CommandFollowerHandler(),
+            "does not exist",
+            target_id="ghost_999999",
+            instruction="go",
+        ),
         case(ReleaseThrallHandler(), "invalid master", character_id="x"),
         case(ReleaseThrallHandler(), "does not exist", target_id="ghost_999999"),
         case(ReleaseThrallHandler(), "do not command", target_id=str(bound)),
@@ -2045,7 +2050,7 @@ async def test_thrall_task_can_be_reassigned_and_released():
     await scenario.actor.tick(HOUR)
 
     await scenario.actor.submit(
-        _cmd(scenario, "command-follower", target_id=str(thrall), orders="cook")
+        _cmd(scenario, "command", target_id=str(thrall), instruction="cook")
     )
     await scenario.actor.tick(HOUR)
     assert scenario.actor.world.get_entity(thrall).get_component(ThrallComponent).task == "cook"

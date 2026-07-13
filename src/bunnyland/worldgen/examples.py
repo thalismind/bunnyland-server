@@ -403,6 +403,11 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
 
 async def clover_city_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
     del options
+    from bunnyland.core.components import IdentityComponent, PortableComponent
+    from bunnyland.core.edges import ContainmentMode, Contains
+    from bunnyland.foundation.consumables.components import ConsumableComponent
+    from bunnyland.foundation.social.mechanics import SocialBond, create_obligation
+    from bunnyland.foundation.storyteller.mechanics import IncidentComponent
     from bunnyland.simpacks.lifesim.mechanics import CareerComponent, HasRoutine, RoutineComponent
 
     room_specs = [
@@ -522,6 +527,91 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
                 ),
             ),
         )
+        _augment(
+            actor,
+            world.objects["log"],
+            ReadableComponent(
+                title="Clover City Incident Log",
+                text=(
+                    "OPEN parcel-01: parcel missing from mailroom. "
+                    "OPEN water-01: rooftop ration and pantry shortage. "
+                    "OPEN lift-01: elevator fault follows a music-room noise complaint."
+                ),
+            ),
+            WritableComponent(remaining_space=1200, erasable=False),
+        )
+        _augment(
+            actor,
+            world.objects["pantry"],
+            ConsumableComponent(current_uses=2, max_uses=8),
+        )
+        parcel = spawn_entity(
+            actor.world,
+            [
+                IdentityComponent(name="misrouted parcel", kind="parcel"),
+                PortableComponent(can_pick_up=True),
+            ],
+        )
+        actor.world.get_entity(world.rooms["laundry"]).add_relationship(
+            Contains(mode=ContainmentMode.ROOM_CONTENT), parcel.id
+        )
+
+        story_specs = (
+            (
+                "missing_parcel",
+                "mailroom",
+                "pip",
+                "ada",
+                "Find the misrouted parcel, return it to the mailroom, and record "
+                "the witness report.",
+            ),
+            (
+                "rooftop_water_shortage",
+                "roof",
+                "wick",
+                "saffron",
+                "Refill the rooftop water and share the remaining pantry supply fairly.",
+            ),
+            (
+                "elevator_noise_dispute",
+                "elevator",
+                "jun",
+                "orla",
+                "Inspect the elevator fault, address the noise complaint, and close "
+                "the incident log.",
+            ),
+        )
+        for index, (kind, room_key, debtor_key, creditor_key, text) in enumerate(story_specs):
+            incident = spawn_entity(
+                actor.world,
+                [
+                    IdentityComponent(name=kind.replace("_", " "), kind="incident"),
+                    IncidentComponent(
+                        kind=kind,
+                        budget_spent=0,
+                        started_at_epoch=actor.epoch,
+                        room_id=str(world.rooms[room_key]),
+                    ),
+                ],
+            )
+            actor.world.get_entity(world.rooms[room_key]).add_relationship(
+                Contains(mode=ContainmentMode.ROOM_CONTENT), incident.id
+            )
+            debtor = world.characters[debtor_key]
+            creditor = world.characters[creditor_key]
+            create_obligation(
+                actor.world,
+                kind="request",
+                text=text,
+                debtor_id=debtor,
+                creditor_id=creditor,
+                source_event_id=f"clover-story-{index}",
+                created_at_epoch=actor.epoch,
+                due_epoch=actor.epoch + 24 * 60 * 60,
+            )
+            actor.world.get_entity(debtor).add_relationship(
+                SocialBond(familiarity=0.4, trust=0.2), creditor
+            )
         for index, character_id in enumerate(world.characters.values()):
             character = actor.world.get_entity(character_id)
             _augment(actor, character_id, CareerComponent(title="resident", hourly_pay=0))

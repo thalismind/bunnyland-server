@@ -2661,18 +2661,26 @@ class StartMutinyHandler:
 
 
 class CommandDroneHandler:
-    command_type = "command-drone"
+    command_type = "command"
+
+    def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
+        target_id = parse_entity_id(command.payload.get("target_id"))
+        return (
+            target_id is not None
+            and ctx.world.has_entity(target_id)
+            and ctx.entity(target_id).has_component(DroneComponent)
+        )
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
         drone, error = _reachable_entity_with(
-            ctx, character_id, command.payload.get("drone_id"), DroneComponent
+            ctx, character_id, command.payload.get("target_id"), DroneComponent
         )
         if error is not None:
             return error
-        task = str(command.payload.get("task", "assist")).strip() or "assist"
+        task = str(command.payload.get("instruction", "assist")).strip() or "assist"
         updated = replace(drone.get_component(DroneComponent), assigned_task=task, active=True)
         replace_component(drone, updated)
         return ok(

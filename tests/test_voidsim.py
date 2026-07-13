@@ -395,8 +395,8 @@ def test_voidsim_parity_handlers_mutate_state_directly():
         (StartMutinyHandler(), "start-mutiny", {}, MutinyStartedEvent),
         (
             CommandDroneHandler(),
-            "command-drone",
-            {"drone_id": str(drone_id), "task": "patch"},
+            "command",
+            {"target_id": str(drone_id), "instruction": "patch"},
             DroneCommandedEvent,
         ),
         (HackShipAIHandler(), "hack-ship-ai", {"ai_id": str(ai_id)}, ShipAIHackedEvent),
@@ -524,7 +524,7 @@ def test_voidsim_parity_handlers_reject_invalid_targets_directly():
     fake = "entity_999999"
     cases = [
         (DeployAwayTeamHandler(), "deploy-away-team", {"team_id": fake}),
-        (CommandDroneHandler(), "command-drone", {"drone_id": fake}),
+        (CommandDroneHandler(), "command", {"target_id": fake}),
         (HackShipAIHandler(), "hack-ship-ai", {"ai_id": fake}),
         (SalvageDataHandler(), "salvage-data", {"data_id": fake}),
         (StudyXenobiologyHandler(), "study-xenobiology", {"sample_id": fake}),

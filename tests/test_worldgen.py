@@ -58,10 +58,12 @@ from bunnyland.foundation.tutorial.mechanics import (
     HungryCourierControllerComponent,
 )
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
+from bunnyland.persistence import WorldMeta, load_world, save_world
 from bunnyland.plugins import (
     ContentContribution,
     EcsContribution,
     Plugin,
+    PluginRegistry,
     apply_plugins,
     bunnyland_plugins,
 )
@@ -432,6 +434,9 @@ async def test_bell_green_generator_builds_online_sandbox_shape():
 
 
 async def test_clover_city_generator_builds_dense_world_shape():
+    from bunnyland.core.components import PortableComponent, WritableComponent
+    from bunnyland.foundation.social.mechanics import ObligationComponent, SocialBond
+    from bunnyland.foundation.storyteller.mechanics import IncidentComponent
     from bunnyland.simpacks.lifesim.mechanics import RoutineComponent
 
     actor = WorldActor()
@@ -446,6 +451,8 @@ async def test_clover_city_generator_builds_dense_world_shape():
         for character_id in world.characters.values()
     }
     routines = list(actor.world.query().with_all([RoutineComponent]).execute_entities())
+    incidents = list(actor.world.query().with_all([IncidentComponent]).execute_entities())
+    obligations = list(actor.world.query().with_all([ObligationComponent]).execute_entities())
     bulletin = actor.world.get_entity(world.objects["bulletin"]).get_component(ReadableComponent)
 
     assert len(world.rooms) >= 20
@@ -466,6 +473,52 @@ async def test_clover_city_generator_builds_dense_world_shape():
     )
     assert len(routines) >= len(world.characters) * 3
     assert "Missing package" in bulletin.text
+    assert {incident.get_component(IncidentComponent).kind for incident in incidents} == {
+        "missing_parcel",
+        "rooftop_water_shortage",
+        "elevator_noise_dispute",
+    }
+    assert len(obligations) == 3
+    assert all(
+        obligation.get_component(ObligationComponent).status == "open"
+        for obligation in obligations
+    )
+    parcel = next(
+        entity
+        for entity in actor.world.query().with_all([PortableComponent]).execute_entities()
+        if entity.has_component(IdentityComponent)
+        and entity.get_component(IdentityComponent).name == "misrouted parcel"
+    )
+    assert parcel is not None
+    assert actor.world.get_entity(world.objects["log"]).has_component(WritableComponent)
+    assert actor.world.get_entity(world.characters["pip"]).get_relationships(SocialBond)
+
+
+async def test_clover_city_story_state_survives_checkpoint_restore(tmp_path):
+    from bunnyland.foundation.social.mechanics import ObligationComponent
+    from bunnyland.foundation.storyteller.mechanics import IncidentComponent
+
+    plugins = bunnyland_plugins()
+    actor = WorldActor()
+    apply_plugins(plugins, actor)
+    await CLOVER_CITY_DEMO.generate(actor, "clover-story-restart", GenOptions())
+    path = tmp_path / "clover-city.json"
+    save_world(actor, path, meta=WorldMeta(seed="clover-story-restart"))
+
+    loaded, meta = load_world(path, registry=PluginRegistry(plugins))
+
+    assert meta.seed == "clover-story-restart"
+    assert {
+        entity.get_component(IncidentComponent).kind
+        for entity in loaded.world.query().with_all([IncidentComponent]).execute_entities()
+    } == {
+        "missing_parcel",
+        "rooftop_water_shortage",
+        "elevator_noise_dispute",
+    }
+    assert len(
+        list(loaded.world.query().with_all([ObligationComponent]).execute_entities())
+    ) == 3
 
 
 def test_validate_rejects_dangling_references():

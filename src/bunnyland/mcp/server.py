@@ -1052,6 +1052,39 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
 
     @mcp.tool()
+    @_traced_tool
+    def query_world(
+        client_id: str,
+        query: str,
+        arguments: dict[str, Any] | None = None,
+        character_id: str | None = None,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+    ) -> dict[str, Any]:
+        """Run one bounded perspective query as the client's controlled character.
+
+        The v1 catalogue is ``available_actions``, ``valid_targets``, ``why_not``, and
+        ``what_changed_since``. Results use the same claim-scoped projections as REST and
+        never expose unrestricted Relics state.
+        """
+
+        try:
+            character, _controller, _generation = controlled_or_requested_player(
+                client_id,
+                character_id,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
+            )
+            return actor.perspective_queries.execute(
+                actor,
+                query,
+                arguments or {},
+                actor_id=str(character),
+            ).model_dump(mode="json")
+        except (RuntimeError, ValueError, TimeoutError) as exc:
+            raise ToolError(str(exc)) from exc
+
+    @mcp.tool()
     def search_actions(query: str = "", limit: int = 30, mode: str = "substring") -> dict[str, Any]:
         """Search the action catalogue -- the MCP equivalent of the clients' action box.
 

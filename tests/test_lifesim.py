@@ -21,6 +21,7 @@ from bunnyland.core import (
     SleepingComponent,
     SuspendedComponent,
     WakeHandler,
+    WorldClockComponent,
     build_submitted_command,
     parse_entity_id,
     replace_component,
@@ -3067,6 +3068,19 @@ async def test_lifesim_profile_whims_home_objects_invites_and_aging_controls():
     fragments = lifesim_fragments(scenario.actor.world, character)
     assert "Your traits: bookish, tidy." in fragments
     assert "Natural aging is on." in fragments
+
+
+async def test_configure_aging_uses_world_clock_when_policy_is_missing():
+    scenario = build_scenario()
+    scenario.actor.register_handler(ConfigureAgingHandler())
+
+    await scenario.actor.submit(_cmd(scenario, "configure-aging", natural_aging=True))
+    await scenario.actor.tick(HOUR)
+
+    clock = next(
+        scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities()
+    )
+    assert clock.get_component(LifesimAgingPolicyComponent).natural_aging is True
 
 
 def test_lifesim_catalogue_handlers_reject_bad_state_directly():

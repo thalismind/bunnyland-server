@@ -63,6 +63,15 @@ class ControlledBy(Edge):
 
 
 @dataclass(frozen=True)
+class KnowsRoom(Edge):
+    """Character-owned durable map knowledge for one room."""
+
+    first_seen_epoch: int = 0
+    last_seen_epoch: int = 0
+    remembered_label: str = ""
+
+
+@dataclass(frozen=True)
 class ConversationParticipant(Edge):
     """conversation -> character participant with stable turn order."""
 
@@ -88,5 +97,6 @@ __all__ = [
     "HasInjury",
     "HasThought",
     "Holding",
+    "KnowsRoom",
     "Wearing",
 ]

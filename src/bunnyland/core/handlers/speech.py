@@ -26,7 +26,7 @@ from ..components import (
     SleepingComponent,
     SuspendedComponent,
 )
-from ..ecs import container_of, contents, parse_entity_id, replace_component, spawn_entity
+from ..ecs import container_of, contents, parse_entity_id
 from ..edges import ConversationParticipant
 from ..events import (
     ConversationEndedEvent,
@@ -36,7 +36,8 @@ from ..events import (
     SpeechSaidEvent,
     SpeechToldEvent,
 )
-from .base import HandlerContext, HandlerResult, ok, rejected
+from ..mutations import AddEdge, AddEntity, EntityReference, MutationPlan, SetComponent
+from .base import HandlerContext, HandlerResult, planned, rejected
 
 DEFAULT_CONVERSATION_TIMEOUT_SECONDS = 10 * 60
 
@@ -124,14 +125,18 @@ def _end_conversation(
     participants: tuple[EntityId, ...],
     reason: str,
 ) -> HandlerResult:
-    replace_component(
-        conversation,
-        replace(component, ended=True, ended_reason=reason),
-    )
     room_id = None
     if participants and ctx.world.has_entity(participants[0]):
         room_id = container_of(ctx.entity(participants[0]))
-    return ok(
+    return planned(
+        MutationPlan(
+            (
+                SetComponent(
+                    conversation.id,
+                    replace(component, ended=True, ended_reason=reason),
+                ),
+            )
+        ),
         ConversationEndedEvent(
             **ctx.event_base(
                 visibility=EventVisibility.ROOM,
@@ -142,7 +147,8 @@ def _end_conversation(
                 participant_ids=tuple(str(participant) for participant in participants),
                 reason=reason,
             )
-        )
+        ),
+        ctx=ctx,
     )
 
 
@@ -182,7 +188,8 @@ class SayHandler:
         approach = str(payload.get("approach", "")).strip() or None
         hearers = _audience(ctx, room_id, speaker_id)
 
-        return ok(
+        return planned(
+            MutationPlan(),
             SpeechSaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -195,7 +202,8 @@ class SayHandler:
                     final_interpretation=final.value,
                     approach=approach,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -232,7 +240,8 @@ class TellHandler:
                 str(hearer) for hearer in _audience(ctx, room_id, speaker_id) if hearer != target_id
             )
 
-        return ok(
+        return planned(
+            MutationPlan(),
             SpeechToldEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.DIRECTED,
@@ -246,7 +255,8 @@ class TellHandler:
                     approach=approach,
                     overhearer_ids=overhearers,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -292,35 +302,46 @@ class StartConversationHandler:
             timeout_seconds = DEFAULT_CONVERSATION_TIMEOUT_SECONDS
         timeout_seconds = max(1, timeout_seconds)
         topic = str(payload.get("topic", "")).strip()
-        conversation = spawn_entity(
-            ctx.world,
-            [
+        conversation = EntityReference()
+        operations = [
+            AddEntity(
+                (
                 IdentityComponent(name=topic or "conversation", kind="conversation"),
                 ConversationComponent(
                     topic=topic,
                     active_turn=0,
                     started_at_epoch=ctx.epoch,
                     expires_at_epoch=ctx.epoch + timeout_seconds,
+                    ),
                 ),
-            ],
-        )
+                reference=conversation,
+            )
+        ]
         for order, participant_id in enumerate(participant_ids):
-            conversation.add_relationship(ConversationParticipant(order=order), participant_id)
+            operations.append(
+                AddEdge(
+                    conversation,
+                    participant_id,
+                    ConversationParticipant(order=order),
+                )
+            )
 
-        return ok(
-            ConversationStartedEvent(
+        return planned(
+            MutationPlan(tuple(operations)),
+            lambda: ConversationStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(speaker_id),
                     room_id=str(room_id),
                     target_ids=tuple(str(participant) for participant in participant_ids[1:]),
-                    conversation_id=str(conversation.id),
+                    conversation_id=str(conversation.require()),
                     participant_ids=tuple(str(participant) for participant in participant_ids),
                     topic=topic,
                     active_participant_id=str(speaker_id),
                     expires_at_epoch=ctx.epoch + timeout_seconds,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -365,13 +386,13 @@ class ConversationLineHandler:
         approach = str(payload.get("approach", "")).strip() or None
         next_turn = component.active_turn + 1
         updated = replace(component, active_turn=next_turn)
-        replace_component(conversation, updated)
         next_participant = _current_participant(participants, updated)
         targets = tuple(
             str(participant) for participant in participants if participant != speaker_id
         )
 
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(conversation_id, updated),)),
             ConversationLineEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -402,6 +423,7 @@ class ConversationLineHandler:
                     approach=approach,
                 )
             ),
+            ctx=ctx,
         )
 
 

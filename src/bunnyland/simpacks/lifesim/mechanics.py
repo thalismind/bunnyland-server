@@ -52,7 +52,18 @@ from ...core.events import (
 from ...core.events import (
     event_base as _event_base,
 )
-from ...core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
+from ...core.mutations import (
+    AddComponent,
+    AddEdge,
+    AddEntity,
+    EntityReference,
+    MutationPlan,
+    RemoveComponent,
+    RemoveEdge,
+    SetComponent,
+    SetComponentFactory,
+)
 from ...prompts import ComponentPromptContext
 
 DEFAULT_PREGNANCY_SECONDS = 3 * 24 * 60 * 60
@@ -665,7 +676,7 @@ def _well_rested_bonus(entity: Entity, epoch: int) -> float:
     return buff.bonus if buff.expires_at_epoch > epoch else 0.0
 
 
-def _add_skill_xp(
+def _skill_xp_update(
     ctx: HandlerContext,
     entity: Entity,
     *,
@@ -674,7 +685,7 @@ def _add_skill_xp(
     actor_id: str,
     visibility: EventVisibility = EventVisibility.PRIVATE,
     target_ids: tuple[str, ...] = (),
-) -> list[DomainEvent]:
+) -> tuple[SkillSetComponent, list[DomainEvent]]:
     # A character well-rested from sleeping in their own home learns faster (spec 20.5).
     amount *= 1.0 + _well_rested_bonus(entity, ctx.epoch)
     state = _skill_state(entity)
@@ -702,7 +713,7 @@ def _add_skill_xp(
 
     levels[skill] = current_level
     xp_by_skill[skill] = current_xp
-    replace_component(entity, SkillSetComponent(levels=levels, xp=xp_by_skill))
+    updated = SkillSetComponent(levels=levels, xp=xp_by_skill)
     events.insert(
         0,
         SkillXPChangedEvent(
@@ -717,6 +728,31 @@ def _add_skill_xp(
             )
         ),
     )
+    return updated, events
+
+
+def _add_skill_xp(
+    ctx: HandlerContext,
+    entity: Entity,
+    *,
+    skill: str,
+    amount: float,
+    actor_id: str,
+    visibility: EventVisibility = EventVisibility.PRIVATE,
+    target_ids: tuple[str, ...] = (),
+) -> list[DomainEvent]:
+    """Compatibility helper for separately ordered systems and bundled packs."""
+
+    updated, events = _skill_xp_update(
+        ctx,
+        entity,
+        skill=skill,
+        amount=amount,
+        actor_id=actor_id,
+        visibility=visibility,
+        target_ids=target_ids,
+    )
+    replace_component(entity, updated)
     return events
 
 
@@ -758,11 +794,6 @@ def _optional_int(raw: object) -> int | None:
     if raw is None:
         return None
     return int(raw)
-
-
-class _ActorView:
-    def __init__(self, world: World) -> None:
-        self.world = world
 
 
 def romance_classifier(command: SubmittedCommand):
@@ -934,28 +965,29 @@ def _funds(entity: Entity) -> HouseholdFundsComponent:
     return HouseholdFundsComponent()
 
 
-def _create_bill(
-    ctx: HandlerContext,
-    debtor: Entity,
+def _bill_operations(
+    debtor_id: EntityId,
     *,
     amount: int,
     reason: str,
     due_epoch: int,
     creditor_id: str | None = None,
-) -> Entity:
-    bill = spawn_entity(
-        ctx.world,
-        [
+) -> tuple[EntityReference, tuple[object, ...]]:
+    reference = EntityReference()
+    return reference, (
+        AddEntity(
+            (
             BillComponent(
                 amount=amount,
                 reason=reason,
                 due_epoch=due_epoch,
                 creditor_id=creditor_id,
-            )
-        ],
+            ),
+            ),
+            reference=reference,
+        ),
+        AddEdge(debtor_id, reference, HasBill()),
     )
-    debtor.add_relationship(HasBill(), bill.id)
-    return bill
 
 
 def kinship_label(world: World, source_id: EntityId, target_id: EntityId) -> str | None:
@@ -1208,16 +1240,18 @@ class ChooseAspirationHandler:
         milestones = tuple(
             str(item).strip() for item in command.payload.get("milestones", ()) if str(item).strip()
         )
-        actor = ctx.entity(actor_id)
-        replace_component(actor, AspirationComponent(name=name, milestones=milestones))
-        return ok(
+        return planned(
+            MutationPlan(
+                (SetComponent(actor_id, AspirationComponent(name=name, milestones=milestones)),)
+            ),
             AspirationChosenEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(actor_id),
                     aspiration=name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1240,46 +1274,75 @@ class CompleteMilestoneHandler:
         if milestone in aspiration.completed:
             return rejected("milestone already completed")
 
-        reward_item_id: str | None = None
         reward_name = str(command.payload.get("reward_name", "")).strip()
+        reward_reference = EntityReference() if reward_name else None
+        milestone_reference = EntityReference()
+        operations = []
         if reward_name:
-            reward = spawn_entity(
-                ctx.world,
-                [IdentityComponent(name=reward_name, kind="item")],
+            operations.extend(
+                (
+                    AddEntity(
+                        (IdentityComponent(name=reward_name, kind="item"),),
+                        reference=reward_reference,
+                    ),
+                    AddEdge(
+                        actor_id,
+                        reward_reference,
+                        Contains(mode=ContainmentMode.INVENTORY),
+                    ),
+                )
             )
-            actor.add_relationship(Contains(mode=ContainmentMode.INVENTORY), reward.id)
-            reward_item_id = str(reward.id)
-
-        milestone_entity = spawn_entity(
-            ctx.world,
-            [
+        operations.append(
+            AddEntity(
+                (
                 MilestoneComponent(
                     name=milestone,
                     completed_at_epoch=ctx.epoch,
-                    reward_item_id=reward_item_id,
+                    reward_item_id=None,
+                ),
+                ),
+                reference=milestone_reference,
+            )
+        )
+        if reward_reference is not None:
+            operations.append(
+                SetComponentFactory(
+                    milestone_reference,
+                    MilestoneComponent,
+                    lambda: MilestoneComponent(
+                        name=milestone,
+                        completed_at_epoch=ctx.epoch,
+                        reward_item_id=str(reward_reference.require()),
+                    ),
                 )
-            ],
+            )
+        operations.append(
+            SetComponent(
+                actor_id,
+                AspirationComponent(
+                    name=aspiration.name,
+                    milestones=aspiration.milestones,
+                    completed=(*aspiration.completed, milestone),
+                ),
+            )
         )
-        del milestone_entity  # milestone entities are queryable history, not linked yet.
-        replace_component(
-            actor,
-            AspirationComponent(
-                name=aspiration.name,
-                milestones=aspiration.milestones,
-                completed=(*aspiration.completed, milestone),
-            ),
-        )
-        return ok(
-            MilestoneCompletedEvent(
+
+        def completed_event() -> DomainEvent:
+            return MilestoneCompletedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(actor_id),
                     aspiration=aspiration.name,
                     milestone=milestone,
-                    reward_item_id=reward_item_id,
+                    reward_item_id=(
+                        str(reward_reference.require())
+                        if reward_reference is not None
+                        else None
+                    ),
                 )
             )
-        )
+
+        return planned(MutationPlan(tuple(operations)), completed_event, ctx=ctx)
 
 
 class PracticeSkillHandler:
@@ -1295,15 +1358,14 @@ class PracticeSkillHandler:
         xp = float(command.payload.get("xp", 25.0))
         if xp <= 0:
             return rejected("xp must be positive")
-        return ok(
-            *_add_skill_xp(
-                ctx,
-                ctx.entity(actor_id),
-                skill=skill,
-                amount=xp,
-                actor_id=str(actor_id),
-            )
+        updated, events = _skill_xp_update(
+            ctx,
+            ctx.entity(actor_id),
+            skill=skill,
+            amount=xp,
+            actor_id=str(actor_id),
         )
+        return planned(MutationPlan((SetComponent(actor_id, updated),)), *events, ctx=ctx)
 
 
 class StudySkillHandler:
@@ -1319,15 +1381,14 @@ class StudySkillHandler:
         xp = float(command.payload.get("xp", 15.0))
         if xp <= 0:
             return rejected("xp must be positive")
-        return ok(
-            *_add_skill_xp(
-                ctx,
-                ctx.entity(actor_id),
-                skill=skill,
-                amount=xp,
-                actor_id=str(actor_id),
-            )
+        updated, events = _skill_xp_update(
+            ctx,
+            ctx.entity(actor_id),
+            skill=skill,
+            amount=xp,
+            actor_id=str(actor_id),
         )
+        return planned(MutationPlan((SetComponent(actor_id, updated),)), *events, ctx=ctx)
 
 
 class MentorSkillHandler:
@@ -1350,7 +1411,7 @@ class MentorSkillHandler:
         xp = float(command.payload.get("xp", 20.0)) + mentor_level * 5.0
         if xp <= 0:
             return rejected("xp must be positive")
-        events = _add_skill_xp(
+        updated, events = _skill_xp_update(
             ctx,
             ctx.entity(student_id),
             skill=skill,
@@ -1370,7 +1431,7 @@ class MentorSkillHandler:
                 )
             )
         )
-        return ok(*events)
+        return planned(MutationPlan((SetComponent(student_id, updated),)), *events, ctx=ctx)
 
 
 class UpdateProfileHandler:
@@ -1383,15 +1444,13 @@ class UpdateProfileHandler:
         traits = _parse_text_tuple(command.payload.get("traits"))
         interests = _parse_text_tuple(command.payload.get("interests"))
         preferred_routine = str(command.payload.get("preferred_routine", "")).strip()
-        replace_component(
-            ctx.entity(actor_id),
-            CharacterProfileComponent(
-                traits=traits,
-                interests=interests,
-                preferred_routine=preferred_routine,
-            ),
+        profile = CharacterProfileComponent(
+            traits=traits,
+            interests=interests,
+            preferred_routine=preferred_routine,
         )
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(actor_id, profile),)),
             ProfileUpdatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1399,7 +1458,8 @@ class UpdateProfileHandler:
                     traits=traits,
                     interests=interests,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1416,18 +1476,32 @@ class AddWhimHandler:
         reward_xp = float(command.payload.get("reward_xp", 5.0))
         if reward_xp < 0:
             return rejected("reward xp must not be negative")
-        whim = spawn_entity(ctx.world, [WhimComponent(want=want, reward_xp=reward_xp)])
-        ctx.entity(actor_id).add_relationship(HasWhim(), whim.id)
-        return ok(
-            WhimAddedEvent(
+        whim_reference = EntityReference()
+
+        def added_event() -> DomainEvent:
+            whim_id = str(whim_reference.require())
+            return WhimAddedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(actor_id),
-                    target_ids=(str(whim.id),),
-                    whim_id=str(whim.id),
+                    target_ids=(whim_id,),
+                    whim_id=whim_id,
                     want=want,
                 )
             )
+
+        return planned(
+            MutationPlan(
+                (
+                    AddEntity(
+                        (WhimComponent(want=want, reward_xp=reward_xp),),
+                        reference=whim_reference,
+                    ),
+                    AddEdge(actor_id, whim_reference, HasWhim()),
+                )
+            ),
+            added_event,
+            ctx=ctx,
         )
 
 
@@ -1450,7 +1524,7 @@ class CompleteWhimHandler:
         whim = whim_entity.get_component(WhimComponent)
         if whim.completed_at_epoch is not None:
             return rejected("whim already completed")
-        replace_component(whim_entity, replace(whim, completed_at_epoch=ctx.epoch))
+        operations = [SetComponent(whim_id, replace(whim, completed_at_epoch=ctx.epoch))]
         events = [
             WhimCompletedEvent(
                 **ctx.event_base(
@@ -1463,16 +1537,16 @@ class CompleteWhimHandler:
             )
         ]
         if whim.reward_xp > 0:
-            events.extend(
-                _add_skill_xp(
-                    ctx,
-                    actor,
-                    skill="life",
-                    amount=whim.reward_xp,
-                    actor_id=str(actor_id),
-                )
+            updated, skill_events = _skill_xp_update(
+                ctx,
+                actor,
+                skill="life",
+                amount=whim.reward_xp,
+                actor_id=str(actor_id),
             )
-        return ok(*events)
+            operations.append(SetComponent(actor_id, updated))
+            events.extend(skill_events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class UseHomeObjectHandler:
@@ -1494,11 +1568,9 @@ class UseHomeObjectHandler:
         component = home_object.get_component(HomeObjectComponent)
         if component.condition <= 0:
             return rejected("home object is broken")
-        replace_component(
-            home_object,
-            replace(component, cleanliness=max(0.0, component.cleanliness - 0.1)),
-        )
-        return ok(
+        updated = replace(component, cleanliness=max(0.0, component.cleanliness - 0.1))
+        return planned(
+            MutationPlan((SetComponent(object_id, updated),)),
             HomeObjectUsedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1508,7 +1580,8 @@ class UseHomeObjectHandler:
                     object_id=str(object_id),
                     affordance=component.affordance,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1543,8 +1616,8 @@ class MaintainHomeObjectHandler:
         else:
             updates["decor_score"] = component.decor_score + 1.0
         updated = replace(component, **updates)
-        replace_component(home_object, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(object_id, updated),)),
             HomeObjectMaintainedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1558,7 +1631,8 @@ class MaintainHomeObjectHandler:
                     decor_score=updated.decor_score,
                     upgrade_level=updated.upgrade_level,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1584,7 +1658,8 @@ class InviteOverHandler:
             _owns_or_claims_room(actor_id, room) or container_of(ctx.entity(actor_id)) == room_id
         ):
             return rejected("you cannot invite guests there")
-        return ok(
+        return planned(
+            MutationPlan(),
             InvitationSentEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.DIRECTED,
@@ -1594,7 +1669,8 @@ class InviteOverHandler:
                     guest_id=str(guest_id),
                     room_id_invited=str(room_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1605,17 +1681,38 @@ class ConfigureAgingHandler:
         actor_id = parse_entity_id(command.character_id)
         if actor_id is None:
             return rejected("invalid character id")
-        policy = configure_lifesim_aging(
-            _ActorView(ctx.world),
-            natural_aging=_optional_bool(command.payload.get("natural_aging")),
-            adult_age_seconds=_optional_int(command.payload.get("adult_age_seconds")),
-            elder_age_seconds=_optional_int(command.payload.get("elder_age_seconds")),
-            natural_death_age_seconds=_optional_int(
-                command.payload.get("natural_death_age_seconds")
-            ),
-            natural_death_checks=_optional_int(command.payload.get("natural_death_checks")),
+        policy_entities = list(
+            ctx.world.query().with_all([LifesimAgingPolicyComponent]).execute_entities()
         )
-        return ok(
+        if policy_entities:
+            policy_entity = policy_entities[0]
+        else:
+            policy_entity = next(
+                ctx.world.query().with_all([WorldClockComponent]).execute_entities()
+            )
+        policy = (
+            policy_entity.get_component(LifesimAgingPolicyComponent)
+            if policy_entity.has_component(LifesimAgingPolicyComponent)
+            else LifesimAgingPolicyComponent()
+        )
+        updates = {
+            key: value
+            for key, value in {
+                "natural_aging": _optional_bool(command.payload.get("natural_aging")),
+                "adult_age_seconds": _optional_int(command.payload.get("adult_age_seconds")),
+                "elder_age_seconds": _optional_int(command.payload.get("elder_age_seconds")),
+                "natural_death_age_seconds": _optional_int(
+                    command.payload.get("natural_death_age_seconds")
+                ),
+                "natural_death_checks": _optional_int(
+                    command.payload.get("natural_death_checks")
+                ),
+            }.items()
+            if value is not None
+        }
+        policy = replace(policy, **updates)
+        return planned(
+            MutationPlan((SetComponent(policy_entity.id, policy),)),
             LifesimAgingPolicyChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.SYSTEM,
@@ -1625,7 +1722,8 @@ class ConfigureAgingHandler:
                     elder_age_seconds=policy.elder_age_seconds,
                     natural_death_age_seconds=policy.natural_death_age_seconds,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1643,10 +1741,11 @@ class FindJobHandler:
         if hourly_pay <= 0:
             return rejected("hourly pay must be positive")
         actor = ctx.entity(actor_id)
-        replace_component(actor, CareerComponent(title=title, hourly_pay=hourly_pay))
-        replace_component(
-            actor,
-            JobScheduleComponent(
+        operations = [
+            SetComponent(actor_id, CareerComponent(title=title, hourly_pay=hourly_pay)),
+            SetComponent(
+                actor_id,
+                JobScheduleComponent(
                 next_shift_epoch=int(command.payload.get("next_shift_epoch", ctx.epoch)),
                 shift_duration_seconds=int(
                     command.payload.get("shift_duration_seconds", 8 * 60 * 60)
@@ -1654,18 +1753,21 @@ class FindJobHandler:
                 shift_interval_seconds=int(
                     command.payload.get("shift_interval_seconds", 24 * 60 * 60)
                 ),
+                ),
             ),
-        )
+        ]
         if not actor.has_component(HouseholdFundsComponent):
-            actor.add_component(HouseholdFundsComponent())
-        return ok(
+            operations.append(AddComponent(actor_id, HouseholdFundsComponent()))
+        return planned(
+            MutationPlan(tuple(operations)),
             CareerStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(actor_id),
                     title=title,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1695,7 +1797,6 @@ class GoToWorkHandler:
             else HouseholdFundsComponent()
         )
         updated_funds = HouseholdFundsComponent(balance=funds.balance + earned)
-        replace_component(actor, updated_funds)
         performance = career.performance + float(command.payload.get("performance_gain", 0.5))
         promoted = performance >= 1.0
         if promoted:
@@ -1714,14 +1815,10 @@ class GoToWorkHandler:
                 performance=performance,
                 active=career.active,
             )
-        replace_component(actor, updated_career)
-        replace_component(
-            actor,
-            JobScheduleComponent(
+        updated_schedule = JobScheduleComponent(
                 next_shift_epoch=ctx.epoch + schedule.shift_interval_seconds,
                 shift_duration_seconds=schedule.shift_duration_seconds,
                 shift_interval_seconds=schedule.shift_interval_seconds,
-            ),
         )
         events = [
             WorkShiftCompletedEvent(
@@ -1745,7 +1842,17 @@ class GoToWorkHandler:
                     )
                 )
             )
-        return ok(*events)
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(actor_id, updated_funds),
+                    SetComponent(actor_id, updated_career),
+                    SetComponent(actor_id, updated_schedule),
+                )
+            ),
+            *events,
+            ctx=ctx,
+        )
 
 
 class QuitJobHandler:
@@ -1759,8 +1866,10 @@ class QuitJobHandler:
         if not actor.has_component(CareerComponent):
             return rejected("character has no job")
         career = actor.get_component(CareerComponent)
-        replace_component(actor, replace(career, active=False))
-        return ok()
+        return planned(
+            MutationPlan((SetComponent(actor_id, replace(career, active=False)),)),
+            ctx=ctx,
+        )
 
 
 class PayWageHandler:
@@ -1786,9 +1895,13 @@ class PayWageHandler:
         worker_funds = _funds(worker)
         updated_payer = HouseholdFundsComponent(balance=payer_funds.balance - amount)
         updated_worker = HouseholdFundsComponent(balance=worker_funds.balance + amount)
-        replace_component(payer, updated_payer)
-        replace_component(worker, updated_worker)
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(payer_id, updated_payer),
+                    SetComponent(worker_id, updated_worker),
+                )
+            ),
             WagePaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.DIRECTED,
@@ -1799,7 +1912,8 @@ class PayWageHandler:
                     payer_balance=updated_payer.balance,
                     worker_balance=updated_worker.balance,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1815,31 +1929,38 @@ class AssessTaxHandler:
             return rejected("tax amount must be positive")
         reason = str(command.payload.get("reason", "taxes")).strip() or "taxes"
         due_epoch = int(command.payload.get("due_epoch", ctx.epoch))
-        actor = ctx.entity(actor_id)
-        bill = _create_bill(ctx, actor, amount=amount, reason=reason, due_epoch=due_epoch)
-        return ok(
-            TaxAssessedEvent(
+        bill, operations = _bill_operations(
+            actor_id, amount=amount, reason=reason, due_epoch=due_epoch
+        )
+
+        def tax_event() -> DomainEvent:
+            bill_id = str(bill.require())
+            return TaxAssessedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(actor_id),
-                    target_ids=(str(bill.id),),
-                    bill_id=str(bill.id),
+                    target_ids=(bill_id,),
+                    bill_id=bill_id,
                     amount=amount,
                     reason=reason,
                 )
-            ),
-            BillCreatedEvent(
+            )
+
+        def bill_event() -> DomainEvent:
+            bill_id = str(bill.require())
+            return BillCreatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(actor_id),
-                    target_ids=(str(bill.id),),
-                    bill_id=str(bill.id),
+                    target_ids=(bill_id,),
+                    bill_id=bill_id,
                     amount=amount,
                     reason=reason,
                     due_epoch=due_epoch,
                 )
-            ),
-        )
+            )
+
+        return planned(MutationPlan(operations), tax_event, bill_event, ctx=ctx)
 
 
 class ChargeRentHandler:
@@ -1859,39 +1980,42 @@ class ChargeRentHandler:
             return rejected("rent amount must be positive")
         reason = str(command.payload.get("reason", "rent")).strip() or "rent"
         due_epoch = int(command.payload.get("due_epoch", ctx.epoch))
-        tenant = ctx.entity(tenant_id)
-        bill = _create_bill(
-            ctx,
-            tenant,
+        bill, operations = _bill_operations(
+            tenant_id,
             amount=amount,
             reason=reason,
             due_epoch=due_epoch,
             creditor_id=str(landlord_id),
         )
-        return ok(
-            RentChargedEvent(
+        def rent_event() -> DomainEvent:
+            bill_id = str(bill.require())
+            return RentChargedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.DIRECTED,
                     actor_id=str(landlord_id),
-                    target_ids=(str(tenant_id), str(bill.id)),
-                    bill_id=str(bill.id),
+                    target_ids=(str(tenant_id), bill_id),
+                    bill_id=bill_id,
                     tenant_id=str(tenant_id),
                     amount=amount,
                     reason=reason,
                 )
-            ),
-            BillCreatedEvent(
+            )
+
+        def bill_event() -> DomainEvent:
+            bill_id = str(bill.require())
+            return BillCreatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.DIRECTED,
                     actor_id=str(landlord_id),
-                    target_ids=(str(tenant_id), str(bill.id)),
-                    bill_id=str(bill.id),
+                    target_ids=(str(tenant_id), bill_id),
+                    bill_id=bill_id,
                     amount=amount,
                     reason=reason,
                     due_epoch=due_epoch,
                 )
-            ),
-        )
+            )
+
+        return planned(MutationPlan(operations), rent_event, bill_event, ctx=ctx)
 
 
 class PayBillHandler:
@@ -1929,18 +2053,21 @@ class PayBillHandler:
         if funds.balance < bill.amount:
             return rejected("insufficient household funds")
         updated_funds = HouseholdFundsComponent(balance=funds.balance - bill.amount)
-        replace_component(actor, updated_funds)
+        operations = [SetComponent(actor_id, updated_funds)]
         if bill.creditor_id is not None:
             creditor_id = parse_entity_id(bill.creditor_id)
             if creditor_id is not None and ctx.world.has_entity(creditor_id):
                 creditor = ctx.entity(creditor_id)
                 creditor_funds = _funds(creditor)
-                replace_component(
-                    creditor,
-                    HouseholdFundsComponent(balance=creditor_funds.balance + bill.amount),
+                operations.append(
+                    SetComponent(
+                        creditor_id,
+                        HouseholdFundsComponent(balance=creditor_funds.balance + bill.amount),
+                    )
                 )
-        replace_component(bill_entity, replace(bill, paid_at_epoch=ctx.epoch))
-        return ok(
+        operations.append(SetComponent(bill_id, replace(bill, paid_at_epoch=ctx.epoch)))
+        return planned(
+            MutationPlan(tuple(operations)),
             BillPaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1950,7 +2077,8 @@ class PayBillHandler:
                     amount=bill.amount,
                     balance=updated_funds.balance,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1968,23 +2096,28 @@ class OpenBusinessHandler:
         if price <= 0:
             return rejected("default price must be positive")
         actor = ctx.entity(actor_id)
-        business = spawn_entity(
-            ctx.world,
-            [BusinessOwnerComponent(name=name, default_price=price)],
-        )
-        actor.add_relationship(OwnsBusiness(), business.id)
+        business = EntityReference()
+        operations = [
+            AddEntity(
+                (BusinessOwnerComponent(name=name, default_price=price),),
+                reference=business,
+            ),
+            AddEdge(actor_id, business, OwnsBusiness()),
+        ]
         if not actor.has_component(HouseholdFundsComponent):
-            actor.add_component(HouseholdFundsComponent())
-        return ok(
-            BusinessOpenedEvent(
+            operations.append(AddComponent(actor_id, HouseholdFundsComponent()))
+
+        def opened_event() -> DomainEvent:
+            return BusinessOpenedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(actor_id),
-                    target_ids=(str(business.id),),
+                    target_ids=(str(business.require()),),
                     business_name=name,
                 )
             )
-        )
+
+        return planned(MutationPlan(tuple(operations)), opened_event, ctx=ctx)
 
 
 class SellItemHandler:
@@ -2014,21 +2147,28 @@ class SellItemHandler:
             return rejected("price must be positive")
         if customer.get_component(CustomerComponent).budget < price:
             return rejected("customer cannot afford item")
-        actor.remove_relationship(Contains, item_id)
         funds = (
             actor.get_component(HouseholdFundsComponent)
             if actor.has_component(HouseholdFundsComponent)
             else HouseholdFundsComponent()
         )
         updated_funds = HouseholdFundsComponent(balance=funds.balance + price)
-        replace_component(actor, updated_funds)
-        replace_component(
-            business_entity,
-            replace(business, sales_count=business.sales_count + 1),
-        )
         customer_budget = customer.get_component(CustomerComponent)
-        replace_component(customer, replace(customer_budget, budget=customer_budget.budget - price))
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    RemoveEdge(actor_id, item_id, Contains),
+                    SetComponent(actor_id, updated_funds),
+                    SetComponent(
+                        business_entity.id,
+                        replace(business, sales_count=business.sales_count + 1),
+                    ),
+                    SetComponent(
+                        customer_id,
+                        replace(customer_budget, budget=customer_budget.budget - price),
+                    ),
+                )
+            ),
             BusinessSaleEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2040,7 +2180,8 @@ class SellItemHandler:
                     price=price,
                     balance=updated_funds.balance,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2076,18 +2217,26 @@ class BuyItemHandler:
         if buyer_funds.balance < price:
             return rejected("insufficient household funds")
 
-        seller.remove_relationship(Contains, item_id)
-        buyer.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
         updated_buyer_funds = HouseholdFundsComponent(balance=buyer_funds.balance - price)
-        replace_component(buyer, updated_buyer_funds)
         seller_funds = _funds(seller)
-        replace_component(seller, HouseholdFundsComponent(balance=seller_funds.balance + price))
+        operations = [
+            RemoveEdge(seller_id, item_id, Contains),
+            AddEdge(actor_id, item_id, Contains(mode=ContainmentMode.INVENTORY)),
+            SetComponent(actor_id, updated_buyer_funds),
+            SetComponent(
+                seller_id,
+                HouseholdFundsComponent(balance=seller_funds.balance + price),
+            ),
+        ]
         if business_entity is not None and business is not None:
-            replace_component(
-                business_entity,
-                replace(business, sales_count=business.sales_count + 1),
+            operations.append(
+                SetComponent(
+                    business_entity.id,
+                    replace(business, sales_count=business.sales_count + 1),
+                )
             )
-        return ok(
+        return planned(
+            MutationPlan(tuple(operations)),
             BusinessPurchaseEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2099,7 +2248,8 @@ class BuyItemHandler:
                     price=price,
                     balance=updated_buyer_funds.balance,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2116,15 +2266,18 @@ class PromoteBusinessHandler:
         if business_entity is None:
             return rejected("character has no business")
         business = business_entity.get_component(BusinessOwnerComponent)
-        replace_component(business_entity, replace(business, promoted=True))
-        return ok(
+        return planned(
+            MutationPlan(
+                (SetComponent(business_entity.id, replace(business, promoted=True)),)
+            ),
             BusinessPromotedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(actor_id),
                     business_name=business.name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2139,9 +2292,10 @@ class JoinHouseholdHandler:
         if not household_id:
             return rejected("household id is required")
         household_name = str(command.payload.get("name", "")).strip()
-        actor = ctx.entity(actor_id)
-        replace_component(actor, HouseholdComponent(household_id=household_id, name=household_name))
-        return ok(
+        return planned(
+            MutationPlan(
+                (SetComponent(actor_id, HouseholdComponent(household_id, household_name)),)
+            ),
             HouseholdJoinedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2149,7 +2303,8 @@ class JoinHouseholdHandler:
                     household_id=household_id,
                     household_name=household_name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2171,9 +2326,10 @@ class ClaimHomeHandler:
             if actor.has_component(HouseholdComponent)
             else None
         )
-        room = ctx.entity(room_id)
-        replace_component(room, HomeComponent(owner_id=str(actor_id), household_id=household_id))
-        return ok(
+        return planned(
+            MutationPlan(
+                (SetComponent(room_id, HomeComponent(str(actor_id), household_id)),)
+            ),
             HomeClaimedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2181,7 +2337,8 @@ class ClaimHomeHandler:
                     room_id=str(room_id),
                     room_id_claimed=str(room_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2197,12 +2354,17 @@ class ClaimRoomHandler:
             room_id = container_of(ctx.entity(actor_id))
         if room_id is None or not ctx.world.has_entity(room_id):
             return rejected("room does not exist")
-        room = ctx.entity(room_id)
-        replace_component(
-            room,
-            RoomClaimComponent(claimed_by_id=str(actor_id), claimed_at_epoch=ctx.epoch),
-        )
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        room_id,
+                        RoomClaimComponent(
+                            claimed_by_id=str(actor_id), claimed_at_epoch=ctx.epoch
+                        ),
+                    ),
+                )
+            ),
             RoomClaimedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2210,7 +2372,8 @@ class ClaimRoomHandler:
                     room_id=str(room_id),
                     room_id_claimed=str(room_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2230,28 +2393,33 @@ class SetRoutineHandler:
         next_due = int(command.payload.get("next_due_epoch", ctx.epoch + interval))
         actor = ctx.entity(actor_id)
         existing = _routine_for_activity(ctx.world, actor, activity)
-        routine = existing or spawn_entity(ctx.world)
-        replace_component(
-            routine,
-            RoutineComponent(
-                activity=activity,
-                interval_seconds=interval,
-                next_due_epoch=next_due,
-            ),
+        component = RoutineComponent(
+            activity=activity,
+            interval_seconds=interval,
+            next_due_epoch=next_due,
         )
         if existing is None:
-            actor.add_relationship(HasRoutine(), routine.id)
-        return ok(
-            RoutineSetEvent(
+            routine = EntityReference()
+            operations = (
+                AddEntity((component,), reference=routine),
+                AddEdge(actor_id, routine, HasRoutine()),
+            )
+        else:
+            routine = EntityReference(existing.id)
+            operations = (SetComponent(existing.id, component),)
+
+        def routine_event() -> DomainEvent:
+            return RoutineSetEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(actor_id),
-                    target_ids=(str(routine.id),),
+                    target_ids=(str(routine.require()),),
                     activity=activity,
                     next_due_epoch=next_due,
                 )
             )
-        )
+
+        return planned(MutationPlan(operations), routine_event, ctx=ctx)
 
 
 class SetRelationshipStatusHandler:
@@ -2274,10 +2442,18 @@ class SetRelationshipStatusHandler:
         if not _same_room(ctx.world, actor_id, target_id):
             return rejected("target is not present")
         current = _status_edge(actor, target_id)
+        operations = []
         if current is not None:
-            actor.remove_relationship(RelationshipStatus, target_id)
-        actor.add_relationship(RelationshipStatus(status=status, since_epoch=ctx.epoch), target_id)
-        return ok(
+            operations.append(RemoveEdge(actor_id, target_id, RelationshipStatus))
+        operations.append(
+            AddEdge(
+                actor_id,
+                target_id,
+                RelationshipStatus(status=status, since_epoch=ctx.epoch),
+            )
+        )
+        return planned(
+            MutationPlan(tuple(operations)),
             RelationshipStatusChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2287,7 +2463,8 @@ class SetRelationshipStatusHandler:
                     target_id=str(target_id),
                     status=status,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2316,11 +2493,15 @@ class SpreadGossipHandler:
         known_for = current.known_for
         if text not in known_for:
             known_for = (*known_for, text)
-        replace_component(
-            target,
-            ReputationComponent(score=current.score + delta, known_for=known_for),
-        )
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        target_id,
+                        ReputationComponent(score=current.score + delta, known_for=known_for),
+                    ),
+                )
+            ),
             GossipSpreadEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2331,7 +2512,8 @@ class SpreadGossipHandler:
                     text=text,
                     reputation_delta=delta,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2354,15 +2536,20 @@ class WitnessRomanceHandler:
         ):
             return rejected("participants are not present")
         intensity = float(command.payload.get("intensity", 0.5))
-        actor.add_relationship(
-            JealousOf(
-                partner_id=str(partner_id),
-                intensity=intensity,
-                triggered_at_epoch=ctx.epoch,
+        return planned(
+            MutationPlan(
+                (
+                    AddEdge(
+                        actor_id,
+                        rival_id,
+                        JealousOf(
+                            partner_id=str(partner_id),
+                            intensity=intensity,
+                            triggered_at_epoch=ctx.epoch,
+                        ),
+                    ),
+                )
             ),
-            rival_id,
-        )
-        return ok(
             JealousyTriggeredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2372,7 +2559,8 @@ class WitnessRomanceHandler:
                     rival_id=str(rival_id),
                     intensity=intensity,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2397,9 +2585,13 @@ class StartPartnershipHandler:
             return rejected("already partners")
 
         edge = PartnerOf(since_epoch=ctx.epoch)
-        actor.add_relationship(edge, target_id)
-        target.add_relationship(edge, actor_id)
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    AddEdge(actor_id, target_id, edge),
+                    AddEdge(target_id, actor_id, edge),
+                )
+            ),
             PartnershipStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2408,7 +2600,8 @@ class StartPartnershipHandler:
                     target_ids=(str(target_id),),
                     partner_id=str(target_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2428,10 +2621,11 @@ class EndPartnershipHandler:
         if _partner_edge(actor, target_id) is None:
             return rejected("not partners")
 
-        actor.remove_relationship(PartnerOf, target_id)
+        operations = [RemoveEdge(actor_id, target_id, PartnerOf)]
         if target.has_relationship(PartnerOf, actor_id):
-            target.remove_relationship(PartnerOf, actor_id)
-        return ok(
+            operations.append(RemoveEdge(target_id, actor_id, PartnerOf))
+        return planned(
+            MutationPlan(tuple(operations)),
             PartnershipEndedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2440,7 +2634,8 @@ class EndPartnershipHandler:
                     target_ids=(str(target_id),),
                     partner_id=str(target_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2493,8 +2688,8 @@ class StartPregnancyHandler:
             co_parent_ids=(str(co_parent_id),),
             source_event_id=command.command_id,
         )
-        replace_component(actor, pregnancy)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(actor_id, pregnancy),)),
             PregnancyStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.DIRECTED,
@@ -2505,7 +2700,8 @@ class StartPregnancyHandler:
                     co_parent_ids=(str(co_parent_id),),
                     due_at_epoch=pregnancy.due_at_epoch,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2523,47 +2719,62 @@ class ResolveBirthHandler:
             return rejected("birth is not due")
 
         child_name = str(command.payload.get("child_name", "Child")).strip() or "Child"
-        child = spawn_entity(
-            ctx.world,
-            [
+        child = EntityReference()
+        controller = EntityReference()
+        operations = [
+            AddEntity(
+                (
                 IdentityComponent(name=child_name, kind="character"),
                 CharacterComponent(species=actor.get_component(CharacterComponent).species),
                 AgeComponent(born_at_epoch=ctx.epoch),
                 LifeStageComponent(stage="child"),
-            ],
-        )
-        controller = spawn_entity(
-            ctx.world,
-            [LLMControllerComponent(profile_name="default", model="claude")],
-        )
-        child.add_relationship(ControlledBy(generation=0, since_epoch=ctx.epoch), controller.id)
+                ),
+                reference=child,
+            ),
+            AddEntity(
+                (LLMControllerComponent(profile_name="default", model="claude"),),
+                reference=controller,
+            ),
+            AddEdge(
+                child,
+                controller,
+                ControlledBy(generation=0, since_epoch=ctx.epoch),
+            ),
+        ]
         room_id = container_of(actor)
         if room_id is not None:
-            ctx.entity(room_id).add_relationship(
-                Contains(mode=ContainmentMode.ROOM_CONTENT), child.id
+            operations.append(
+                AddEdge(room_id, child, Contains(mode=ContainmentMode.ROOM_CONTENT))
             )
 
         pregnancy = actor.get_component(PregnancyComponent)
-        actor.add_relationship(ParentOf(), child.id)
+        operations.append(AddEdge(actor_id, child, ParentOf()))
         for raw_id in pregnancy.co_parent_ids:
             co_parent_id = parse_entity_id(raw_id)
             if co_parent_id is not None and ctx.world.has_entity(co_parent_id):
-                ctx.entity(co_parent_id).add_relationship(ParentOf(), child.id)
+                operations.append(AddEdge(co_parent_id, child, ParentOf()))
 
-        actor.remove_component(PregnancyComponent)
-        actor.remove_component(BirthDueComponent)
-        return ok(
-            BirthResolvedEvent(
+        operations.extend(
+            (
+                RemoveComponent(actor_id, PregnancyComponent),
+                RemoveComponent(actor_id, BirthDueComponent),
+            )
+        )
+
+        def birth_event() -> DomainEvent:
+            child_id = str(child.require())
+            return BirthResolvedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(actor_id),
                     room_id=str(room_id) if room_id is not None else None,
-                    target_ids=(str(child.id), *pregnancy.co_parent_ids),
-                    child_id=str(child.id),
+                    target_ids=(child_id, *pregnancy.co_parent_ids),
+                    child_id=child_id,
                     parent_ids=(str(actor_id), *pregnancy.co_parent_ids),
                 )
             )
-        )
+
+        return planned(MutationPlan(tuple(operations)), birth_event, ctx=ctx)
 
 
 class AdoptChildHandler:
@@ -2591,8 +2802,8 @@ class AdoptChildHandler:
         if actor.has_relationship(ParentOf, child_id):
             return rejected("already parent of child")
 
-        actor.add_relationship(ParentOf(), child_id)
-        return ok(
+        return planned(
+            MutationPlan((AddEdge(actor_id, child_id, ParentOf()),)),
             AdoptionCompletedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2602,7 +2813,8 @@ class AdoptChildHandler:
                     child_id=str(child_id),
                     parent_id=str(actor_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 

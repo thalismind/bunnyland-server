@@ -6,7 +6,7 @@ from ...core.components import (
     HoldableComponent,
     WearableComponent,
 )
-from ...core.edges import ConversationParticipant
+from ...core.edges import ConversationParticipant, KnowsRoom
 from ...core.events import (
     ContainerClosedEvent,
     ContainerOpenedEvent,
@@ -50,12 +50,14 @@ from ...core.handlers import (
     WearHandler,
     WriteHandler,
 )
+from ...core.perspective import V1_PERSPECTIVE_QUERIES
 from ...plugins.ids import CORE_VERBS
 from ...plugins.model import (
     CommandContribution,
     EcsContribution,
     Plugin,
     PluginPlacement,
+    RuntimeContribution,
 )
 from .actions import ACTION_DEFINITIONS
 
@@ -71,7 +73,7 @@ def _definition() -> Plugin:
                 HoldableComponent,
                 WearableComponent,
             ),
-            edges=(ConversationParticipant,),
+            edges=(ConversationParticipant, KnowsRoom),
         ),
         commands=CommandContribution(
             action_definitions=ACTION_DEFINITIONS,
@@ -119,6 +121,7 @@ def _definition() -> Plugin:
                 ItemRemovedEvent,
             ),
         ),
+        runtime=RuntimeContribution(perspective_queries=V1_PERSPECTIVE_QUERIES),
     )
 
 

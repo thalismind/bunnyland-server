@@ -44,7 +44,7 @@ slips a calm checkpoint quietly but fails against an alerted guard.
 Claim a safehouse as your own base of operations:
 
 ```text
-!claim-safehouse target_id="back-alley flop"
+!claim target_id="back-alley flop"
 ```
 
 ## Devices and surveillance

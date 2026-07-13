@@ -625,6 +625,7 @@ def test_build_context_surfaces_relevant_memory_with_audit_metadata():
 
     assert len(ctx.recall) == 1
     assert "The basin water is unsafe." in ctx.recall[0]
+    assert ctx.recall[0].startswith('[untrusted world memory] "')
     assert f"memory:{unsafe.id}" in ctx.recall[0]
     assert "source:manual" in ctx.recall[0]
     assert "score:" in ctx.recall[0]

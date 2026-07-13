@@ -18,6 +18,8 @@ from .actions import (
 from .commands import (
     Command,
     CommandCost,
+    CommitReceipt,
+    CommitStatus,
     Lane,
     MoveCommand,
     OnInsufficientPoints,
@@ -116,6 +118,7 @@ from .edges import (
     HasInjury,
     HasThought,
     Holding,
+    KnowsRoom,
     Wearing,
 )
 from .events import (
@@ -185,11 +188,33 @@ from .handlers import (
     WriteHandler,
     infer_intent,
 )
+from .mutations import (
+    AddComponent,
+    AddEdge,
+    AddEntity,
+    DeleteEntity,
+    EntityReference,
+    MutationError,
+    MutationPlan,
+    RemoveComponent,
+    RemoveEdge,
+    SetComponent,
+    SetComponentFactory,
+    execute_mutation_plan,
+    validate_core_invariants,
+)
+from .perspective import (
+    PerspectiveQueryDefinition,
+    PerspectiveQueryRegistry,
+    PerspectiveQueryRequest,
+    PerspectiveQueryResult,
+)
 from .queue import CommandQueues
 from .systems import ClaimTimeoutSystem
 from .world_actor import WorldActor
 
 __all__ = [
+    "AddComponent",
     "ActionPointsComponent",
     "AdminComponent",
     "ActionArgument",
@@ -216,6 +241,23 @@ __all__ = [
     "CloseHandler",
     "Command",
     "CommandCost",
+    "CommitReceipt",
+    "CommitStatus",
+    "AddEdge",
+    "AddEntity",
+    "EntityReference",
+    "MutationError",
+    "MutationPlan",
+    "RemoveComponent",
+    "RemoveEdge",
+    "SetComponent",
+    "SetComponentFactory",
+    "execute_mutation_plan",
+    "validate_core_invariants",
+    "PerspectiveQueryDefinition",
+    "PerspectiveQueryRegistry",
+    "PerspectiveQueryRequest",
+    "PerspectiveQueryResult",
     "CommandQueues",
     "ContainerComponent",
     "ContainerClosedEvent",
@@ -231,6 +273,7 @@ __all__ = [
     "ContainmentMode",
     "ControlledBy",
     "DeadComponent",
+    "DeleteEntity",
     "DescriptionComponent",
     "DiscordControllerComponent",
     "DomainEvent",
@@ -271,6 +314,7 @@ __all__ = [
     "HoldableComponent",
     "HoldHandler",
     "Holding",
+    "KnowsRoom",
     "IdentityComponent",
     "InspectHandler",
     "InitiativeComponent",

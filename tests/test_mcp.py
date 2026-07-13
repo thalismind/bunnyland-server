@@ -1997,6 +1997,38 @@ def test_runtime_status_reports_tick_cadence(monkeypatch, scenario):
     assert no_loop["game_seconds_per_tick"] is None
 
 
+def test_query_world_uses_claimed_perspective_registry(monkeypatch, scenario):
+    from bunnyland.core.perspective import V1_PERSPECTIVE_QUERIES
+
+    for definition in V1_PERSPECTIVE_QUERIES:
+        scenario.actor.perspective_queries.register(
+            definition, owner="bunnyland.core_verbs"
+        )
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+    claimed = asyncio.run(
+        tools["claim_character"](client_id="query-client", character_name="Juniper")
+    )
+
+    result = tools["query_world"](
+        client_id="query-client",
+        query="valid_targets",
+        arguments={"action": "move"},
+        claim_id=claimed["claim_id"],
+        claim_secret=claimed["claim_secret"],
+    )
+
+    assert result["owner"] == "bunnyland.core_verbs"
+    assert result["actor_id"] == str(scenario.character)
+    assert result["result"]["exit_id"][0]["id"] == str(scenario.room_b)
+    with pytest.raises(RuntimeError, match="unknown perspective query"):
+        tools["query_world"](
+            client_id="query-client",
+            query="raw_relics",
+            claim_id=claimed["claim_id"],
+            claim_secret=claimed["claim_secret"],
+        )
+
+
 def test_mcp_client_resources_require_and_accept_claim_headers(monkeypatch, scenario):
     resources: dict = {}
     headers: dict[str, str] = {}

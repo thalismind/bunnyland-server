@@ -47,6 +47,7 @@ class RuntimeContribution(BaseModel):
     #: HTTP router factories called by the FastAPI app factory after built-in middleware is
     #: installed. A factory receives ``(app, actor, **context)`` and may include routers.
     server_routers: tuple[Any, ...] = ()
+    perspective_queries: tuple[Any, ...] = ()
 
     def all_factories(self) -> tuple[Any, ...]:
         return (

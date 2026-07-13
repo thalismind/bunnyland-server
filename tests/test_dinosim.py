@@ -1119,10 +1119,10 @@ async def test_creature_can_be_tracked_tamed_trained_commanded_mounted_and_recal
         _cmd(scenario, "mount-creature", creature_id=str(raptor.id)),
         _cmd(
             scenario,
-            "command-companion",
-            creature_id=str(raptor.id),
-            command_name="guard",
-            target_id=str(scenario.room_a),
+            "command",
+            target_id=str(raptor.id),
+            instruction="guard",
+            command_target_id=str(scenario.room_a),
         ),
     ]
     for command in commands:
@@ -1373,8 +1373,8 @@ async def test_enclosure_escape_recapture_hide_and_evacuation_loop():
     await scenario.actor.submit(
         _cmd(
             scenario,
-            "build-enclosure",
-            room_id=str(scenario.room_a),
+            "build",
+            target_id=str(scenario.room_a),
             name="Fern Pen",
             capacity=2,
             feeding_pen=True,
@@ -2430,17 +2430,17 @@ def test_enclosure_handlers_reject_invalid_and_cover_edge_paths_directly():
     cases = [
         (
             BuildEnclosureHandler(),
-            _handler_cmd(scenario, "build-enclosure", character_id="not-an-id"),
+            _handler_cmd(scenario, "build", character_id="not-an-id"),
             "invalid character id",
         ),
         (
             BuildEnclosureHandler(),
-            _handler_cmd(scenario, "build-enclosure", room_id=str(rock.id)),
+            _handler_cmd(scenario, "build", target_id=str(rock.id)),
             "target is not a room",
         ),
         (
             BuildEnclosureHandler(),
-            _handler_cmd(scenario, "build-enclosure", room_id=str(no_gate.id)),
+            _handler_cmd(scenario, "build", target_id=str(no_gate.id)),
             "room is already an enclosure",
         ),
         (
@@ -2657,21 +2657,21 @@ def test_companion_lifecycle_and_item_handlers_cover_additional_edge_paths_direc
         ),
         (
             CommandCompanionHandler(),
-            _handler_cmd(scenario, "command-companion", character_id="not-an-id"),
+            _handler_cmd(scenario, "command", character_id="not-an-id"),
             "invalid character id",
         ),
         (
             CommandCompanionHandler(),
-            _handler_cmd(scenario, "command-companion", creature_id=str(companion.id)),
+            _handler_cmd(scenario, "command", target_id=str(companion.id)),
             "command name is required",
         ),
         (
             CommandCompanionHandler(),
             _handler_cmd(
                 scenario,
-                "command-companion",
-                creature_id=str(companion.id),
-                command_name="guard",
+                "command",
+                target_id=str(companion.id),
+                instruction="guard",
             ),
             "command has not been trained",
         ),
@@ -2720,10 +2720,10 @@ def test_companion_lifecycle_and_item_handlers_cover_additional_edge_paths_direc
             ctx,
             _handler_cmd(
                 scenario,
-                "command-companion",
-                creature_id=str(companion.id),
-                command_name="hunt",
-                target_id="velociraptor",
+                "command",
+                target_id=str(companion.id),
+                instruction="hunt",
+                command_target_id="velociraptor",
             ),
         )
         .ok
@@ -3233,9 +3233,9 @@ def test_companion_handlers_reject_invalid_targets_and_missing_ownership_directl
             CommandCompanionHandler(),
             _handler_cmd(
                 scenario,
-                "command-companion",
-                creature_id=str(other_companion.id),
-                command_name="guard",
+                "command",
+                target_id=str(other_companion.id),
+                instruction="guard",
             ),
             "creature is not your companion",
         ),
@@ -3677,7 +3677,7 @@ def test_creature_action_handlers_reject_invalid_character():
         (TameCreatureHandler(), "tame-creature"),
         (TrainCommandHandler(), "train-command"),
         (MountCreatureHandler(), "mount-creature"),
-        (CommandCompanionHandler(), "command-companion"),
+        (CommandCompanionHandler(), "command"),
         (RepairFenceHandler(), "repair-fence"),
         (ReinforceGateHandler(), "reinforce-gate"),
         (LockPenHandler(), "lock-pen"),
@@ -3717,7 +3717,7 @@ def test_creature_handlers_reject_missing_creature_or_item():
         (TameCreatureHandler(), "tame-creature"),
         (TrainCommandHandler(), "train-command"),
         (MountCreatureHandler(), "mount-creature"),
-        (CommandCompanionHandler(), "command-companion"),
+        (CommandCompanionHandler(), "command"),
         (RecaptureCreatureHandler(), "recapture-creature"),
         (HideFromCreatureHandler(), "hide-from-creature"),
         (DodgeCreatureHandler(), "dodge-creature"),
@@ -3760,9 +3760,9 @@ def test_mount_and_command_require_a_companion_relationship():
         ctx,
         _handler_cmd(
             scenario,
-            "command-companion",
-            creature_id=str(creature.id),
-            command_name="sit",
+            "command",
+            target_id=str(creature.id),
+            instruction="sit",
         ),
     )
     assert not command.ok
@@ -3906,8 +3906,8 @@ def test_build_enclosure_without_optional_pens():
         ctx,
         _handler_cmd(
             scenario,
-            "build-enclosure",
-            room_id=str(scenario.room_a),
+            "build",
+            target_id=str(scenario.room_a),
             name="Plain Pen",
         ),
     )

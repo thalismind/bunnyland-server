@@ -102,7 +102,7 @@ Train and issue a companion command:
 
 ```text
 !train-command creature_id="clever raptor" command_name="guard" progress=2
-!command-companion creature_id="clever raptor" command_name="guard"
+!command target_id="clever raptor" instruction="guard"
 ```
 
 You can mount your own companion and recall it back to your current room:
@@ -121,7 +121,7 @@ park-management systems.
 Build a pen around a room:
 
 ```text
-!build-enclosure room_id="Fern Paddock" name="Fern Pen" capacity=3 feeding_pen=true
+!build target_id="Fern Paddock" name="Fern Pen" capacity=3 feeding_pen=true
 ```
 
 Repair and reinforce containment:
@@ -320,8 +320,8 @@ encounters, but it does not assume settlement damage or colony job queues exist.
 !approach-creature creature_id="clever raptor"
 !tame-creature creature_id="clever raptor"
 !train-command creature_id="clever raptor" command_name="guard" progress=2
-!command-companion creature_id="clever raptor" command_name="guard"
-!build-enclosure room_id="Fern Paddock" name="Fern Pen"
+!command target_id="clever raptor" instruction="guard"
+!build target_id="Fern Paddock" name="Fern Pen"
 !fight-creature creature_id="clever raptor" damage=2
 !target-weak-point creature_id="clever raptor" damage=2
 !repair-damage damage_id="damaged gatehouse" amount=2

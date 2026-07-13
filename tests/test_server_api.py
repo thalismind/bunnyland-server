@@ -1462,6 +1462,65 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario, 
     assert isinstance(queued_body["generated_at_unix"], float)
 
 
+def test_claim_scoped_perspective_query_route_and_stream_metrics(scenario, monkeypatch):
+    from bunnyland.core.perspective import V1_PERSPECTIVE_QUERIES
+
+    testclient = pytest.importorskip("fastapi.testclient")
+    for definition in V1_PERSPECTIVE_QUERIES:
+        scenario.actor.perspective_queries.register(
+            definition, owner="bunnyland.core_verbs"
+        )
+    secrets = ClaimSecretRegistry()
+    controller = scenario.actor.world.get_entity(scenario.controller)
+    claim = add_claim(
+        controller,
+        client_kind="web",
+        client_id="query-client",
+        character_id=str(scenario.character),
+    )
+    secret = secrets.issue(claim.claim_id)
+    app = create_app(
+        scenario.actor,
+        claim_secrets=secrets,
+        admin_token="admin-secret",
+    )
+    client = testclient.TestClient(app)
+    headers = {"X-Bunnyland-Claim-Secret": secret}
+    path = f"/world/character/{scenario.character}/query?claim_id={claim.claim_id}"
+
+    valid = client.post(
+        path,
+        headers=headers,
+        json={"query": "valid_targets", "arguments": {"action": "move"}},
+    )
+    unknown = client.post(
+        path,
+        headers=headers,
+        json={"query": "raw_relics"},
+    )
+    stats = client.get(
+        "/admin/stream",
+        headers={"X-Bunnyland-Admin-Secret": "admin-secret"},
+    )
+
+    assert valid.status_code == 200
+    assert valid.json()["result"]["exit_id"][0]["id"] == str(scenario.room_b)
+    assert unknown.status_code == 400
+    assert stats.status_code == 200
+    assert stats.json()["connections"] == 0
+
+    def timeout(*args, **kwargs):
+        raise TimeoutError("query budget exhausted")
+
+    monkeypatch.setattr(scenario.actor.perspective_queries, "execute", timeout)
+    exhausted = client.post(
+        path,
+        headers=headers,
+        json={"query": "valid_targets", "arguments": {"action": "move"}},
+    )
+    assert exhausted.status_code == 503
+
+
 def test_health_reports_unknown_git_hash_when_env_is_missing(scenario, monkeypatch):
     testclient = pytest.importorskip("fastapi.testclient")
     monkeypatch.delenv("BUNNYLAND_GIT_HASH", raising=False)
@@ -3887,24 +3946,27 @@ async def test_register_script_endpoint_translates_value_errors(scenario):
     assert "definitely_not_a_real_tool" in exc.value.detail
 
 
-async def test_world_updates_websocket_handles_disconnect_on_send(scenario):
+async def test_world_updates_websocket_handles_disconnect_on_send(scenario, monkeypatch):
     from fastapi import WebSocketDisconnect
 
     app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
     route = next(route for route in app.routes if route.path == "/world/updates")
 
     closed = []
+    monkeypatch.setattr(server_app, "WEBSOCKET_HEARTBEAT_SECONDS", 0.01)
 
     class FakeWebSocket:
         headers = {"x-bunnyland-admin-secret": "secret"}
+        sent = 0
 
         async def accept(self):
             return None
 
         async def send_json(self, _payload):
-            # Client vanished as the server pushed the snapshot: the send raises
-            # WebSocketDisconnect, which the handler swallows before cleanup.
-            raise WebSocketDisconnect(code=1006)
+            self.sent += 1
+            # The snapshot succeeds; the client vanishes on the next heartbeat.
+            if self.sent == 2:
+                raise WebSocketDisconnect(code=1006)
 
         async def close(self, code=1000):
             closed.append(code)
@@ -4337,51 +4399,6 @@ def test_worldgen_builder_selects_ollama_world_agent(monkeypatch):
     }
 
 
-def test_patch_helpers_reject_missing_entity_and_unknown_types_directly(scenario):
-    # The _apply_* helpers carry defense-in-depth guards that duplicate the preflight
-    # checks; exercise them directly (bypassing preflight) to confirm their behavior.
-    from bunnyland.server.models import (
-        RemoveComponentPatchRequest,
-        RemoveEdgePatchRequest,
-    )
-    from bunnyland.server.patches import (
-        _apply_remove_component,
-        _apply_remove_edge,
-        _entity_id,
-    )
-
-    # _entity_id raises for an entity that does not exist (patches.py:47).
-    with pytest.raises(WorldPatchError, match="entity 'entity_999' does not exist"):
-        _entity_id(scenario.actor, "entity_999")
-
-    # remove_component with an unknown component type (patches.py:260).
-    with pytest.raises(WorldPatchError, match="unknown component 'NoSuchComponent'"):
-        _apply_remove_component(
-            scenario.actor,
-            RemoveComponentPatchRequest(
-                op="remove_component",
-                entity_id=str(scenario.character),
-                component_type="NoSuchComponent",
-            ),
-            set(),
-            {},
-        )
-
-    # remove_edge with an unknown edge type (patches.py:287).
-    with pytest.raises(WorldPatchError, match="unknown edge 'NoSuchEdge'"):
-        _apply_remove_edge(
-            scenario.actor,
-            RemoveEdgePatchRequest(
-                op="remove_edge",
-                source_id=str(scenario.room_a),
-                target_id=str(scenario.room_b),
-                edge_type="NoSuchEdge",
-            ),
-            set(),
-            {},
-        )
-
-
 def test_world_patch_updates_component_and_edge(scenario):
     response = apply_world_patch(
         scenario.actor,
@@ -4536,6 +4553,48 @@ def test_world_patch_can_reference_client_ids_within_one_request(scenario):
     assert len(response.changed_entities) == 2
     exits = scenario.actor.world.get_entity(scenario.room_a).get_relationships(ExitTo)
     assert any(edge.direction == "down" for edge, _target in exits)
+
+
+def test_world_patch_can_delete_a_new_alias_atomically(scenario):
+    before_ids = {
+        entity.id for entity in scenario.actor.world.query().execute_entities()
+    }
+
+    response = apply_world_patch(
+        scenario.actor,
+        WorldPatchRequest.model_validate(
+            {
+                "operations": [
+                    {
+                        "op": "add_entity",
+                        "client_id": "$temporary",
+                        "components": [
+                            {
+                                "type": "IdentityComponent",
+                                "fields": {"name": "Temporary", "kind": "item"},
+                            }
+                        ],
+                    },
+                    {
+                        "op": "set_edge",
+                        "source_id": str(scenario.room_a),
+                        "target_id": "$temporary",
+                        "edge": {
+                            "type": "Contains",
+                            "fields": {"mode": "room_content"},
+                        },
+                    },
+                    {"op": "delete_entity", "entity_id": "$temporary"},
+                ]
+            }
+        ),
+    )
+
+    assert len(response.deleted_entities) == 1
+    assert response.changed_entities[0]["id"] == str(scenario.room_a)
+    assert {
+        entity.id for entity in scenario.actor.world.query().execute_entities()
+    } == before_ids
 
 
 @pytest.mark.parametrize(
@@ -4818,6 +4877,49 @@ def test_world_patch_preflight_allows_pending_component_add_then_remove(scenario
 
     assert response.ok is True
     assert not scenario.actor.world.get_entity(scenario.character).has_component(SuspendedComponent)
+
+
+def test_world_patch_rolls_back_earlier_operations_when_apply_fails(scenario):
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    original_identity = character.get_component(IdentityComponent)
+    before_ids = {entity.id for entity in world.query().execute_entities()}
+    world.register_prefab(
+        "already-labeled",
+        {IdentityComponent: IdentityComponent(name="default", kind="item")},
+    )
+
+    with pytest.raises(WorldPatchError, match="already has component IdentityComponent"):
+        apply_world_patch(
+            scenario.actor,
+            WorldPatchRequest.model_validate(
+                {
+                    "operations": [
+                        {
+                            "op": "set_component",
+                            "entity_id": str(scenario.character),
+                            "component": {
+                                "type": "IdentityComponent",
+                                "fields": {"name": "Temporary", "kind": "character"},
+                            },
+                        },
+                        {
+                            "op": "add_entity",
+                            "prefab": "already-labeled",
+                            "components": [
+                                {
+                                    "type": "IdentityComponent",
+                                    "fields": {"name": "Duplicate", "kind": "item"},
+                                }
+                            ],
+                        },
+                    ]
+                }
+            ),
+        )
+
+    assert character.get_component(IdentityComponent) == original_identity
+    assert {entity.id for entity in world.query().execute_entities()} == before_ids
 
 
 def test_world_patch_set_component_on_new_alias_entity(scenario):
@@ -5494,13 +5596,19 @@ async def test_character_updates_websocket_authenticates_before_ready(scenario):
     )
 
     assert outputs[0]["type"] == "websocket.accept"
-    assert json.loads(outputs[1]["text"]) == {
+    ready = json.loads(outputs[1]["text"])
+    assert {"type": ready["type"], "data": ready["data"]} == {
         "type": "ready",
         "data": {
             "character_id": str(scenario.character),
             "world_epoch": scenario.actor.epoch,
         },
     }
+    assert ready["protocol_version"] == 1
+    assert ready["projection_version"] == 1
+    assert ready["stream_sequence"] == 1
+    assert ready["world_id"]
+    assert ready["event_id"] is None
 
 
 @pytest.mark.parametrize(

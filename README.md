@@ -195,6 +195,8 @@ metric/span reference and the Tempo setup.
 
 - **[The Vision](docs/developer/vision.md)** — what bunnyland is trying to be, and what belongs in
   core, plugins, clients, scripts, and content libraries.
+- **[World Contract v1](docs/developer/world-contract-v1.md)** — normative tick, mutation,
+  persistence, perspective, and streaming boundaries for the controlled preview.
 - **[Running a server](docs/admin/running-a-server.md)** — install, the `serve` loop, the time
   model, and connecting Ollama or OpenRouter.
 - **[Generating worlds](docs/admin/generating-worlds.md)** — choosing generators, using the

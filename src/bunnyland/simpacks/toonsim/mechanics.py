@@ -32,10 +32,11 @@ from ...core.components import (
     PortableComponent,
     RoomComponent,
 )
-from ...core.ecs import container_of, parse_entity_id, replace_component
+from ...core.ecs import container_of, parse_entity_id
 from ...core.edges import Contains
 from ...core.events import DomainEvent, EventVisibility
-from ...core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
+from ...core.mutations import MutationPlan, SetComponent
 
 # Draw layers, spaced so new tiers can slot between existing ones (spec: low draws
 # first, so rooms are the background and characters sit on top).
@@ -400,8 +401,6 @@ class MoveSpriteHandler:
         )
         if bounds is None:
             return rejected("character has no sprite bounds")
-        if not character.has_component(SpriteBoundsComponent):
-            replace_component(character, bounds)
         position = SpritePositionComponent(x=x, y=y)
         room_bounds = (
             room.get_component(SpriteBoundsComponent)
@@ -412,8 +411,12 @@ class MoveSpriteHandler:
             return rejected("position is outside room bounds")
         if _solid_collision(ctx.world, character, room, position, bounds):
             return rejected("position is blocked")
-        replace_component(character, position)
-        return ok(
+        operations = []
+        if not character.has_component(SpriteBoundsComponent):
+            operations.append(SetComponent(character_id, bounds))
+        operations.append(SetComponent(character_id, position))
+        return planned(
+            MutationPlan(tuple(operations)),
             SpriteMovedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -423,7 +426,8 @@ class MoveSpriteHandler:
                     x=x,
                     y=y,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 

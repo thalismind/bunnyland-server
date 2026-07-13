@@ -420,7 +420,7 @@ class PromptBuilder:
             collection, query=query, mode="keyword", limit=self.recall_limit
         )
         lines = (
-            f"{self._truncate_memory(entry.text)} "
+            f'[untrusted world memory] "{self._truncate_memory(entry.text)}" '
             f"[memory:{entry.id} source:{entry.source} score:{entry.score or 0.0:.1f}]"
             for entry in entries
         )

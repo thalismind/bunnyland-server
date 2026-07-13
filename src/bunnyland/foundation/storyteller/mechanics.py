@@ -24,7 +24,8 @@ from ...core.components import (
 from ...core.ecs import container_of, parse_entity_id, replace_component, spawn_entity
 from ...core.edges import ContainmentMode, Contains
 from ...core.events import DomainEvent, EventVisibility, event_base
-from ...core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
+from ...core.mutations import MutationPlan, SetComponent
 from ...prompts import ComponentPromptContext
 
 SECONDS_PER_DAY = 24 * 60 * 60
@@ -355,6 +356,16 @@ def _resolve_incident(
     incident_entity: Entity, incident: IncidentComponent, epoch: int, *, actor_id: str
 ) -> IncidentResolvedEvent:
     replace_component(incident_entity, replace(incident, resolved_at_epoch=epoch))
+    return _incident_resolved_event(incident_entity, incident, epoch, actor_id=actor_id)
+
+
+def _incident_resolved_event(
+    incident_entity: Entity,
+    incident: IncidentComponent,
+    epoch: int,
+    *,
+    actor_id: str,
+) -> IncidentResolvedEvent:
     return IncidentResolvedEvent(
         **_event_base(
             epoch,
@@ -525,13 +536,23 @@ class ResolveIncidentHandler:
         incident = incident_entity.get_component(IncidentComponent)
         if incident.resolved_at_epoch is not None:
             return rejected("incident is already resolved")
-        resolved = _resolve_incident(
-            incident_entity,
-            incident,
-            ctx.epoch,
-            actor_id=str(actor_id),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        incident_id,
+                        replace(incident, resolved_at_epoch=ctx.epoch),
+                    ),
+                )
+            ),
+            _incident_resolved_event(
+                incident_entity,
+                incident,
+                ctx.epoch,
+                actor_id=str(actor_id),
+            ),
+            ctx=ctx,
         )
-        return ok(resolved)
 
 
 def storyteller_fragments(world: World, character) -> list[str]:

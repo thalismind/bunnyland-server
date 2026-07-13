@@ -24,7 +24,7 @@ from ..components import (
     RoomComponent,
     WritableComponent,
 )
-from ..ecs import container_of, parse_entity_id, reachable_ids, replace_component
+from ..ecs import container_of, parse_entity_id, reachable_ids
 from ..edges import Contains
 from ..events import (
     ContainerClosedEvent,
@@ -39,7 +39,8 @@ from ..events import (
     PhysicalWriteEvent,
     RoomLookedEvent,
 )
-from .base import HandlerContext, HandlerResult, ok, rejected
+from ..mutations import MutationPlan, SetComponent
+from .base import HandlerContext, HandlerResult, planned, rejected
 
 
 def _reachable_target(ctx: HandlerContext, command: SubmittedCommand, key: str = "target_id"):
@@ -150,28 +151,61 @@ class UseHandler:
                     and tool.has_component(KeyComponent)
                     and tool.get_component(KeyComponent).key_name == lock.key_name
                 ):
-                    replace_component(target, replace(lock, locked=False))
-                    return self._event(ctx, command, item_id, target_id, "unlocked", tool_id)
+                    return self._event(
+                        ctx,
+                        command,
+                        item_id,
+                        target_id,
+                        "unlocked",
+                        tool_id,
+                        MutationPlan((SetComponent(target_id, replace(lock, locked=False)),)),
+                    )
                 return rejected("it is locked")
 
         if target.has_component(DoorComponent):
             door = target.get_component(DoorComponent)
-            replace_component(target, replace(door, open=not door.open))
             affordance = "door_opened" if not door.open else "door_closed"
-            return self._event(ctx, command, item_id, target_id, affordance, tool_id)
+            return self._event(
+                ctx,
+                command,
+                item_id,
+                target_id,
+                affordance,
+                tool_id,
+                MutationPlan((SetComponent(target_id, replace(door, open=not door.open)),)),
+            )
 
         if target.has_component(ButtonComponent):
             button = target.get_component(ButtonComponent)
             if not button.active:
                 return rejected("nothing happens")
-            replace_component(target, replace(button, pressed=not button.pressed))
-            return self._event(ctx, command, item_id, target_id, "button_pressed", tool_id)
+            return self._event(
+                ctx,
+                command,
+                item_id,
+                target_id,
+                "button_pressed",
+                tool_id,
+                MutationPlan(
+                    (SetComponent(target_id, replace(button, pressed=not button.pressed)),)
+                ),
+            )
 
         return rejected("you can't use that")
 
-    def _event(self, ctx, command, item_id, target_id, affordance, tool_id) -> HandlerResult:
+    def _event(
+        self,
+        ctx,
+        command,
+        item_id,
+        target_id,
+        affordance,
+        tool_id,
+        plan,
+    ) -> HandlerResult:
         target_ids = (str(target_id),) if item_id == target_id else (str(target_id), str(item_id))
-        return ok(
+        return planned(
+            plan,
             ItemUsedEvent(
                 **ctx.event_base(
                     actor_id=command.character_id,
@@ -180,7 +214,8 @@ class UseHandler:
                     affordance=affordance,
                     tool_id=str(tool_id) if tool_id is not None else None,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -206,7 +241,8 @@ class LookHandler:
             child = ctx.entity(child_id)
             visible.append(_entity_label(child)[0])
         summary = title if not visible else f"{title}: {', '.join(sorted(visible))}"
-        return ok(
+        return planned(
+            MutationPlan(),
             RoomLookedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -216,7 +252,8 @@ class LookHandler:
                     room_title=title,
                     summary=summary,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -259,7 +296,8 @@ class InspectHandler:
                 {"key": fact.key, "text": fact.text, "detail": fact.detail}
                 for fact in projected
             )
-        return ok(
+        return planned(
+            MutationPlan(),
             EntityInspectedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -273,7 +311,8 @@ class InspectHandler:
                     state=", ".join(states),
                     facts=facts,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -290,24 +329,26 @@ class OpenHandler:
             container = target.get_component(ContainerComponent)
             if container.open:
                 return rejected("it is already open")
-            replace_component(target, replace(container, open=True))
+            component = replace(container, open=True)
             event_type = ContainerOpenedEvent
         elif target.has_component(DoorComponent):
             door = target.get_component(DoorComponent)
             if door.open:
                 return rejected("it is already open")
-            replace_component(target, replace(door, open=True))
+            component = replace(door, open=True)
             event_type = DoorOpenedEvent
         else:
             return rejected("target is not openable")
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(target_id, component),)),
             event_type(
                 **ctx.event_base(
                     actor_id=command.character_id,
                     target_ids=(str(target_id),),
                     target_id=str(target_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -322,24 +363,26 @@ class CloseHandler:
             container = target.get_component(ContainerComponent)
             if not container.open:
                 return rejected("it is already closed")
-            replace_component(target, replace(container, open=False))
+            component = replace(container, open=False)
             event_type = ContainerClosedEvent
         elif target.has_component(DoorComponent):
             door = target.get_component(DoorComponent)
             if not door.open:
                 return rejected("it is already closed")
-            replace_component(target, replace(door, open=False))
+            component = replace(door, open=False)
             event_type = DoorClosedEvent
         else:
             return rejected("target is not closeable")
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(target_id, component),)),
             event_type(
                 **ctx.event_base(
                     actor_id=command.character_id,
                     target_ids=(str(target_id),),
                     target_id=str(target_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -351,6 +394,7 @@ class UnlockHandler:
         if error is not None:
             return error
         tool_id = None
+        operations = []
         if target.has_component(LockableComponent):
             lock = target.get_component(LockableComponent)
             if not lock.locked:
@@ -358,7 +402,7 @@ class UnlockHandler:
             tool_id, reason = _matching_key(ctx, command, lock)
             if reason is not None:
                 return rejected(reason)
-            replace_component(target, replace(lock, locked=False))
+            operations.append(SetComponent(target_id, replace(lock, locked=False)))
         elif target.has_component(ContainerComponent):
             container = target.get_component(ContainerComponent)
             if not container.locked:
@@ -367,8 +411,9 @@ class UnlockHandler:
             return rejected("target is not lockable")
         if target.has_component(ContainerComponent):
             container = target.get_component(ContainerComponent)
-            replace_component(target, replace(container, locked=False))
-        return ok(
+            operations.append(SetComponent(target_id, replace(container, locked=False)))
+        return planned(
+            MutationPlan(tuple(operations)),
             EntityUnlockedEvent(
                 **ctx.event_base(
                     actor_id=command.character_id,
@@ -376,7 +421,8 @@ class UnlockHandler:
                     target_id=str(target_id),
                     tool_id=str(tool_id) if tool_id is not None else None,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -388,6 +434,7 @@ class LockHandler:
         if error is not None:
             return error
         tool_id = None
+        operations = []
         if target.has_component(LockableComponent):
             lock = target.get_component(LockableComponent)
             if lock.locked:
@@ -395,7 +442,7 @@ class LockHandler:
             tool_id, reason = _matching_key(ctx, command, lock)
             if reason is not None:
                 return rejected(reason)
-            replace_component(target, replace(lock, locked=True))
+            operations.append(SetComponent(target_id, replace(lock, locked=True)))
         elif target.has_component(ContainerComponent):
             container = target.get_component(ContainerComponent)
             if container.locked:
@@ -404,8 +451,9 @@ class LockHandler:
             return rejected("target is not lockable")
         if target.has_component(ContainerComponent):
             container = target.get_component(ContainerComponent)
-            replace_component(target, replace(container, locked=True))
-        return ok(
+            operations.append(SetComponent(target_id, replace(container, locked=True)))
+        return planned(
+            MutationPlan(tuple(operations)),
             EntityLockedEvent(
                 **ctx.event_base(
                     actor_id=command.character_id,
@@ -413,7 +461,8 @@ class LockHandler:
                     target_id=str(target_id),
                     tool_id=str(tool_id) if tool_id is not None else None,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -452,13 +501,20 @@ class WriteHandler:
             else ReadableComponent()
         )
         new_text = text if not existing.text else f"{existing.text}\n{text}"
-        replace_component(target, replace(existing, text=new_text))
+        operations = [SetComponent(target_id, replace(existing, text=new_text))]
         if writable.remaining_space is not None:
-            replace_component(
-                target, replace(writable, remaining_space=writable.remaining_space - len(text))
+            operations.append(
+                SetComponent(
+                    target_id,
+                    replace(
+                        writable,
+                        remaining_space=writable.remaining_space - len(text),
+                    ),
+                )
             )
 
-        return ok(
+        return planned(
+            MutationPlan(tuple(operations)),
             PhysicalWriteEvent(
                 **ctx.event_base(
                     actor_id=command.character_id,
@@ -466,7 +522,8 @@ class WriteHandler:
                     item_id=str(target_id),
                     text=text,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
