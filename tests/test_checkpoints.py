@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     CommandCost,
@@ -218,18 +218,23 @@ def test_checkpoint_handlers_reject_invalid_missing_and_unreachable_targets(tmp_
     missing_target = _command(scenario, "save-checkpoint", removed_checkpoint.id)
     unreachable = _command(scenario, "save-checkpoint", remote_checkpoint.id)
 
-    assert save_handler.execute(ctx, invalid_character).reason == "invalid character id"
-    assert save_handler.execute(ctx, missing_character).reason == "character does not exist"
-    assert save_handler.execute(ctx, invalid_target).reason == "invalid checkpoint id"
-    assert save_handler.execute(ctx, missing_target).reason == "checkpoint does not exist"
-    assert save_handler.execute(ctx, unreachable).reason == "checkpoint is not reachable"
+    assert execute_handler(save_handler, ctx, invalid_character).reason == "invalid character id"
+    assert (
+        execute_handler(save_handler, ctx, missing_character).reason == "character does not exist"
+    )
+    assert execute_handler(save_handler, ctx, invalid_target).reason == "invalid checkpoint id"
+    assert execute_handler(save_handler, ctx, missing_target).reason == "checkpoint does not exist"
+    assert execute_handler(save_handler, ctx, unreachable).reason == "checkpoint is not reachable"
 
-    no_save_path = ReloadCheckpointHandler(CheckpointReloadService()).execute(
+    no_save_path = execute_handler(
+        ReloadCheckpointHandler(CheckpointReloadService()),
         HandlerContext(scenario.actor.world, scenario.actor.epoch, actor=None),
         _command(scenario, "reload-checkpoint", checkpoint_id),
     )
     assert no_save_path.reason == "server was not started with --save"
-    assert reload_handler.execute(ctx, missing_target).reason == "checkpoint does not exist"
+    assert (
+        execute_handler(reload_handler, ctx, missing_target).reason == "checkpoint does not exist"
+    )
 
 
 async def test_reload_checkpoint_restores_saved_world_and_clears_queues(tmp_path):

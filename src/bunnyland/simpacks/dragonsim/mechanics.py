@@ -846,7 +846,6 @@ class DiscoverLocationHandler:
                     region=poi.region,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -908,7 +907,6 @@ class MarkMapHandler:
                     marker_type=updated.marker_type,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -955,7 +953,6 @@ class TriggerEncounterHandler:
                     danger_rating=zone.danger_rating,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1006,7 +1003,6 @@ class AcceptQuestHandler:
                     title=quest.title,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1121,7 +1117,7 @@ class CompleteObjectiveHandler:
                     )
                 )
             )
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class TrackQuestHandler:
@@ -1157,7 +1153,6 @@ class TrackQuestHandler:
                     title=quest.title,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1191,7 +1186,6 @@ class DeclineQuestHandler:
                     title=quest.title,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1223,7 +1217,6 @@ class ChooseQuestBranchHandler:
                     branch=branch,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1267,7 +1260,6 @@ class JoinFactionHandler:
                     rank=rank,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1301,7 +1293,6 @@ class LeaveFactionHandler:
                     faction_name=faction_name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1346,7 +1337,6 @@ class UnlockPerkHandler:
                     skill_name=perk.skill_name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1396,7 +1386,6 @@ class AbsorbGreatSoulHandler:
                     souls=souls,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1440,7 +1429,6 @@ class LearnWordOfPowerHandler:
                     word_name=word.name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1475,7 +1463,6 @@ class SpeakWordOfPowerHandler:
                     word_name=word_name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1561,7 +1548,6 @@ class SneakHandler:
                     sneaking=sneaking,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1610,7 +1596,7 @@ class StealHandler:
         bounty_operations, bounty_events = self._witness_bounties(ctx, thief, thief_id, room_id)
         operations.extend(bounty_operations)
         events.extend(bounty_events)
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
     def _witness_bounties(
         self, ctx: HandlerContext, thief: Entity, thief_id: EntityId, room_id: EntityId
@@ -1683,7 +1669,6 @@ class PayBountyHandler:
                     amount=bounty.amount,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1731,7 +1716,6 @@ class ChangeFactionRankHandler:
                     new_rank=new_rank,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1783,7 +1767,6 @@ class BribeGuardHandler:
                     amount=component.bribe_amount,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1817,7 +1800,6 @@ class ServeJailTimeHandler:
                     faction_id=str(faction_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1858,7 +1840,6 @@ class PersuadeHandler:
                     disposition=updated.disposition,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1897,7 +1878,6 @@ class SurrenderHandler:
                     surrendered_to=surrendered_to,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1938,7 +1918,6 @@ class ReportCrimeHandler:
                     bounty=bounty,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1993,7 +1972,6 @@ class PickLockHandler:
                 )
             ),
             *events,
-            ctx=ctx,
         )
 
 
@@ -2053,7 +2031,7 @@ class ReadLoreBookHandler:
             )
             operations.append(SetComponent(character_id, skill_update))
             events.extend(skill_events)
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class LearnSpellHandler:
@@ -2092,7 +2070,6 @@ class LearnSpellHandler:
                     spell_name=spell.name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2161,7 +2138,7 @@ class CastDragonSpellHandler:
             )
             operations.append(SetComponent(character_id, skill_update))
             events.extend(skill_events)
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class BrewPotionHandler:
@@ -2239,7 +2216,7 @@ class BrewPotionHandler:
             )
             operations.append(SetComponent(character_id, skill_update))
             events.extend(lambda event=event: event for event in skill_events)
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class UseArtifactHandler:
@@ -2286,7 +2263,6 @@ class UseArtifactHandler:
                     remaining_charges=updated.charges,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2324,7 +2300,6 @@ class RecoverMagicHandler:
                     maximum=updated.maximum,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2373,7 +2348,6 @@ class IdentifyArtifactHandler:
                     artifact_name=artifact.name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2408,7 +2382,6 @@ class AppeaseAncientBeastHandler:
                     method=method,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2493,7 +2466,6 @@ class InscribeVoicePhraseHandler:
                     phrase=phrase,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2543,7 +2515,6 @@ class StudyVoiceInscriptionHandler:
                     word_id=str(word_id),
                 )
             ),
-            ctx=ctx,
         )
 
 

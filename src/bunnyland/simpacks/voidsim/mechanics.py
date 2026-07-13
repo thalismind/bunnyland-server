@@ -39,7 +39,6 @@ from ...core.ecs import (
     parse_entity_id,
     reachable_ids,
     replace_component,
-    spawn_entity,
 )
 from ...core.ecs import (
     entity_name as _name,
@@ -895,9 +894,7 @@ class OpenAirlockHandler:
             if module.has_component(PressurizedComponent):
                 pressurized = module.get_component(PressurizedComponent)
                 if pressurized.pressure > 0.0:
-                    operations.append(
-                        SetComponent(module.id, replace(pressurized, pressure=0.0))
-                    )
+                    operations.append(SetComponent(module.id, replace(pressurized, pressure=0.0)))
                     events.append(
                         PressureChangedEvent(
                             **ctx.event_base(
@@ -910,7 +907,7 @@ class OpenAirlockHandler:
                             )
                         )
                     )
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class CycleAirlockHandler:
@@ -927,9 +924,8 @@ class CycleAirlockHandler:
             return rejected(error if error else "target is not an airlock")
 
         state = airlock.get_component(AirlockComponent)
-        return planned(MutationPlan((
-            SetComponent(airlock.id, replace(state, state="sealed")),
-        )),
+        return planned(
+            MutationPlan((SetComponent(airlock.id, replace(state, state="sealed")),)),
             AirlockCycledEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -939,7 +935,7 @@ class CycleAirlockHandler:
                     airlock_id=str(airlock.id),
                     state="cycled",
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -959,9 +955,7 @@ class SealBulkheadHandler:
         state = bulkhead.get_component(BulkheadComponent)
         if state.sealed:
             return rejected("bulkhead is already sealed")
-        return planned(
-            MutationPlan((SetComponent(bulkhead.id, replace(state, sealed=True)),)), ctx=ctx
-        )
+        return planned(MutationPlan((SetComponent(bulkhead.id, replace(state, sealed=True)),)))
 
 
 class RepairSystemHandler:
@@ -980,9 +974,8 @@ class RepairSystemHandler:
         state = system.get_component(ShipSystemComponent)
         if state.integrity >= 100.0 and state.online:
             return rejected("system is not damaged")
-        return planned(MutationPlan((
-            SetComponent(system.id, replace(state, integrity=100.0, online=True)),
-        )),
+        return planned(
+            MutationPlan((SetComponent(system.id, replace(state, integrity=100.0, online=True)),)),
             ShipSystemRepairedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -992,7 +985,7 @@ class RepairSystemHandler:
                     system_id=str(system.id),
                     system_type=state.system_type,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1025,10 +1018,15 @@ class ReroutePowerHandler:
             return rejected("not enough power available")
 
         system_state = system.get_component(ShipSystemComponent)
-        return planned(MutationPlan((
-            SetComponent(grid.id, replace(grid_state, available=grid_state.available - amount)),
-            SetComponent(system.id, replace(system_state, online=True)),
-        )),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        grid.id, replace(grid_state, available=grid_state.available - amount)
+                    ),
+                    SetComponent(system.id, replace(system_state, online=True)),
+                )
+            ),
             PowerReroutedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1038,7 +1036,7 @@ class ReroutePowerHandler:
                     system_id=str(system.id),
                     amount=amount,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1068,7 +1066,8 @@ class InspectShipSystemHandler:
         if system is None:
             return rejected(error if error else "target is not a ship system")
         state = system.get_component(ShipSystemComponent)
-        return planned(MutationPlan(),
+        return planned(
+            MutationPlan(),
             ShipSystemInspectedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1080,7 +1079,7 @@ class InspectShipSystemHandler:
                     integrity=state.integrity,
                     online=state.online,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1132,10 +1131,13 @@ def _spawn_inventory_resource_operations(
 ) -> tuple[list[MutationOperation], EntityReference]:
     stack = EntityReference()
     return [
-        AddEntity((
-            IdentityComponent(name=resource_type, kind="resource"),
-            ResourceStackComponent(resource_type=resource_type, quantity=quantity),
-        ), reference=stack),
+        AddEntity(
+            (
+                IdentityComponent(name=resource_type, kind="resource"),
+                ResourceStackComponent(resource_type=resource_type, quantity=quantity),
+            ),
+            reference=stack,
+        ),
         AddEdge(character_id, stack, Contains(mode=ContainmentMode.INVENTORY)),
     ], stack
 
@@ -1170,17 +1172,23 @@ class FabricateHandler:
             return rejected("not enough resources to fabricate")
 
         part = EntityReference()
-        operations.extend((
-            AddEntity((
-                IdentityComponent(name=blueprint.name, kind="upgrade"),
-                ShipUpgradeComponent(
-                    system_type=blueprint.system_type,
-                    integrity_bonus=blueprint.integrity_bonus,
+        operations.extend(
+            (
+                AddEntity(
+                    (
+                        IdentityComponent(name=blueprint.name, kind="upgrade"),
+                        ShipUpgradeComponent(
+                            system_type=blueprint.system_type,
+                            integrity_bonus=blueprint.integrity_bonus,
+                        ),
+                    ),
+                    reference=part,
                 ),
-            ), reference=part),
-            AddEdge(character_id, part, Contains(mode=ContainmentMode.INVENTORY)),
-        ))
-        return planned(MutationPlan(tuple(operations)),
+                AddEdge(character_id, part, Contains(mode=ContainmentMode.INVENTORY)),
+            )
+        )
+        return planned(
+            MutationPlan(tuple(operations)),
             lambda: ItemFabricatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1194,7 +1202,7 @@ class FabricateHandler:
                     system_type=blueprint.system_type,
                     resource_inputs=blueprint.resource_inputs,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1223,10 +1231,15 @@ class InstallUpgradeHandler:
             return rejected("upgrade does not fit this system")
 
         integrity = system_state.integrity + upgrade.integrity_bonus
-        return planned(MutationPlan((
-            SetComponent(system.id, replace(system_state, integrity=integrity, online=True)),
-            SetComponent(upgrade_entity.id, replace(upgrade, installed=True)),
-        )),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        system.id, replace(system_state, integrity=integrity, online=True)
+                    ),
+                    SetComponent(upgrade_entity.id, replace(upgrade, installed=True)),
+                )
+            ),
             UpgradeInstalledEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1238,7 +1251,7 @@ class InstallUpgradeHandler:
                     system_type=system_state.system_type,
                     integrity=integrity,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1274,14 +1287,17 @@ class AcceptContractHandler:
         operations: list[MutationOperation] = []
         if origin_id is not None and ctx.world.has_entity(origin_id):
             operations.append(RemoveEdge(origin_id, contract.id, Contains))
-        operations.extend((
-            AddEdge(character_id, contract.id, Contains(mode=ContainmentMode.INVENTORY)),
-            SetComponent(
-                contract.id,
-                replace(component, status="active", accepted_by=str(character_id)),
-            ),
-        ))
-        return planned(MutationPlan(tuple(operations)),
+        operations.extend(
+            (
+                AddEdge(character_id, contract.id, Contains(mode=ContainmentMode.INVENTORY)),
+                SetComponent(
+                    contract.id,
+                    replace(component, status="active", accepted_by=str(character_id)),
+                ),
+            )
+        )
+        return planned(
+            MutationPlan(tuple(operations)),
             ContractAcceptedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1291,7 +1307,7 @@ class AcceptContractHandler:
                     contract_id=str(contract.id),
                     contract_type=component.contract_type,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1343,7 +1359,8 @@ class LoadCargoHandler:
 
         operations = _move_entity_operations(ctx.world, cargo_entity.id, ship.id)
         operations.append(SetComponent(cargo_entity.id, replace(cargo, loaded_on=str(ship.id))))
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             CargoLoadedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1354,7 +1371,7 @@ class LoadCargoHandler:
                     ship_id=str(ship.id),
                     contract_id=str(contract_entity.id),
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1396,11 +1413,14 @@ class DeliverCargoHandler:
             return rejected("ship is not at the destination")
 
         operations = _move_entity_operations(ctx.world, cargo_entity.id, destination_id)
-        operations.extend((
-            SetComponent(cargo_entity.id, replace(cargo, loaded_on=None, delivered=True)),
-            SetComponent(contract_entity.id, replace(contract, status="completed")),
-        ))
-        return planned(MutationPlan(tuple(operations)),
+        operations.extend(
+            (
+                SetComponent(cargo_entity.id, replace(cargo, loaded_on=None, delivered=True)),
+                SetComponent(contract_entity.id, replace(contract, status="completed")),
+            )
+        )
+        return planned(
+            MutationPlan(tuple(operations)),
             CargoDeliveredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1421,7 +1441,7 @@ class DeliverCargoHandler:
                     contract_id=str(contract_entity.id),
                     reward=contract.reward,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1465,7 +1485,8 @@ class ClaimSalvageHandler:
         operations.append(
             SetComponent(claim.id, replace(component, claimed=True, claimed_by=str(character_id)))
         )
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             lambda: SalvageClaimedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1477,7 +1498,7 @@ class ClaimSalvageHandler:
                     contract_id=str(contract_id) if contract_id is not None else None,
                     output_ids=tuple(str(output.require()) for output in outputs),
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1501,7 +1522,8 @@ class InitiateContactHandler:
             contacted_by=tuple(sorted((*component.contacted_by, str(character_id)))),
             status="contacted",
         )
-        return planned(MutationPlan((SetComponent(contact.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(contact.id, updated),)),
             FirstContactEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1512,7 +1534,7 @@ class InitiateContactHandler:
                     species_id=component.species_id,
                     status=updated.status,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1534,7 +1556,8 @@ class AttemptTranslationHandler:
             return rejected("translation is already complete")
         progress = min(100.0, component.progress + max(0.0, amount))
         updated = replace(component, progress=progress, complete=progress >= 100.0)
-        return planned(MutationPlan((SetComponent(matrix.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(matrix.id, updated),)),
             TranslationProgressedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1546,7 +1569,7 @@ class AttemptTranslationHandler:
                     progress=updated.progress,
                     complete=updated.complete,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1566,10 +1589,17 @@ class QuarantineSampleHandler:
         target = ctx.entity(target_id)
         reason = str(command.payload.get("reason", "unknown organism")).strip()
         reason = reason or "unknown organism"
-        return planned(MutationPlan((SetComponent(
-            target.id,
-            QuarantineComponent(reason=reason, active=True, started_by=str(character_id)),
-        ),)),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        target.id,
+                        QuarantineComponent(
+                            reason=reason, active=True, started_by=str(character_id)
+                        ),
+                    ),
+                )
+            ),
             QuarantineStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1579,7 +1609,7 @@ class QuarantineSampleHandler:
                     target_id=str(target_id),
                     reason=reason,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1602,7 +1632,8 @@ class NegotiateAlienHandler:
             standing=component.standing + delta,
             last_negotiated_epoch=ctx.epoch,
         )
-        return planned(MutationPlan((SetComponent(mission.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(mission.id, updated),)),
             DiplomacyChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1613,7 +1644,7 @@ class NegotiateAlienHandler:
                     species_id=component.species_id,
                     standing=updated.standing,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1636,7 +1667,8 @@ class StudyAlienArtifactHandler:
             component,
             studied_by=tuple(sorted((*component.studied_by, str(character_id)))),
         )
-        return planned(MutationPlan((SetComponent(artifact.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(artifact.id, updated),)),
             AlienArtifactStudiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1647,7 +1679,7 @@ class StudyAlienArtifactHandler:
                     species_id=component.species_id,
                     insight=component.insight,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1672,7 +1704,8 @@ class DockHandler:
             return rejected("ship is already docked here")
 
         port = str(command.payload.get("port", "main"))
-        return planned(MutationPlan((AddEdge(ship.id, station.id, DockedTo(port=port)),)),
+        return planned(
+            MutationPlan((AddEdge(ship.id, station.id, DockedTo(port=port)),)),
             DockingCompletedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1683,7 +1716,7 @@ class DockHandler:
                     station_id=str(station.id),
                     docked=True,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1707,7 +1740,8 @@ class UndockHandler:
         if not _docked(ship, station.id):
             return rejected("ship is not docked here")
 
-        return planned(MutationPlan((RemoveEdge(ship.id, station.id, DockedTo),)),
+        return planned(
+            MutationPlan((RemoveEdge(ship.id, station.id, DockedTo),)),
             DockingCompletedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1718,7 +1752,7 @@ class UndockHandler:
                     station_id=str(station.id),
                     docked=False,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1746,14 +1780,19 @@ class EvacuateModuleHandler:
             occupant = ctx.entity(occupant_id)
             if not occupant.has_component(CharacterComponent):
                 continue
-            operations.extend((
-                RemoveEdge(module.id, occupant_id, Contains),
-                AddEdge(destination_id, occupant_id, Contains(mode=ContainmentMode.ROOM_CONTENT)),
-            ))
+            operations.extend(
+                (
+                    RemoveEdge(module.id, occupant_id, Contains),
+                    AddEdge(
+                        destination_id, occupant_id, Contains(mode=ContainmentMode.ROOM_CONTENT)
+                    ),
+                )
+            )
             evacuees.append(str(occupant_id))
         if not evacuees:
             return rejected("no one to evacuate")
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             ModuleEvacuatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1763,7 +1802,7 @@ class EvacuateModuleHandler:
                     module_id=str(module.id),
                     evacuee_ids=tuple(evacuees),
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1806,16 +1845,21 @@ class PlotCourseHandler:
         if route is None:
             return rejected("no jump route to destination")
 
-        return planned(MutationPlan((SetComponent(
-            ship.id,
-            NavigationRouteComponent(
-                destination_id=str(destination_id),
-                fuel_cost=route.fuel_cost,
-                hazard=route.hazard,
-                jump_seconds=route.jump_seconds,
-                status="plotted",
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        ship.id,
+                        NavigationRouteComponent(
+                            destination_id=str(destination_id),
+                            fuel_cost=route.fuel_cost,
+                            hazard=route.hazard,
+                            jump_seconds=route.jump_seconds,
+                            status="plotted",
+                        ),
+                    ),
+                )
             ),
-        ),)),
             CoursePlottedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1826,7 +1870,7 @@ class PlotCourseHandler:
                     destination_id=str(destination_id),
                     fuel_cost=route.fuel_cost,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1905,10 +1949,17 @@ class JumpHandler:
                         )
                     )
                 )
-        return planned(MutationPlan((
-            SetComponent(ship.id, new_fuel),
-            SetComponent(ship.id, replace(route, status="jumping", arrive_at_epoch=arrive_at)),
-        )), *events, ctx=ctx)
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(ship.id, new_fuel),
+                    SetComponent(
+                        ship.id, replace(route, status="jumping", arrive_at_epoch=arrive_at)
+                    ),
+                )
+            ),
+            *events,
+        )
 
 
 class ScanHandler:
@@ -1951,7 +2002,7 @@ class ScanHandler:
             )
         if not events:
             return rejected("scan finds nothing")
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class AnswerDistressSignalHandler:
@@ -1971,9 +2022,9 @@ class AnswerDistressSignalHandler:
             return rejected("signal has not been detected")
         if signal.answered:
             return rejected("signal already answered")
-        return planned(MutationPlan((
-            SetComponent(signal_entity.id, replace(signal, answered=True)),
-        )), ctx=ctx)
+        return planned(
+            MutationPlan((SetComponent(signal_entity.id, replace(signal, answered=True)),))
+        )
 
 
 class RefuelHandler:
@@ -2000,7 +2051,8 @@ class RefuelHandler:
                 new_level = min(fuel.maximum, fuel.level + float(raw_amount))
             except (TypeError, ValueError):
                 return rejected("invalid fuel amount")
-        return planned(MutationPlan((SetComponent(ship.id, replace(fuel, level=new_level)),)),
+        return planned(
+            MutationPlan((SetComponent(ship.id, replace(fuel, level=new_level)),)),
             FuelChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2011,7 +2063,7 @@ class RefuelHandler:
                     level=new_level,
                     maximum=fuel.maximum,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2033,9 +2085,10 @@ class EnterOrbitHandler:
         if body is None:
             return rejected(error if error else "target is not an orbital body")
 
-        return planned(MutationPlan((
-            SetComponent(ship.id, OrbitComponent(body_id=str(body.id), altitude="orbit")),
-        )),
+        return planned(
+            MutationPlan(
+                (SetComponent(ship.id, OrbitComponent(body_id=str(body.id), altitude="orbit")),)
+            ),
             OrbitEnteredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2045,7 +2098,7 @@ class EnterOrbitHandler:
                     ship_id=str(ship.id),
                     body_id=str(body.id),
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2063,7 +2116,7 @@ class LeaveOrbitHandler:
             return rejected(error if error else "target is not a ship")
         if not ship.has_component(OrbitComponent):
             return rejected("ship is not in orbit")
-        return planned(MutationPlan((RemoveComponent(ship.id, OrbitComponent),)), ctx=ctx)
+        return planned(MutationPlan((RemoveComponent(ship.id, OrbitComponent),)))
 
 
 class LandHandler:
@@ -2093,9 +2146,8 @@ class LandHandler:
         ):
             return rejected("body cannot be landed on")
 
-        return planned(MutationPlan((
-            SetComponent(ship.id, replace(orbit, altitude="surface")),
-        )),
+        return planned(
+            MutationPlan((SetComponent(ship.id, replace(orbit, altitude="surface")),)),
             LandingCompletedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2105,7 +2157,7 @@ class LandHandler:
                     ship_id=str(ship.id),
                     body_id=str(body_id),
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2126,9 +2178,7 @@ class LaunchHandler:
         orbit = ship.get_component(OrbitComponent)
         if orbit.altitude != "surface":
             return rejected("ship is not on a surface")
-        return planned(MutationPlan((
-            SetComponent(ship.id, replace(orbit, altitude="orbit")),
-        )), ctx=ctx)
+        return planned(MutationPlan((SetComponent(ship.id, replace(orbit, altitude="orbit")),)))
 
 
 class JumpTravelConsequence:
@@ -2530,9 +2580,8 @@ class AssignCrewShiftHandler:
         station = str(command.payload.get("station", "")).strip()
         shift = shift_entity.get_component(DutyShiftComponent)
         room_id = container_of(character)
-        return planned(MutationPlan((
-            AddEdge(character_id, shift_id, WorksShift(station=station)),
-        )),
+        return planned(
+            MutationPlan((AddEdge(character_id, shift_id, WorksShift(station=station)),)),
             CrewShiftAssignedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2544,7 +2593,7 @@ class AssignCrewShiftHandler:
                     shift_name=shift.name,
                     station=station,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2569,7 +2618,8 @@ class RelieveCrewShiftHandler:
             else _name(shift_entity)
         )
         room_id = container_of(character)
-        return planned(MutationPlan((RemoveEdge(character_id, shift_id, WorksShift),)),
+        return planned(
+            MutationPlan((RemoveEdge(character_id, shift_id, WorksShift),)),
             CrewShiftRelievedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2580,7 +2630,7 @@ class RelieveCrewShiftHandler:
                     shift_id=str(shift_id),
                     shift_name=shift_name,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2617,7 +2667,8 @@ class DeployAwayTeamHandler:
         if component.deployed:
             return rejected("away team already deployed")
         updated = replace(component, deployed=True)
-        return planned(MutationPlan((SetComponent(team.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(team.id, updated),)),
             AwayTeamDeployedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2629,7 +2680,7 @@ class DeployAwayTeamHandler:
                     team_id=str(team.id),
                     mission=updated.mission,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2648,7 +2699,8 @@ class BoostMoraleHandler:
             else MoraleComponent()
         )
         updated = replace(current, value=current.value + amount)
-        return planned(MutationPlan((SetComponent(character_id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(character_id, updated),)),
             MoraleChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2658,7 +2710,7 @@ class BoostMoraleHandler:
                     character_id=str(character_id),
                     value=updated.value,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2670,11 +2722,14 @@ class StartMutinyHandler:
         if character_id is None:
             return rejected("invalid character id")
         character = ctx.entity(character_id)
-        return planned(MutationPlan((
-            SetComponent(
-                character_id, MutinyComponent(active=True, ringleader_id=str(character_id))
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        character_id, MutinyComponent(active=True, ringleader_id=str(character_id))
+                    ),
+                )
             ),
-        )),
             MutinyStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2683,7 +2738,7 @@ class StartMutinyHandler:
                     target_ids=(str(character_id),),
                     character_id=str(character_id),
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2709,7 +2764,8 @@ class CommandDroneHandler:
             return error
         task = str(command.payload.get("instruction", "assist")).strip() or "assist"
         updated = replace(drone.get_component(DroneComponent), assigned_task=task, active=True)
-        return planned(MutationPlan((SetComponent(drone.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(drone.id, updated),)),
             DroneCommandedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2721,7 +2777,7 @@ class CommandDroneHandler:
                     drone_id=str(drone.id),
                     task=task,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2739,7 +2795,8 @@ class HackShipAIHandler:
             return error
         ai_state = ai.get_component(ShipAIComponent)
         updated = replace(ai_state, hacked=True, trust=ai_state.trust + 1)
-        return planned(MutationPlan((SetComponent(ai.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(ai.id, updated),)),
             ShipAIHackedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2751,7 +2808,7 @@ class HackShipAIHandler:
                     ai_id=str(ai.id),
                     trust=updated.trust,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2768,11 +2825,14 @@ class SalvageDataHandler:
         if error is not None:
             return error
         component = data.get_component(DataSalvageComponent)
-        return planned(MutationPlan((
-            SetComponent(
-                data.id, replace(component, encrypted=False, recovered_by=str(character_id))
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        data.id, replace(component, encrypted=False, recovered_by=str(character_id))
+                    ),
+                )
             ),
-        )),
             DataSalvagedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2784,7 +2844,7 @@ class SalvageDataHandler:
                     data_id=str(data.id),
                     data_type=component.data_type,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2805,7 +2865,8 @@ class StudyXenobiologyHandler:
             component,
             studied_by=tuple(sorted((*component.studied_by, str(character_id)))),
         )
-        return planned(MutationPlan((SetComponent(sample.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(sample.id, updated),)),
             XenobiologyStudiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2817,7 +2878,7 @@ class StudyXenobiologyHandler:
                     sample_id=str(sample.id),
                     contamination=updated.contamination,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2834,9 +2895,8 @@ class AcceptTradeProtocolHandler:
         if error is not None:
             return error
         component = protocol.get_component(TradeProtocolComponent)
-        return planned(MutationPlan((
-            SetComponent(protocol.id, replace(component, accepted=True)),
-        )),
+        return planned(
+            MutationPlan((SetComponent(protocol.id, replace(component, accepted=True)),)),
             TradeProtocolAcceptedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2848,7 +2908,7 @@ class AcceptTradeProtocolHandler:
                     protocol_id=str(protocol.id),
                     terms=component.terms,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2865,9 +2925,8 @@ class ResolveEmergencyHandler:
         if error is not None:
             return error
         component = emergency.get_component(EmergencyComponent)
-        return planned(MutationPlan((
-            SetComponent(emergency.id, replace(component, resolved=True)),
-        )),
+        return planned(
+            MutationPlan((SetComponent(emergency.id, replace(component, resolved=True)),)),
             EmergencyResolvedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2879,7 +2938,7 @@ class ResolveEmergencyHandler:
                     emergency_id=str(emergency.id),
                     emergency_type=component.emergency_type,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2900,7 +2959,8 @@ class StabilizeReactorHandler:
         updated = replace(
             component, stability=min(100.0, component.stability + amount), online=True
         )
-        return planned(MutationPlan((SetComponent(reactor.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(reactor.id, updated),)),
             ReactorStabilizedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2912,7 +2972,7 @@ class StabilizeReactorHandler:
                     reactor_id=str(reactor.id),
                     stability=updated.stability,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2933,7 +2993,8 @@ class AdjustGravityHandler:
         updated = replace(
             gravity.get_component(GravityComponent), enabled=enabled, strength=strength
         )
-        return planned(MutationPlan((SetComponent(gravity.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(gravity.id, updated),)),
             GravityAdjustedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2946,7 +3007,7 @@ class AdjustGravityHandler:
                     enabled=enabled,
                     strength=strength,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2963,9 +3024,8 @@ class RepelBoardersHandler:
         if error is not None:
             return error
         component = threat.get_component(BoardingThreatComponent)
-        return planned(MutationPlan((
-            SetComponent(threat.id, replace(component, repelled=True)),
-        )),
+        return planned(
+            MutationPlan((SetComponent(threat.id, replace(component, repelled=True)),)),
             BoardingRepelledEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2977,7 +3037,7 @@ class RepelBoardersHandler:
                     threat_id=str(threat.id),
                     threat_level=component.threat_level,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2994,9 +3054,8 @@ class DeliverPassengerHandler:
         if error is not None:
             return error
         component = passenger.get_component(PassengerComponent)
-        return planned(MutationPlan((
-            SetComponent(passenger.id, replace(component, delivered=True)),
-        )),
+        return planned(
+            MutationPlan((SetComponent(passenger.id, replace(component, delivered=True)),)),
             PassengerDeliveredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3007,7 +3066,7 @@ class DeliverPassengerHandler:
                     target_ids=(str(passenger.id),),
                     passenger_id=str(passenger.id),
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3024,12 +3083,18 @@ class SurveySiteHandler:
         if error is not None:
             return error
         component = site.get_component(SurveySiteComponent)
-        return planned(MutationPlan((SetComponent(
-            site.id,
-            replace(
-                component, surveyed_by=tuple(sorted((*component.surveyed_by, str(character_id))))
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        site.id,
+                        replace(
+                            component,
+                            surveyed_by=tuple(sorted((*component.surveyed_by, str(character_id)))),
+                        ),
+                    ),
+                )
             ),
-        ),)),
             SurveyCompletedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3041,7 +3106,7 @@ class SurveySiteHandler:
                     site_id=str(site.id),
                     resource=component.resource,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3068,7 +3133,8 @@ class MineAsteroidHandler:
             0,
             SetComponent(site.id, replace(component, remaining=component.remaining - quantity)),
         )
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             lambda: MiningCompletedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3081,7 +3147,7 @@ class MineAsteroidHandler:
                     resource_type=component.resource_type,
                     quantity=quantity,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3111,14 +3177,19 @@ class InspectCustomsHandler:
         if error is not None:
             return error
         contraband = bool(command.payload.get("contraband_found", False))
-        return planned(MutationPlan((SetComponent(
-            hold.id,
-            replace(
-                hold.get_component(CustomsHoldComponent),
-                inspected=True,
-                contraband_found=contraband,
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        hold.id,
+                        replace(
+                            hold.get_component(CustomsHoldComponent),
+                            inspected=True,
+                            contraband_found=contraband,
+                        ),
+                    ),
+                )
             ),
-        ),)),
             CustomsInspectedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3130,7 +3201,7 @@ class InspectCustomsHandler:
                     hold_id=str(hold.id),
                     contraband_found=contraband,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3148,9 +3219,10 @@ class SearchSmugglingCompartmentHandler:
             return error
         component = compartment.get_component(SmugglingCompartmentComponent)
         discovered = component.hidden
-        return planned(MutationPlan((
-            SetComponent(compartment.id, replace(component, discovered=discovered)),
-        )),
+        return planned(
+            MutationPlan(
+                (SetComponent(compartment.id, replace(component, discovered=discovered)),)
+            ),
             SmugglingCompartmentSearchedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3162,7 +3234,7 @@ class SearchSmugglingCompartmentHandler:
                     compartment_id=str(compartment.id),
                     discovered=discovered,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3181,9 +3253,8 @@ class ClaimInsuranceHandler:
         component = policy.get_component(InsurancePolicyComponent)
         if component.claimed:
             return rejected("insurance already claimed")
-        return planned(MutationPlan((
-            SetComponent(policy.id, replace(component, claimed=True)),
-        )),
+        return planned(
+            MutationPlan((SetComponent(policy.id, replace(component, claimed=True)),)),
             InsuranceClaimedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3194,7 +3265,7 @@ class ClaimInsuranceHandler:
                     target_ids=(str(policy.id),),
                     policy_id=str(policy.id),
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3215,7 +3286,8 @@ class PayMortgageHandler:
             return rejected("mortgage payment must be positive")
         component = mortgage.get_component(MortgageComponent)
         updated = replace(component, balance=max(0, component.balance - amount))
-        return planned(MutationPlan((SetComponent(mortgage.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(mortgage.id, updated),)),
             MortgagePaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3227,7 +3299,7 @@ class PayMortgageHandler:
                     mortgage_id=str(mortgage.id),
                     balance=updated.balance,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 

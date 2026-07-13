@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     CharacterComponent,
@@ -129,9 +129,9 @@ def test_lifecycle_handlers_reject_invalid_character_ids():
     )
     ctx = handler_context(scenario)
 
-    assert SleepHandler().execute(ctx, invalid).reason == "invalid character id"
-    assert WakeHandler().execute(ctx, invalid).reason == "invalid character id"
-    assert WaitHandler().execute(ctx, invalid).reason == "invalid character id"
+    assert execute_handler(SleepHandler(), ctx, invalid).reason == "invalid character id"
+    assert execute_handler(WakeHandler(), ctx, invalid).reason == "invalid character id"
+    assert execute_handler(WaitHandler(), ctx, invalid).reason == "invalid character id"
 
     missing = build_submitted_command(
         character_id="entity_999",
@@ -141,9 +141,9 @@ def test_lifecycle_handlers_reject_invalid_character_ids():
         cost=CommandCost(),
         lane=Lane.WORLD,
     )
-    assert SleepHandler().execute(ctx, missing).reason == "character does not exist"
-    assert WakeHandler().execute(ctx, missing).reason == "character does not exist"
-    assert WaitHandler().execute(ctx, missing).reason == "character does not exist"
+    assert execute_handler(SleepHandler(), ctx, missing).reason == "character does not exist"
+    assert execute_handler(WakeHandler(), ctx, missing).reason == "character does not exist"
+    assert execute_handler(WaitHandler(), ctx, missing).reason == "character does not exist"
 
 
 def test_sleep_and_wake_reject_repeated_or_unmatched_state():
@@ -152,9 +152,9 @@ def test_sleep_and_wake_reject_repeated_or_unmatched_state():
     wake = cmd(scenario, "wake", cost=CommandCost())
     ctx = handler_context(scenario)
 
-    assert WakeHandler().execute(ctx, wake).reason == "not asleep"
+    assert execute_handler(WakeHandler(), ctx, wake).reason == "not asleep"
 
-    assert SleepHandler().execute(ctx, sleep).ok is True
-    assert SleepHandler().execute(ctx, sleep).reason == "already asleep"
+    assert execute_handler(SleepHandler(), ctx, sleep).ok is True
+    assert execute_handler(SleepHandler(), ctx, sleep).reason == "already asleep"
 
-    assert WakeHandler().execute(ctx, wake).ok is True
+    assert execute_handler(WakeHandler(), ctx, wake).ok is True

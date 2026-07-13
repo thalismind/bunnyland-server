@@ -951,9 +951,7 @@ def _consume_resource_operations(
         SetComponent(item.id, replace(stack, quantity=remaining)),
         SetComponent(
             item.id,
-            IdentityComponent(
-                name=_resource_name(resource_type, remaining), kind="resource"
-            ),
+            IdentityComponent(name=_resource_name(resource_type, remaining), kind="resource"),
         ),
     )
 
@@ -978,9 +976,7 @@ def _add_resource_operations(
     return reference, (
         AddEntity(
             (
-                IdentityComponent(
-                    name=_resource_name(resource_type, quantity), kind="resource"
-                ),
+                IdentityComponent(name=_resource_name(resource_type, quantity), kind="resource"),
                 ResourceStackComponent(resource_type=resource_type, quantity=quantity),
                 PortableComponent(can_pick_up=True),
             ),
@@ -1170,7 +1166,6 @@ class SetWorkPriorityHandler:
                     priority=priority,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1206,7 +1201,6 @@ class SetAllowedAreaHandler:
                     room_ids=room_ids,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1246,10 +1240,10 @@ class TendWoundHandler:
             SetComponent(
                 injury_id,
                 replace(
-                injury,
-                treated=True,
-                pain=max(0.0, injury.pain * (1.0 - min(1.0, quality))),
-                bleeding_rate=max(0.0, injury.bleeding_rate * (1.0 - min(1.0, quality))),
+                    injury,
+                    treated=True,
+                    pain=max(0.0, injury.pain * (1.0 - min(1.0, quality))),
+                    bleeding_rate=max(0.0, injury.bleeding_rate * (1.0 - min(1.0, quality))),
                 ),
             )
         ]
@@ -1262,9 +1256,7 @@ class TendWoundHandler:
                 assert holder is not None
                 operations.append(RemoveEdge(holder, medicine_id, Contains))
             else:
-                operations.append(
-                    SetComponent(medicine_id, replace(medicine, uses=remaining))
-                )
+                operations.append(SetComponent(medicine_id, replace(medicine, uses=remaining)))
         if patient.has_component(BleedingComponent):
             bleeding = patient.get_component(BleedingComponent)
             operations.append(
@@ -1289,7 +1281,6 @@ class TendWoundHandler:
                     quality=quality,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1350,7 +1341,6 @@ class RescueToBedHandler:
                     bed_id=str(bed_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1373,11 +1363,11 @@ class CreateStockpileHandler:
         operations = (
             AddEntity(
                 (
-                IdentityComponent(name=name, kind="stockpile"),
-                StockpileComponent(capacity=capacity),
-                StorageFilterComponent(
-                    allowed_types=_parse_types(command.payload.get("allowed_types"))
-                ),
+                    IdentityComponent(name=name, kind="stockpile"),
+                    StockpileComponent(capacity=capacity),
+                    StorageFilterComponent(
+                        allowed_types=_parse_types(command.payload.get("allowed_types"))
+                    ),
                 ),
                 reference=stockpile,
             ),
@@ -1401,7 +1391,7 @@ class CreateStockpileHandler:
                 )
             )
 
-        return planned(MutationPlan(operations), created_event, ctx=ctx)
+        return planned(MutationPlan(operations), created_event)
 
 
 class SetStorageFilterHandler:
@@ -1422,9 +1412,7 @@ class SetStorageFilterHandler:
             return rejected("target is not a stockpile")
         allowed_types = _parse_types(command.payload.get("allowed_types"))
         return planned(
-            MutationPlan(
-                (SetComponent(stockpile_id, StorageFilterComponent(allowed_types)),)
-            ),
+            MutationPlan((SetComponent(stockpile_id, StorageFilterComponent(allowed_types)),)),
             StorageFilterChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1435,7 +1423,6 @@ class SetStorageFilterHandler:
                     allowed_types=allowed_types,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1464,7 +1451,6 @@ class ForbidItemHandler:
                     forbidden=True,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1496,7 +1482,6 @@ class AllowItemHandler:
                     forbidden=False,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1554,7 +1539,6 @@ class HaulItemHandler:
                     target_container_id=str(target_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1592,12 +1576,12 @@ class SplitStackHandler:
             ),
             AddEntity(
                 (
-                IdentityComponent(
-                    name=_resource_name(stack.resource_type, quantity), kind="resource"
-                ),
-                ResourceStackComponent(resource_type=stack.resource_type, quantity=quantity),
-                PortableComponent(can_pick_up=True),
-                HaulableComponent(),
+                    IdentityComponent(
+                        name=_resource_name(stack.resource_type, quantity), kind="resource"
+                    ),
+                    ResourceStackComponent(resource_type=stack.resource_type, quantity=quantity),
+                    PortableComponent(can_pick_up=True),
+                    HaulableComponent(),
                 ),
                 reference=new_stack,
             ),
@@ -1626,7 +1610,7 @@ class SplitStackHandler:
                 )
             )
 
-        return planned(MutationPlan(tuple(operations)), split_event, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), split_event)
 
 
 class MergeStackHandler:
@@ -1686,7 +1670,6 @@ class MergeStackHandler:
                     quantity=source_stack.quantity,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1711,9 +1694,7 @@ class ReserveHandler:
             return rejected("already reserved")
 
         return planned(
-            MutationPlan(
-                (AddEdge(target_id, character_id, ReservedBy(since_epoch=ctx.epoch)),)
-            ),
+            MutationPlan((AddEdge(target_id, character_id, ReservedBy(since_epoch=ctx.epoch)),)),
             ReservationCreatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1723,7 +1704,6 @@ class ReserveHandler:
                     target_id=str(target_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1751,7 +1731,6 @@ class ReleaseReservationHandler:
                     target_id=str(target_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1842,7 +1821,7 @@ class GatherResourceHandler:
                 )
             )
 
-        return planned(MutationPlan(tuple(operations)), gathered_event, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), gathered_event)
 
 
 class CraftHandler:
@@ -1873,9 +1852,7 @@ class CraftHandler:
         operations = []
         for resource_type, quantity in recipe.inputs.items():
             operations.extend(
-                _consume_resource_operations(
-                    character, ctx.world, resource_type, quantity
-                )
+                _consume_resource_operations(character, ctx.world, resource_type, quantity)
             )
         outputs = []
         for resource_type, quantity in recipe.outputs.items():
@@ -1913,7 +1890,7 @@ class CraftHandler:
                 )
             )
 
-        return planned(MutationPlan(tuple(operations)), crafted_event, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), crafted_event)
 
 
 class BakeHandler(CraftHandler):
@@ -1961,7 +1938,6 @@ class AssignJobHandler:
                     job_id=str(job_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1999,7 +1975,6 @@ class CompleteJobHandler:
                     job_id=str(job_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2022,9 +1997,9 @@ class UpdatePawnProfileHandler:
                     SetComponent(
                         character_id,
                         PawnProfileComponent(
-                backstory=backstory,
-                passions=passions,
-                expectations=expectations,
+                            backstory=backstory,
+                            passions=passions,
+                            expectations=expectations,
                         ),
                     ),
                 )
@@ -2037,7 +2012,6 @@ class UpdatePawnProfileHandler:
                     expectations=expectations,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2070,9 +2044,7 @@ class ProgressJobBillHandler:
         operations = [SetComponent(bill_id, replace(bill, work_done=done))]
         if completed and bill_entity.has_component(JobComponent):
             job = bill_entity.get_component(JobComponent)
-            operations.append(
-                SetComponent(bill_id, replace(job, completed=True, assigned=False))
-            )
+            operations.append(SetComponent(bill_id, replace(job, completed=True, assigned=False)))
         return planned(
             MutationPlan(tuple(operations)),
             JobBillProgressedEvent(
@@ -2086,7 +2058,6 @@ class ProgressJobBillHandler:
                     completed=completed,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2118,7 +2089,6 @@ class SetPrisonerPolicyHandler:
                     policy=policy,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2148,9 +2118,7 @@ class RecruitPrisonerHandler:
         if recruited:
             operation = RemoveComponent(prisoner_id, PrisonerComponent)
         else:
-            operation = SetComponent(
-                prisoner_id, replace(component, recruitment_progress=total)
-            )
+            operation = SetComponent(prisoner_id, replace(component, recruitment_progress=total))
         return planned(
             MutationPlan((operation,)),
             RecruitmentProgressedEvent(
@@ -2164,7 +2132,6 @@ class RecruitPrisonerHandler:
                     recruited=recruited,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2189,9 +2156,7 @@ class ResearchProjectHandler:
             return rejected("research project is already unlocked")
         done = min(project.work_required, project.work_done + work)
         unlocked = done >= project.work_required
-        operations = [
-            SetComponent(project_id, replace(project, work_done=done, unlocked=unlocked))
-        ]
+        operations = [SetComponent(project_id, replace(project, work_done=done, unlocked=unlocked))]
         events: list[DomainEvent] = [
             ResearchProgressedEvent(
                 **ctx.event_base(
@@ -2208,9 +2173,7 @@ class ResearchProjectHandler:
             operations.append(
                 SetComponent(
                     project_id,
-                    TechUnlockComponent(
-                        tech_id=project.project_id, unlocked_at_epoch=ctx.epoch
-                    ),
+                    TechUnlockComponent(tech_id=project.project_id, unlocked_at_epoch=ctx.epoch),
                 )
             )
             events.append(
@@ -2224,7 +2187,7 @@ class ResearchProjectHandler:
                     )
                 )
             )
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class ResolveColonyIncidentHandler:
@@ -2254,7 +2217,6 @@ class ResolveColonyIncidentHandler:
                     incident_type=incident.incident_type,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2280,9 +2242,7 @@ class CompleteTradeHandler:
         operations = []
         for resource_type, quantity in offer.wants.items():
             operations.extend(
-                _consume_resource_operations(
-                    character, ctx.world, resource_type, quantity
-                )
+                _consume_resource_operations(character, ctx.world, resource_type, quantity)
             )
         for resource_type, quantity in offer.gives.items():
             _reference, added = _add_resource_operations(
@@ -2295,8 +2255,7 @@ class CompleteTradeHandler:
                 for entity in ctx.world.query()
                 .with_all([FactionRelationComponent])
                 .execute_entities()
-                if entity.get_component(FactionRelationComponent).faction_id
-                == offer.faction_id
+                if entity.get_component(FactionRelationComponent).faction_id == offer.faction_id
             ),
             None,
         )
@@ -2304,24 +2263,17 @@ class CompleteTradeHandler:
             goodwill = offer.goodwill_delta
             operations.append(
                 AddEntity(
-                    (
-                        FactionRelationComponent(
-                            faction_id=offer.faction_id, goodwill=goodwill
-                        ),
-                    )
+                    (FactionRelationComponent(faction_id=offer.faction_id, goodwill=goodwill),)
                 )
             )
         else:
             goodwill = (
-                relation.get_component(FactionRelationComponent).goodwill
-                + offer.goodwill_delta
+                relation.get_component(FactionRelationComponent).goodwill + offer.goodwill_delta
             )
             operations.append(
                 SetComponent(
                     relation.id,
-                    FactionRelationComponent(
-                        faction_id=offer.faction_id, goodwill=goodwill
-                    ),
+                    FactionRelationComponent(faction_id=offer.faction_id, goodwill=goodwill),
                 )
             )
         return planned(
@@ -2337,7 +2289,6 @@ class CompleteTradeHandler:
                     goodwill=goodwill,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2368,9 +2319,7 @@ class FormCaravanHandler:
         for resource_type, quantity in cargo.items():
             if quantity:
                 operations.extend(
-                    _consume_resource_operations(
-                        character, ctx.world, resource_type, quantity
-                    )
+                    _consume_resource_operations(character, ctx.world, resource_type, quantity)
                 )
         member_ids = tuple(
             sorted({str(character_id), *_parse_types(command.payload.get("member_ids"))})
@@ -2385,12 +2334,12 @@ class FormCaravanHandler:
         operations.append(
             AddEntity(
                 (
-                IdentityComponent(name=f"caravan to {destination}", kind="caravan"),
-                CaravanComponent(
-                    destination=destination,
-                    cargo=cargo,
-                    departed_at_epoch=ctx.epoch,
-                ),
+                    IdentityComponent(name=f"caravan to {destination}", kind="caravan"),
+                    CaravanComponent(
+                        destination=destination,
+                        cargo=cargo,
+                        departed_at_epoch=ctx.epoch,
+                    ),
                 ),
                 reference=caravan,
             )
@@ -2410,7 +2359,7 @@ class FormCaravanHandler:
                 )
             )
 
-        return planned(MutationPlan(tuple(operations)), caravan_event, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), caravan_event)
 
 
 class PerformSurgeryHandler:
@@ -2461,8 +2410,8 @@ class PerformSurgeryHandler:
                 (
                     AddEntity(
                         (
-                    IdentityComponent(name=surgery.part, kind="body-part"),
-                    BodyPartHealthComponent(part=surgery.part),
+                            IdentityComponent(name=surgery.part, kind="body-part"),
+                            BodyPartHealthComponent(part=surgery.part),
                         ),
                         reference=body_part_reference,
                     ),
@@ -2500,7 +2449,7 @@ class PerformSurgeryHandler:
                 )
             )
 
-        return planned(MutationPlan(tuple(operations)), surgery_event, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), surgery_event)
 
 
 class ClaimOwnershipHandler:
@@ -2525,9 +2474,7 @@ class ClaimOwnershipHandler:
             return rejected("target is already owned")
 
         return planned(
-            MutationPlan(
-                (AddEdge(character_id, target_id, Owns(since_epoch=ctx.epoch)),)
-            ),
+            MutationPlan((AddEdge(character_id, target_id, Owns(since_epoch=ctx.epoch)),)),
             OwnershipClaimedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2537,7 +2484,6 @@ class ClaimOwnershipHandler:
                     target_id=str(target_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2567,7 +2513,6 @@ class ReleaseOwnershipHandler:
                     target_id=str(target_id),
                 )
             ),
-            ctx=ctx,
         )
 
 

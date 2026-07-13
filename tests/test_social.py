@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     AffectComponent,
@@ -523,7 +523,7 @@ def test_resolve_obligation_updates_status_and_social_consequence():
         },
     )
 
-    result = ResolveObligationHandler().execute(ctx, command)
+    result = execute_handler(ResolveObligationHandler(), ctx, command)
 
     assert result.ok is True
     event = result.events[0]
@@ -575,14 +575,18 @@ def test_resolve_obligation_rejections_and_failed_consequence():
         (command(scenario.character, obligation.id, "unknown"), "invalid obligation status"),
     ]
     for submitted, reason in cases:
-        result = ResolveObligationHandler().execute(ctx, submitted)
+        result = execute_handler(ResolveObligationHandler(), ctx, submitted)
         assert result.ok is False
         assert result.reason == reason
 
-    failed = ResolveObligationHandler().execute(ctx, command(scenario.character, obligation.id))
+    failed = execute_handler(
+        ResolveObligationHandler(), ctx, command(scenario.character, obligation.id)
+    )
     assert failed.ok is True
     assert bond_between(world, hazel, scenario.character).resentment > 0
-    second = ResolveObligationHandler().execute(ctx, command(scenario.character, obligation.id))
+    second = execute_handler(
+        ResolveObligationHandler(), ctx, command(scenario.character, obligation.id)
+    )
     assert second.ok is False
     assert second.reason == "obligation is already resolved"
 
@@ -928,7 +932,7 @@ def test_resolve_obligation_cancel_leaves_bond_unchanged():
         payload={"obligation_id": str(obligation.id), "status": "canceled"},
     )
 
-    result = ResolveObligationHandler().execute(ctx, command)
+    result = execute_handler(ResolveObligationHandler(), ctx, command)
 
     assert result.ok is True
     assert obligation.get_component(ObligationComponent).status == "canceled"

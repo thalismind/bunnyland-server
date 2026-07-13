@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     CommandCost,
@@ -211,7 +211,8 @@ def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
 
 def test_gardensim_reachable_entity_rejects_missing_character_without_crashing():
     scenario = build_scenario()
-    result = TillHandler().execute(
+    result = execute_handler(
+        TillHandler(),
         HandlerContext(scenario.actor.world, scenario.actor.epoch),
         _handler_cmd(
             scenario,
@@ -832,7 +833,8 @@ async def test_fishing_mining_foraging_gifts_festivals_and_bundles():
     await scenario.actor.tick(0.0)
     await scenario.actor.submit(_cmd(scenario, "join-festival", festival_id=str(festival.id)))
     await scenario.actor.tick(0.0)
-    repeated_join = JoinFestivalHandler().execute(
+    repeated_join = execute_handler(
+        JoinFestivalHandler(),
         HandlerContext(scenario.actor.world, scenario.actor.epoch),
         _handler_cmd(scenario, "join-festival", festival_id=str(festival.id)),
     )
@@ -1405,18 +1407,20 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
-    water_result = WaterCropHandler().execute(
+    water_result = execute_handler(
+        WaterCropHandler(),
         ctx,
         _handler_cmd(scenario, "water-crop", soil_id=str(soil.id)),
     )
     assert water_result.ok is True
     assert soil.get_component(WateredComponent).expires_at_epoch == DAY
 
-    simple_clear = ClearDeadCropHandler().execute(
+    simple_clear = execute_handler(
+        ClearDeadCropHandler(),
         ctx,
         _handler_cmd(scenario, "clear-dead-crop", soil_id=str(dead_soil.id)),
     )
@@ -1424,7 +1428,8 @@ def test_gardensim_handlers_reject_invalid_and_unreachable_targets_directly():
     assert not dead_soil.has_component(CropComponent)
     assert not dead_soil.has_component(HarvestableComponent)
 
-    result = ClearDeadCropHandler().execute(
+    result = execute_handler(
+        ClearDeadCropHandler(),
         ctx,
         _handler_cmd(scenario, "clear-dead-crop", soil_id=str(dead_soil_full.id)),
     )
@@ -2083,11 +2088,12 @@ def test_farm_loop_handlers_reject_invalid_and_unavailable_targets_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
-    result = ContributeBundleHandler().execute(
+    result = execute_handler(
+        ContributeBundleHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2275,7 +2281,8 @@ def test_gift_preferences_apply_loved_disliked_and_plain_item_deltas():
         (plain_target, shell),
         (neutral_target, pebble),
     ):
-        result = GiveGiftHandler().execute(
+        result = execute_handler(
+            GiveGiftHandler(),
             ctx,
             _handler_cmd(
                 scenario,
@@ -3229,7 +3236,7 @@ def test_gardensim_catalogue_handlers_reject_bad_state_directly():
         ),
     ]
     for handler, command_type, payload, reason in cases:
-        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        result = execute_handler(handler, ctx, _handler_cmd(scenario, command_type, **payload))
         assert result.ok is False
         assert result.reason == reason
 
@@ -3411,8 +3418,8 @@ def test_inspect_crop_notes_omit_absent_pests_and_weeds_directly():
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), soil.id)
 
-    result = InspectCropHandler().execute(
-        ctx, _handler_cmd(scenario, "inspect", soil_id=str(soil.id))
+    result = execute_handler(
+        InspectCropHandler(), ctx, _handler_cmd(scenario, "inspect", soil_id=str(soil.id))
     )
     assert result.ok
     assert soil.get_component(CropInspectionComponent).notes == "turnip stage 1"
@@ -3438,14 +3445,12 @@ def test_weed_and_treat_without_quality_component_skip_quality_bump_directly():
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), soil.id)
 
-    assert (
-        WeedCropHandler().execute(ctx, _handler_cmd(scenario, "weed-crop", soil_id=str(soil.id))).ok
-    )
-    assert (
-        TreatPestsHandler()
-        .execute(ctx, _handler_cmd(scenario, "treat-pests", soil_id=str(soil.id)))
-        .ok
-    )
+    assert execute_handler(
+        WeedCropHandler(), ctx, _handler_cmd(scenario, "weed-crop", soil_id=str(soil.id))
+    ).ok
+    assert execute_handler(
+        TreatPestsHandler(), ctx, _handler_cmd(scenario, "treat-pests", soil_id=str(soil.id))
+    ).ok
     assert not soil.has_component(WeedComponent)
     assert not soil.has_component(PestComponent)
     assert not soil.has_component(CropQualityComponent)
@@ -3457,24 +3462,27 @@ def test_weed_treat_repair_reject_unparseable_character_id_directly():
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     # Unparseable character id short-circuits each handler (lines 1366, 1398, 1815).
     assert (
-        WeedCropHandler()
-        .execute(ctx, _handler_cmd(scenario, "weed-crop", character_id="bad", soil_id="entity_1"))
-        .reason
+        execute_handler(
+            WeedCropHandler(),
+            ctx,
+            _handler_cmd(scenario, "weed-crop", character_id="bad", soil_id="entity_1"),
+        ).reason
         == "invalid character or soil id"
     )
     assert (
-        TreatPestsHandler()
-        .execute(ctx, _handler_cmd(scenario, "treat-pests", character_id="bad", soil_id="entity_1"))
-        .reason
+        execute_handler(
+            TreatPestsHandler(),
+            ctx,
+            _handler_cmd(scenario, "treat-pests", character_id="bad", soil_id="entity_1"),
+        ).reason
         == "invalid character or soil id"
     )
     assert (
-        RepairMachineHandler()
-        .execute(
+        execute_handler(
+            RepairMachineHandler(),
             ctx,
             _handler_cmd(scenario, "repair-machine", character_id="bad", machine_id="entity_1"),
-        )
-        .reason
+        ).reason
         == "invalid character or machine id"
     )
 
@@ -3496,8 +3504,10 @@ def test_start_machine_rejects_broken_machine_directly():
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), machine.id)
 
-    result = StartMachineHandler().execute(
-        ctx, _handler_cmd(scenario, "start-machine", machine_id=str(machine.id), recipe_id="juice")
+    result = execute_handler(
+        StartMachineHandler(),
+        ctx,
+        _handler_cmd(scenario, "start-machine", machine_id=str(machine.id), recipe_id="juice"),
     )
     assert result.ok is False
     assert result.reason == "machine is broken"
@@ -3519,8 +3529,10 @@ def test_repair_intact_machine_skips_breakdown_removal_directly():
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), machine.id)
 
-    result = RepairMachineHandler().execute(
-        ctx, _handler_cmd(scenario, "repair-machine", machine_id=str(machine.id))
+    result = execute_handler(
+        RepairMachineHandler(),
+        ctx,
+        _handler_cmd(scenario, "repair-machine", machine_id=str(machine.id)),
     )
     assert result.ok
     assert machine.get_component(MachineComponent).quality == 0.8
@@ -3548,18 +3560,16 @@ def test_claim_mail_and_complete_quest_without_reward_skip_spawn_directly():
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), mail.id)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), quest.id)
 
-    assert (
-        ClaimMailHandler()
-        .execute(ctx, _handler_cmd(scenario, "claim-mail", mail_id=str(mail.id)))
-        .ok
-    )
+    assert execute_handler(
+        ClaimMailHandler(), ctx, _handler_cmd(scenario, "claim-mail", mail_id=str(mail.id))
+    ).ok
     assert mail.get_component(MailComponent).claimed is True
 
-    assert (
-        CompleteFarmQuestHandler()
-        .execute(ctx, _handler_cmd(scenario, "complete-farm-quest", quest_id=str(quest.id)))
-        .ok
-    )
+    assert execute_handler(
+        CompleteFarmQuestHandler(),
+        ctx,
+        _handler_cmd(scenario, "complete-farm-quest", quest_id=str(quest.id)),
+    ).ok
     assert quest.get_component(FarmQuestComponent).completed is True
 
 
@@ -3579,8 +3589,10 @@ def test_complete_farm_quest_rejects_unreachable_quest_directly():
     # In another room -> not reachable (line 2414).
     other_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), quest.id)
 
-    result = CompleteFarmQuestHandler().execute(
-        ctx, _handler_cmd(scenario, "complete-farm-quest", quest_id=str(quest.id))
+    result = execute_handler(
+        CompleteFarmQuestHandler(),
+        ctx,
+        _handler_cmd(scenario, "complete-farm-quest", quest_id=str(quest.id)),
     )
     assert result.ok is False
     assert result.reason == "quest is not reachable"
@@ -3617,7 +3629,8 @@ def test_ship_and_donate_skip_collection_event_for_known_entry_directly():
         )
         character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), stack.id)
 
-    ship_result = ShipItemsHandler().execute(
+    ship_result = execute_handler(
+        ShipItemsHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -3631,7 +3644,8 @@ def test_ship_and_donate_skip_collection_event_for_known_entry_directly():
     assert ship_result.ok
     assert not any(isinstance(e, CollectionUpdatedEvent) for e in ship_result.events)
 
-    donate_result = DonateMuseumHandler().execute(
+    donate_result = execute_handler(
+        DonateMuseumHandler(),
         ctx,
         _handler_cmd(scenario, "donate-museum", museum_id=str(museum.id), resource_type="ruby"),
     )
@@ -3687,7 +3701,8 @@ def test_plan_migration_alternate_dispatch_and_optional_operations():
     assert inspect.can_handle(ctx, wrong_target) is False
     assert harvest.can_handle(ctx, wrong_target) is False
 
-    result = harvest.execute(
+    result = execute_handler(
+        harvest,
         ctx,
         _handler_cmd(scenario, "harvest", target_id=str(soil.id)),
     )
@@ -3711,7 +3726,8 @@ def test_plan_migration_alternate_dispatch_and_optional_operations():
     )
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), bait.id)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), spot.id)
-    result = FishHandler().execute(
+    result = execute_handler(
+        FishHandler(),
         ctx,
         _handler_cmd(scenario, "fish", spot_id=str(spot.id)),
     )

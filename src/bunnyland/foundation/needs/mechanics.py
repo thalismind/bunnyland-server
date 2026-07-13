@@ -438,7 +438,6 @@ class _RecoverNeedHandler:
                     band=band(updated.meter),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -729,9 +728,7 @@ def _meter_fact(
     detail = _DETAIL_BY_BAND[current_band]
     if not ctx.includes_detail(detail):
         return ()
-    if not ctx.is_first_person and (
-        observable_cutoff is None or detail > observable_cutoff
-    ):
+    if not ctx.is_first_person and (observable_cutoff is None or detail > observable_cutoff):
         return ()
     phrase = _need_phrase(ctx, phrases[current_band])
     return (PromptFact(key=key, text=phrase, detail=detail),)
@@ -764,9 +761,7 @@ def need_fragments(
         perspective=PromptPerspective(
             viewer=viewer or character,
             perspective=(
-                "second-person"
-                if viewer is None or viewer.id == character.id
-                else "third-person"
+                "second-person" if viewer is None or viewer.id == character.id else "third-person"
             ),
         ),
         detail_cutoff=detail_cutoff,

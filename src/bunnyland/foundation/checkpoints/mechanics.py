@@ -144,7 +144,6 @@ class SaveCheckpointHandler:
                     saved_at_epoch=stamped.saved_at_epoch,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -228,7 +227,6 @@ class ReloadCheckpointHandler:
                     path=str(save_path),
                 )
             ),
-            ctx=ctx,
         )
 
 

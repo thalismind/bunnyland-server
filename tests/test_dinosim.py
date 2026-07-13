@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     CommandCost,
@@ -316,7 +316,8 @@ def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
 
 def test_dinosim_reachable_entity_rejects_missing_character_without_crashing():
     scenario = build_scenario()
-    result = IdentifyFossilHandler().execute(
+    result = execute_handler(
+        IdentifyFossilHandler(),
         HandlerContext(scenario.actor.world, scenario.actor.epoch),
         _handler_cmd(
             scenario,
@@ -471,7 +472,7 @@ def test_dinosim_parity_handlers_mutate_state_directly():
     ]
 
     for handler, command_type, payload, event_type in calls:
-        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        result = execute_handler(handler, ctx, _handler_cmd(scenario, command_type, **payload))
         assert result.ok, (command_type, result.reason)
         assert any(isinstance(event, event_type) for event in result.events)
 
@@ -596,13 +597,16 @@ def test_dinosim_parity_handlers_reject_invalid_targets_directly():
     ]
 
     for handler, command_type, payload, invalid_reason, missing_reason in cases:
-        bad_character = handler.execute(
+        bad_character = execute_handler(
+            handler,
             ctx,
             _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
         )
         assert bad_character.ok is False
         assert bad_character.reason == invalid_reason
-        missing_target = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        missing_target = execute_handler(
+            handler, ctx, _handler_cmd(scenario, command_type, **payload)
+        )
         assert missing_target.ok is False
         assert missing_target.reason == missing_reason
 
@@ -713,85 +717,72 @@ def test_dinosim_parity_handlers_reject_reachable_wrong_kind_and_state_directly(
         ),
     ]
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
-    assert (
-        SurveyFossilHandler()
-        .execute(ctx, _handler_cmd(scenario, "survey-fossil", fossil_id=str(fossil.id)))
-        .ok
-    )
+    assert execute_handler(
+        SurveyFossilHandler(),
+        ctx,
+        _handler_cmd(scenario, "survey-fossil", fossil_id=str(fossil.id)),
+    ).ok
     fossil.remove_component(FossilSurveyComponent)
-    assert (
-        ExcavateFossilHandler()
-        .execute(ctx, _handler_cmd(scenario, "excavate-fossil", fossil_id=str(fossil.id)))
-        .ok
-    )
+    assert execute_handler(
+        ExcavateFossilHandler(),
+        ctx,
+        _handler_cmd(scenario, "excavate-fossil", fossil_id=str(fossil.id)),
+    ).ok
     fossil.remove_component(FossilSurveyComponent)
-    assert (
-        StabilizeFossilHandler()
-        .execute(ctx, _handler_cmd(scenario, "stabilize-fossil", fossil_id=str(fossil.id)))
-        .ok
-    )
-    assert (
-        InspectEggHandler()
-        .execute(ctx, _handler_cmd(scenario, "inspect", egg_id=str(egg.id), viability=0.5))
-        .ok
-    )
-    assert (
-        ImprintCreatureHandler()
-        .execute(
-            ctx, _handler_cmd(scenario, "imprint-creature", creature_id=str(creature.id), bond=0.5)
-        )
-        .ok
-    )
-    assert (
-        CareForJuvenileHandler()
-        .execute(
-            ctx, _handler_cmd(scenario, "care-for-juvenile", creature_id=str(creature.id), care=0.5)
-        )
-        .ok
-    )
-    assert (
-        StudyWaterCreatureHandler()
-        .execute(
-            ctx,
-            _handler_cmd(scenario, "study-water-creature", creature_id=str(water_creature.id)),
-        )
-        .ok
-    )
-    assert (
-        BroodEggHandler()
-        .execute(ctx, _handler_cmd(scenario, "brood-egg", egg_id=str(incubating_egg.id), warmth=1))
-        .ok
-    )
-    assert (
-        SetIncubationTemperatureHandler()
-        .execute(
-            ctx,
-            _handler_cmd(
-                scenario,
-                "set-incubation-temperature",
-                egg_id=str(incubating_egg.id),
-                temperature=29,
-            ),
-        )
-        .ok
-    )
-    assert (
-        TriggerContainmentPanicHandler()
-        .execute(
-            ctx,
-            _handler_cmd(
-                scenario,
-                "trigger-containment-panic",
-                enclosure_id=str(enclosure.id),
-                severity=1,
-            ),
-        )
-        .ok
-    )
+    assert execute_handler(
+        StabilizeFossilHandler(),
+        ctx,
+        _handler_cmd(scenario, "stabilize-fossil", fossil_id=str(fossil.id)),
+    ).ok
+    assert execute_handler(
+        InspectEggHandler(),
+        ctx,
+        _handler_cmd(scenario, "inspect", egg_id=str(egg.id), viability=0.5),
+    ).ok
+    assert execute_handler(
+        ImprintCreatureHandler(),
+        ctx,
+        _handler_cmd(scenario, "imprint-creature", creature_id=str(creature.id), bond=0.5),
+    ).ok
+    assert execute_handler(
+        CareForJuvenileHandler(),
+        ctx,
+        _handler_cmd(scenario, "care-for-juvenile", creature_id=str(creature.id), care=0.5),
+    ).ok
+    assert execute_handler(
+        StudyWaterCreatureHandler(),
+        ctx,
+        _handler_cmd(scenario, "study-water-creature", creature_id=str(water_creature.id)),
+    ).ok
+    assert execute_handler(
+        BroodEggHandler(),
+        ctx,
+        _handler_cmd(scenario, "brood-egg", egg_id=str(incubating_egg.id), warmth=1),
+    ).ok
+    assert execute_handler(
+        SetIncubationTemperatureHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "set-incubation-temperature",
+            egg_id=str(incubating_egg.id),
+            temperature=29,
+        ),
+    ).ok
+    assert execute_handler(
+        TriggerContainmentPanicHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "trigger-containment-panic",
+            enclosure_id=str(enclosure.id),
+            severity=1,
+        ),
+    ).ok
 
 
 def test_entity_room_id_returns_containing_room_or_none():
@@ -1266,68 +1257,80 @@ def test_ecology_handlers_reject_bad_state_directly():
     track = TrackHerdHandler()
     prepare = PrepareNestHandler()
     assert (
-        mark.execute(ctx, _handler_cmd(scenario, "mark-territory", character_id="x")).reason
+        execute_handler(
+            mark, ctx, _handler_cmd(scenario, "mark-territory", character_id="x")
+        ).reason
         == "invalid character or territory id"
     )
     assert (
-        mark.execute(
-            ctx, _handler_cmd(scenario, "mark-territory", territory_id=str(distant.id))
+        execute_handler(
+            mark, ctx, _handler_cmd(scenario, "mark-territory", territory_id=str(distant.id))
         ).reason
         == "territory is not reachable"
     )
     assert (
-        mark.execute(
-            ctx, _handler_cmd(scenario, "mark-territory", territory_id=str(rock.id))
+        execute_handler(
+            mark, ctx, _handler_cmd(scenario, "mark-territory", territory_id=str(rock.id))
         ).reason
         == "target is not a territory"
     )
-    assert mark.execute(
-        ctx, _handler_cmd(scenario, "mark-territory", territory_id=str(territory.id))
+    assert execute_handler(
+        mark, ctx, _handler_cmd(scenario, "mark-territory", territory_id=str(territory.id))
     ).ok
     assert (
-        mark.execute(
-            ctx, _handler_cmd(scenario, "mark-territory", territory_id=str(territory.id))
+        execute_handler(
+            mark, ctx, _handler_cmd(scenario, "mark-territory", territory_id=str(territory.id))
         ).reason
         == "territory is already marked by you"
     )
 
     assert (
-        track.execute(ctx, _handler_cmd(scenario, "track-herd", character_id="x")).reason
+        execute_handler(track, ctx, _handler_cmd(scenario, "track-herd", character_id="x")).reason
         == "invalid character or herd id"
     )
     assert (
-        track.execute(
-            ctx, _handler_cmd(scenario, "track-herd", herd_id=str(distant_herd.id))
+        execute_handler(
+            track, ctx, _handler_cmd(scenario, "track-herd", herd_id=str(distant_herd.id))
         ).reason
         == "herd is not reachable"
     )
     assert (
-        track.execute(ctx, _handler_cmd(scenario, "track-herd", herd_id=str(rock.id))).reason
+        execute_handler(
+            track, ctx, _handler_cmd(scenario, "track-herd", herd_id=str(rock.id))
+        ).reason
         == "target is not a herd"
     )
-    assert track.execute(ctx, _handler_cmd(scenario, "track-herd", herd_id=str(herd.id))).ok
+    assert execute_handler(
+        track, ctx, _handler_cmd(scenario, "track-herd", herd_id=str(herd.id))
+    ).ok
 
     assert (
-        prepare.execute(ctx, _handler_cmd(scenario, "prepare-nest", character_id="x")).reason
+        execute_handler(
+            prepare, ctx, _handler_cmd(scenario, "prepare-nest", character_id="x")
+        ).reason
         == "invalid character or nest id"
     )
     assert (
-        prepare.execute(
-            ctx, _handler_cmd(scenario, "prepare-nest", nest_id=str(distant_nest.id))
+        execute_handler(
+            prepare, ctx, _handler_cmd(scenario, "prepare-nest", nest_id=str(distant_nest.id))
         ).reason
         == "nest is not reachable"
     )
     assert (
-        prepare.execute(ctx, _handler_cmd(scenario, "prepare-nest", nest_id=str(rock.id))).reason
+        execute_handler(
+            prepare, ctx, _handler_cmd(scenario, "prepare-nest", nest_id=str(rock.id))
+        ).reason
         == "target is not a nest"
     )
     assert (
-        prepare.execute(
-            ctx, _handler_cmd(scenario, "prepare-nest", nest_id=str(prepared.id))
+        execute_handler(
+            prepare, ctx, _handler_cmd(scenario, "prepare-nest", nest_id=str(prepared.id))
         ).reason
         == "nest is already prepared"
     )
-    assert prepare.execute(ctx, _handler_cmd(scenario, "prepare-nest", nest_id=str(nest.id))).ok
+    assert execute_handler(
+        prepare, ctx, _handler_cmd(scenario, "prepare-nest", nest_id=str(nest.id))
+    ).ok
 
 
 async def test_enclosure_escape_recapture_hide_and_evacuation_loop():
@@ -1813,34 +1816,35 @@ def test_dangerous_encounter_handlers_reject_invalid_and_cover_edge_paths_direct
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
-    assert (
-        DodgeCreatureHandler()
-        .execute(ctx, _handler_cmd(scenario, "dodge-creature", creature_id=str(plain.id)))
-        .ok
-    )
-    fight_result = FightCreatureHandler().execute(
-        ctx, _handler_cmd(scenario, "fight-creature", creature_id=str(plain.id))
+    assert execute_handler(
+        DodgeCreatureHandler(),
+        ctx,
+        _handler_cmd(scenario, "dodge-creature", creature_id=str(plain.id)),
+    ).ok
+    fight_result = execute_handler(
+        FightCreatureHandler(),
+        ctx,
+        _handler_cmd(scenario, "fight-creature", creature_id=str(plain.id)),
     )
     assert fight_result.ok is True
     assert len(fight_result.events) == 1
-    assert (
-        DriveOffPredatorHandler()
-        .execute(
-            ctx,
-            _handler_cmd(
-                scenario,
-                "drive-off-predator",
-                creature_id=str(inventory_predator.id),
-            ),
-        )
-        .ok
-    )
-    signal_result = SignalArmyHandler().execute(
-        ctx, _handler_cmd(scenario, "signal-army", room_id=str(scenario.room_a))
+    assert execute_handler(
+        DriveOffPredatorHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "drive-off-predator",
+            creature_id=str(inventory_predator.id),
+        ),
+    ).ok
+    signal_result = execute_handler(
+        SignalArmyHandler(),
+        ctx,
+        _handler_cmd(scenario, "signal-army", room_id=str(scenario.room_a)),
     )
     assert signal_result.ok is True
     assert len(signal_result.events) == 1
@@ -2191,46 +2195,40 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
-    stock_result = StockFeedHandler().execute(ctx, _handler_cmd(scenario, "stock-feed", amount=2))
+    stock_result = execute_handler(
+        StockFeedHandler(), ctx, _handler_cmd(scenario, "stock-feed", amount=2)
+    )
     assert stock_result.ok is True
     assert room.get_component(FeedStoreComponent).feed == 2.0
-    assert (
-        HarvestProductHandler()
-        .execute(
+    assert execute_handler(
+        HarvestProductHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "harvest",
+            creature_id=str(meat.id),
+            product_type="meat",
+            quantity=2,
+        ),
+    ).ok
+    assert meat.get_component(CreatureProductComponent).quantity == 0.0
+    for creature in (auto_milk, auto_toxin, auto_product, auto_hide, auto_bone):
+        assert execute_handler(
+            HarvestProductHandler(),
             ctx,
             _handler_cmd(
                 scenario,
                 "harvest",
-                creature_id=str(meat.id),
-                product_type="meat",
-                quantity=2,
+                creature_id=str(creature.id),
             ),
-        )
-        .ok
-    )
-    assert meat.get_component(CreatureProductComponent).quantity == 0.0
-    for creature in (auto_milk, auto_toxin, auto_product, auto_hide, auto_bone):
-        assert (
-            HarvestProductHandler()
-            .execute(
-                ctx,
-                _handler_cmd(
-                    scenario,
-                    "harvest",
-                    creature_id=str(creature.id),
-                ),
-            )
-            .ok
-        )
-    assert (
-        AssignGuardHandler()
-        .execute(ctx, _handler_cmd(scenario, "assign-guard", creature_id=str(plain.id)))
-        .ok
-    )
+        ).ok
+    assert execute_handler(
+        AssignGuardHandler(), ctx, _handler_cmd(scenario, "assign-guard", creature_id=str(plain.id))
+    ).ok
     assert plain.get_component(GuardAnimalComponent).location_id == str(scenario.room_a)
 
 
@@ -2514,59 +2512,46 @@ def test_enclosure_handlers_reject_invalid_and_cover_edge_paths_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
-    assert (
-        RepairFenceHandler()
-        .execute(
-            ctx,
-            _handler_cmd(
-                scenario,
-                "repair-fence",
-                enclosure_id=str(no_fence.id),
-                amount=3,
-            ),
-        )
-        .ok
-    )
+    assert execute_handler(
+        RepairFenceHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "repair-fence",
+            enclosure_id=str(no_fence.id),
+            amount=3,
+        ),
+    ).ok
     assert no_fence.get_component(FenceComponent).integrity == 3.0
-    assert (
-        LockPenHandler()
-        .execute(ctx, _handler_cmd(scenario, "lock-pen", enclosure_id=str(no_gate.id)))
-        .ok
-    )
-    assert (
-        OpenPenHandler()
-        .execute(ctx, _handler_cmd(scenario, "open-pen", enclosure_id=str(no_gate.id)))
-        .ok
-    )
-    assert (
-        TriggerContainmentHandler()
-        .execute(
-            ctx,
-            _handler_cmd(
-                scenario,
-                "trigger-containment",
-                enclosure_id=str(no_gate.id),
-            ),
-        )
-        .ok
-    )
-    assert (
-        RecaptureCreatureHandler()
-        .execute(
-            ctx,
-            _handler_cmd(
-                scenario,
-                "recapture-creature",
-                creature_id=str(raptor.id),
-                enclosure_id=str(no_gate.id),
-            ),
-        )
-        .ok
-    )
+    assert execute_handler(
+        LockPenHandler(), ctx, _handler_cmd(scenario, "lock-pen", enclosure_id=str(no_gate.id))
+    ).ok
+    assert execute_handler(
+        OpenPenHandler(), ctx, _handler_cmd(scenario, "open-pen", enclosure_id=str(no_gate.id))
+    ).ok
+    assert execute_handler(
+        TriggerContainmentHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "trigger-containment",
+            enclosure_id=str(no_gate.id),
+        ),
+    ).ok
+    assert execute_handler(
+        RecaptureCreatureHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "recapture-creature",
+            creature_id=str(raptor.id),
+            enclosure_id=str(no_gate.id),
+        ),
+    ).ok
     assert raptor.get_component(EscapeRiskComponent).risk == 0.0
 
 
@@ -2701,11 +2686,12 @@ def test_companion_lifecycle_and_item_handlers_cover_additional_edge_paths_direc
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
-    partial = TrainCommandHandler().execute(
+    partial = execute_handler(
+        TrainCommandHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2717,40 +2703,36 @@ def test_companion_lifecycle_and_item_handlers_cover_additional_edge_paths_direc
     )
     assert partial.ok is True
     assert partial.events == ()
-    assert (
-        CommandCompanionHandler()
-        .execute(
-            ctx,
-            _handler_cmd(
-                scenario,
-                "command",
-                target_id=str(companion.id),
-                instruction="hunt",
-                command_target_id="velociraptor",
-            ),
-        )
-        .ok
-    )
+    assert execute_handler(
+        CommandCompanionHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "command",
+            target_id=str(companion.id),
+            instruction="hunt",
+            command_target_id="velociraptor",
+        ),
+    ).ok
     assert companion.get_component(HuntBehaviorComponent).target_species == "velociraptor"
 
-    hatched = HatchEggHandler().execute(
-        ctx, _handler_cmd(scenario, "hatch-egg", egg_id=str(clone_egg.id))
+    hatched = execute_handler(
+        HatchEggHandler(), ctx, _handler_cmd(scenario, "hatch-egg", egg_id=str(clone_egg.id))
     )
     assert hatched.ok is True
     assert not clone_egg.has_component(CloneCandidateComponent)
 
     room.remove_relationship(Contains, scenario.character)
     assert (
-        RecallCreatureHandler()
-        .execute(
+        execute_handler(
+            RecallCreatureHandler(),
             ctx,
             _handler_cmd(
                 scenario,
                 "recall-creature",
                 creature_id=str(companion.id),
             ),
-        )
-        .reason
+        ).reason
         == "character is not in a room"
     )
 
@@ -3139,7 +3121,7 @@ def test_dinosim_handlers_reject_invalid_and_unreachable_targets_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         if reason:
             assert result.ok is False
             assert result.reason == reason
@@ -3250,7 +3232,7 @@ def test_companion_handlers_reject_invalid_targets_and_missing_ownership_directl
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -3558,7 +3540,7 @@ def test_creature_need_handlers_reject_bad_state_directly():
         (*observe(creature_id=str(not_a_creature.id)), "not a creature"),
     ]
     for handler, command, expected in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert not result.ok, expected
         assert expected in result.reason, (expected, result.reason)
 
@@ -3699,8 +3681,8 @@ def test_creature_action_handlers_reject_invalid_character():
         (EvacuateRoomHandler(), "evacuate-room"),
     ]
     for handler, command_type in handlers:
-        result = handler.execute(
-            ctx, _handler_cmd(scenario, command_type, character_id="not-an-id")
+        result = execute_handler(
+            handler, ctx, _handler_cmd(scenario, command_type, character_id="not-an-id")
         )
         assert not result.ok, command_type
         assert result.reason == "invalid character id", command_type
@@ -3731,18 +3713,20 @@ def test_creature_handlers_reject_missing_creature_or_item():
         (DriveOffPredatorHandler(), "drive-off-predator"),
     ]
     for handler, command_type in creature_handlers:
-        result = handler.execute(ctx, _handler_cmd(scenario, command_type))
+        result = execute_handler(handler, ctx, _handler_cmd(scenario, command_type))
         assert not result.ok, command_type
         assert result.reason == "invalid creature id", command_type
 
     # set-bait requires a reachable item.
-    bait = SetBaitHandler().execute(ctx, _handler_cmd(scenario, "set-bait"))
+    bait = execute_handler(SetBaitHandler(), ctx, _handler_cmd(scenario, "set-bait"))
     assert not bait.ok
     assert bait.reason == "invalid item id"
 
     # tranquilize requires a tranquilizer item once the creature resolves.
-    no_item = TranquilizeCreatureHandler().execute(
-        ctx, _handler_cmd(scenario, "tranquilize-creature", creature_id=str(creature.id))
+    no_item = execute_handler(
+        TranquilizeCreatureHandler(),
+        ctx,
+        _handler_cmd(scenario, "tranquilize-creature", creature_id=str(creature.id)),
     )
     assert not no_item.ok
     assert no_item.reason == "invalid item id"
@@ -3755,13 +3739,16 @@ def test_mount_and_command_require_a_companion_relationship():
     # A reachable creature that is NOT this character's companion.
     creature = _reachable_creature_entity(scenario)
 
-    mount = MountCreatureHandler().execute(
-        ctx, _handler_cmd(scenario, "mount-creature", creature_id=str(creature.id))
+    mount = execute_handler(
+        MountCreatureHandler(),
+        ctx,
+        _handler_cmd(scenario, "mount-creature", creature_id=str(creature.id)),
     )
     assert not mount.ok
     assert mount.reason == "creature is not your companion"
 
-    command = CommandCompanionHandler().execute(
+    command = execute_handler(
+        CommandCompanionHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -3781,8 +3768,10 @@ def test_tame_creature_progresses_without_taming_when_below_required():
     creature = _reachable_creature_entity(
         scenario, components=[TamingComponent(progress=0.0, required=100.0)]
     )
-    result = TameCreatureHandler().execute(
-        ctx, _handler_cmd(scenario, "tame-creature", creature_id=str(creature.id))
+    result = execute_handler(
+        TameCreatureHandler(),
+        ctx,
+        _handler_cmd(scenario, "tame-creature", creature_id=str(creature.id)),
     )
     assert result.ok, result.reason
     # Progress is still far below required, so no CreatureTamedEvent and no companion.
@@ -3795,7 +3784,8 @@ def test_recapture_requires_a_target_enclosure():
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     creature = _reachable_creature_entity(scenario)
-    result = RecaptureCreatureHandler().execute(
+    result = execute_handler(
+        RecaptureCreatureHandler(),
         ctx,
         _handler_cmd(scenario, "recapture-creature", creature_id=str(creature.id)),
     )
@@ -3811,7 +3801,8 @@ def test_target_weak_point_reduces_only_present_threat_components():
     creature = _reachable_creature_entity(
         scenario, components=[WeakPointComponent(label="soft belly", exposed=True)]
     )
-    result = TargetWeakPointHandler().execute(
+    result = execute_handler(
+        TargetWeakPointHandler(),
         ctx,
         _handler_cmd(scenario, "target-weak-point", creature_id=str(creature.id), damage=2.0),
     )
@@ -3830,7 +3821,8 @@ def test_signal_army_skips_non_creature_and_kaiju_only_targets():
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), prop.id
     )
-    result = SignalArmyHandler().execute(
+    result = execute_handler(
+        SignalArmyHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -3848,7 +3840,8 @@ def test_signal_army_skips_non_creature_and_kaiju_only_targets():
         components=[ApexPredatorComponent(threat_level=8)],
         name="alpha",
     )
-    apex_result = SignalArmyHandler().execute(
+    apex_result = execute_handler(
+        SignalArmyHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -3867,7 +3860,9 @@ def test_repair_damage_defaults_to_current_room_and_rejects_unreachable():
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     # No damage_id supplied -> defaults to the character's room, which lacks damage.
-    default_room = RepairDamageHandler().execute(ctx, _handler_cmd(scenario, "repair-damage"))
+    default_room = execute_handler(
+        RepairDamageHandler(), ctx, _handler_cmd(scenario, "repair-damage")
+    )
     assert not default_room.ok
     assert default_room.reason == "target has no settlement damage"
 
@@ -3879,8 +3874,10 @@ def test_repair_damage_defaults_to_current_room_and_rejects_unreachable():
     scenario.actor.world.get_entity(scenario.room_b).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), distant.id
     )
-    unreachable = RepairDamageHandler().execute(
-        ctx, _handler_cmd(scenario, "repair-damage", damage_id=str(distant.id))
+    unreachable = execute_handler(
+        RepairDamageHandler(),
+        ctx,
+        _handler_cmd(scenario, "repair-damage", damage_id=str(distant.id)),
     )
     assert not unreachable.ok
     assert unreachable.reason == "damage target is not reachable"
@@ -3893,7 +3890,8 @@ def test_fight_creature_grapples_an_unbound_target():
     creature = _reachable_creature_entity(
         scenario, components=[GrappleComponent(target_id="", active=True)]
     )
-    result = FightCreatureHandler().execute(
+    result = execute_handler(
+        FightCreatureHandler(),
         ctx,
         _handler_cmd(scenario, "fight-creature", creature_id=str(creature.id), damage=2.0),
     )
@@ -3907,7 +3905,8 @@ def test_build_enclosure_without_optional_pens():
     scenario = build_scenario()
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
-    result = BuildEnclosureHandler().execute(
+    result = execute_handler(
+        BuildEnclosureHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -3936,7 +3935,9 @@ def test_brood_egg_without_incubation_component():
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), egg.id
     )
-    result = BroodEggHandler().execute(ctx, _handler_cmd(scenario, "brood-egg", egg_id=str(egg.id)))
+    result = execute_handler(
+        BroodEggHandler(), ctx, _handler_cmd(scenario, "brood-egg", egg_id=str(egg.id))
+    )
     assert result.ok, result.reason
     assert egg.has_component(BroodingComponent)
 
@@ -3949,7 +3950,8 @@ def test_extract_and_hatch_reject_wrong_kind_targets():
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), not_fossil.id
     )
-    extract = ExtractAncientSampleHandler().execute(
+    extract = execute_handler(
+        ExtractAncientSampleHandler(),
         ctx,
         _handler_cmd(scenario, "extract-ancient-sample", fossil_id=str(not_fossil.id)),
     )
@@ -3960,8 +3962,8 @@ def test_extract_and_hatch_reject_wrong_kind_targets():
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), not_egg.id
     )
-    hatch = HatchEggHandler().execute(
-        ctx, _handler_cmd(scenario, "hatch-egg", egg_id=str(not_egg.id))
+    hatch = execute_handler(
+        HatchEggHandler(), ctx, _handler_cmd(scenario, "hatch-egg", egg_id=str(not_egg.id))
     )
     assert not hatch.ok
     assert hatch.reason == "target is not an egg"
@@ -3976,7 +3978,8 @@ def test_evacuate_room_requires_a_room():
         scenario.actor.world,
         [IdentityComponent(name="Drifter", kind="character"), CharacterComponent()],
     )
-    result = EvacuateRoomHandler().execute(
+    result = execute_handler(
+        EvacuateRoomHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -4009,8 +4012,8 @@ def test_enclosure_handlers_reject_non_enclosure_target():
         (TriggerContainmentHandler(), "trigger-containment"),
     ]
     for handler, command_type in handlers:
-        result = handler.execute(
-            ctx, _handler_cmd(scenario, command_type, enclosure_id=str(plain.id))
+        result = execute_handler(
+            handler, ctx, _handler_cmd(scenario, command_type, enclosure_id=str(plain.id))
         )
         assert not result.ok, command_type
         assert result.reason == "target is not an enclosure", command_type
@@ -4020,7 +4023,8 @@ def test_extract_ancient_sample_rejects_missing_fossil():
     scenario = build_scenario()
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
-    result = ExtractAncientSampleHandler().execute(
+    result = execute_handler(
+        ExtractAncientSampleHandler(),
         ctx,
         _handler_cmd(scenario, "extract-ancient-sample", fossil_id="entity_999999"),
     )
@@ -4061,8 +4065,10 @@ def test_repair_damage_rejects_when_no_room_and_no_target():
         scenario.actor.world,
         [IdentityComponent(name="Wanderer", kind="character"), CharacterComponent()],
     )
-    result = RepairDamageHandler().execute(
-        ctx, _handler_cmd(scenario, "repair-damage", character_id=str(loose.id))
+    result = execute_handler(
+        RepairDamageHandler(),
+        ctx,
+        _handler_cmd(scenario, "repair-damage", character_id=str(loose.id)),
     )
     assert not result.ok
     assert result.reason == "damage target does not exist"
@@ -4101,8 +4107,8 @@ def test_lay_egg_places_egg_in_actor_room_when_parent_has_no_room():
     scenario.actor.world.get_entity(scenario.character).add_relationship(
         Contains(mode=ContainmentMode.INVENTORY), parent.id
     )
-    result = LayEggHandler().execute(
-        ctx, _handler_cmd(scenario, "lay-egg", parent_id=str(parent.id))
+    result = execute_handler(
+        LayEggHandler(), ctx, _handler_cmd(scenario, "lay-egg", parent_id=str(parent.id))
     )
     assert result.ok, result.reason
     laid = [e for e in result.events if e.__class__.__name__ == "EggLaidEvent"]
@@ -4117,8 +4123,8 @@ def test_incubate_and_fertilize_reject_non_egg_targets():
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), not_egg.id
     )
-    incubate = IncubateEggHandler().execute(
-        ctx, _handler_cmd(scenario, "incubate-egg", egg_id=str(not_egg.id))
+    incubate = execute_handler(
+        IncubateEggHandler(), ctx, _handler_cmd(scenario, "incubate-egg", egg_id=str(not_egg.id))
     )
     assert not incubate.ok
     assert incubate.reason == "target is not an egg"
@@ -4132,7 +4138,8 @@ def test_fight_creature_leaves_grapple_bound_to_other_target():
         scenario,
         components=[GrappleComponent(target_id="entity_424242", active=True)],
     )
-    result = FightCreatureHandler().execute(
+    result = execute_handler(
+        FightCreatureHandler(),
         ctx,
         _handler_cmd(scenario, "fight-creature", creature_id=str(creature.id), damage=1.0),
     )
@@ -4152,7 +4159,8 @@ def test_signal_army_reduces_kaiju_only_threat():
         components=[KaijuComponent(threat_level=9, difficulty="epic")],
         name="titan",
     )
-    result = SignalArmyHandler().execute(
+    result = execute_handler(
+        SignalArmyHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -4183,8 +4191,10 @@ def test_tame_with_nonmatching_bait_in_reach():
     scenario.actor.world.get_entity(scenario.character).add_relationship(
         Contains(mode=ContainmentMode.INVENTORY), bait.id
     )
-    result = ApproachCreatureHandler().execute(
-        ctx, _handler_cmd(scenario, "approach-creature", creature_id=str(creature.id))
+    result = execute_handler(
+        ApproachCreatureHandler(),
+        ctx,
+        _handler_cmd(scenario, "approach-creature", creature_id=str(creature.id)),
     )
     assert result.ok, result.reason
 
@@ -4205,7 +4215,9 @@ def test_hatch_egg_with_egg_having_no_room_container():
     scenario.actor.world.get_entity(scenario.character).add_relationship(
         Contains(mode=ContainmentMode.INVENTORY), egg.id
     )
-    result = HatchEggHandler().execute(ctx, _handler_cmd(scenario, "hatch-egg", egg_id=str(egg.id)))
+    result = execute_handler(
+        HatchEggHandler(), ctx, _handler_cmd(scenario, "hatch-egg", egg_id=str(egg.id))
+    )
     assert result.ok, result.reason
     hatched = [e for e in result.events if e.__class__.__name__ == "EggHatchedEvent"]
     assert hatched
@@ -4284,20 +4296,23 @@ def test_plan_handlers_cover_uncontained_reachable_source_edges():
             species_name="raptor", viability=1.0, source_fossil_id=str(scenario.room_a)
         )
     )
-    assert PrepareCloneHandler().execute(
+    assert execute_handler(
+        PrepareCloneHandler(),
         ctx,
         _handler_cmd(scenario, "prepare-clone", sample_id=str(scenario.room_a)),
     ).ok
 
     source.add_component(EggComponent(species_name="raptor", laid_at_epoch=0, fertilized=True))
     source.add_component(IncubationComponent(started_at_epoch=0, ready=True))
-    assert HatchEggHandler().execute(
+    assert execute_handler(
+        HatchEggHandler(),
         ctx,
         _handler_cmd(scenario, "hatch-egg", egg_id=str(scenario.room_a)),
     ).ok
 
     source.add_component(EggComponent(species_name="raptor", laid_at_epoch=0))
-    result = CollectEggHandler().execute(
+    result = execute_handler(
+        CollectEggHandler(),
         ctx,
         _handler_cmd(scenario, "collect-egg", egg_id=str(scenario.room_a)),
     )
@@ -4330,7 +4345,8 @@ def test_lay_egg_skips_placement_when_no_room_is_available():
     )
     assert container_of(parent) is None
 
-    result = LayEggHandler().execute(
+    result = execute_handler(
+        LayEggHandler(),
         ctx,
         _handler_cmd(scenario, "lay-egg", character_id=str(parent.id), parent_id=str(parent.id)),
     )
@@ -4366,7 +4382,8 @@ def test_hatch_egg_skips_placement_when_no_room_is_available():
         Contains(mode=ContainmentMode.INVENTORY), egg.id
     )
 
-    result = HatchEggHandler().execute(
+    result = execute_handler(
+        HatchEggHandler(),
         ctx,
         _handler_cmd(scenario, "hatch-egg", character_id=str(character_id), egg_id=str(egg.id)),
     )
@@ -4392,7 +4409,8 @@ def test_drive_off_predator_rejects_creature_without_a_room():
     )
     assert container_of(creature) is None
 
-    result = DriveOffPredatorHandler().execute(
+    result = execute_handler(
+        DriveOffPredatorHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -4417,4 +4435,6 @@ def test_spawn_egg_ignores_missing_parent_reference():
     )
 
     execute_mutation_plan(scenario.actor.world, MutationPlan(tuple(operations)))
-    assert scenario.actor.world.get_entity(egg.require()).get_relationships(DescendsFromParent) == []
+    assert (
+        scenario.actor.world.get_entity(egg.require()).get_relationships(DescendsFromParent) == []
+    )

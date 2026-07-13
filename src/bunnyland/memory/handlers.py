@@ -25,7 +25,7 @@ from ..core.events import (
     ReflectionCreatedEvent,
 )
 from ..core.handlers.base import HandlerContext, HandlerResult, planned, rejected
-from ..core.mutations import MutationPlan, SetComponent
+from ..core.mutations import MutationPlan, SetComponent, execute_mutation_plan
 from .store import MemoryStore, normalize_tags
 
 DEFAULT_REFLECTION_INTERVAL_SECONDS = 24 * 3600
@@ -95,7 +95,6 @@ class TakeNoteHandler:
                     collection=collection,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -135,7 +134,6 @@ class RememberHandler:
                     collection=collection,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -172,7 +170,6 @@ class ForgetHandler:
                     collection=collection,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -246,7 +243,6 @@ class ReflectHandler:
                     source_note_ids=tuple(entry.id for entry in entries),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -305,8 +301,16 @@ class ReflectionLoopConsequence:
                 submitted_at_epoch=epoch,
             )
             result = self._handler.execute(HandlerContext(world, epoch), command)
-            if result.ok:
-                events.extend(result.events)
+            if result.ok and result.plan is not None:
+                event_factories = result.event_factories
+                _summary, deferred = execute_mutation_plan(
+                    world,
+                    result.plan,
+                    after_apply=lambda event_factories=event_factories: tuple(
+                        factory() for factory in event_factories
+                    ),
+                )
+                events.extend((*result.events, *deferred))
         return events
 
 

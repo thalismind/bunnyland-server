@@ -215,7 +215,6 @@ class UseHandler:
                     tool_id=str(tool_id) if tool_id is not None else None,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -253,7 +252,6 @@ class LookHandler:
                     summary=summary,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -293,8 +291,7 @@ class InspectHandler:
                 cutoff=DETAILED_DETAIL_CUTOFF,
             )
             facts = tuple(
-                {"key": fact.key, "text": fact.text, "detail": fact.detail}
-                for fact in projected
+                {"key": fact.key, "text": fact.text, "detail": fact.detail} for fact in projected
             )
         return planned(
             MutationPlan(),
@@ -312,7 +309,6 @@ class InspectHandler:
                     facts=facts,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -348,7 +344,6 @@ class OpenHandler:
                     target_id=str(target_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -382,7 +377,6 @@ class CloseHandler:
                     target_id=str(target_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -422,7 +416,6 @@ class UnlockHandler:
                     tool_id=str(tool_id) if tool_id is not None else None,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -462,7 +455,6 @@ class LockHandler:
                     tool_id=str(tool_id) if tool_id is not None else None,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -523,7 +515,6 @@ class WriteHandler:
                     text=text,
                 )
             ),
-            ctx=ctx,
         )
 
 

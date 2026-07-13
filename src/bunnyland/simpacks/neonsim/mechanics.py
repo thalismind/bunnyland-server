@@ -52,7 +52,6 @@ from ...core.edges import ContainmentMode, Contains
 from ...core.events import DomainEvent, EventVisibility
 from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
 from ...core.mutations import (
-    AddComponent,
     AddEdge,
     AddEntity,
     DeleteEntity,
@@ -334,9 +333,7 @@ def _spend_scrip_operations(
                     SetComponent(item_id, replace(stack, quantity=remaining)),
                     SetComponent(
                         item_id,
-                        IdentityComponent(
-                            name=f"{SCRIP_RESOURCE} x{remaining}", kind="resource"
-                        ),
+                        IdentityComponent(name=f"{SCRIP_RESOURCE} x{remaining}", kind="resource"),
                     ),
                 ]
             else:
@@ -442,7 +439,6 @@ class EnterDistrictHandler:
                         requirement=clearance_required,
                     )
                 ),
-                ctx=ctx,
             )
 
         operations = _clear_inside_zone_operations(character)
@@ -481,7 +477,7 @@ class EnterDistrictHandler:
                     )
                 )
             )
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class ShowCredentialsHandler:
@@ -512,7 +508,6 @@ class ShowCredentialsHandler:
                         requirement=gate.clearance_required,
                     )
                 ),
-                ctx=ctx,
             )
         return planned(
             MutationPlan(),
@@ -538,7 +533,6 @@ class ShowCredentialsHandler:
                     method="credentials",
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -595,7 +589,6 @@ class BribeCheckpointHandler:
                     method="bribe",
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -638,7 +631,6 @@ class SneakCheckpointHandler:
                     method="stealth",
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -646,9 +638,7 @@ class ClaimSafehouseHandler:
     command_type = "claim"
 
     def can_handle(self, ctx: HandlerContext, command: SubmittedCommand) -> bool:
-        return _can_handle_target_component(
-            ctx, command, SafehouseComponent, "target_id"
-        )
+        return _can_handle_target_component(ctx, command, SafehouseComponent, "target_id")
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
@@ -678,7 +668,6 @@ class ClaimSafehouseHandler:
                     safehouse_id=str(safehouse.id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -719,7 +708,6 @@ class CaseLocationHandler:
                     has_checkpoint=has_checkpoint,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -979,7 +967,6 @@ class InspectDeviceHandler:
                     disabled=dev.disabled,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1012,7 +999,6 @@ class DisableCameraHandler:
                     device_id=str(device.id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1046,7 +1032,6 @@ class LoopCameraHandler:
                     device_id=str(device.id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1077,7 +1062,6 @@ class JamSensorHandler:
                     device_id=str(device.id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1096,9 +1080,7 @@ class DeployDroneHandler:
         drone = device.get_component(DroneComponent)
         if drone.active:
             return rejected("drone is already deployed")
-        operations: list[MutationOperation] = [
-            SetComponent(device.id, replace(drone, active=True))
-        ]
+        operations: list[MutationOperation] = [SetComponent(device.id, replace(drone, active=True))]
         if device.has_component(DeviceComponent):
             dev = device.get_component(DeviceComponent)
             if not dev.powered:
@@ -1115,7 +1097,6 @@ class DeployDroneHandler:
                     device_id=str(device.id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1148,7 +1129,6 @@ class WipeEvidenceHandler:
                     evidence_id=evidence_id,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1392,7 +1372,8 @@ class ScanNetworkHandler:
         if device is None:
             return rejected(error if error else "target is not a network device")
         hack = device.get_component(HackableComponent)
-        return planned(MutationPlan(),
+        return planned(
+            MutationPlan(),
             NetworkScannedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1404,7 +1385,7 @@ class ScanNetworkHandler:
                     security=hack.security,
                     breached=hack.breached,
                 )
-            )
+            ),
         )
 
 
@@ -1428,7 +1409,8 @@ class TraceNetworkHandler:
                     sibling_id
                 ).has_component(HackableComponent):
                     node_count += 1
-        return planned(MutationPlan(),
+        return planned(
+            MutationPlan(),
             NetworkTracedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1439,7 +1421,7 @@ class TraceNetworkHandler:
                     device_id=str(device.id),
                     node_count=node_count,
                 )
-            )
+            ),
         )
 
 
@@ -1502,7 +1484,7 @@ class RunExploitHandler:
                         )
                     )
                 )
-            return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+            return planned(MutationPlan(tuple(operations)), *events)
         alarm_operations: list[MutationOperation] = []
         for entity_id in reachable_ids(ctx.world, character):
             entity = ctx.world.get_entity(entity_id)
@@ -1512,7 +1494,8 @@ class RunExploitHandler:
                     alarm_operations.append(
                         SetComponent(entity_id, replace(zone, alarm_raised=True))
                     )
-        return planned(MutationPlan(tuple(alarm_operations)),
+        return planned(
+            MutationPlan(tuple(alarm_operations)),
             HackFailedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1553,9 +1536,10 @@ class UseCredentialHandler:
         if credential is None:
             return rejected("no credential matches this system")
         privilege = credential.get_component(CredentialComponent).privilege
-        return planned(MutationPlan((
-            SetComponent(device.id, replace(hack, breached=True, privilege=privilege)),
-        )),
+        return planned(
+            MutationPlan(
+                (SetComponent(device.id, replace(hack, breached=True, privilege=privilege)),)
+            ),
             CredentialUsedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1566,7 +1550,7 @@ class UseCredentialHandler:
                     device_id=str(device.id),
                     privilege=privilege,
                 )
-            )
+            ),
         )
 
 
@@ -1585,7 +1569,8 @@ class AccessTerminalHandler:
         hack = device.get_component(HackableComponent)
         if not hack.breached and not hack.backdoored:
             return rejected("terminal is locked; breach it first")
-        return planned(MutationPlan(),
+        return planned(
+            MutationPlan(),
             TerminalAccessedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1595,7 +1580,7 @@ class AccessTerminalHandler:
                     character_id=str(character_id),
                     device_id=str(device.id),
                 )
-            )
+            ),
         )
 
 
@@ -1616,7 +1601,8 @@ class EscalatePrivilegesHandler:
             return rejected("breach the system first")
         if hack.privilege == "admin":
             return rejected("already running as admin")
-        return planned(MutationPlan((SetComponent(device.id, replace(hack, privilege="admin")),)),
+        return planned(
+            MutationPlan((SetComponent(device.id, replace(hack, privilege="admin")),)),
             PrivilegesEscalatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1627,7 +1613,7 @@ class EscalatePrivilegesHandler:
                     device_id=str(device.id),
                     privilege="admin",
                 )
-            )
+            ),
         )
 
 
@@ -1648,7 +1634,8 @@ class InstallBackdoorHandler:
             return rejected("breach the system first")
         if hack.backdoored:
             return rejected("backdoor is already installed")
-        return planned(MutationPlan((SetComponent(device.id, replace(hack, backdoored=True)),)),
+        return planned(
+            MutationPlan((SetComponent(device.id, replace(hack, backdoored=True)),)),
             BackdoorInstalledEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1658,7 +1645,7 @@ class InstallBackdoorHandler:
                     character_id=str(character_id),
                     device_id=str(device.id),
                 )
-            )
+            ),
         )
 
 
@@ -1685,15 +1672,21 @@ class ExfiltrateDataHandler:
         if payload.sensitive and hack.privilege != "admin":
             return rejected("sensitive data needs admin privileges")
         data_item = EntityReference()
-        plan = MutationPlan((
-            SetComponent(device.id, replace(payload, exfiltrated=True)),
-            AddEntity((
-                IdentityComponent(name=payload.name, kind="data"),
-                DataPayloadComponent(name=payload.name, sensitive=payload.sensitive),
-            ), reference=data_item),
-            AddEdge(character_id, data_item, Contains(mode=ContainmentMode.INVENTORY)),
-        ))
-        return planned(plan,
+        plan = MutationPlan(
+            (
+                SetComponent(device.id, replace(payload, exfiltrated=True)),
+                AddEntity(
+                    (
+                        IdentityComponent(name=payload.name, kind="data"),
+                        DataPayloadComponent(name=payload.name, sensitive=payload.sensitive),
+                    ),
+                    reference=data_item,
+                ),
+                AddEdge(character_id, data_item, Contains(mode=ContainmentMode.INVENTORY)),
+            )
+        )
+        return planned(
+            plan,
             lambda: DataExfiltratedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1706,7 +1699,6 @@ class ExfiltrateDataHandler:
                     name=payload.name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1731,7 +1723,8 @@ class SabotageSystemHandler:
             if dev.disabled:
                 return rejected("system is already sabotaged")
             operations = (SetComponent(device.id, replace(dev, disabled=True)),)
-        return planned(MutationPlan(operations),
+        return planned(
+            MutationPlan(operations),
             SystemSabotagedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1741,7 +1734,7 @@ class SabotageSystemHandler:
                     character_id=str(character_id),
                     device_id=str(device.id),
                 )
-            )
+            ),
         )
 
 
@@ -1773,7 +1766,8 @@ class UnlockDoorHandler:
         lock = device.get_component(LockableComponent)
         if not lock.locked:
             return rejected("door is already unlocked")
-        return planned(MutationPlan((SetComponent(device.id, replace(lock, locked=False)),)),
+        return planned(
+            MutationPlan((SetComponent(device.id, replace(lock, locked=False)),)),
             DoorUnlockedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1783,7 +1777,7 @@ class UnlockDoorHandler:
                     character_id=str(character_id),
                     device_id=str(device.id),
                 )
-            )
+            ),
         )
 
 
@@ -1797,7 +1791,8 @@ class EvadeTraceHandler:
         character = ctx.entity(character_id)
         if not character.has_component(TraceTimerComponent):
             return rejected("no active trace to evade")
-        return planned(MutationPlan((RemoveComponent(character_id, TraceTimerComponent),)),
+        return planned(
+            MutationPlan((RemoveComponent(character_id, TraceTimerComponent),)),
             TraceEvadedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1805,7 +1800,7 @@ class EvadeTraceHandler:
                     room_id=_room_id(ctx.world, character_id),
                     character_id=str(character_id),
                 )
-            )
+            ),
         )
 
 
@@ -1820,14 +1815,19 @@ class SpoofIdentityHandler:
         if not character.has_component(TraceTimerComponent):
             return rejected("no active trace to spoof")
         timer = character.get_component(TraceTimerComponent)
-        return planned(MutationPlan((SetComponent(
-            character_id,
-            replace(
-                timer,
-                remaining=timer.remaining + SPOOF_EXTRA_SECONDS,
-                last_updated_epoch=ctx.epoch,
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        character_id,
+                        replace(
+                            timer,
+                            remaining=timer.remaining + SPOOF_EXTRA_SECONDS,
+                            last_updated_epoch=ctx.epoch,
+                        ),
+                    ),
+                )
             ),
-        ),)),
             IdentitySpoofedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1836,7 +1836,7 @@ class SpoofIdentityHandler:
                     character_id=str(character_id),
                     seconds=SPOOF_EXTRA_SECONDS,
                 )
-            )
+            ),
         )
 
 
@@ -2010,9 +2010,7 @@ def _scrip_stack(character: Entity, world: World) -> Entity | None:
     return None
 
 
-def _add_scrip_operations(
-    character: Entity, world: World, amount: int
-) -> list[MutationOperation]:
+def _add_scrip_operations(character: Entity, world: World, amount: int) -> list[MutationOperation]:
     if amount <= 0:
         return []
     existing = _scrip_stack(character, world)
@@ -2028,11 +2026,14 @@ def _add_scrip_operations(
         ]
     item = EntityReference()
     return [
-        AddEntity((
-            IdentityComponent(name=f"{SCRIP_RESOURCE} x{amount}", kind="resource"),
-            ResourceStackComponent(resource_type=SCRIP_RESOURCE, quantity=amount),
-            PortableComponent(can_pick_up=True),
-        ), reference=item),
+        AddEntity(
+            (
+                IdentityComponent(name=f"{SCRIP_RESOURCE} x{amount}", kind="resource"),
+                ResourceStackComponent(resource_type=SCRIP_RESOURCE, quantity=amount),
+                PortableComponent(can_pick_up=True),
+            ),
+            reference=item,
+        ),
         AddEdge(character.id, item, Contains(mode=ContainmentMode.INVENTORY)),
     ]
 
@@ -2131,17 +2132,25 @@ class BuyContrabandHandler:
         if operations is None:
             return rejected("not enough scrip for the contraband")
         item = EntityReference()
-        operations.extend((
-            AddEntity((
-                IdentityComponent(name=market.contraband_name, kind="contraband"),
-                ContrabandComponent(value=market.contraband_value, heat=market.contraband_heat),
-                PortableComponent(can_pick_up=True),
-            ), reference=item),
-            AddEdge(character_id, item, Contains(mode=ContainmentMode.INVENTORY)),
-        ))
+        operations.extend(
+            (
+                AddEntity(
+                    (
+                        IdentityComponent(name=market.contraband_name, kind="contraband"),
+                        ContrabandComponent(
+                            value=market.contraband_value, heat=market.contraband_heat
+                        ),
+                        PortableComponent(can_pick_up=True),
+                    ),
+                    reference=item,
+                ),
+                AddEdge(character_id, item, Contains(mode=ContainmentMode.INVENTORY)),
+            )
+        )
         heat, heat_operations = _heat_operations(character, ctx.epoch, market.contraband_heat)
         operations.extend(heat_operations)
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             lambda: ContrabandBoughtEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2161,7 +2170,7 @@ class BuyContrabandHandler:
                     character_id=str(character_id),
                     amount=heat,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2188,7 +2197,8 @@ class SellDataHandler:
         data_id = str(data.id)
         operations = [DeleteEntity(data.id)]
         operations.extend(_add_scrip_operations(character, ctx.world, price))
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             DataSoldEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2199,7 +2209,7 @@ class SellDataHandler:
                     data_id=data_id,
                     price=price,
                 )
-            )
+            ),
         )
 
 
@@ -2217,7 +2227,8 @@ class CallFavorHandler:
             return rejected(error if error else "target is not a contact")
         if not contact.has_relationship(OwesFavor, character_id):
             return rejected("they owe you no favor")
-        return planned(MutationPlan((RemoveEdge(contact.id, character_id, OwesFavor),)),
+        return planned(
+            MutationPlan((RemoveEdge(contact.id, character_id, OwesFavor),)),
             FavorCalledEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2227,7 +2238,7 @@ class CallFavorHandler:
                     character_id=str(character_id),
                     contact_id=str(contact.id),
                 )
-            )
+            ),
         )
 
 
@@ -2255,7 +2266,8 @@ class PayDebtHandler:
             operations.append(SetComponent(character_id, replace(debt, amount=remaining)))
         else:
             operations.append(RemoveComponent(character_id, DebtComponent))
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             DebtPaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2265,7 +2277,7 @@ class PayDebtHandler:
                     amount=payment,
                     remaining=remaining,
                 )
-            )
+            ),
         )
 
 
@@ -2302,7 +2314,8 @@ class PostBountyHandler:
         )
         # Reuse dagger-sim's bounty event/state; a street bounty is the same record placed
         # deliberately by a runner rather than generated by a crime, so crime_id is empty.
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             BountyPostedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2312,7 +2325,7 @@ class PostBountyHandler:
                     crime_id="",
                     amount=amount,
                 )
-            )
+            ),
         )
 
 
@@ -2336,7 +2349,8 @@ class TurnInformantHandler:
         if operations is None:
             return rejected("not enough scrip to turn the informant")
         operations.append(SetComponent(informant.id, replace(component, flipped=True)))
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             InformantTurnedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2346,7 +2360,7 @@ class TurnInformantHandler:
                     character_id=str(character_id),
                     informant_id=str(informant.id),
                 )
-            )
+            ),
         )
 
 
@@ -2363,7 +2377,8 @@ class HideFromLawHandler:
         if not _in_claimed_safehouse(ctx.world, character_id):
             return rejected("lay low in a safehouse you have claimed")
         heat, operations = _heat_operations(character, ctx.epoch, -HIDE_HEAT_REDUCTION)
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             HeatChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2372,7 +2387,7 @@ class HideFromLawHandler:
                     character_id=str(character_id),
                     amount=heat,
                 )
-            )
+            ),
         )
 
 
@@ -2391,11 +2406,14 @@ class ClearWarrantHandler:
         operations = _spend_scrip_operations(character, ctx.world, cost)
         if operations is None:
             return rejected("not enough scrip to clear the warrant")
-        operations.extend((
-            RemoveComponent(character_id, WantedLevelComponent),
-            SetComponent(character_id, HeatComponent(amount=0.0, last_updated_epoch=ctx.epoch)),
-        ))
-        return planned(MutationPlan(tuple(operations)),
+        operations.extend(
+            (
+                RemoveComponent(character_id, WantedLevelComponent),
+                SetComponent(character_id, HeatComponent(amount=0.0, last_updated_epoch=ctx.epoch)),
+            )
+        )
+        return planned(
+            MutationPlan(tuple(operations)),
             WarrantClearedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2658,20 +2676,25 @@ class InstallImplantHandler:
         # The implant stays in the character's inventory (so it remains reachable for
         # perception) but is wired in via HasImplant and pinned non-portable so it cannot
         # be dropped or stashed until surgically removed.
-        operations.extend((
-            AddEdge(
-                character_id,
-                item.id,
-                HasImplant(slot=implant.slot, installed_epoch=ctx.epoch),
-            ),
-            SetComponent(item.id, PortableComponent(can_pick_up=False)),
-            SetComponent(item.id, replace(
-                implant,
-                active=True,
-                serviced_epoch=ctx.epoch,
-                maintenance_due_epoch=ctx.epoch + int(implant.maintenance_interval),
-            )),
-        ))
+        operations.extend(
+            (
+                AddEdge(
+                    character_id,
+                    item.id,
+                    HasImplant(slot=implant.slot, installed_epoch=ctx.epoch),
+                ),
+                SetComponent(item.id, PortableComponent(can_pick_up=False)),
+                SetComponent(
+                    item.id,
+                    replace(
+                        implant,
+                        active=True,
+                        serviced_epoch=ctx.epoch,
+                        maintenance_due_epoch=ctx.epoch + int(implant.maintenance_interval),
+                    ),
+                ),
+            )
+        )
         events: list[DomainEvent] = [
             ImplantInstalledEvent(
                 **ctx.event_base(
@@ -2699,7 +2722,7 @@ class InstallImplantHandler:
                     )
                 )
             )
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class RemoveImplantHandler:
@@ -2715,10 +2738,13 @@ class RemoveImplantHandler:
             return rejected("you have no such implant")
         # The implant kept its inventory Contains edge while installed; removal just
         # unwires it and restores portability so it can be carried or dropped again.
-        return planned(MutationPlan((
-            RemoveEdge(character_id, implant.id, HasImplant),
-            SetComponent(implant.id, PortableComponent(can_pick_up=True)),
-        )),
+        return planned(
+            MutationPlan(
+                (
+                    RemoveEdge(character_id, implant.id, HasImplant),
+                    SetComponent(implant.id, PortableComponent(can_pick_up=True)),
+                )
+            ),
             ImplantRemovedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2728,7 +2754,7 @@ class RemoveImplantHandler:
                     character_id=str(character_id),
                     implant_id=str(implant.id),
                 )
-            )
+            ),
         )
 
 
@@ -2755,12 +2781,18 @@ class ServiceImplantHandler:
         operations = _spend_scrip_operations(character, ctx.world, service_cost)
         if operations is None:
             return rejected("not enough scrip for the service")
-        operations.append(SetComponent(implant.id, replace(
-                comp,
-                serviced_epoch=ctx.epoch,
-                maintenance_due_epoch=ctx.epoch + int(comp.maintenance_interval),
-            )))
-        return planned(MutationPlan(tuple(operations)),
+        operations.append(
+            SetComponent(
+                implant.id,
+                replace(
+                    comp,
+                    serviced_epoch=ctx.epoch,
+                    maintenance_due_epoch=ctx.epoch + int(comp.maintenance_interval),
+                ),
+            )
+        )
+        return planned(
+            MutationPlan(tuple(operations)),
             ImplantServicedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2770,7 +2802,7 @@ class ServiceImplantHandler:
                     character_id=str(character_id),
                     implant_id=str(implant.id),
                 )
-            )
+            ),
         )
 
 
@@ -2789,18 +2821,25 @@ class OverclockImplantHandler:
         if comp.overclocked:
             return rejected("implant is already overclocked")
         interval = comp.maintenance_interval / 2 if comp.maintenance_interval > 0 else 0.0
-        return planned(MutationPlan((SetComponent(
-            implant.id,
-            replace(
-                comp,
-                overclocked=True,
-                power_draw=comp.power_draw + OVERCLOCK_POWER_BONUS,
-                maintenance_interval=interval,
-                maintenance_due_epoch=(
-                    ctx.epoch + int(interval) if interval > 0 else comp.maintenance_due_epoch
-                ),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        implant.id,
+                        replace(
+                            comp,
+                            overclocked=True,
+                            power_draw=comp.power_draw + OVERCLOCK_POWER_BONUS,
+                            maintenance_interval=interval,
+                            maintenance_due_epoch=(
+                                ctx.epoch + int(interval)
+                                if interval > 0
+                                else comp.maintenance_due_epoch
+                            ),
+                        ),
+                    ),
+                )
             ),
-        ),)),
             ImplantOverclockedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2810,7 +2849,7 @@ class OverclockImplantHandler:
                     character_id=str(character_id),
                     implant_id=str(implant.id),
                 )
-            )
+            ),
         )
 
 
@@ -2828,7 +2867,8 @@ class DisableImplantHandler:
         comp = implant.get_component(ImplantComponent)
         if not comp.active:
             return rejected("implant is already disabled")
-        return planned(MutationPlan((SetComponent(implant.id, replace(comp, active=False)),)),
+        return planned(
+            MutationPlan((SetComponent(implant.id, replace(comp, active=False)),)),
             ImplantDisabledEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2838,7 +2878,7 @@ class DisableImplantHandler:
                     character_id=str(character_id),
                     implant_id=str(implant.id),
                 )
-            )
+            ),
         )
 
 
@@ -2865,7 +2905,8 @@ class LicenseImplantHandler:
         if operations is None:
             return rejected("not enough scrip for the license fee")
         operations.append(SetComponent(implant.id, replace(comp, legal=True)))
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             ImplantLicensedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2875,7 +2916,7 @@ class LicenseImplantHandler:
                     character_id=str(character_id),
                     implant_id=str(implant.id),
                 )
-            )
+            ),
         )
 
 
@@ -2892,7 +2933,8 @@ class ScanImplantHandler:
         if subject is None:
             return rejected(error if error else "target is not a person")
         implants = _installed_implants(subject, ctx.world)
-        return planned(MutationPlan(),
+        return planned(
+            MutationPlan(),
             ImplantScannedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2903,7 +2945,7 @@ class ScanImplantHandler:
                     subject_id=str(subject.id),
                     implant_count=len(implants),
                 )
-            )
+            ),
         )
 
 
@@ -2933,7 +2975,8 @@ class ExploitImplantHandler:
         character = ctx.entity(character_id)
         power, _item = _best_exploit(character, ctx.world)
         if power < hack.security:
-            return planned(MutationPlan(),
+            return planned(
+                MutationPlan(),
                 HackFailedEvent(
                     **ctx.event_base(
                         visibility=EventVisibility.PRIVATE,
@@ -2943,13 +2986,16 @@ class ExploitImplantHandler:
                         character_id=str(character_id),
                         device_id=str(target_implant.id),
                     )
-                )
+                ),
             )
         implant_comp = target_implant.get_component(ImplantComponent)
-        return planned(MutationPlan((
-            SetComponent(target_implant.id, replace(hack, breached=True)),
-            SetComponent(target_implant.id, replace(implant_comp, active=False)),
-        )),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(target_implant.id, replace(hack, breached=True)),
+                    SetComponent(target_implant.id, replace(implant_comp, active=False)),
+                )
+            ),
             ImplantExploitedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2960,7 +3006,7 @@ class ExploitImplantHandler:
                     subject_id=str(subject.id),
                     implant_id=str(target_implant.id),
                 )
-            )
+            ),
         )
 
 
@@ -3104,12 +3150,15 @@ class TakeFixerJobHandler:
         component = contract.get_component(RunnerContractComponent)
         if component.status != "offered":
             return rejected("this job is no longer available")
-        return planned(MutationPlan((
-            SetComponent(
-                contract.id,
-                replace(component, status="accepted", accepted_by=str(character_id)),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        contract.id,
+                        replace(component, status="accepted", accepted_by=str(character_id)),
+                    ),
+                )
             ),
-        )),
             FixerJobAcceptedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3121,7 +3170,7 @@ class TakeFixerJobHandler:
                     objective=component.objective,
                     payout=component.payout,
                 )
-            )
+            ),
         )
 
 
@@ -3137,7 +3186,8 @@ class MeetHandlerHandler:
         )
         if handler is None:
             return rejected(error if error else "target is not a handler")
-        return planned(MutationPlan(),
+        return planned(
+            MutationPlan(),
             HandlerMetEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3147,7 +3197,7 @@ class MeetHandlerHandler:
                     character_id=str(character_id),
                     handler_id=str(handler.id),
                 )
-            )
+            ),
         )
 
 
@@ -3175,10 +3225,13 @@ class DeliverDataHandler:
         if data is None:
             return rejected("you are not carrying that data")
         data_id = str(data.id)
-        return planned(MutationPlan((
-            DeleteEntity(data.id),
-            SetComponent(contract.id, replace(component, status="delivered")),
-        )),
+        return planned(
+            MutationPlan(
+                (
+                    DeleteEntity(data.id),
+                    SetComponent(contract.id, replace(component, status="delivered")),
+                )
+            ),
             DataDeliveredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3189,7 +3242,7 @@ class DeliverDataHandler:
                     contract_id=str(contract.id),
                     data_id=data_id,
                 )
-            )
+            ),
         )
 
 
@@ -3214,7 +3267,8 @@ class CollectPayoutHandler:
         if component.double_cross:
             heat, operations = _heat_operations(character, ctx.epoch, DOUBLE_CROSS_HEAT)
             operations.insert(0, SetComponent(contract.id, replace(component, status="burned")))
-            return planned(MutationPlan(tuple(operations)),
+            return planned(
+                MutationPlan(tuple(operations)),
                 DoubleCrossRevealedEvent(
                     **ctx.event_base(
                         visibility=EventVisibility.ROOM,
@@ -3237,7 +3291,8 @@ class CollectPayoutHandler:
             )
         operations = [SetComponent(contract.id, replace(component, status="paid"))]
         operations.extend(_add_scrip_operations(character, ctx.world, component.payout))
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             PayoutCollectedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3248,7 +3303,7 @@ class CollectPayoutHandler:
                     contract_id=str(contract.id),
                     amount=component.payout,
                 )
-            )
+            ),
         )
 
 
@@ -3267,7 +3322,8 @@ class BurnContactHandler:
         component = fixer.get_component(FixerComponent)
         if component.burned:
             return rejected("contact is already burned")
-        return planned(MutationPlan((SetComponent(fixer.id, replace(component, burned=True)),)),
+        return planned(
+            MutationPlan((SetComponent(fixer.id, replace(component, burned=True)),)),
             ContactBurnedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3277,7 +3333,7 @@ class BurnContactHandler:
                     character_id=str(character_id),
                     contact_id=str(fixer.id),
                 )
-            )
+            ),
         )
 
 
@@ -3296,16 +3352,20 @@ class PlantEvidenceHandler:
         room_id = container_of(ctx.entity(character_id))
         file_entity = EntityReference()
         operations: list[MutationOperation] = [
-            AddEntity((
-                IdentityComponent(name=f"evidence on {_name(target)}", kind="evidence"),
-                BlackmailFileComponent(target_id=str(target.id)),
-            ), reference=file_entity)
+            AddEntity(
+                (
+                    IdentityComponent(name=f"evidence on {_name(target)}", kind="evidence"),
+                    BlackmailFileComponent(target_id=str(target.id)),
+                ),
+                reference=file_entity,
+            )
         ]
         if room_id is not None and ctx.world.has_entity(room_id):
             operations.append(
                 AddEdge(room_id, file_entity, Contains(mode=ContainmentMode.ROOM_CONTENT))
             )
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             lambda: EvidencePlantedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3316,7 +3376,7 @@ class PlantEvidenceHandler:
                     target_id=str(target.id),
                     file_id=str(file_entity.require()),
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3343,10 +3403,13 @@ class BlackmailTargetHandler:
             return rejected("that leverage is already spent")
         if component.target_id != str(target.id):
             return rejected("that file is not about them")
-        return planned(MutationPlan((
-            SetComponent(file.id, replace(component, used=True)),
-            AddEdge(target.id, character_id, OwesFavor(reason="blackmail")),
-        )),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(file.id, replace(component, used=True)),
+                    AddEdge(target.id, character_id, OwesFavor(reason="blackmail")),
+                )
+            ),
             BlackmailAppliedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3356,7 +3419,7 @@ class BlackmailTargetHandler:
                     character_id=str(character_id),
                     target_id=str(target.id),
                 )
-            )
+            ),
         )
 
 
@@ -3388,7 +3451,8 @@ class LeakFileHandler:
                 ctx.world.get_entity(subject_id), ctx.epoch, LEAK_HEAT
             )
             operations.extend(heat_operations)
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             FileLeakedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3398,7 +3462,7 @@ class LeakFileHandler:
                     character_id=str(character_id),
                     file_id=str(file.id),
                 )
-            )
+            ),
         )
 
 
@@ -3417,9 +3481,8 @@ class ExtractAssetHandler:
         component = asset.get_component(AssetExtractionComponent)
         if component.extracted:
             return rejected("asset is already extracted")
-        return planned(MutationPlan((
-            SetComponent(asset.id, replace(component, extracted=True)),
-        )),
+        return planned(
+            MutationPlan((SetComponent(asset.id, replace(component, extracted=True)),)),
             AssetExtractedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3429,7 +3492,7 @@ class ExtractAssetHandler:
                     character_id=str(character_id),
                     asset_id=str(asset.id),
                 )
-            )
+            ),
         )
 
 

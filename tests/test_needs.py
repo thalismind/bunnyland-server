@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     CommandCost,
@@ -107,7 +107,7 @@ def execute_eat(scenario, item_id, *, character_id=None):
             lane=Lane.WORLD,
             payload=command.payload,
         )
-    return EatHandler().execute(handler_context(scenario), command)
+    return execute_handler(EatHandler(), handler_context(scenario), command)
 
 
 def execute_drink(scenario, source_id, *, character_id=None):
@@ -122,7 +122,7 @@ def execute_drink(scenario, source_id, *, character_id=None):
             lane=Lane.WORLD,
             payload=command.payload,
         )
-    return DrinkHandler().execute(handler_context(scenario), command)
+    return execute_handler(DrinkHandler(), handler_context(scenario), command)
 
 
 # -- rise over time ---------------------------------------------------------------------
@@ -242,7 +242,7 @@ def test_daily_need_recovery_handler_rejects_invalid_missing_and_unreachable_tar
         lane=Lane.WORLD,
         payload={},
     )
-    assert BatheHandler().execute(ctx, invalid_command).reason == "invalid character id"
+    assert execute_handler(BatheHandler(), ctx, invalid_command).reason == "invalid character id"
     missing_command = build_submitted_command(
         character_id="entity_999",
         controller_id=str(scenario.controller),
@@ -252,19 +252,23 @@ def test_daily_need_recovery_handler_rejects_invalid_missing_and_unreachable_tar
         lane=Lane.WORLD,
         payload={},
     )
-    assert BatheHandler().execute(ctx, missing_command).reason == "character does not exist"
-    assert BatheHandler().execute(ctx, verb(scenario, "bathe")).reason == (
+    assert (
+        execute_handler(BatheHandler(), ctx, missing_command).reason == "character does not exist"
+    )
+    assert execute_handler(BatheHandler(), ctx, verb(scenario, "bathe")).reason == (
         "character has no hygiene need"
     )
 
     char.add_component(HygieneComponent(meter=Meter(value=40.0)))
-    missing_target = BatheHandler().execute(
+    missing_target = execute_handler(
+        BatheHandler(),
         ctx,
         verb(scenario, "bathe", target_id="entity_999"),
     )
     assert missing_target.ok is False
     assert missing_target.reason == "target does not exist"
-    result = BatheHandler().execute(
+    result = execute_handler(
+        BatheHandler(),
         ctx,
         verb(scenario, "bathe", target_id=str(distant_basin.id)),
     )

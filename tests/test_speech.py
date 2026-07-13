@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     CharacterComponent,
@@ -164,7 +164,7 @@ def execute_say(scenario, text, *, character_id=None, payload=None):
             lane=Lane.WORLD,
             payload=payload if payload is not None else command.payload,
         )
-    return SayHandler().execute(handler_context(scenario), command)
+    return execute_handler(SayHandler(), handler_context(scenario), command)
 
 
 def execute_tell(scenario, target_id, text, *, character_id=None, payload=None):
@@ -179,7 +179,7 @@ def execute_tell(scenario, target_id, text, *, character_id=None, payload=None):
             lane=Lane.WORLD,
             payload=payload if payload is not None else command.payload,
         )
-    return TellHandler().execute(handler_context(scenario), command)
+    return execute_handler(TellHandler(), handler_context(scenario), command)
 
 
 def execute_start_conversation(scenario, target_ids, *, payload=None):
@@ -194,11 +194,12 @@ def execute_start_conversation(scenario, target_ids, *, payload=None):
             lane=Lane.FOCUS,
             payload=payload,
         )
-    return StartConversationHandler().execute(handler_context(scenario), command)
+    return execute_handler(StartConversationHandler(), handler_context(scenario), command)
 
 
 def execute_conversation_line(scenario, conversation_id, text, *, character_id=None, payload=None):
-    return ConversationLineHandler().execute(
+    return execute_handler(
+        ConversationLineHandler(),
         handler_context(scenario),
         conversation_line(
             scenario,
@@ -211,7 +212,8 @@ def execute_conversation_line(scenario, conversation_id, text, *, character_id=N
 
 
 def execute_end_conversation(scenario, conversation_id, *, character_id=None, reason="finished"):
-    return EndConversationHandler().execute(
+    return execute_handler(
+        EndConversationHandler(),
         handler_context(scenario),
         end_conversation(scenario, conversation_id, character_id=character_id, reason=reason),
     )
@@ -556,7 +558,8 @@ def test_conversation_line_rejects_wrong_turn_and_timeout_ends_conversation():
         == "not your conversation turn"
     )
 
-    result = ConversationLineHandler().execute(
+    result = execute_handler(
+        ConversationLineHandler(),
         HandlerContext(scenario.actor.world, 2),
         conversation_line(scenario, conversation_id, "anyone there?"),
     )
@@ -631,8 +634,8 @@ def test_start_conversation_rejects_bad_speaker_states_and_inactive_participant(
     listener = add_listener(scenario, scenario.room_a)
 
     assert (
-        StartConversationHandler()
-        .execute(
+        execute_handler(
+            StartConversationHandler(),
             handler_context(scenario),
             build_submitted_command(
                 character_id="not-an-id",
@@ -643,13 +646,12 @@ def test_start_conversation_rejects_bad_speaker_states_and_inactive_participant(
                 lane=Lane.FOCUS,
                 payload={"target_ids": (str(listener),)},
             ),
-        )
-        .reason
+        ).reason
         == "invalid character id"
     )
     assert (
-        StartConversationHandler()
-        .execute(
+        execute_handler(
+            StartConversationHandler(),
             handler_context(scenario),
             build_submitted_command(
                 character_id="entity_999",
@@ -660,8 +662,7 @@ def test_start_conversation_rejects_bad_speaker_states_and_inactive_participant(
                 lane=Lane.FOCUS,
                 payload={"target_ids": (str(listener),)},
             ),
-        )
-        .reason
+        ).reason
         == "speaker does not exist"
     )
 

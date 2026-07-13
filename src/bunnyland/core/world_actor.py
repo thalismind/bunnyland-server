@@ -295,9 +295,7 @@ class WorldActor:
                 if self._command_pending(command.command_id):
                     return SubmissionOutcome(accepted=True, command_id=command.command_id)
                 self._submission_sequence += 1
-                object.__setattr__(
-                    command, "submission_sequence", self._submission_sequence
-                )
+                object.__setattr__(command, "submission_sequence", self._submission_sequence)
                 reason = self._validate_submission(command)
                 if reason is not None:
                     span.set_attribute("command.accepted", False)
@@ -460,13 +458,13 @@ class WorldActor:
 
     async def _publish_cancelled(self, command: SubmittedCommand) -> None:
         event = CommandCancelledEvent(
-                **self._event_base(
-                    actor_id=command.character_id,
-                    command_id=command.command_id,
-                    command_type=command.command_type,
-                    lane=command.lane.value,
-                )
+            **self._event_base(
+                actor_id=command.character_id,
+                command_id=command.command_id,
+                command_type=command.command_type,
+                lane=command.lane.value,
             )
+        )
         await self._publish(event)
         self._record_receipt(
             command, CommitStatus.CANCELLED, reason="cancelled", event_ids=(event.event_id,)
@@ -630,13 +628,13 @@ class WorldActor:
             self.queues.pop(character_id, lane)
             telemetry.set_span_attributes({"command.outcome": "expired"})
             event = CommandExpiredEvent(
-                    **self._event_base(
-                        actor_id=character_id,
-                        command_id=command.command_id,
-                        command_type=command.command_type,
-                        payload=dict(command.payload),
-                    )
+                **self._event_base(
+                    actor_id=character_id,
+                    command_id=command.command_id,
+                    command_type=command.command_type,
+                    payload=dict(command.payload),
                 )
+            )
             await self._publish(event)
             self._record_receipt(
                 command, CommitStatus.EXPIRED, reason="expired", event_ids=(event.event_id,)
@@ -660,12 +658,12 @@ class WorldActor:
                 await self._reject(command, reason)
                 return _LaneOutcome(executed=False, stop_lane=False)
             executed_event = CommandExecutedEvent(
-                    **self._event_base(
-                        actor_id=character_id,
-                        command_id=command.command_id,
-                        command_type=command.command_type,
-                    )
+                **self._event_base(
+                    actor_id=character_id,
+                    command_id=command.command_id,
+                    command_type=command.command_type,
                 )
+            )
             await self._publish(executed_event)
             self._record_receipt(
                 command, CommitStatus.COMMITTED, event_ids=(executed_event.event_id,)
@@ -729,7 +727,6 @@ class WorldActor:
             world=self.world,
             epoch=self.epoch,
             actor=self,
-            defer_plans=True,
         )
         handler = self._handler_for(ctx, command, handlers)
         if handler is None:
@@ -752,7 +749,14 @@ class WorldActor:
             ) as hspan,
         ):
             result = handler.execute(ctx, command)
-            if result.ok and result.plan is not None:
+            if result.ok and result.plan is None:
+                result = replace(
+                    result,
+                    ok=False,
+                    reason="handler returned success without a mutation plan",
+                )
+            if result.ok:
+                assert result.plan is not None
                 combined = MutationPlan(
                     operations=(
                         *result.plan.operations,
@@ -796,20 +800,17 @@ class WorldActor:
             }
             for event in result.events
         )
-        if result.plan is None:
-            await self._spend(character, command)
-        else:
-            for event in transaction_point_events:
-                await self._publish(event)
+        for event in transaction_point_events:
+            await self._publish(event)
         executed_event = CommandExecutedEvent(
-                **self._event_base(
-                    actor_id=character_id,
-                    command_id=command.command_id,
-                    command_type=command.command_type,
-                    payload=dict(command.payload),
-                    result_events=result_events,
-                )
+            **self._event_base(
+                actor_id=character_id,
+                command_id=command.command_id,
+                command_type=command.command_type,
+                payload=dict(command.payload),
+                result_events=result_events,
             )
+        )
         await self._publish(executed_event)
         telemetry.record_command_accepted(command.command_type)
         for event in result.events:
@@ -899,9 +900,7 @@ class WorldActor:
         enough_action, enough_focus = affordable(character, command.cost)
         return enough_action and enough_focus
 
-    def _cost_operations(
-        self, character, command: SubmittedCommand
-    ) -> tuple[SetComponent, ...]:
+    def _cost_operations(self, character, command: SubmittedCommand) -> tuple[SetComponent, ...]:
         operations = []
         if command.cost.action and character.has_component(ActionPointsComponent):
             points = character.get_component(ActionPointsComponent)
@@ -921,9 +920,7 @@ class WorldActor:
             )
         return tuple(operations)
 
-    def _point_events(
-        self, character, command: SubmittedCommand
-    ) -> tuple[DomainEvent, ...]:
+    def _point_events(self, character, command: SubmittedCommand) -> tuple[DomainEvent, ...]:
         events: list[DomainEvent] = []
         if command.cost.action and character.has_component(ActionPointsComponent):
             points = character.get_component(ActionPointsComponent)
@@ -948,34 +945,6 @@ class WorldActor:
                 )
             )
         return tuple(events)
-
-    async def _spend(self, character, command: SubmittedCommand) -> None:
-        if command.cost.action and character.has_component(ActionPointsComponent):
-            ap = character.get_component(ActionPointsComponent)
-            replace_component(character, replace(ap, current=ap.current - command.cost.action))
-            updated = character.get_component(ActionPointsComponent)
-            await self._publish(
-                ActionPointsChangedEvent(
-                    **self._event_base(
-                        actor_id=command.character_id,
-                        current=updated.current,
-                        maximum=updated.maximum,
-                    )
-                )
-            )
-        if command.cost.focus and character.has_component(FocusPointsComponent):
-            fp = character.get_component(FocusPointsComponent)
-            replace_component(character, replace(fp, current=fp.current - command.cost.focus))
-            updated = character.get_component(FocusPointsComponent)
-            await self._publish(
-                FocusPointsChangedEvent(
-                    **self._event_base(
-                        actor_id=command.character_id,
-                        current=updated.current,
-                        maximum=updated.maximum,
-                    )
-                )
-            )
 
     # -- controller management ----------------------------------------------------------
 
@@ -1089,13 +1058,13 @@ class WorldActor:
             }
         )
         event = CommandRejectedEvent(
-                **self._event_base(
-                    actor_id=command.character_id,
-                    command_id=command.command_id,
-                    command_type=command.command_type,
-                    reason=reason,
-                )
+            **self._event_base(
+                actor_id=command.character_id,
+                command_id=command.command_id,
+                command_type=command.command_type,
+                reason=reason,
             )
+        )
         await self._publish(event)
         self._record_receipt(
             command, CommitStatus.REJECTED, reason=reason, event_ids=(event.event_id,)

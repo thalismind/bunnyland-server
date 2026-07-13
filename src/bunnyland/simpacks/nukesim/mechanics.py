@@ -1000,7 +1000,6 @@ class ScanRadiationHandler:
                     sealed=radiation.sealed,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1038,7 +1037,6 @@ class SealRadiationSourceHandler:
                     source_type=radiation.source_type,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1096,7 +1094,6 @@ class DecontaminateHandler:
                     mutation_pressure=pressure,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1164,7 +1161,6 @@ class UseRadMedicineHandler:
                     mutation_pressure=pressure,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1233,7 +1229,6 @@ class TakeChemHandler:
                     addiction=levels[chem.chem_type],
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1263,7 +1258,6 @@ class PurifyWaterHandler:
                     item_id=str(water.id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1321,7 +1315,6 @@ class DrinkContaminatedWaterHandler:
                     rads=rads,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1438,7 +1431,6 @@ class ScavengeHandler:
         return planned(
             MutationPlan(tuple(operations)),
             *event_factories,
-            ctx=ctx,
         )
 
 
@@ -1505,7 +1497,6 @@ class ScrapItemHandler:
             MutationPlan(tuple(operations)),
             scrapped_event,
             *(lambda event=event: event for event in radiation_events),
-            ctx=ctx,
         )
 
 
@@ -1536,7 +1527,6 @@ class StabilizeMutationHandler:
                     mutation_id=mutation.mutation_id,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1587,7 +1577,6 @@ class MarkHotspotHandler:
                 )
             ),
             marked_event,
-            ctx=ctx,
         )
 
 
@@ -1630,7 +1619,6 @@ class UseSuppressantHandler:
                     pressure=updated_pressure,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1685,7 +1673,6 @@ class HarvestSampleHandler:
                 )
             ),
             sample_event,
-            ctx=ctx,
         )
 
 
@@ -1724,7 +1711,6 @@ class StudySampleHandler:
                     sample_type=component.sample_type,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1767,7 +1753,6 @@ class UnlockCrateHandler:
                     crate_id=str(crate.id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1796,7 +1781,6 @@ class StudyWastelandArtifactHandler:
                     artifact_type=component.artifact_type,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1829,7 +1813,6 @@ class ClaimFactionSalvageHandler:
                     faction_id=component.faction_id,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1869,7 +1852,6 @@ class InstallModHandler:
                     mod_name=component.mod_name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1908,7 +1890,6 @@ class FieldRepairHandler:
                     durability=updated.current,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1971,7 +1952,6 @@ class BrewChemHandler:
         return planned(
             MutationPlan(tuple(operations)),
             brewed_event,
-            ctx=ctx,
         )
 
 
@@ -2000,7 +1980,6 @@ class ActivateBeaconHandler:
                     message=component.message,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2029,7 +2008,6 @@ class OpenTraderRouteHandler:
                     destination=component.destination,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2061,7 +2039,6 @@ class IncreaseRaiderPressureHandler:
                     pressure=updated.pressure,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2101,7 +2078,6 @@ class BootTerminalHandler:
                     access_level=access_level,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2256,7 +2232,6 @@ class IdentifyTechHandler:
                     tech_name=tech.tech_name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2312,7 +2287,6 @@ class RestoreTechHandler:
                     scrap_spent=tech.restore_scrap,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2358,7 +2332,6 @@ class ClaimSettlementHandler:
                     name=component.name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2433,7 +2406,6 @@ class SalvageSettlementHandler:
         return planned(
             MutationPlan(tuple(operations)),
             salvaged_event,
-            ctx=ctx,
         )
 
 
@@ -2493,7 +2465,6 @@ class BuildPurifierHandler:
                     scrap_spent=purifier.scrap_cost,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2538,7 +2509,6 @@ class PowerGeneratorHandler:
                     fuel_spent=component.fuel_cost,
                 )
             ),
-            ctx=ctx,
         )
 
 

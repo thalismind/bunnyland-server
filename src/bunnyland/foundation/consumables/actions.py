@@ -107,7 +107,7 @@ class EatHandler:
                 )
             ),
         )
-        return planned(plan, *events, ctx=ctx)
+        return planned(plan, *events)
 
 
 class DrinkHandler:
@@ -160,7 +160,7 @@ class DrinkHandler:
                 )
             ),
         )
-        return planned(plan, *events, ctx=ctx)
+        return planned(plan, *events)
 
 
 __all__ = ["DrinkHandler", "EatHandler"]

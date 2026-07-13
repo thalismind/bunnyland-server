@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     BodyPlanComponent,
@@ -364,7 +364,7 @@ def test_barbariansim_parity_handlers_mutate_reachable_state_directly():
     ]
 
     for handler, command_type, payload in calls:
-        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        result = execute_handler(handler, ctx, _handler_cmd(scenario, command_type, **payload))
         assert result.ok, (command_type, result.reason)
 
     assert gap.get_component(SurvivalGapComponent).bridged_by == str(scenario.character)
@@ -478,13 +478,16 @@ def test_barbariansim_parity_handlers_reject_invalid_targets_directly():
     ]
 
     for handler, command_type, payload, invalid_reason, missing_reason in cases:
-        bad_character = handler.execute(
+        bad_character = execute_handler(
+            handler,
             ctx,
             _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
         )
         assert bad_character.ok is False
         assert bad_character.reason == invalid_reason
-        missing_target = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        missing_target = execute_handler(
+            handler, ctx, _handler_cmd(scenario, command_type, **payload)
+        )
         assert missing_target.ok is False
         assert missing_target.reason == missing_reason
 
@@ -762,20 +765,20 @@ def test_barbariansim_parity_handlers_reject_wrong_kind_and_state_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
-    assert (
-        ExploreDangerZoneHandler()
-        .execute(ctx, _handler_cmd(scenario, "explore-danger-zone", zone_id=str(zone.id)))
-        .ok
-    )
-    assert (
-        ExploreDangerZoneHandler()
-        .execute(ctx, _handler_cmd(scenario, "explore-danger-zone", zone_id=str(zone.id)))
-        .ok
-    )
+    assert execute_handler(
+        ExploreDangerZoneHandler(),
+        ctx,
+        _handler_cmd(scenario, "explore-danger-zone", zone_id=str(zone.id)),
+    ).ok
+    assert execute_handler(
+        ExploreDangerZoneHandler(),
+        ctx,
+        _handler_cmd(scenario, "explore-danger-zone", zone_id=str(zone.id)),
+    ).ok
 
 
 async def test_attack_is_blocked_when_pvp_not_enabled():
@@ -915,7 +918,9 @@ async def test_attack_rejects_bad_targets_before_damage_resolution():
         (str(distant_target.id), "target is not present"),
         (str(no_health_target.id), "target has no health"),
     ):
-        result = AttackHandler().execute(ctx, _cmd(scenario, "attack", target_id=target_id))
+        result = execute_handler(
+            AttackHandler(), ctx, _cmd(scenario, "attack", target_id=target_id)
+        )
         assert result.ok is False
         assert result.reason == reason
 
@@ -1550,7 +1555,7 @@ def test_barbariansim_handlers_reject_bad_state_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -1909,7 +1914,9 @@ def test_subdue_requires_a_defeated_target():
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     standing = _target(scenario)
 
-    result = SubdueHandler().execute(ctx, _handler_cmd(scenario, "subdue", target_id=str(standing)))
+    result = execute_handler(
+        SubdueHandler(), ctx, _handler_cmd(scenario, "subdue", target_id=str(standing))
+    )
 
     assert not result.ok
     assert "defeated" in result.reason
@@ -1958,8 +1965,10 @@ def test_command_follower_rejects_non_master():
         FollowerComponent(master_id="some-other-master")
     )
 
-    result = CommandFollowerHandler().execute(
-        ctx, _handler_cmd(scenario, "command", target_id=str(target), instruction="follow")
+    result = execute_handler(
+        CommandFollowerHandler(),
+        ctx,
+        _handler_cmd(scenario, "command", target_id=str(target), instruction="follow"),
     )
 
     assert not result.ok
@@ -2037,7 +2046,9 @@ def test_thrall_handlers_reject_bad_state_directly():
         case(ReleaseThrallHandler(), "do not command", target_id=str(bound)),
     ]
     for handler, expected, payload in cases:
-        result = handler.execute(ctx, _handler_cmd(scenario, handler.command_type, **payload))
+        result = execute_handler(
+            handler, ctx, _handler_cmd(scenario, handler.command_type, **payload)
+        )
         assert not result.ok, expected
         assert expected in result.reason, (expected, result.reason)
 
@@ -2155,7 +2166,8 @@ def test_attack_uses_requested_body_part_string():
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     target = _target(scenario, health=20.0)
     _weapon(scenario, damage=6.0)
-    result = AttackHandler().execute(
+    result = execute_handler(
+        AttackHandler(),
         ctx,
         _handler_cmd(scenario, "attack", target_id=str(target), body_part="left arm"),
     )
@@ -2172,7 +2184,9 @@ def test_attack_defaults_to_body_when_body_plan_has_no_parts():
     # A body plan present but with no parts falls back to the generic "body".
     scenario.actor.world.get_entity(target).add_component(BodyPlanComponent(parts=()))
     _weapon(scenario, damage=6.0)
-    result = AttackHandler().execute(ctx, _handler_cmd(scenario, "attack", target_id=str(target)))
+    result = execute_handler(
+        AttackHandler(), ctx, _handler_cmd(scenario, "attack", target_id=str(target))
+    )
     assert result.ok, result.reason
     injuries = [e for e in result.events if e.__class__.__name__ == "InjuryAddedEvent"]
     assert injuries and injuries[0].body_part == "body"
@@ -2186,7 +2200,8 @@ def test_attack_defaults_to_first_body_plan_part():
     scenario.actor.world.get_entity(target).add_component(BodyPlanComponent(parts=("head", "body")))
     _weapon(scenario, damage=6.0)
 
-    result = AttackHandler().execute(
+    result = execute_handler(
+        AttackHandler(),
         ctx,
         _handler_cmd(scenario, "attack", target_id=str(target)),
     )
@@ -2205,7 +2220,8 @@ def test_place_trap_rejects_when_character_has_no_room():
         scenario.actor.world,
         [IdentityComponent(name="Drifter", kind="character"), CharacterComponent()],
     )
-    result = PlaceTrapHandler().execute(
+    result = execute_handler(
+        PlaceTrapHandler(),
         ctx,
         _handler_cmd(scenario, "place-trap", character_id=str(loose.id)),
     )
@@ -2219,7 +2235,7 @@ def test_defend_rejects_when_stamina_is_insufficient():
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(StaminaComponent(current=0.0, maximum=10.0))
-    result = DefendHandler().execute(ctx, _handler_cmd(scenario, "defend"))
+    result = execute_handler(DefendHandler(), ctx, _handler_cmd(scenario, "defend"))
     assert not result.ok
     assert "stamina" in (result.reason or "")
 
@@ -2231,7 +2247,7 @@ def test_defend_plans_and_spends_available_stamina():
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(StaminaComponent(current=5.0, maximum=10.0))
 
-    result = DefendHandler().execute(ctx, _handler_cmd(scenario, "defend"))
+    result = execute_handler(DefendHandler(), ctx, _handler_cmd(scenario, "defend"))
 
     assert result.ok, result.reason
     assert character.get_component(StaminaComponent).current == 3.0
@@ -2242,7 +2258,8 @@ def test_recruit_follower_rejects_nonexistent_target():
     scenario = build_scenario()
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
-    result = RecruitFollowerHandler().execute(
+    result = execute_handler(
+        RecruitFollowerHandler(),
         ctx,
         _handler_cmd(scenario, "recruit-follower", target_id="entity_999999"),
     )
@@ -2261,7 +2278,8 @@ def test_recruit_follower_rejects_target_in_another_room():
     scenario.actor.world.get_entity(scenario.room_b).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), distant.id
     )
-    result = RecruitFollowerHandler().execute(
+    result = execute_handler(
+        RecruitFollowerHandler(),
         ctx,
         _handler_cmd(scenario, "recruit-follower", target_id=str(distant.id)),
     )
@@ -2280,7 +2298,8 @@ def test_perform_ritual_without_blessing_curse_or_corruption():
         "ritual",
         [RitualComponent(blessing="", curse="", corruption_cost=0.0)],
     )
-    result = PerformRitualHandler().execute(
+    result = execute_handler(
+        PerformRitualHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2355,7 +2374,7 @@ def test_parity_handlers_reject_targets_in_another_room():
         ),
     ]
     for handler, command_type, payload, reason in cases:
-        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        result = execute_handler(handler, ctx, _handler_cmd(scenario, command_type, **payload))
         assert not result.ok, command_type
         assert result.reason == reason, command_type
 
@@ -2372,8 +2391,10 @@ def test_unlock_treasure_with_locked_key_requirement_and_wrong_key():
         [TreasureComponent(treasure_type="hoard", key_name="ruby")],
     )
     # No key carried at all.
-    no_key = UnlockTreasureHandler().execute(
-        ctx, _handler_cmd(scenario, "unlock-treasure", treasure_id=str(treasure.id))
+    no_key = execute_handler(
+        UnlockTreasureHandler(),
+        ctx,
+        _handler_cmd(scenario, "unlock-treasure", treasure_id=str(treasure.id)),
     )
     assert not no_key.ok
     assert no_key.reason == "required key is not carried"
@@ -2388,7 +2409,8 @@ def test_unlock_treasure_with_locked_key_requirement_and_wrong_key():
         ],
     )
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), wrong.id)
-    wrong_key = UnlockTreasureHandler().execute(
+    wrong_key = execute_handler(
+        UnlockTreasureHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2426,7 +2448,9 @@ def test_damage_item_noop_when_item_is_already_broken():
         DurabilityComponent(current=0.0, maximum=1.0, broken=True),
     )
     target = _target(scenario)
-    result = AttackHandler().execute(ctx, _handler_cmd(scenario, "attack", target_id=str(target)))
+    result = execute_handler(
+        AttackHandler(), ctx, _handler_cmd(scenario, "attack", target_id=str(target))
+    )
     assert result.ok, result.reason
     # An already-broken weapon emits no further item damage/break events.
     assert not any(
@@ -2516,7 +2540,8 @@ async def test_attack_fully_absorbed_by_armor_inflicts_no_injury():
     target = _target(scenario, health=20.0, armor=10.0)
     weapon = _weapon(scenario, damage=4.0)
 
-    result = AttackHandler().execute(
+    result = execute_handler(
+        AttackHandler(),
         HandlerContext(scenario.actor.world, scenario.actor.epoch),
         _handler_cmd(scenario, "attack", target_id=str(target), weapon_id=str(weapon)),
     )
@@ -2542,8 +2567,8 @@ async def test_raid_with_depleted_fortification_does_not_replace_component():
     raids: list[RaidStartedEvent] = []
     scenario.actor.bus.subscribe(RaidStartedEvent, raids.append)
 
-    result = RaidHandler().execute(
-        ctx, _handler_cmd(scenario, "raid", target_id=str(target.id), intensity=5.0)
+    result = execute_handler(
+        RaidHandler(), ctx, _handler_cmd(scenario, "raid", target_id=str(target.id), intensity=5.0)
     )
 
     assert result.ok, result.reason
@@ -2558,7 +2583,9 @@ async def test_prepare_siege_defaults_to_current_room():
     _install(scenario.actor, enabled=frozenset())
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
 
-    result = PrepareSiegeHandler().execute(ctx, _handler_cmd(scenario, "prepare-siege", score=3.0))
+    result = execute_handler(
+        PrepareSiegeHandler(), ctx, _handler_cmd(scenario, "prepare-siege", score=3.0)
+    )
 
     assert result.ok, result.reason
     room = scenario.actor.world.get_entity(scenario.room_a)
@@ -2570,8 +2597,8 @@ async def test_start_purge_wave_defaults_to_current_room():
     _install(scenario.actor, enabled=frozenset())
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
 
-    result = StartPurgeWaveHandler().execute(
-        ctx, _handler_cmd(scenario, "start-purge-wave", intensity=2.0)
+    result = execute_handler(
+        StartPurgeWaveHandler(), ctx, _handler_cmd(scenario, "start-purge-wave", intensity=2.0)
     )
 
     assert result.ok, result.reason
@@ -2590,8 +2617,10 @@ def test_unlock_treasure_without_key_requirement_needs_no_key():
         [TreasureComponent(treasure_type="hoard", key_name="")],
     )
 
-    result = UnlockTreasureHandler().execute(
-        ctx, _handler_cmd(scenario, "unlock-treasure", treasure_id=str(treasure.id))
+    result = execute_handler(
+        UnlockTreasureHandler(),
+        ctx,
+        _handler_cmd(scenario, "unlock-treasure", treasure_id=str(treasure.id)),
     )
 
     assert result.ok, result.reason

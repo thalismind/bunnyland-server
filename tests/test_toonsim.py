@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     ActionPointsComponent,
@@ -499,7 +499,7 @@ def test_move_sprite_rejects_out_of_room_bounds():
     scenario = build_scenario()
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
 
-    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=1.0, y=1.0))
+    result = execute_handler(MoveSpriteHandler(), ctx, _move_sprite(scenario, x=1.0, y=1.0))
 
     character = scenario.actor.world.get_entity(scenario.character)
     assert result.reason == "position is outside room bounds"
@@ -522,7 +522,7 @@ def test_move_sprite_rejects_solid_collision():
     )
     ctx = HandlerContext(world, scenario.actor.epoch)
 
-    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
+    result = execute_handler(MoveSpriteHandler(), ctx, _move_sprite(scenario, x=40.0, y=40.0))
 
     character = world.get_entity(scenario.character)
     assert result.reason == "position is blocked"
@@ -545,7 +545,7 @@ def test_move_sprite_allows_nearby_non_overlapping_solid_member():
     )
     ctx = HandlerContext(world, scenario.actor.epoch)
 
-    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
+    result = execute_handler(MoveSpriteHandler(), ctx, _move_sprite(scenario, x=40.0, y=40.0))
 
     assert result.ok is True
     assert world.get_entity(scenario.character).get_component(SpritePositionComponent).x == 40.0
@@ -574,7 +574,7 @@ def test_move_sprite_ignores_non_solid_and_unpositioned_members():
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), unpositioned_solid.id)
     ctx = HandlerContext(world, scenario.actor.epoch)
 
-    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
+    result = execute_handler(MoveSpriteHandler(), ctx, _move_sprite(scenario, x=40.0, y=40.0))
 
     assert result.ok is True
     assert world.get_entity(scenario.character).get_component(SpritePositionComponent).x == 40.0
@@ -586,7 +586,7 @@ def test_move_sprite_rejects_character_without_room():
     world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
     ctx = HandlerContext(world, scenario.actor.epoch)
 
-    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
+    result = execute_handler(MoveSpriteHandler(), ctx, _move_sprite(scenario, x=40.0, y=40.0))
 
     assert result.reason == "character is not in a room"
 
@@ -598,7 +598,7 @@ def test_move_sprite_rejects_entity_without_sprite_bounds():
     character.remove_component(CharacterComponent)
     ctx = HandlerContext(world, scenario.actor.epoch)
 
-    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
+    result = execute_handler(MoveSpriteHandler(), ctx, _move_sprite(scenario, x=40.0, y=40.0))
 
     assert result.reason == "character has no sprite bounds"
 
@@ -610,7 +610,7 @@ def test_move_sprite_preserves_existing_character_bounds():
     character.add_component(SpriteBoundsComponent(width=3.0, height=7.0, solid=True))
     ctx = HandlerContext(world, scenario.actor.epoch)
 
-    result = MoveSpriteHandler().execute(ctx, _move_sprite(scenario, x=40.0, y=40.0))
+    result = execute_handler(MoveSpriteHandler(), ctx, _move_sprite(scenario, x=40.0, y=40.0))
 
     # The character already has bounds, so they are reused unchanged (477->479).
     assert result.ok is True
@@ -644,6 +644,6 @@ def test_move_sprite_rejects_invalid_character_id():
     )
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
 
-    result = MoveSpriteHandler().execute(ctx, command)
+    result = execute_handler(MoveSpriteHandler(), ctx, command)
 
     assert result.reason == "invalid character id"

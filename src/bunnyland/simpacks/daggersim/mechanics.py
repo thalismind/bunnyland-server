@@ -1146,9 +1146,7 @@ def _institution_reputation_operation(
         None,
     )
     score = (current.score if current is not None else 0) + delta
-    return score, AddEdge(
-        character.id, institution_id, HasStandingWithInstitution(score=score)
-    )
+    return score, AddEdge(character.id, institution_id, HasStandingWithInstitution(score=score))
 
 
 def _legal_reputation_operation(
@@ -1226,10 +1224,15 @@ class ExpandSiteHandler:
             command.payload.get("trigger", hook.trigger if hook is not None else "manual")
         )
 
-        return planned(MutationPlan((
-            SetComponent(site.id, replace(procedural, generated=True, generator_id=generator_id)),
-            SetComponent(site.id, replace(unrealized, detail_level="instantiated")),
-        )),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        site.id, replace(procedural, generated=True, generator_id=generator_id)
+                    ),
+                    SetComponent(site.id, replace(unrealized, detail_level="instantiated")),
+                )
+            ),
             ExpansionRequestedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1253,7 +1256,7 @@ class ExpandSiteHandler:
                     detail_level="instantiated",
                     generator_plugin_id=generator_id,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1279,7 +1282,8 @@ class AskRumorHandler:
         if rumor_entity.has_relationship(RumorHeardBy, character_id):
             return rejected("rumor already heard")
 
-        return planned(MutationPlan((AddEdge(rumor_id, character_id, RumorHeardBy()),)),
+        return planned(
+            MutationPlan((AddEdge(rumor_id, character_id, RumorHeardBy()),)),
             RumorHeardEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1289,7 +1293,7 @@ class AskRumorHandler:
                     rumor_id=str(rumor_id),
                     text=rumor.text,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1379,9 +1383,9 @@ class InvestigateRumorHandler:
                             )
                         )
                     )
-        return planned(MutationPlan((
-            SetComponent(rumor_id, replace(rumor, state=state)),
-        )), *events, ctx=ctx)
+        return planned(
+            MutationPlan((SetComponent(rumor_id, replace(rumor, state=state)),)), *events
+        )
 
 
 class PlanTravelHandler:
@@ -1418,16 +1422,21 @@ class PlanTravelHandler:
         )
         travel_seconds = max(1, int(route.travel_seconds / max(0.1, mode.speed_multiplier)))
         arrive_at = ctx.epoch + travel_seconds
-        return planned(MutationPlan((AddEdge(
-            character_id,
-            destination_id,
-            TravelingToDestination(
-                started_at_epoch=ctx.epoch,
-                arrive_at_epoch=arrive_at,
-                mode=mode.mode,
-                route_label=route.label,
+        return planned(
+            MutationPlan(
+                (
+                    AddEdge(
+                        character_id,
+                        destination_id,
+                        TravelingToDestination(
+                            started_at_epoch=ctx.epoch,
+                            arrive_at_epoch=arrive_at,
+                            mode=mode.mode,
+                            route_label=route.label,
+                        ),
+                    ),
+                )
             ),
-        ),)),
             TravelStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1438,7 +1447,7 @@ class PlanTravelHandler:
                     arrive_at_epoch=arrive_at,
                     mode=mode.mode,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1513,14 +1522,17 @@ class JoinInstitutionHandler:
         reputation, reputation_operation = _institution_reputation_operation(
             character, institution_id, 1
         )
-        return planned(MutationPlan((
-            AddEdge(
-                character_id,
-                institution_id,
-                MemberOfInstitution(rank=rank, since_epoch=ctx.epoch),
+        return planned(
+            MutationPlan(
+                (
+                    AddEdge(
+                        character_id,
+                        institution_id,
+                        MemberOfInstitution(rank=rank, since_epoch=ctx.epoch),
+                    ),
+                    reputation_operation,
+                )
             ),
-            reputation_operation,
-        )),
             InstitutionJoinedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1541,7 +1553,7 @@ class JoinInstitutionHandler:
                     institution_id=str(institution_id),
                     score=reputation,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1600,7 +1612,8 @@ class UseInstitutionServiceHandler:
             character, institution_id, 1
         )
         operations.append(reputation_operation)
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             lambda: InstitutionServiceUsedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1632,7 +1645,7 @@ class UseInstitutionServiceHandler:
                     institution_id=str(institution_id),
                     score=reputation,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1654,15 +1667,18 @@ class PromoteInstitutionHandler:
         reputation, reputation_operation = _institution_reputation_operation(
             character, institution_id, 2
         )
-        return planned(MutationPlan((
-            RemoveEdge(character_id, institution_id, MemberOfInstitution),
-            AddEdge(
-                character_id,
-                institution_id,
-                MemberOfInstitution(rank=rank, since_epoch=membership.since_epoch),
+        return planned(
+            MutationPlan(
+                (
+                    RemoveEdge(character_id, institution_id, MemberOfInstitution),
+                    AddEdge(
+                        character_id,
+                        institution_id,
+                        MemberOfInstitution(rank=rank, since_epoch=membership.since_epoch),
+                    ),
+                    reputation_operation,
+                )
             ),
-            reputation_operation,
-        )),
             InstitutionPromotedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1682,7 +1698,7 @@ class PromoteInstitutionHandler:
                     institution_id=str(institution_id),
                     score=reputation,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1709,10 +1725,15 @@ class PayInstitutionDuesHandler:
             return rejected("no dues are owed")
         if str(character_id) in dues.paid_by:
             return rejected("dues already paid")
-        return planned(MutationPlan((SetComponent(
-            institution.id,
-            replace(dues, paid_by=tuple(sorted((*dues.paid_by, str(character_id))))),
-        ),)),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        institution.id,
+                        replace(dues, paid_by=tuple(sorted((*dues.paid_by, str(character_id))))),
+                    ),
+                )
+            ),
             InstitutionDuesPaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1722,7 +1743,7 @@ class PayInstitutionDuesHandler:
                     institution_id=str(institution_id),
                     amount=dues.amount_due,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1746,17 +1767,23 @@ class OpenBankAccountHandler:
             return rejected("bank account already exists")
 
         account = EntityReference()
-        plan = MutationPlan((
-            AddEntity((
-                IdentityComponent(
-                    name=f"{bank.get_component(BankComponent).name} account",
-                    kind="bank-account",
+        plan = MutationPlan(
+            (
+                AddEntity(
+                    (
+                        IdentityComponent(
+                            name=f"{bank.get_component(BankComponent).name} account",
+                            kind="bank-account",
+                        ),
+                        BankAccountComponent(bank_id=str(bank_id), owner_id=str(character_id)),
+                    ),
+                    reference=account,
                 ),
-                BankAccountComponent(bank_id=str(bank_id), owner_id=str(character_id)),
-            ), reference=account),
-            AddEdge(bank_id, account, Contains(mode=ContainmentMode.CONTAINER)),
-        ))
-        return planned(plan,
+                AddEdge(bank_id, account, Contains(mode=ContainmentMode.CONTAINER)),
+            )
+        )
+        return planned(
+            plan,
             lambda: AccountOpenedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1767,7 +1794,7 @@ class OpenBankAccountHandler:
                     account_id=str(account.require()),
                     balance=0,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1787,7 +1814,8 @@ class DepositHandler:
             return rejected("bank account does not exist")
         account_component = account.get_component(BankAccountComponent)
         updated = replace(account_component, balance=account_component.balance + amount)
-        return planned(MutationPlan((SetComponent(account.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(account.id, updated),)),
             DepositMadeEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1798,7 +1826,7 @@ class DepositHandler:
                     amount=amount,
                     balance=updated.balance,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1820,7 +1848,8 @@ class WithdrawHandler:
         if account_component.balance < amount:
             return rejected("insufficient bank balance")
         updated = replace(account_component, balance=account_component.balance - amount)
-        return planned(MutationPlan((SetComponent(account.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(account.id, updated),)),
             WithdrawalMadeEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1831,7 +1860,7 @@ class WithdrawHandler:
                     amount=amount,
                     balance=updated.balance,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1854,23 +1883,30 @@ class TakeLoanHandler:
         account_component = account.get_component(BankAccountComponent)
         due_at = ctx.epoch + duration_seconds
         loan = EntityReference()
-        plan = MutationPlan((
-            SetComponent(
-                account.id, replace(account_component, balance=account_component.balance + amount)
-            ),
-            AddEntity((
-                IdentityComponent(name="bank loan", kind="loan"),
-                LoanComponent(
-                    bank_id=str(bank_id),
-                    borrower_id=str(character_id),
-                    principal=amount,
-                    balance=amount,
-                    due_at_epoch=due_at,
+        plan = MutationPlan(
+            (
+                SetComponent(
+                    account.id,
+                    replace(account_component, balance=account_component.balance + amount),
                 ),
-            ), reference=loan),
-            AddEdge(character_id, loan, Contains(mode=ContainmentMode.INVENTORY)),
-        ))
-        return planned(plan,
+                AddEntity(
+                    (
+                        IdentityComponent(name="bank loan", kind="loan"),
+                        LoanComponent(
+                            bank_id=str(bank_id),
+                            borrower_id=str(character_id),
+                            principal=amount,
+                            balance=amount,
+                            due_at_epoch=due_at,
+                        ),
+                    ),
+                    reference=loan,
+                ),
+                AddEdge(character_id, loan, Contains(mode=ContainmentMode.INVENTORY)),
+            )
+        )
+        return planned(
+            plan,
             lambda: LoanIssuedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1882,7 +1918,7 @@ class TakeLoanHandler:
                     amount=amount,
                     due_at_epoch=due_at,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1920,12 +1956,18 @@ class RepayLoanHandler:
 
         next_balance = loan.balance - payment
         status = "repaid" if next_balance == 0 else loan.status
-        return planned(MutationPlan((
-            SetComponent(
-                account.id, replace(account_component, balance=account_component.balance - payment)
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        account.id,
+                        replace(account_component, balance=account_component.balance - payment),
+                    ),
+                    SetComponent(
+                        loan_entity.id, replace(loan, balance=next_balance, status=status)
+                    ),
+                )
             ),
-            SetComponent(loan_entity.id, replace(loan, balance=next_balance, status=status)),
-        )),
             LoanRepaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1936,7 +1978,7 @@ class RepayLoanHandler:
                     amount=payment,
                     balance=next_balance,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -1985,22 +2027,29 @@ class IssueLetterOfCreditHandler:
         if account_component.balance < amount:
             return rejected("insufficient bank balance")
         letter = EntityReference()
-        plan = MutationPlan((
-            SetComponent(
-                account.id, replace(account_component, balance=account_component.balance - amount)
-            ),
-            AddEntity((
-                IdentityComponent(name="letter of credit", kind="letter-of-credit"),
-                PortableComponent(can_pick_up=True),
-                LetterOfCreditComponent(
-                    bank_id=str(bank_id),
-                    owner_id=str(character_id),
-                    amount=amount,
+        plan = MutationPlan(
+            (
+                SetComponent(
+                    account.id,
+                    replace(account_component, balance=account_component.balance - amount),
                 ),
-            ), reference=letter),
-            AddEdge(character_id, letter, Contains(mode=ContainmentMode.INVENTORY)),
-        ))
-        return planned(plan,
+                AddEntity(
+                    (
+                        IdentityComponent(name="letter of credit", kind="letter-of-credit"),
+                        PortableComponent(can_pick_up=True),
+                        LetterOfCreditComponent(
+                            bank_id=str(bank_id),
+                            owner_id=str(character_id),
+                            amount=amount,
+                        ),
+                    ),
+                    reference=letter,
+                ),
+                AddEdge(character_id, letter, Contains(mode=ContainmentMode.INVENTORY)),
+            )
+        )
+        return planned(
+            plan,
             lambda: LetterOfCreditIssuedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2010,7 +2059,7 @@ class IssueLetterOfCreditHandler:
                     letter_id=str(letter.require()),
                     amount=amount,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2025,7 +2074,6 @@ class StoreSafeItemHandler:
             return rejected("invalid character, storage, or item id")
         if not ctx.world.has_entity(storage_id) or not ctx.world.has_entity(item_id):
             return rejected("storage or item does not exist")
-        character = ctx.entity(character_id)
         if container_of(ctx.world.get_entity(item_id)) != character_id:
             return rejected("item is not carried")
         storage = ctx.entity(storage_id)
@@ -2039,12 +2087,15 @@ class StoreSafeItemHandler:
         operations: list[MutationOperation] = []
         if not storage.has_component(SafeStorageComponent):
             operations.append(SetComponent(storage_id, safe))
-        operations.extend((
-            RemoveEdge(character_id, item_id, Contains),
-            AddEdge(storage_id, item_id, Contains(mode=ContainmentMode.CONTAINER)),
-            AddEdge(item_id, storage_id, StoredIn()),
-        ))
-        return planned(MutationPlan(tuple(operations)),
+        operations.extend(
+            (
+                RemoveEdge(character_id, item_id, Contains),
+                AddEdge(storage_id, item_id, Contains(mode=ContainmentMode.CONTAINER)),
+                AddEdge(item_id, storage_id, StoredIn()),
+            )
+        )
+        return planned(
+            MutationPlan(tuple(operations)),
             SafeStorageUpdatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2055,7 +2106,7 @@ class StoreSafeItemHandler:
                     item_id=str(item_id),
                     stored=True,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2081,11 +2132,14 @@ class RetrieveSafeItemHandler:
             for _edge, target_id in ctx.entity(item_id).get_relationships(StoredIn)
         ):
             return rejected("item is not in safe storage")
-        return planned(MutationPlan((
-            RemoveEdge(storage_id, item_id, Contains),
-            RemoveEdge(item_id, storage_id, StoredIn),
-            AddEdge(character_id, item_id, Contains(mode=ContainmentMode.INVENTORY)),
-        )),
+        return planned(
+            MutationPlan(
+                (
+                    RemoveEdge(storage_id, item_id, Contains),
+                    RemoveEdge(item_id, storage_id, StoredIn),
+                    AddEdge(character_id, item_id, Contains(mode=ContainmentMode.INVENTORY)),
+                )
+            ),
             SafeStorageUpdatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2096,7 +2150,7 @@ class RetrieveSafeItemHandler:
                     item_id=str(item_id),
                     stored=False,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2115,17 +2169,21 @@ class SendDebtCollectorHandler:
             return rejected("target is not debt")
         collector = EntityReference()
         operations: list[MutationOperation] = [
-            AddEntity((
-                IdentityComponent(name="debt collector", kind="debt-collector"),
-                DebtCollectorComponent(borrower_id=str(character_id), debt_id=str(debt_id)),
-            ), reference=collector)
+            AddEntity(
+                (
+                    IdentityComponent(name="debt collector", kind="debt-collector"),
+                    DebtCollectorComponent(borrower_id=str(character_id), debt_id=str(debt_id)),
+                ),
+                reference=collector,
+            )
         ]
         room_id = container_of(ctx.entity(character_id))
         if room_id is not None:
             operations.append(
                 AddEdge(room_id, collector, Contains(mode=ContainmentMode.ROOM_CONTENT))
             )
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             lambda: DebtCollectorSentEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2135,7 +2193,7 @@ class SendDebtCollectorHandler:
                     collector_id=str(collector.require()),
                     borrower_id=str(character_id),
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2171,20 +2229,26 @@ class CommitCrimeHandler:
 
         crime = EntityReference()
         legal_score, legal_operation = _legal_reputation_operation(character, region_id, -fine)
-        plan = MutationPlan((
-            AddEntity((
-                IdentityComponent(name=f"{crime_type} charge", kind="crime-record"),
-                CrimeRecordComponent(
-                    crime_type=crime_type,
-                    region_id=law.region_id,
-                    fine=fine,
+        plan = MutationPlan(
+            (
+                AddEntity(
+                    (
+                        IdentityComponent(name=f"{crime_type} charge", kind="crime-record"),
+                        CrimeRecordComponent(
+                            crime_type=crime_type,
+                            region_id=law.region_id,
+                            fine=fine,
+                        ),
+                        BountyComponent(amount=fine, region_id=law.region_id),
+                    ),
+                    reference=crime,
                 ),
-                BountyComponent(amount=fine, region_id=law.region_id),
-            ), reference=crime),
-            AddEdge(character_id, crime, Contains(mode=ContainmentMode.INVENTORY)),
-            legal_operation,
-        ))
-        return planned(plan,
+                AddEdge(character_id, crime, Contains(mode=ContainmentMode.INVENTORY)),
+                legal_operation,
+            )
+        )
+        return planned(
+            plan,
             lambda: CrimeCommittedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2215,7 +2279,7 @@ class CommitCrimeHandler:
                     region_id=law.region_id,
                     score=legal_score,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2257,11 +2321,10 @@ class PayFineHandler:
         ]
         if crime_entity.has_component(BountyComponent):
             operations.append(RemoveComponent(crime_entity.id, BountyComponent))
-        legal_score, legal_operation = _legal_reputation_operation(
-            character, region_id, crime.fine
-        )
+        legal_score, legal_operation = _legal_reputation_operation(character, region_id, crime.fine)
         operations.append(legal_operation)
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             FinePaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2281,7 +2344,7 @@ class PayFineHandler:
                     region_id=crime.region_id,
                     score=legal_score,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2300,9 +2363,10 @@ class SentenceCrimeHandler:
         if not crime_entity.has_component(CrimeRecordComponent):
             return rejected("target is not a crime record")
         crime = crime_entity.get_component(CrimeRecordComponent)
-        return planned(MutationPlan((
-            SetComponent(crime_entity.id, replace(crime, status=f"sentenced:{sentence}")),
-        )),
+        return planned(
+            MutationPlan(
+                (SetComponent(crime_entity.id, replace(crime, status=f"sentenced:{sentence}")),)
+            ),
             CourtSentenceIssuedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2313,7 +2377,7 @@ class SentenceCrimeHandler:
                     sentence=sentence,
                     fine=crime.fine,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2344,7 +2408,8 @@ class RentLodgingHandler:
             occupied_by=str(character_id),
             paid_until_epoch=ctx.epoch + duration_seconds,
         )
-        return planned(MutationPlan((SetComponent(lodging_entity.id, updated),)),
+        return planned(
+            MutationPlan((SetComponent(lodging_entity.id, updated),)),
             LodgingRentedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2354,7 +2419,7 @@ class RentLodgingHandler:
                     lodging_id=str(lodging_id),
                     paid_until_epoch=updated.paid_until_epoch,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2371,10 +2436,17 @@ class CampHandler:
             return rejected("character is not in a room")
         risk = str(command.payload.get("risk", "low")).strip() or "low"
         room = ctx.entity(room_id)
-        return planned(MutationPlan((SetComponent(
-            room.id,
-            CampingComponent(camped_by=str(character_id), risk=risk, started_at_epoch=ctx.epoch),
-        ),)),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        room.id,
+                        CampingComponent(
+                            camped_by=str(character_id), risk=risk, started_at_epoch=ctx.epoch
+                        ),
+                    ),
+                )
+            ),
             CampMadeEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2384,7 +2456,7 @@ class CampHandler:
                     camp_room_id=str(room_id),
                     risk=risk,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2399,15 +2471,21 @@ class BuyTravelSuppliesHandler:
         if quantity <= 0:
             return rejected("supply quantity must be positive")
         supply = EntityReference()
-        plan = MutationPlan((
-            AddEntity((
-                IdentityComponent(name="travel supplies", kind="travel-supplies"),
-                PortableComponent(can_pick_up=True),
-                TravelSupplyComponent(quantity=quantity),
-            ), reference=supply),
-            AddEdge(character_id, supply, Contains(mode=ContainmentMode.INVENTORY)),
-        ))
-        return planned(plan,
+        plan = MutationPlan(
+            (
+                AddEntity(
+                    (
+                        IdentityComponent(name="travel supplies", kind="travel-supplies"),
+                        PortableComponent(can_pick_up=True),
+                        TravelSupplyComponent(quantity=quantity),
+                    ),
+                    reference=supply,
+                ),
+                AddEdge(character_id, supply, Contains(mode=ContainmentMode.INVENTORY)),
+            )
+        )
+        return planned(
+            plan,
             lambda: TravelSuppliesBoughtEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2417,7 +2495,7 @@ class BuyTravelSuppliesHandler:
                     supply_id=str(supply.require()),
                     quantity=quantity,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2437,9 +2515,10 @@ class ResolveTravelInterruptionHandler:
         interruption = interruption_entity.get_component(TravelInterruptionComponent)
         if interruption.resolved:
             return rejected("travel interruption is already resolved")
-        return planned(MutationPlan((
-            SetComponent(interruption_entity.id, replace(interruption, resolved=True)),
-        )),
+        return planned(
+            MutationPlan(
+                (SetComponent(interruption_entity.id, replace(interruption, resolved=True)),)
+            ),
             TravelInterruptionResolvedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2449,7 +2528,7 @@ class ResolveTravelInterruptionHandler:
                     interruption_id=str(interruption_id),
                     reason=interruption.reason,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2489,18 +2568,21 @@ class BuyPropertyHandler:
             owner_id=str(character_id),
             purchased_at_epoch=ctx.epoch,
         )
-        return planned(MutationPlan((
-            SetComponent(
-                account.id,
-                replace(account_component, balance=account_component.balance - deed.price),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        account.id,
+                        replace(account_component, balance=account_component.balance - deed.price),
+                    ),
+                    SetComponent(property_entity.id, updated),
+                    AddEdge(
+                        character_id,
+                        property_id,
+                        OwnsProperty(deed_id=str(property_id), purchased_at_epoch=ctx.epoch),
+                    ),
+                )
             ),
-            SetComponent(property_entity.id, updated),
-            AddEdge(
-                character_id,
-                property_id,
-                OwnsProperty(deed_id=str(property_id), purchased_at_epoch=ctx.epoch),
-            ),
-        )),
             PropertyPurchasedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2511,7 +2593,7 @@ class BuyPropertyHandler:
                     deed_id=str(property_id),
                     price=deed.price,
                 )
-            )
+            ),
         )
 
 
@@ -2550,7 +2632,8 @@ class CreateCustomClassHandler:
             ),
             finalized_at_epoch=ctx.epoch,
         )
-        return planned(MutationPlan((SetComponent(character_id, custom_class),)),
+        return planned(
+            MutationPlan((SetComponent(character_id, custom_class),)),
             CustomClassCreatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2562,7 +2645,7 @@ class CreateCustomClassHandler:
                     major_skills=custom_class.major_skills,
                     minor_skills=custom_class.minor_skills,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2594,14 +2677,20 @@ class CreateSpellHandler:
             creator_id=str(character_id),
         )
         spell_entity = EntityReference()
-        plan = MutationPlan((
-            AddEntity((
-                IdentityComponent(name=spell.spell_name, kind="spell"),
-                spell,
-            ), reference=spell_entity),
-            AddEdge(character_id, spell_entity, Contains(mode=ContainmentMode.INVENTORY)),
-        ))
-        return planned(plan,
+        plan = MutationPlan(
+            (
+                AddEntity(
+                    (
+                        IdentityComponent(name=spell.spell_name, kind="spell"),
+                        spell,
+                    ),
+                    reference=spell_entity,
+                ),
+                AddEdge(character_id, spell_entity, Contains(mode=ContainmentMode.INVENTORY)),
+            )
+        )
+        return planned(
+            plan,
             lambda: SpellCreatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2613,7 +2702,7 @@ class CreateSpellHandler:
                     effect_type=spell.effect_type,
                     magnitude=spell.magnitude,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2639,7 +2728,8 @@ class CastSpellHandler:
         target = ctx.entity(target_id)
         target_health, operation = _spell_effect_operation(target, spell)
         operations = (operation,) if operation is not None else ()
-        return planned(MutationPlan(operations),
+        return planned(
+            MutationPlan(operations),
             SpellCastEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2653,7 +2743,7 @@ class CastSpellHandler:
                     magnitude=spell.magnitude,
                     target_health=target_health,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2705,7 +2795,8 @@ class EnchantItemHandler:
             enchanter_id=str(character_id),
             enchanted_at_epoch=ctx.epoch,
         )
-        return planned(MutationPlan((SetComponent(item.id, enchantment),)),
+        return planned(
+            MutationPlan((SetComponent(item.id, enchantment),)),
             ItemEnchantedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2718,7 +2809,7 @@ class EnchantItemHandler:
                     effect_type=enchantment.effect_type,
                     magnitude=enchantment.magnitude,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2744,7 +2835,8 @@ class MakePotionHandler:
             component.output_item_name,
             kind="potion",
         )
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             lambda: PotionMadeEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2754,7 +2846,7 @@ class MakePotionHandler:
                     potion_id=str(item.require()),
                     potion_name=component.output_item_name,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2781,10 +2873,9 @@ class RechargeEnchantedItemHandler:
             return rejected("target is not a recharge service")
         enchantment = item.get_component(EnchantedItemComponent)
         recharge = service.get_component(RechargeServiceComponent)
-        updated = replace(
-            enchantment, cost=max(1, enchantment.cost - recharge.charge_amount)
-        )
-        return planned(MutationPlan((SetComponent(item.id, updated),)),
+        updated = replace(enchantment, cost=max(1, enchantment.cost - recharge.charge_amount))
+        return planned(
+            MutationPlan((SetComponent(item.id, updated),)),
             EnchantedItemRechargedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2794,7 +2885,7 @@ class RechargeEnchantedItemHandler:
                     item_id=str(item_id),
                     cost=updated.cost,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2827,13 +2918,20 @@ class IdentifyIngredientHandler:
         ingredient = ingredient_entity.get_component(IngredientComponent)
         if str(character_id) in ingredient.identified_by:
             return rejected("ingredient already identified")
-        return planned(MutationPlan((SetComponent(
-            ingredient_entity.id,
-            replace(
-                ingredient,
-                identified_by=tuple(sorted((*ingredient.identified_by, str(character_id)))),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        ingredient_entity.id,
+                        replace(
+                            ingredient,
+                            identified_by=tuple(
+                                sorted((*ingredient.identified_by, str(character_id)))
+                            ),
+                        ),
+                    ),
+                )
             ),
-        ),)),
             IngredientIdentifiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2843,7 +2941,7 @@ class IdentifyIngredientHandler:
                     ingredient_id=str(ingredient_id),
                     effect=ingredient.effect,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2921,14 +3019,16 @@ class AttemptPacifyHandler:
                         replace(target.get_component(HostilityComponent), hostile=False),
                     )
                 )
-            operations.append(SetComponent(
-                target.id,
-                PacifiedComponent(
-                    pacified_by=str(character_id),
-                    language=requested,
-                    pacified_at_epoch=ctx.epoch,
-                ),
-            ))
+            operations.append(
+                SetComponent(
+                    target.id,
+                    PacifiedComponent(
+                        pacified_by=str(character_id),
+                        language=requested,
+                        pacified_at_epoch=ctx.epoch,
+                    ),
+                )
+            )
             events.append(
                 CreaturePacifiedEvent(
                     **ctx.event_base(
@@ -2941,7 +3041,7 @@ class AttemptPacifyHandler:
                     )
                 )
             )
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class ContractAfflictionHandler:
@@ -2956,13 +3056,19 @@ class ContractAfflictionHandler:
         if character.has_component(SupernaturalAfflictionComponent):
             return rejected("character already has a supernatural affliction")
 
-        return planned(MutationPlan((
-            SetComponent(character_id, SupernaturalAfflictionComponent(
-                affliction_type=affliction_type,
-                contracted_at_epoch=ctx.epoch,
-            )),
-            SetComponent(character_id, FeedingNeedComponent(last_updated_epoch=ctx.epoch)),
-        )),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        character_id,
+                        SupernaturalAfflictionComponent(
+                            affliction_type=affliction_type,
+                            contracted_at_epoch=ctx.epoch,
+                        ),
+                    ),
+                    SetComponent(character_id, FeedingNeedComponent(last_updated_epoch=ctx.epoch)),
+                )
+            ),
             AfflictionContractedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2970,7 +3076,7 @@ class ContractAfflictionHandler:
                     room_id=_room_id(ctx.world, character_id),
                     affliction_type=affliction_type,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -2986,9 +3092,8 @@ class ProgressAfflictionIncubationHandler:
         if not character.has_component(SupernaturalAfflictionComponent):
             return rejected("character has no supernatural affliction")
         affliction = character.get_component(SupernaturalAfflictionComponent)
-        return planned(MutationPlan((
-            SetComponent(character_id, replace(affliction, stage=stage)),
-        )),
+        return planned(
+            MutationPlan((SetComponent(character_id, replace(affliction, stage=stage)),)),
             AfflictionIncubationProgressedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2997,7 +3102,7 @@ class ProgressAfflictionIncubationHandler:
                     affliction_type=affliction.affliction_type,
                     stage=stage,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3012,10 +3117,15 @@ class MarkAfflictionStigmaHandler:
             return rejected("invalid character id")
         if severity <= 0:
             return rejected("stigma severity must be positive")
-        character = ctx.entity(character_id)
-        return planned(MutationPlan((SetComponent(
-            character_id, AfflictionStigmaComponent(region_id=region_id, severity=severity)
-        ),)),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        character_id,
+                        AfflictionStigmaComponent(region_id=region_id, severity=severity),
+                    ),
+                )
+            ),
             AfflictionStigmaMarkedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3024,7 +3134,7 @@ class MarkAfflictionStigmaHandler:
                     region_id=region_id,
                     severity=severity,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3040,13 +3150,18 @@ class RequestCureHandler:
         if not character.has_component(SupernaturalAfflictionComponent):
             return rejected("character has no supernatural affliction")
         affliction = character.get_component(SupernaturalAfflictionComponent)
-        return planned(MutationPlan((SetComponent(
-            character_id,
-            CureRequestComponent(
-                affliction_type=affliction.affliction_type,
-                quest_id=quest_id,
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        character_id,
+                        CureRequestComponent(
+                            affliction_type=affliction.affliction_type,
+                            quest_id=quest_id,
+                        ),
+                    ),
+                )
             ),
-        ),)),
             CureRequestedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3055,7 +3170,7 @@ class RequestCureHandler:
                     affliction_type=affliction.affliction_type,
                     quest_id=quest_id,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3074,13 +3189,19 @@ class TransformHandler:
 
         affliction = character.get_component(SupernaturalAfflictionComponent)
         form_name = str(command.payload.get("form_name", affliction.affliction_type)).strip()
-        return planned(MutationPlan((
-            SetComponent(character_id, replace(affliction, stage="active")),
-            SetComponent(character_id, WereformComponent(
-                form_name=form_name or affliction.affliction_type,
-                transformed_at_epoch=ctx.epoch,
-            )),
-        )),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(character_id, replace(affliction, stage="active")),
+                    SetComponent(
+                        character_id,
+                        WereformComponent(
+                            form_name=form_name or affliction.affliction_type,
+                            transformed_at_epoch=ctx.epoch,
+                        ),
+                    ),
+                )
+            ),
             TransformationStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3089,7 +3210,7 @@ class TransformHandler:
                     affliction_type=affliction.affliction_type,
                     form_name=form_name or affliction.affliction_type,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3114,11 +3235,14 @@ class FeedOnHandler:
             return rejected("feeding target is not reachable")
 
         need = character.get_component(FeedingNeedComponent)
-        return planned(MutationPlan((
-            SetComponent(
-                character_id, replace(need, current=0.0, last_updated_epoch=ctx.epoch)
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        character_id, replace(need, current=0.0, last_updated_epoch=ctx.epoch)
+                    ),
+                )
             ),
-        )),
             FeedingNeedChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3128,7 +3252,7 @@ class FeedOnHandler:
                     current=0.0,
                     maximum=need.maximum,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3144,15 +3268,14 @@ class EndTransformationHandler:
             return rejected("character is not transformed")
 
         wereform = character.get_component(WereformComponent)
-        operations: list[MutationOperation] = [
-            RemoveComponent(character_id, WereformComponent)
-        ]
+        operations: list[MutationOperation] = [RemoveComponent(character_id, WereformComponent)]
         affliction_type = wereform.form_name
         if character.has_component(SupernaturalAfflictionComponent):
             affliction = character.get_component(SupernaturalAfflictionComponent)
             affliction_type = affliction.affliction_type
             operations.append(SetComponent(character_id, replace(affliction, stage="dormant")))
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             TransformationEndedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3161,7 +3284,7 @@ class EndTransformationHandler:
                     affliction_type=affliction_type,
                     form_name=wereform.form_name,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3184,7 +3307,8 @@ class CureAfflictionHandler:
             operations.append(RemoveComponent(character_id, FeedingNeedComponent))
         if character.has_component(WereformComponent):
             operations.append(RemoveComponent(character_id, WereformComponent))
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             AfflictionCuredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3192,7 +3316,7 @@ class CureAfflictionHandler:
                     room_id=_room_id(ctx.world, character_id),
                     affliction_type=affliction_type,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3288,9 +3412,7 @@ def _spawn_inventory_item_operations(
 ) -> tuple[list[MutationOperation], EntityReference]:
     output = EntityReference()
     return [
-        AddEntity(
-            (IdentityComponent(name=name, kind=kind), PortableComponent()), reference=output
-        ),
+        AddEntity((IdentityComponent(name=name, kind=kind), PortableComponent()), reference=output),
         AddEdge(character_id, output, Contains(mode=ContainmentMode.INVENTORY)),
     ], output
 
@@ -3380,9 +3502,8 @@ class RequestDungeonHandler:
         )
         generator_id = hook.generator_plugin_id if hook is not None else None
         room_id = _room_id(ctx.world, character_id)
-        return planned(MutationPlan((
-            SetComponent(dungeon_entity.id, replace(dungeon, generated=True)),
-        )),
+        return planned(
+            MutationPlan((SetComponent(dungeon_entity.id, replace(dungeon, generated=True)),)),
             DungeonRequestedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3402,7 +3523,7 @@ class RequestDungeonHandler:
                     target_ids=(str(dungeon_entity_id),),
                     dungeon_id=dungeon.dungeon_id,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3440,21 +3561,24 @@ class EnterDungeonHandler:
         ]
         dungeon_origin_id = container_of(dungeon_entity)
         if dungeon_origin_id is not None and dungeon_origin_id != entry_room_id:
-            operations.extend((
-                RemoveEdge(dungeon_origin_id, dungeon_entity.id, Contains),
-                AddEdge(
-                    entry_room_id,
-                    dungeon_entity.id,
-                    Contains(mode=ContainmentMode.ROOM_CONTENT),
-                ),
-            ))
+            operations.extend(
+                (
+                    RemoveEdge(dungeon_origin_id, dungeon_entity.id, Contains),
+                    AddEdge(
+                        entry_room_id,
+                        dungeon_entity.id,
+                        Contains(mode=ContainmentMode.ROOM_CONTENT),
+                    ),
+                )
+            )
         operations.extend(_move_character_operations(ctx.world, character, entry_room_id))
         _changed, discovery_operation = _discover_room_operation(entry_room)
         if discovery_operation is not None:
             operations.append(discovery_operation)
         operations.append(_automap_operation(character, str(entry_room_id)))
         depth = entry_room.get_component(DungeonRoomComponent).depth
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             DungeonEnteredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3474,7 +3598,7 @@ class EnterDungeonHandler:
                     dungeon_room_id=str(entry_room_id),
                     depth=depth,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3534,9 +3658,7 @@ class SearchRoomHandler:
             if content.has_component(DungeonObjectiveComponent):
                 objective = content.get_component(DungeonObjectiveComponent)
                 if not objective.found:
-                    operations.append(
-                        SetComponent(content.id, replace(objective, found=True))
-                    )
+                    operations.append(SetComponent(content.id, replace(objective, found=True)))
                     events.append(
                         DungeonObjectiveFoundEvent(
                             **ctx.event_base(
@@ -3552,7 +3674,7 @@ class SearchRoomHandler:
 
         if not events:
             return rejected("you find nothing of note")
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class OpenSecretDoorHandler:
@@ -3593,10 +3715,13 @@ class OpenSecretDoorHandler:
             if target_room.has_component(DungeonRoomComponent)
             else ""
         )
-        return planned(MutationPlan((
-            SetComponent(door_entity.id, replace(door, opened=True)),
-            AddEdge(room_id, target_room_id, ExitTo(direction=door.direction)),
-        )),
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(door_entity.id, replace(door, opened=True)),
+                    AddEdge(room_id, target_room_id, ExitTo(direction=door.direction)),
+                )
+            ),
             DungeonRoomDiscoveredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3607,7 +3732,7 @@ class OpenSecretDoorHandler:
                     dungeon_room_id=str(target_room_id),
                     depth=depth,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3622,9 +3747,7 @@ class MarkPathHandler:
         room_id = container_of(character)
         if room_id is None or not ctx.world.has_entity(room_id):
             return rejected("character is not in a room")
-        return planned(
-            MutationPlan((_automap_operation(character, str(room_id), marked=True),)), ctx=ctx
-        )
+        return planned(MutationPlan((_automap_operation(character, str(room_id), marked=True),)))
 
 
 class ViewMapHandler:
@@ -3637,7 +3760,7 @@ class ViewMapHandler:
         character = ctx.entity(character_id)
         if not character.has_component(AutomapComponent):
             return rejected("you have no map to view")
-        return planned(MutationPlan(), ctx=ctx)
+        return planned(MutationPlan())
 
 
 class SetRecallHandler:
@@ -3656,7 +3779,8 @@ class SetRecallHandler:
             for _edge, anchor_id in tuple(character.get_relationships(AnchoredToRoom))
         ]
         operations.append(AddEdge(character_id, room_id, AnchoredToRoom()))
-        return planned(MutationPlan(tuple(operations)),
+        return planned(
+            MutationPlan(tuple(operations)),
             RecallAnchorSetEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3664,7 +3788,7 @@ class SetRecallHandler:
                     room_id=str(room_id),
                     anchor_room_id=str(room_id),
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3682,9 +3806,8 @@ class UseRecallHandler:
         _anchor_edge, anchor_id = anchor
         if container_of(character) == anchor_id:
             return rejected("already at the recall anchor")
-        return planned(MutationPlan(tuple(
-            _move_character_operations(ctx.world, character, anchor_id)
-        )),
+        return planned(
+            MutationPlan(tuple(_move_character_operations(ctx.world, character, anchor_id))),
             RecallUsedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3692,7 +3815,7 @@ class UseRecallHandler:
                     room_id=str(anchor_id),
                     anchor_room_id=str(anchor_id),
                 )
-            ), ctx=ctx,
+            ),
         )
 
 
@@ -3712,7 +3835,7 @@ class RestHandler:
             risk = room.get_component(RestRiskComponent)
             if risk.band in ("high", "ambush"):
                 return rejected("this area is too dangerous to rest")
-        return planned(MutationPlan(), ctx=ctx)
+        return planned(MutationPlan())
 
 
 class LeaveDungeonHandler:
@@ -3732,9 +3855,8 @@ class LeaveDungeonHandler:
         if not dungeon.entered:
             return rejected("not currently in this dungeon")
 
-        return planned(MutationPlan((
-            SetComponent(dungeon_entity.id, replace(dungeon, entered=False)),
-        )),
+        return planned(
+            MutationPlan((SetComponent(dungeon_entity.id, replace(dungeon, entered=False)),)),
             DungeonExitedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3743,7 +3865,7 @@ class LeaveDungeonHandler:
                     target_ids=(str(dungeon_entity_id),),
                     dungeon_id=dungeon.dungeon_id,
                 )
-            ), ctx=ctx,
+            ),
         )
 
 

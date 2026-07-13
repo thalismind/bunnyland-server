@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     ActionPointsComponent,
@@ -320,7 +320,8 @@ def test_complete_milestone_succeeds_without_reward_item():
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(AspirationComponent(name="Quiet Life", milestones=("rest",)))
 
-    result = CompleteMilestoneHandler().execute(
+    result = execute_handler(
+        CompleteMilestoneHandler(),
         ctx,
         _handler_cmd(scenario, "complete-milestone", milestone="rest"),
     )
@@ -367,7 +368,7 @@ def test_aspiration_and_milestone_handlers_reject_invalid_commands():
         ),
     ]
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -393,7 +394,7 @@ def test_aspiration_and_milestone_handlers_reject_invalid_commands():
             "milestone already completed",
         ),
     ):
-        result = complete.execute(ctx, command)
+        result = execute_handler(complete, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -562,19 +563,19 @@ def test_lifesim_economy_and_skill_handlers_reject_bad_state_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
     actor.add_component(CareerComponent(title="Archivist", active=False))
     actor.add_component(JobScheduleComponent(next_shift_epoch=scenario.actor.epoch))
-    result = GoToWorkHandler().execute(ctx, _handler_cmd(scenario, "go-to-work"))
+    result = execute_handler(GoToWorkHandler(), ctx, _handler_cmd(scenario, "go-to-work"))
     assert result.ok is False
     assert result.reason == "career is inactive"
 
     replace_component(actor, CareerComponent(title="Archivist", active=True))
     replace_component(actor, JobScheduleComponent(next_shift_epoch=scenario.actor.epoch + HOUR))
-    result = GoToWorkHandler().execute(ctx, _handler_cmd(scenario, "go-to-work"))
+    result = execute_handler(GoToWorkHandler(), ctx, _handler_cmd(scenario, "go-to-work"))
     assert result.ok is False
     assert result.reason == "shift is not scheduled yet"
 
@@ -586,7 +587,8 @@ def test_lifesim_job_handlers_cover_existing_funds_no_promotion_and_quit_success
     actor = scenario.actor.world.get_entity(scenario.character)
     actor.add_component(HouseholdFundsComponent(balance=3))
 
-    result = FindJobHandler().execute(
+    result = execute_handler(
+        FindJobHandler(),
         ctx,
         _handler_cmd(scenario, "find-job", title="Archivist", hourly_pay=4),
     )
@@ -606,7 +608,8 @@ def test_lifesim_job_handlers_cover_existing_funds_no_promotion_and_quit_success
             shift_interval_seconds=2 * HOUR,
         ),
     )
-    result = GoToWorkHandler().execute(
+    result = execute_handler(
+        GoToWorkHandler(),
         ctx,
         _handler_cmd(scenario, "go-to-work", performance_gain=0.25),
     )
@@ -615,7 +618,7 @@ def test_lifesim_job_handlers_cover_existing_funds_no_promotion_and_quit_success
     assert [type(event) for event in result.events] == [WorkShiftCompletedEvent]
     assert actor.get_component(CareerComponent).performance == 0.25
 
-    result = QuitJobHandler().execute(ctx, _handler_cmd(scenario, "quit-job"))
+    result = execute_handler(QuitJobHandler(), ctx, _handler_cmd(scenario, "quit-job"))
 
     assert result.ok is True
     assert actor.get_component(CareerComponent).active is False
@@ -627,7 +630,7 @@ def test_lifesim_pay_bill_handler_rejects_invalid_bills_directly():
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     actor = scenario.actor.world.get_entity(scenario.character)
 
-    result = PayBillHandler().execute(ctx, _handler_cmd(scenario, "pay-bill"))
+    result = execute_handler(PayBillHandler(), ctx, _handler_cmd(scenario, "pay-bill"))
     assert result.ok is False
     assert result.reason == "no unpaid bills"
 
@@ -686,7 +689,7 @@ def test_lifesim_pay_bill_handler_rejects_invalid_bills_directly():
     )
 
     for command, reason in cases:
-        result = PayBillHandler().execute(ctx, command)
+        result = execute_handler(PayBillHandler(), ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -905,11 +908,12 @@ def test_lifesim_business_household_and_social_handlers_reject_bad_state_directl
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
-    result = SetRelationshipStatusHandler().execute(
+    result = execute_handler(
+        SetRelationshipStatusHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -919,7 +923,8 @@ def test_lifesim_business_household_and_social_handlers_reject_bad_state_directl
         ),
     )
     assert result.ok is True
-    result = SetRelationshipStatusHandler().execute(
+    result = execute_handler(
+        SetRelationshipStatusHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -933,7 +938,8 @@ def test_lifesim_business_household_and_social_handlers_reject_bad_state_directl
 
     target = scenario.actor.world.get_entity(worker_id)
     target.add_component(ReputationComponent(score=0, known_for=("news",)))
-    result = SpreadGossipHandler().execute(
+    result = execute_handler(
+        SpreadGossipHandler(),
         ctx,
         _handler_cmd(scenario, "spread-gossip", target_id=str(worker_id), text="news"),
     )
@@ -966,7 +972,7 @@ def test_lifesim_business_household_and_social_handlers_reject_bad_state_directl
             "item is not in inventory",
         ),
     ):
-        result = SellItemHandler().execute(ctx, command)
+        result = execute_handler(SellItemHandler(), ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -1002,7 +1008,7 @@ def test_lifesim_business_household_and_social_handlers_reject_bad_state_directl
             "customer cannot afford item",
         ),
     ):
-        result = SellItemHandler().execute(ctx, command)
+        result = execute_handler(SellItemHandler(), ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -1022,7 +1028,7 @@ def test_lifesim_business_household_and_social_handlers_reject_bad_state_directl
             "item is not for sale",
         ),
     ):
-        result = BuyItemHandler().execute(ctx, command)
+        result = execute_handler(BuyItemHandler(), ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -1048,7 +1054,7 @@ def test_lifesim_business_household_and_social_handlers_reject_bad_state_directl
             "insufficient household funds",
         ),
     ):
-        result = BuyItemHandler().execute(ctx, command)
+        result = execute_handler(BuyItemHandler(), ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -1189,7 +1195,7 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -1197,7 +1203,8 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
     scenario.actor.world.get_entity(partner_id).add_relationship(
         PartnerOf(since_epoch=scenario.actor.epoch), scenario.character
     )
-    result = StartPartnershipHandler().execute(
+    result = execute_handler(
+        StartPartnershipHandler(),
         ctx,
         _handler_cmd(scenario, "start-partnership", target_id=str(partner_id)),
     )
@@ -1211,7 +1218,8 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
             CharacterComponent(species="bunny"),
         ],
     ).id
-    result = WitnessRomanceHandler().execute(
+    result = execute_handler(
+        WitnessRomanceHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -1224,7 +1232,8 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
     assert result.reason == "participants are not present"
 
     actor.add_relationship(PartnerOf(since_epoch=0), partner_id)
-    result = EndPartnershipHandler().execute(
+    result = execute_handler(
+        EndPartnershipHandler(),
         ctx,
         _handler_cmd(scenario, "end-partnership", target_id=str(partner_id)),
     )
@@ -1240,7 +1249,8 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
             co_parent_ids=(str(partner_id),),
         )
     )
-    result = StartPregnancyHandler().execute(
+    result = execute_handler(
+        StartPregnancyHandler(),
         ctx,
         _handler_cmd(scenario, "start-pregnancy", co_parent_id=str(partner_id)),
     )
@@ -1252,7 +1262,8 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
         actor,
         ReproductiveComponent(can_be_pregnant=False, species_group="bunny"),
     )
-    result = StartPregnancyHandler().execute(
+    result = execute_handler(
+        StartPregnancyHandler(),
         ctx,
         _handler_cmd(scenario, "start-pregnancy", co_parent_id=str(partner_id)),
     )
@@ -1268,7 +1279,8 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
         co_parent,
         ReproductiveComponent(can_cause_pregnancy=False, species_group="bunny"),
     )
-    result = StartPregnancyHandler().execute(
+    result = execute_handler(
+        StartPregnancyHandler(),
         ctx,
         _handler_cmd(scenario, "start-pregnancy", co_parent_id=str(partner_id)),
     )
@@ -1279,7 +1291,8 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
         co_parent,
         ReproductiveComponent(can_cause_pregnancy=True, species_group="hare"),
     )
-    result = StartPregnancyHandler().execute(
+    result = execute_handler(
+        StartPregnancyHandler(),
         ctx,
         _handler_cmd(scenario, "start-pregnancy", co_parent_id=str(partner_id)),
     )
@@ -1294,7 +1307,8 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
             fertility=0.0,
         ),
     )
-    result = StartPregnancyHandler().execute(
+    result = execute_handler(
+        StartPregnancyHandler(),
         ctx,
         _handler_cmd(scenario, "start-pregnancy", co_parent_id=str(partner_id)),
     )
@@ -1305,7 +1319,8 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
         co_parent,
         ReproductiveComponent(can_cause_pregnancy=True, species_group="bunny"),
     )
-    result = StartPregnancyHandler().execute(
+    result = execute_handler(
+        StartPregnancyHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -1318,7 +1333,8 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
     assert result.reason == "due time must be in the future"
 
     actor.add_relationship(ParentOf(), child_id)
-    result = AdoptChildHandler().execute(
+    result = execute_handler(
+        AdoptChildHandler(),
         ctx,
         _handler_cmd(scenario, "adopt-child", child_id=str(child_id)),
     )
@@ -1717,7 +1733,8 @@ def test_lifesim_handlers_reject_invalid_character_ids_directly():
     ]
 
     for handler, command_type, payload, reason in cases:
-        result = handler.execute(
+        result = execute_handler(
+            handler,
             ctx,
             _handler_cmd(
                 scenario,
@@ -1748,7 +1765,8 @@ def test_resolve_birth_handles_unplaced_parent_and_invalid_co_parent_id():
         scenario.character,
     )
 
-    result = ResolveBirthHandler().execute(
+    result = execute_handler(
+        ResolveBirthHandler(),
         ctx,
         _handler_cmd(scenario, "resolve-birth", child_name="Clover"),
     )
@@ -2291,7 +2309,8 @@ def test_set_routine_updates_existing_routine_for_activity():
     )
     character.add_relationship(HasRoutine(), routine.id)
 
-    result = SetRoutineHandler().execute(
+    result = execute_handler(
+        SetRoutineHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -3077,9 +3096,7 @@ async def test_configure_aging_uses_world_clock_when_policy_is_missing():
     await scenario.actor.submit(_cmd(scenario, "configure-aging", natural_aging=True))
     await scenario.actor.tick(HOUR)
 
-    clock = next(
-        scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities()
-    )
+    clock = next(scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities())
     assert clock.get_component(LifesimAgingPolicyComponent).natural_aging is True
 
 
@@ -3294,7 +3311,8 @@ def test_lifesim_catalogue_handlers_reject_bad_state_directly():
         (ConfigureAgingHandler(), "configure-aging", {}, "invalid character id", "not-an-id"),
     ]
     for handler, command_type, payload, reason, character_id in cases:
-        result = handler.execute(
+        result = execute_handler(
+            handler,
             ctx,
             _handler_cmd(scenario, command_type, character_id=character_id, **payload),
         )
@@ -3302,7 +3320,8 @@ def test_lifesim_catalogue_handlers_reject_bad_state_directly():
         assert result.reason == reason
 
     for action in ("clean", "repair", "decorate"):
-        result = MaintainHomeObjectHandler().execute(
+        result = execute_handler(
+            MaintainHomeObjectHandler(),
             ctx,
             _handler_cmd(
                 scenario,
@@ -3312,7 +3331,8 @@ def test_lifesim_catalogue_handlers_reject_bad_state_directly():
             ),
         )
         assert result.ok is True
-    result = CompleteWhimHandler().execute(
+    result = execute_handler(
+        CompleteWhimHandler(),
         ctx,
         _handler_cmd(scenario, "complete-whim", whim_id=str(no_reward_whim.id)),
     )
@@ -3599,7 +3619,8 @@ def test_maintain_home_object_rejects_invalid_object_id():
     """MaintainHomeObjectHandler rejects when object id is invalid (line 1524)."""
     scenario = build_scenario()
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
-    result = MaintainHomeObjectHandler().execute(
+    result = execute_handler(
+        MaintainHomeObjectHandler(),
         ctx,
         _handler_cmd(scenario, "maintain-home-object", object_id="not-an-id", action="clean"),
     )
@@ -3613,7 +3634,8 @@ def test_invite_over_defaults_to_current_room_when_room_id_missing():
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     guest_id = _co_parent(scenario)
-    result = InviteOverHandler().execute(
+    result = execute_handler(
+        InviteOverHandler(),
         ctx,
         _handler_cmd(scenario, "invite-over", guest_id=str(guest_id)),
     )
@@ -3633,7 +3655,8 @@ def test_end_partnership_when_target_has_no_reverse_edge():
     # Only the actor holds the edge; the target has no reverse PartnerOf.
     actor.add_relationship(PartnerOf(since_epoch=1), target_id)
 
-    result = EndPartnershipHandler().execute(
+    result = execute_handler(
+        EndPartnershipHandler(),
         ctx,
         _handler_cmd(scenario, "end-partnership", target_id=str(target_id)),
     )

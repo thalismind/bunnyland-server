@@ -1135,7 +1135,6 @@ class TillHandler:
                     soil_id=str(soil_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1217,7 +1216,6 @@ class PlantHandler:
                     crop_type=seed.crop_type,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1259,7 +1257,6 @@ class WaterCropHandler:
                     expires_at_epoch=expires_at,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1304,7 +1301,6 @@ class FertilizeHandler:
                     kind=fertilizer.kind,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1357,7 +1353,6 @@ class InspectCropHandler:
                     notes=notes,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1396,7 +1391,6 @@ class WeedCropHandler:
                     soil_id=str(soil_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1435,7 +1429,6 @@ class TreatPestsHandler:
                     soil_id=str(soil_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1553,7 +1546,7 @@ class HarvestCropHandler:
                 )
             )
 
-        return planned(MutationPlan(tuple(operations)), harvested_event, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), harvested_event)
 
 
 class ClearDeadCropHandler:
@@ -1594,7 +1587,6 @@ class ClearDeadCropHandler:
                     crop_type=crop.crop_type,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1647,7 +1639,6 @@ class TapTreeHandler:
                     tree_type=component.tree_type,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1726,7 +1717,7 @@ class HarvestSapHandler:
                 )
             )
 
-        return planned(MutationPlan(operations), sap_event, ctx=ctx)
+        return planned(MutationPlan(operations), sap_event)
 
 
 class StartMachineHandler:
@@ -1801,7 +1792,6 @@ class StartMachineHandler:
                     ready_at_epoch=ready_at,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1872,7 +1862,7 @@ class CollectMachineOutputHandler:
                 )
             )
 
-        return planned(MutationPlan(tuple(operations)), output_event, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), output_event)
 
 
 class CancelMachineHandler:
@@ -1911,7 +1901,6 @@ class CancelMachineHandler:
                     recipe_id=task.recipe_id,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1950,7 +1939,6 @@ class RepairMachineHandler:
                     machine_id=str(machine_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1998,7 +1986,6 @@ class FeedAnimalHandler:
                     feed_type=feed_type,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2048,7 +2035,6 @@ class PetAnimalHandler:
                     friendship=friendship,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2101,7 +2087,6 @@ class BreedAnimalHandler:
                     due_epoch=due_epoch,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2159,7 +2144,6 @@ class CollectAnimalProductHandler:
                 )
             ),
             product_event,
-            ctx=ctx,
         )
 
 
@@ -2221,7 +2205,7 @@ class FishHandler:
                 )
             )
 
-        return planned(MutationPlan(tuple(operations)), fish_event, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), fish_event)
 
 
 class MineHandler:
@@ -2269,7 +2253,6 @@ class MineHandler:
                 )
             ),
             mined_event,
-            ctx=ctx,
         )
 
 
@@ -2301,7 +2284,6 @@ class DiscoverLadderHandler:
                     target_room_id=ladder.target_room_id,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2354,7 +2336,6 @@ class OpenGeodeHandler:
                 )
             ),
             geode_event,
-            ctx=ctx,
         )
 
 
@@ -2406,7 +2387,6 @@ class ForageHandler:
                 )
             ),
             forage_event,
-            ctx=ctx,
         )
 
 
@@ -2467,7 +2447,6 @@ class GiveGiftHandler:
                     friendship=updated.points,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2508,7 +2487,6 @@ class JoinFestivalHandler:
                     name=component.name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2570,7 +2548,6 @@ class ContributeBundleHandler:
                     completed=completed,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2623,7 +2600,6 @@ class ClaimMailHandler:
                     subject=component.subject,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2698,7 +2674,7 @@ class CompleteFarmQuestHandler:
                 )
             )
 
-        return planned(MutationPlan(tuple(operations)), quest_event, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), quest_event)
 
 
 class ShipItemsHandler:
@@ -2767,7 +2743,7 @@ class ShipItemsHandler:
                     )
                 )
             )
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class DonateMuseumHandler:
@@ -2824,7 +2800,7 @@ class DonateMuseumHandler:
                     )
                 )
             )
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class ClaimRewardHandler:
@@ -2871,7 +2847,6 @@ class ClaimRewardHandler:
                 )
             ),
             reward_event,
-            ctx=ctx,
         )
 
 

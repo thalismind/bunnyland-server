@@ -66,13 +66,13 @@ class MoveHandler:
                 ),
                 AddEntity(
                     (
-                NoiseComponent(
-                    loudness=float(payload.get("noise", 1.0)),
-                    text="movement",
-                    source_entity_id=str(character_id),
-                    room_id=str(destination_id),
-                    created_at_epoch=ctx.epoch,
-                    expires_at_epoch=ctx.epoch + 60,
+                        NoiseComponent(
+                            loudness=float(payload.get("noise", 1.0)),
+                            text="movement",
+                            source_entity_id=str(character_id),
+                            room_id=str(destination_id),
+                            created_at_epoch=ctx.epoch,
+                            expires_at_epoch=ctx.epoch + 60,
                         ),
                     )
                 ),
@@ -88,12 +88,9 @@ class MoveHandler:
                     from_room_id=str(current_room_id),
                     to_room_id=str(destination_id),
                     direction=chosen_direction,
-                    arrival_summary=render_summary(
-                        build_room_facts(ctx.world, destination_id)
-                    ),
+                    arrival_summary=render_summary(build_room_facts(ctx.world, destination_id)),
                 )
             ),
-            ctx=ctx,
         )
 
 

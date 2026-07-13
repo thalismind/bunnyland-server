@@ -22,6 +22,10 @@ known-world command sequences that assert the resulting ECS state and events.
 Avoid hacky monkeypatch-only coverage that does not correspond to a behavior a
 runtime system can exhibit.
 
+Direct handler calls only validate and return a `MutationPlan`. Tests must execute that
+plan explicitly and realize its event factories before asserting committed ECS state or
+post-commit events; `HandlerContext` never applies a plan as a side effect.
+
 Run focused tests with module-form pytest:
 
 ```bash

@@ -180,7 +180,6 @@ class AskForWorkHandler:
                 ),
             ),
             generated_event,
-            ctx=ctx,
         )
 
 
@@ -230,7 +229,6 @@ class AcceptGeneratedQuestHandler:
                     title=component.title,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -312,7 +310,6 @@ class CompleteGeneratedQuestHandler:
                 )
             ),
             completed_event,
-            ctx=ctx,
         )
 
 
@@ -345,7 +342,6 @@ class RefuseGeneratedQuestHandler:
                     title=component.title,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -378,7 +374,6 @@ class AbandonGeneratedQuestHandler:
                     title=component.title,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -414,7 +409,6 @@ class ExtendGeneratedQuestHandler:
                     due_at_epoch=updated.due_at_epoch,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -451,7 +445,6 @@ class LieAboutQuestHandler:
                     lie=lie,
                 )
             ),
-            ctx=ctx,
         )
 
 

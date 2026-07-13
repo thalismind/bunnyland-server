@@ -952,12 +952,12 @@ def _bill_operations(
     return reference, (
         AddEntity(
             (
-            BillComponent(
-                amount=amount,
-                reason=reason,
-                due_epoch=due_epoch,
-                creditor_id=creditor_id,
-            ),
+                BillComponent(
+                    amount=amount,
+                    reason=reason,
+                    due_epoch=due_epoch,
+                    creditor_id=creditor_id,
+                ),
             ),
             reference=reference,
         ),
@@ -1226,7 +1226,6 @@ class ChooseAspirationHandler:
                     aspiration=name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1270,11 +1269,11 @@ class CompleteMilestoneHandler:
         operations.append(
             AddEntity(
                 (
-                MilestoneComponent(
-                    name=milestone,
-                    completed_at_epoch=ctx.epoch,
-                    reward_item_id=None,
-                ),
+                    MilestoneComponent(
+                        name=milestone,
+                        completed_at_epoch=ctx.epoch,
+                        reward_item_id=None,
+                    ),
                 ),
                 reference=milestone_reference,
             )
@@ -1310,14 +1309,12 @@ class CompleteMilestoneHandler:
                     aspiration=aspiration.name,
                     milestone=milestone,
                     reward_item_id=(
-                        str(reward_reference.require())
-                        if reward_reference is not None
-                        else None
+                        str(reward_reference.require()) if reward_reference is not None else None
                     ),
                 )
             )
 
-        return planned(MutationPlan(tuple(operations)), completed_event, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), completed_event)
 
 
 class PracticeSkillHandler:
@@ -1340,7 +1337,7 @@ class PracticeSkillHandler:
             amount=xp,
             actor_id=str(actor_id),
         )
-        return planned(MutationPlan((SetComponent(actor_id, updated),)), *events, ctx=ctx)
+        return planned(MutationPlan((SetComponent(actor_id, updated),)), *events)
 
 
 class StudySkillHandler:
@@ -1363,7 +1360,7 @@ class StudySkillHandler:
             amount=xp,
             actor_id=str(actor_id),
         )
-        return planned(MutationPlan((SetComponent(actor_id, updated),)), *events, ctx=ctx)
+        return planned(MutationPlan((SetComponent(actor_id, updated),)), *events)
 
 
 class MentorSkillHandler:
@@ -1406,7 +1403,7 @@ class MentorSkillHandler:
                 )
             )
         )
-        return planned(MutationPlan((SetComponent(student_id, updated),)), *events, ctx=ctx)
+        return planned(MutationPlan((SetComponent(student_id, updated),)), *events)
 
 
 class UpdateProfileHandler:
@@ -1434,7 +1431,6 @@ class UpdateProfileHandler:
                     interests=interests,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1476,7 +1472,6 @@ class AddWhimHandler:
                 )
             ),
             added_event,
-            ctx=ctx,
         )
 
 
@@ -1521,7 +1516,7 @@ class CompleteWhimHandler:
             )
             operations.append(SetComponent(actor_id, updated))
             events.extend(skill_events)
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class UseHomeObjectHandler:
@@ -1556,7 +1551,6 @@ class UseHomeObjectHandler:
                     affordance=component.affordance,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1607,7 +1601,6 @@ class MaintainHomeObjectHandler:
                     upgrade_level=updated.upgrade_level,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1645,7 +1638,6 @@ class InviteOverHandler:
                     room_id_invited=str(room_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1679,9 +1671,7 @@ class ConfigureAgingHandler:
                 "natural_death_age_seconds": _optional_int(
                     command.payload.get("natural_death_age_seconds")
                 ),
-                "natural_death_checks": _optional_int(
-                    command.payload.get("natural_death_checks")
-                ),
+                "natural_death_checks": _optional_int(command.payload.get("natural_death_checks")),
             }.items()
             if value is not None
         }
@@ -1698,7 +1688,6 @@ class ConfigureAgingHandler:
                     natural_death_age_seconds=policy.natural_death_age_seconds,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1721,13 +1710,13 @@ class FindJobHandler:
             SetComponent(
                 actor_id,
                 JobScheduleComponent(
-                next_shift_epoch=int(command.payload.get("next_shift_epoch", ctx.epoch)),
-                shift_duration_seconds=int(
-                    command.payload.get("shift_duration_seconds", 8 * 60 * 60)
-                ),
-                shift_interval_seconds=int(
-                    command.payload.get("shift_interval_seconds", 24 * 60 * 60)
-                ),
+                    next_shift_epoch=int(command.payload.get("next_shift_epoch", ctx.epoch)),
+                    shift_duration_seconds=int(
+                        command.payload.get("shift_duration_seconds", 8 * 60 * 60)
+                    ),
+                    shift_interval_seconds=int(
+                        command.payload.get("shift_interval_seconds", 24 * 60 * 60)
+                    ),
                 ),
             ),
         ]
@@ -1742,7 +1731,6 @@ class FindJobHandler:
                     title=title,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1791,9 +1779,9 @@ class GoToWorkHandler:
                 active=career.active,
             )
         updated_schedule = JobScheduleComponent(
-                next_shift_epoch=ctx.epoch + schedule.shift_interval_seconds,
-                shift_duration_seconds=schedule.shift_duration_seconds,
-                shift_interval_seconds=schedule.shift_interval_seconds,
+            next_shift_epoch=ctx.epoch + schedule.shift_interval_seconds,
+            shift_duration_seconds=schedule.shift_duration_seconds,
+            shift_interval_seconds=schedule.shift_interval_seconds,
         )
         events = [
             WorkShiftCompletedEvent(
@@ -1826,7 +1814,6 @@ class GoToWorkHandler:
                 )
             ),
             *events,
-            ctx=ctx,
         )
 
 
@@ -1843,7 +1830,6 @@ class QuitJobHandler:
         career = actor.get_component(CareerComponent)
         return planned(
             MutationPlan((SetComponent(actor_id, replace(career, active=False)),)),
-            ctx=ctx,
         )
 
 
@@ -1888,7 +1874,6 @@ class PayWageHandler:
                     worker_balance=updated_worker.balance,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1935,7 +1920,7 @@ class AssessTaxHandler:
                 )
             )
 
-        return planned(MutationPlan(operations), tax_event, bill_event, ctx=ctx)
+        return planned(MutationPlan(operations), tax_event, bill_event)
 
 
 class ChargeRentHandler:
@@ -1962,6 +1947,7 @@ class ChargeRentHandler:
             due_epoch=due_epoch,
             creditor_id=str(landlord_id),
         )
+
         def rent_event() -> DomainEvent:
             bill_id = str(bill.require())
             return RentChargedEvent(
@@ -1990,7 +1976,7 @@ class ChargeRentHandler:
                 )
             )
 
-        return planned(MutationPlan(operations), rent_event, bill_event, ctx=ctx)
+        return planned(MutationPlan(operations), rent_event, bill_event)
 
 
 class PayBillHandler:
@@ -2053,7 +2039,6 @@ class PayBillHandler:
                     balance=updated_funds.balance,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2092,7 +2077,7 @@ class OpenBusinessHandler:
                 )
             )
 
-        return planned(MutationPlan(tuple(operations)), opened_event, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), opened_event)
 
 
 class SellItemHandler:
@@ -2156,7 +2141,6 @@ class SellItemHandler:
                     balance=updated_funds.balance,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2224,7 +2208,6 @@ class BuyItemHandler:
                     balance=updated_buyer_funds.balance,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2242,9 +2225,7 @@ class PromoteBusinessHandler:
             return rejected("character has no business")
         business = business_entity.get_component(BusinessOwnerComponent)
         return planned(
-            MutationPlan(
-                (SetComponent(business_entity.id, replace(business, promoted=True)),)
-            ),
+            MutationPlan((SetComponent(business_entity.id, replace(business, promoted=True)),)),
             BusinessPromotedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2252,7 +2233,6 @@ class PromoteBusinessHandler:
                     business_name=business.name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2279,7 +2259,6 @@ class JoinHouseholdHandler:
                     household_name=household_name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2302,9 +2281,7 @@ class ClaimHomeHandler:
             else None
         )
         return planned(
-            MutationPlan(
-                (SetComponent(room_id, HomeComponent(str(actor_id), household_id)),)
-            ),
+            MutationPlan((SetComponent(room_id, HomeComponent(str(actor_id), household_id)),)),
             HomeClaimedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2313,7 +2290,6 @@ class ClaimHomeHandler:
                     room_id_claimed=str(room_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2334,9 +2310,7 @@ class ClaimRoomHandler:
                 (
                     SetComponent(
                         room_id,
-                        RoomClaimComponent(
-                            claimed_by_id=str(actor_id), claimed_at_epoch=ctx.epoch
-                        ),
+                        RoomClaimComponent(claimed_by_id=str(actor_id), claimed_at_epoch=ctx.epoch),
                     ),
                 )
             ),
@@ -2348,7 +2322,6 @@ class ClaimRoomHandler:
                     room_id_claimed=str(room_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2394,7 +2367,7 @@ class SetRoutineHandler:
                 )
             )
 
-        return planned(MutationPlan(operations), routine_event, ctx=ctx)
+        return planned(MutationPlan(operations), routine_event)
 
 
 class SetRelationshipStatusHandler:
@@ -2439,7 +2412,6 @@ class SetRelationshipStatusHandler:
                     status=status,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2488,7 +2460,6 @@ class SpreadGossipHandler:
                     reputation_delta=delta,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2535,7 +2506,6 @@ class WitnessRomanceHandler:
                     intensity=intensity,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2576,7 +2546,6 @@ class StartPartnershipHandler:
                     partner_id=str(target_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2610,7 +2579,6 @@ class EndPartnershipHandler:
                     partner_id=str(target_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2676,7 +2644,6 @@ class StartPregnancyHandler:
                     due_at_epoch=pregnancy.due_at_epoch,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2699,10 +2666,10 @@ class ResolveBirthHandler:
         operations = [
             AddEntity(
                 (
-                IdentityComponent(name=child_name, kind="character"),
-                CharacterComponent(species=actor.get_component(CharacterComponent).species),
-                AgeComponent(born_at_epoch=ctx.epoch),
-                LifeStageComponent(stage="child"),
+                    IdentityComponent(name=child_name, kind="character"),
+                    CharacterComponent(species=actor.get_component(CharacterComponent).species),
+                    AgeComponent(born_at_epoch=ctx.epoch),
+                    LifeStageComponent(stage="child"),
                 ),
                 reference=child,
             ),
@@ -2718,9 +2685,7 @@ class ResolveBirthHandler:
         ]
         room_id = container_of(actor)
         if room_id is not None:
-            operations.append(
-                AddEdge(room_id, child, Contains(mode=ContainmentMode.ROOM_CONTENT))
-            )
+            operations.append(AddEdge(room_id, child, Contains(mode=ContainmentMode.ROOM_CONTENT)))
 
         pregnancy = actor.get_component(PregnancyComponent)
         operations.append(AddEdge(actor_id, child, ParentOf()))
@@ -2749,7 +2714,7 @@ class ResolveBirthHandler:
                 )
             )
 
-        return planned(MutationPlan(tuple(operations)), birth_event, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), birth_event)
 
 
 class AdoptChildHandler:
@@ -2789,7 +2754,6 @@ class AdoptChildHandler:
                     parent_id=str(actor_id),
                 )
             ),
-            ctx=ctx,
         )
 
 

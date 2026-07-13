@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     CharacterComponent,
@@ -985,8 +985,8 @@ def test_handlers_reject_invalid_character_ids_directly():
         (CaseLocationHandler(), "case-location"),
     ]
     for handler, command_type in cases:
-        result = handler.execute(
-            ctx, _cmd(scenario, command_type, character_id="not-an-id", target_id=target)
+        result = execute_handler(
+            handler, ctx, _cmd(scenario, command_type, character_id="not-an-id", target_id=target)
         )
         assert result.ok is False
         assert result.reason == "invalid character id"
@@ -1452,8 +1452,8 @@ def test_device_handlers_reject_invalid_character_ids_directly():
         (WipeEvidenceHandler(), "wipe-evidence"),
     ]
     for handler, command_type in cases:
-        result = handler.execute(
-            ctx, _cmd(scenario, command_type, character_id="not-an-id", target_id=target)
+        result = execute_handler(
+            handler, ctx, _cmd(scenario, command_type, character_id="not-an-id", target_id=target)
         )
         assert result.ok is False
         assert result.reason == "invalid character id"
@@ -1979,8 +1979,8 @@ def test_hacking_handlers_reject_invalid_character_ids_directly():
         (SpoofIdentityHandler(), "spoof-identity"),
     ]
     for handler, command_type in cases:
-        result = handler.execute(
-            ctx, _cmd(scenario, command_type, character_id="not-an-id", target_id=target)
+        result = execute_handler(
+            handler, ctx, _cmd(scenario, command_type, character_id="not-an-id", target_id=target)
         )
         assert result.ok is False
         assert result.reason == "invalid character id"
@@ -2540,8 +2540,8 @@ def test_street_handlers_reject_invalid_character_ids_directly():
         (ClearWarrantHandler(), "clear-warrant"),
     ]
     for handler, command_type in cases:
-        result = handler.execute(
-            ctx, _cmd(scenario, command_type, character_id="not-an-id", target_id=target)
+        result = execute_handler(
+            handler, ctx, _cmd(scenario, command_type, character_id="not-an-id", target_id=target)
         )
         assert result.ok is False
         assert result.reason == "invalid character id"
@@ -2817,7 +2817,7 @@ async def test_installed_implant_cannot_be_dropped():
     await scenario.actor.tick(1.0)
 
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
-    result = DropHandler().execute(ctx, _cmd(scenario, "drop", item_id=str(implant)))
+    result = execute_handler(DropHandler(), ctx, _cmd(scenario, "drop", item_id=str(implant)))
 
     assert result.ok is False
     assert result.reason == "item is fixed in place and cannot be moved"
@@ -2860,7 +2860,7 @@ async def test_removed_implant_can_be_dropped_again():
     await scenario.actor.tick(1.0)
 
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
-    result = DropHandler().execute(ctx, _cmd(scenario, "drop", item_id=str(implant)))
+    result = execute_handler(DropHandler(), ctx, _cmd(scenario, "drop", item_id=str(implant)))
 
     assert result.ok is True
     character = scenario.actor.world.get_entity(scenario.character)
@@ -3131,7 +3131,8 @@ def test_implant_handlers_reject_invalid_character_ids_directly():
         (ExploitImplantHandler(), "exploit-implant"),
     ]
     for handler, command_type in cases:
-        result = handler.execute(
+        result = execute_handler(
+            handler,
             ctx,
             _cmd(scenario, command_type, character_id="not-an-id", target_id=target),
         )
@@ -3569,8 +3570,8 @@ def test_intrigue_handlers_reject_invalid_character_ids_directly():
         (ExtractAssetHandler(), "extract-asset"),
     ]
     for handler, command_type in cases:
-        result = handler.execute(
-            ctx, _cmd(scenario, command_type, character_id="not-an-id", target_id=target)
+        result = execute_handler(
+            handler, ctx, _cmd(scenario, command_type, character_id="not-an-id", target_id=target)
         )
         assert result.ok is False
         assert result.reason == "invalid character id"
@@ -4046,7 +4047,9 @@ async def test_unlock_lockable_that_is_not_a_network_device():
         [LockableComponent(locked=True)],
     )
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
-    result = UnlockDoorHandler().execute(ctx, _cmd(scenario, "unlock", target_id=str(door)))
+    result = execute_handler(
+        UnlockDoorHandler(), ctx, _cmd(scenario, "unlock", target_id=str(door))
+    )
     assert result.ok is False
     assert result.reason == "target is not a network device"
 
@@ -4062,7 +4065,7 @@ def test_pay_debt_rejects_when_spend_scrip_underdrains(monkeypatch):
     # Force the defensive double-check: the spend plan reports failure even though
     # _scrip_stack reported available funds.
     monkeypatch.setattr(_neon, "_spend_scrip_operations", lambda *a, **k: None)
-    result = PayDebtHandler().execute(ctx, _cmd(scenario, "pay-debt"))
+    result = execute_handler(PayDebtHandler(), ctx, _cmd(scenario, "pay-debt"))
     assert result.ok is False
     assert result.reason == "not enough scrip to pay the debt"
 

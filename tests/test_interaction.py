@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     ButtonComponent,
@@ -155,7 +155,7 @@ def execute_use(scenario, target_id, tool_id=None, *, character_id=None):
             lane=Lane.WORLD,
             payload=command.payload,
         )
-    return UseHandler().execute(handler_context(scenario), command)
+    return execute_handler(UseHandler(), handler_context(scenario), command)
 
 
 def execute_write(scenario, target_id, text, *, character_id=None):
@@ -170,7 +170,7 @@ def execute_write(scenario, target_id, text, *, character_id=None):
             lane=Lane.WORLD,
             payload=command.payload,
         )
-    return WriteHandler().execute(handler_context(scenario), command)
+    return execute_handler(WriteHandler(), handler_context(scenario), command)
 
 
 def collect(actor, event_type):
@@ -241,7 +241,8 @@ def test_inspect_rejects_unreachable_target_directly():
         far.id,
     )
 
-    result = InspectHandler().execute(
+    result = execute_handler(
+        InspectHandler(),
         handler_context(scenario),
         target_cmd(scenario, "inspect", far.id),
     )
@@ -253,11 +254,11 @@ def test_look_rejects_invalid_character_and_missing_room_directly():
     scenario = interaction_scenario()
 
     invalid = command_with_payload(scenario, "look", {}, character_id="not-an-id")
-    assert LookHandler().execute(handler_context(scenario), invalid).reason == (
+    assert execute_handler(LookHandler(), handler_context(scenario), invalid).reason == (
         "invalid character id"
     )
     missing_character = command_with_payload(scenario, "look", {}, character_id="entity_999")
-    assert LookHandler().execute(handler_context(scenario), missing_character).reason == (
+    assert execute_handler(LookHandler(), handler_context(scenario), missing_character).reason == (
         "character does not exist"
     )
 
@@ -266,19 +267,19 @@ def test_look_rejects_invalid_character_and_missing_room_directly():
         scenario.character,
     )
     assert (
-        LookHandler()
-        .execute(
+        execute_handler(
+            LookHandler(),
             handler_context(scenario),
             command_with_payload(scenario, "look", {}),
-        )
-        .reason
+        ).reason
         == "character is not in a room"
     )
 
 
 def test_inspect_describes_rooms_nameless_entities_descriptions_and_locked_state():
     scenario = interaction_scenario()
-    room_result = InspectHandler().execute(
+    room_result = execute_handler(
+        InspectHandler(),
         handler_context(scenario),
         target_cmd(scenario, "inspect", scenario.room_a),
     )
@@ -287,7 +288,8 @@ def test_inspect_describes_rooms_nameless_entities_descriptions_and_locked_state
     assert room_result.events[0].kind == "room"
 
     nameless = in_room(scenario, [])
-    nameless_result = InspectHandler().execute(
+    nameless_result = execute_handler(
+        InspectHandler(),
         handler_context(scenario),
         target_cmd(scenario, "inspect", nameless.id),
     )
@@ -300,7 +302,8 @@ def test_inspect_describes_rooms_nameless_entities_descriptions_and_locked_state
             DescriptionComponent(short="short", long="long", appearance="appearance"),
         ],
     )
-    note_result = InspectHandler().execute(
+    note_result = execute_handler(
+        InspectHandler(),
         handler_context(scenario),
         target_cmd(scenario, "inspect", note.id),
     )
@@ -313,7 +316,8 @@ def test_inspect_describes_rooms_nameless_entities_descriptions_and_locked_state
             ContainerComponent(open=False, locked=True),
         ],
     )
-    locked_result = InspectHandler().execute(
+    locked_result = execute_handler(
+        InspectHandler(),
         handler_context(scenario),
         target_cmd(scenario, "inspect", locked.id),
     )
@@ -327,7 +331,8 @@ def test_inspect_describes_rooms_nameless_entities_descriptions_and_locked_state
             LockableComponent(locked=True, key_name="brass"),
         ],
     )
-    door_result = InspectHandler().execute(
+    door_result = execute_handler(
+        InspectHandler(),
         handler_context(scenario),
         target_cmd(scenario, "inspect", door.id),
     )
@@ -338,7 +343,7 @@ def test_reachable_target_rejects_invalid_and_missing_target_directly():
     scenario = interaction_scenario()
 
     invalid = command_with_payload(scenario, "inspect", {"target_id": "not-an-id"})
-    assert InspectHandler().execute(handler_context(scenario), invalid).reason == (
+    assert execute_handler(InspectHandler(), handler_context(scenario), invalid).reason == (
         "invalid character or target id"
     )
 
@@ -349,12 +354,12 @@ def test_reachable_target_rejects_invalid_and_missing_target_directly():
         character_id="entity_999",
     )
     assert (
-        InspectHandler().execute(handler_context(scenario), missing_character).reason
+        execute_handler(InspectHandler(), handler_context(scenario), missing_character).reason
         == "character does not exist"
     )
 
     missing = target_cmd(scenario, "inspect", "entity_999")
-    assert InspectHandler().execute(handler_context(scenario), missing).reason == (
+    assert execute_handler(InspectHandler(), handler_context(scenario), missing).reason == (
         "target does not exist"
     )
 
@@ -446,96 +451,95 @@ def test_open_close_lock_unlock_reject_bad_state_directly():
     )
 
     assert (
-        OpenHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "open", open_box.id))
-        .reason
+        execute_handler(
+            OpenHandler(), handler_context(scenario), target_cmd(scenario, "open", open_box.id)
+        ).reason
         == "it is already open"
     )
     assert (
-        OpenHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "open", open_door.id))
-        .reason
+        execute_handler(
+            OpenHandler(), handler_context(scenario), target_cmd(scenario, "open", open_door.id)
+        ).reason
         == "it is already open"
     )
     assert (
-        CloseHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "close", closed_box.id))
-        .reason
+        execute_handler(
+            CloseHandler(), handler_context(scenario), target_cmd(scenario, "close", closed_box.id)
+        ).reason
         == "it is already closed"
     )
     assert (
-        CloseHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "close", closed_door.id))
-        .reason
+        execute_handler(
+            CloseHandler(), handler_context(scenario), target_cmd(scenario, "close", closed_door.id)
+        ).reason
         == "it is already closed"
     )
     assert (
-        CloseHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "close", rock.id))
-        .reason
+        execute_handler(
+            CloseHandler(), handler_context(scenario), target_cmd(scenario, "close", rock.id)
+        ).reason
         == "target is not closeable"
     )
     assert (
-        OpenHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "open", rock.id))
-        .reason
+        execute_handler(
+            OpenHandler(), handler_context(scenario), target_cmd(scenario, "open", rock.id)
+        ).reason
         == "target is not openable"
     )
     assert (
-        OpenHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "open", locked.id))
-        .reason
+        execute_handler(
+            OpenHandler(), handler_context(scenario), target_cmd(scenario, "open", locked.id)
+        ).reason
         == "it is locked"
     )
     assert (
-        OpenHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "open", keyed.id))
-        .reason
+        execute_handler(
+            OpenHandler(), handler_context(scenario), target_cmd(scenario, "open", keyed.id)
+        ).reason
         == "it is locked"
     )
     assert (
-        OpenHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "open", "entity_999"))
-        .reason
+        execute_handler(
+            OpenHandler(), handler_context(scenario), target_cmd(scenario, "open", "entity_999")
+        ).reason
         == "target does not exist"
     )
     assert (
-        CloseHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "close", "entity_999"))
-        .reason
+        execute_handler(
+            CloseHandler(), handler_context(scenario), target_cmd(scenario, "close", "entity_999")
+        ).reason
         == "target does not exist"
     )
     assert (
-        UnlockHandler()
-        .execute(
+        execute_handler(
+            UnlockHandler(),
             handler_context(scenario),
             target_cmd(scenario, "unlock", keyed.id),
-        )
-        .reason
+        ).reason
         == "matching key is required"
     )
     assert (
-        UnlockHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "unlock", rock.id))
-        .reason
+        execute_handler(
+            UnlockHandler(), handler_context(scenario), target_cmd(scenario, "unlock", rock.id)
+        ).reason
         == "target is not lockable"
     )
     assert (
-        UnlockHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "unlock", "entity_999"))
-        .reason
+        execute_handler(
+            UnlockHandler(), handler_context(scenario), target_cmd(scenario, "unlock", "entity_999")
+        ).reason
         == "target does not exist"
     )
     assert (
-        LockHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "lock", rock.id))
-        .reason
+        execute_handler(
+            LockHandler(), handler_context(scenario), target_cmd(scenario, "lock", rock.id)
+        ).reason
         == "target is not lockable"
     )
     assert (
-        LockHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "lock", "entity_999"))
-        .reason
+        execute_handler(
+            LockHandler(), handler_context(scenario), target_cmd(scenario, "lock", "entity_999")
+        ).reason
         == "target does not exist"
     )
 
@@ -556,27 +560,27 @@ def test_open_close_lock_unlock_reject_unreachable_targets_directly():
     )
 
     assert (
-        OpenHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "open", far.id))
-        .reason
+        execute_handler(
+            OpenHandler(), handler_context(scenario), target_cmd(scenario, "open", far.id)
+        ).reason
         == "target is not reachable"
     )
     assert (
-        CloseHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "close", far.id))
-        .reason
+        execute_handler(
+            CloseHandler(), handler_context(scenario), target_cmd(scenario, "close", far.id)
+        ).reason
         == "target is not reachable"
     )
     assert (
-        LockHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "lock", far.id))
-        .reason
+        execute_handler(
+            LockHandler(), handler_context(scenario), target_cmd(scenario, "lock", far.id)
+        ).reason
         == "target is not reachable"
     )
     assert (
-        UnlockHandler()
-        .execute(handler_context(scenario), target_cmd(scenario, "unlock", far.id))
-        .reason
+        execute_handler(
+            UnlockHandler(), handler_context(scenario), target_cmd(scenario, "unlock", far.id)
+        ).reason
         == "target is not reachable"
     )
 
@@ -588,7 +592,8 @@ def test_lock_and_unlock_container_variants_directly():
         [IdentityComponent(name="lock box", kind="container"), ContainerComponent(locked=False)],
     )
 
-    locked = LockHandler().execute(
+    locked = execute_handler(
+        LockHandler(),
         handler_context(scenario),
         target_cmd(scenario, "lock", box.id),
     )
@@ -596,16 +601,16 @@ def test_lock_and_unlock_container_variants_directly():
     assert box.get_component(ContainerComponent).locked is True
 
     assert (
-        LockHandler()
-        .execute(
+        execute_handler(
+            LockHandler(),
             handler_context(scenario),
             target_cmd(scenario, "lock", box.id),
-        )
-        .reason
+        ).reason
         == "it is already locked"
     )
 
-    unlocked = UnlockHandler().execute(
+    unlocked = execute_handler(
+        UnlockHandler(),
         handler_context(scenario),
         target_cmd(scenario, "unlock", box.id),
     )
@@ -613,12 +618,11 @@ def test_lock_and_unlock_container_variants_directly():
     assert box.get_component(ContainerComponent).locked is False
 
     assert (
-        UnlockHandler()
-        .execute(
+        execute_handler(
+            UnlockHandler(),
             handler_context(scenario),
             target_cmd(scenario, "unlock", box.id),
-        )
-        .reason
+        ).reason
         == "it is already unlocked"
     )
 
@@ -655,76 +659,68 @@ def test_lock_and_unlock_key_variants_directly():
     )
 
     assert (
-        UnlockHandler()
-        .execute(
+        execute_handler(
+            UnlockHandler(),
             handler_context(scenario),
             target_cmd(scenario, "unlock", door.id, tool_id=wrong_key.id),
-        )
-        .reason
+        ).reason
         == "matching key is required"
     )
     assert (
-        UnlockHandler()
-        .execute(
+        execute_handler(
+            UnlockHandler(),
             handler_context(scenario),
             target_cmd(scenario, "unlock", door.id, tool_id=far_key.id),
-        )
-        .reason
+        ).reason
         == "tool is not reachable"
     )
 
     assert (
-        UnlockHandler()
-        .execute(
+        execute_handler(
+            UnlockHandler(),
             handler_context(scenario),
             target_cmd(scenario, "unlock", latch.id),
-        )
-        .ok
+        ).ok
         is True
     )
     assert (
-        LockHandler()
-        .execute(
+        execute_handler(
+            LockHandler(),
             handler_context(scenario),
             target_cmd(scenario, "lock", latch.id),
-        )
-        .ok
+        ).ok
         is True
     )
     assert (
-        UnlockHandler()
-        .execute(
+        execute_handler(
+            UnlockHandler(),
             handler_context(scenario),
             target_cmd(scenario, "unlock", latch.id),
-        )
-        .ok
+        ).ok
         is True
     )
     assert (
-        UnlockHandler()
-        .execute(
+        execute_handler(
+            UnlockHandler(),
             handler_context(scenario),
             target_cmd(scenario, "unlock", latch.id),
-        )
-        .reason
+        ).reason
         == "it is already unlocked"
     )
     assert (
-        LockHandler()
-        .execute(
+        execute_handler(
+            LockHandler(),
             handler_context(scenario),
             target_cmd(scenario, "lock", latch.id),
-        )
-        .ok
+        ).ok
         is True
     )
     assert (
-        LockHandler()
-        .execute(
+        execute_handler(
+            LockHandler(),
             handler_context(scenario),
             target_cmd(scenario, "lock", latch.id),
-        )
-        .reason
+        ).reason
         == "it is already locked"
     )
 
@@ -734,19 +730,18 @@ def test_lock_and_unlock_key_variants_directly():
         {"target_id": str(latch.id)},
         character_id="not-an-id",
     )
-    assert LockHandler().execute(handler_context(scenario), invalid_character).reason == (
+    assert execute_handler(LockHandler(), handler_context(scenario), invalid_character).reason == (
         "invalid character or target id"
     )
 
     latch.remove_component(LockableComponent)
     latch.add_component(LockableComponent(locked=False, key_name="brass"))
     assert (
-        LockHandler()
-        .execute(
+        execute_handler(
+            LockHandler(),
             handler_context(scenario),
             target_cmd(scenario, "lock", latch.id, tool_id=wrong_key.id),
-        )
-        .reason
+        ).reason
         == "matching key is required"
     )
 
@@ -891,11 +886,13 @@ def test_use_rejects_invalid_missing_and_unreachable_targets():
 
     ctx = handler_context(scenario)
     assert (
-        UseHandler().execute(ctx, use_item(scenario, item.id, target_id="entity_999")).reason
+        execute_handler(
+            UseHandler(), ctx, use_item(scenario, item.id, target_id="entity_999")
+        ).reason
         == "target does not exist"
     )
     assert (
-        UseHandler().execute(ctx, use_item(scenario, item.id, target_id=far.id)).reason
+        execute_handler(UseHandler(), ctx, use_item(scenario, item.id, target_id=far.id)).reason
         == "target is not reachable"
     )
 

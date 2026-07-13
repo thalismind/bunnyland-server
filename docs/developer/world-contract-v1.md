@@ -42,14 +42,17 @@ deletions, and only then calls Relics removal. No fallible plan work runs after 
 barrier. Plans containing deletion cannot add custom invariants because those invariants
 cannot be evaluated against a deleted entity without making the deletion irreversible.
 
-Legacy bundled handlers remain supported while they are migrated pack by pack. They run
-under the same actor lock, validation, cost, receipt, and post-commit publication order.
-They must not be used as precedent for new direct mutation. Admin patch and scripting
-surfaces compile to mutation plans and may not invent a second mutation authority.
+All 440 bundled action handlers use this plan contract. A successful handler result without
+a plan is rejected without spending points. `HandlerContext` is read-only and standalone
+callers must execute returned plans explicitly; handlers cannot use it to apply mutations as
+a compatibility side effect. Admin patch and scripting surfaces compile to mutation plans
+and may not invent a second mutation authority.
 
 Passive systems and event reactions are not part of an initiating command's atomic
 transaction. Their tick phase and causation/correlation identifiers establish their
-boundary. A failure in a later reaction does not retroactively uncommit its cause.
+boundary. When a passive system reuses handler validation, it explicitly executes the
+returned plan as its own ordered transaction. A failure in a later reaction does not
+retroactively uncommit its cause.
 
 Core invariants are: exactly one world clock; monotonic time; at most one physical
 `Contains` parent; legal, acyclic containment; existing edge endpoints; at most one active

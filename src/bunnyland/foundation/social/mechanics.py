@@ -677,7 +677,6 @@ class ResolveObligationHandler:
                     note=note,
                 )
             ),
-            ctx=ctx,
         )
 
 

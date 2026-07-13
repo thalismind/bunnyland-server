@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import ModuleType
 from typing import Any
 
@@ -17,12 +17,15 @@ from bunnyland.core import (
     Contains,
     ExitTo,
     FocusPointsComponent,
+    HandlerContext,
+    HandlerResult,
     IdentityComponent,
     InitiativeComponent,
     LLMControllerComponent,
     MoveHandler,
     RoomComponent,
     WorldActor,
+    execute_mutation_plan,
     spawn_entity,
 )
 from bunnyland.plugins import PluginRegistry, bunnyland_plugins
@@ -41,6 +44,25 @@ class Scenario:
         from bunnyland.core import container_of
 
         return container_of(self.actor.world.get_entity(self.character))
+
+
+def execute_handler(handler, ctx: HandlerContext, command) -> HandlerResult:
+    """Execute a handler plan explicitly for standalone handler tests."""
+
+    result = handler.execute(ctx, command)
+    if not result.ok:
+        return result
+    assert result.plan is not None
+    _summary, deferred = execute_mutation_plan(
+        ctx.world,
+        result.plan,
+        after_apply=lambda: tuple(factory() for factory in result.event_factories),
+    )
+    return replace(
+        result,
+        events=(*result.events, *deferred),
+        event_factories=(),
+    )
 
 
 def build_scenario(

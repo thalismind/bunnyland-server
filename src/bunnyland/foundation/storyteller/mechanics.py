@@ -551,7 +551,6 @@ class ResolveIncidentHandler:
                 ctx.epoch,
                 actor_id=str(actor_id),
             ),
-            ctx=ctx,
         )
 
 

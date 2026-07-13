@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     CharacterComponent,
@@ -116,7 +116,7 @@ def execute_take(scenario, item_id, *, character_id=None):
             lane=Lane.WORLD,
             payload={"item_id": str(item_id)},
         )
-    return TakeHandler().execute(handler_context(scenario), command)
+    return execute_handler(TakeHandler(), handler_context(scenario), command)
 
 
 def execute_put(scenario, item_id, target=None, *, character_id=None, raw_payload=None):
@@ -131,11 +131,12 @@ def execute_put(scenario, item_id, target=None, *, character_id=None, raw_payloa
             lane=Lane.WORLD,
             payload=raw_payload if raw_payload is not None else command.payload,
         )
-    return PutHandler().execute(handler_context(scenario), command)
+    return execute_handler(PutHandler(), handler_context(scenario), command)
 
 
 def execute_item_handler(handler, scenario, item_id):
-    return handler.execute(
+    return execute_handler(
+        handler,
         handler_context(scenario),
         item_cmd(scenario, handler.command_type, item_id),
     )
@@ -151,7 +152,7 @@ def execute_drop(scenario, item_id, *, character_id=None):
         lane=Lane.WORLD,
         payload={"item_id": str(item_id)},
     )
-    return DropHandler().execute(handler_context(scenario), command)
+    return execute_handler(DropHandler(), handler_context(scenario), command)
 
 
 async def test_take_moves_item_into_inventory():
@@ -309,7 +310,7 @@ def test_equipment_handlers_reject_invalid_missing_and_unheld_items_directly():
         lane=Lane.WORLD,
         payload={"item_id": str(item)},
     )
-    assert HoldHandler().execute(handler_context(scenario), invalid).reason == (
+    assert execute_handler(HoldHandler(), handler_context(scenario), invalid).reason == (
         "invalid character or item id"
     )
     missing_character = build_submitted_command(
@@ -321,7 +322,7 @@ def test_equipment_handlers_reject_invalid_missing_and_unheld_items_directly():
         lane=Lane.WORLD,
         payload={"item_id": str(item)},
     )
-    assert HoldHandler().execute(handler_context(scenario), missing_character).reason == (
+    assert execute_handler(HoldHandler(), handler_context(scenario), missing_character).reason == (
         "character does not exist"
     )
     assert execute_item_handler(HoldHandler(), scenario, "entity_999").reason == (

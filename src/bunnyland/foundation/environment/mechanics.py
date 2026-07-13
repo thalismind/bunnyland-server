@@ -383,7 +383,6 @@ class IgniteHandler:
                     intensity=intensity,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -415,7 +414,6 @@ class ExtinguishHandler:
                     target_id=str(target_id),
                 )
             ),
-            ctx=ctx,
         )
 
 

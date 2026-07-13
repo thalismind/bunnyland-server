@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     CommandCost,
@@ -187,7 +187,8 @@ def _room_entity(scenario, name, kind, components):
 
 def test_nukesim_reachable_component_rejects_missing_character():
     scenario = build_scenario()
-    result = ScanRadiationHandler().execute(
+    result = execute_handler(
+        ScanRadiationHandler(),
         HandlerContext(scenario.actor.world, scenario.actor.epoch),
         _handler_cmd(
             scenario,
@@ -381,7 +382,7 @@ def test_nukesim_parity_handlers_mutate_state_directly():
     ]
 
     for handler, command_type, payload, event_type in calls:
-        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        result = execute_handler(handler, ctx, _handler_cmd(scenario, command_type, **payload))
         assert result.ok, (command_type, result.reason)
         assert any(isinstance(event, event_type) for event in result.events)
 
@@ -511,17 +512,21 @@ def test_nukesim_parity_handlers_reject_invalid_targets_directly():
     ]
 
     for handler, command_type, payload, invalid_reason, missing_reason in cases:
-        bad_character = handler.execute(
+        bad_character = execute_handler(
+            handler,
             ctx,
             _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
         )
         assert bad_character.ok is False
         assert bad_character.reason == invalid_reason
-        missing_target = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        missing_target = execute_handler(
+            handler, ctx, _handler_cmd(scenario, command_type, **payload)
+        )
         assert missing_target.ok is False
         assert missing_target.reason == missing_reason
 
-    result = HarvestSampleHandler().execute(
+    result = execute_handler(
+        HarvestSampleHandler(),
         ctx,
         _handler_cmd(scenario, "harvest", character_id="not-an-id"),
     )
@@ -900,7 +905,8 @@ def test_nukesim_handlers_reject_invalid_character_ids_directly():
     ]
 
     for handler, command_type, payload in cases:
-        result = handler.execute(
+        result = execute_handler(
+            handler,
             ctx,
             _handler_cmd(
                 scenario,
@@ -912,7 +918,8 @@ def test_nukesim_handlers_reject_invalid_character_ids_directly():
         assert result.ok is False
         assert result.reason == "invalid character id"
 
-    missing = StabilizeMutationHandler().execute(
+    missing = execute_handler(
+        StabilizeMutationHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -972,7 +979,7 @@ def test_nukesim_handlers_reject_missing_and_wrong_kind_targets_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -1069,7 +1076,7 @@ def test_nukesim_handlers_reject_unreachable_targets_directly():
     ]
 
     for handler, command in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == "target is not reachable"
 
@@ -1133,14 +1140,15 @@ def test_nukesim_handlers_reject_spent_empty_and_invalid_states_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
     character.add_component(
         MutationComponent(mutation_id="rad-adapted", label="Rad-Adapted", stable=False)
     )
-    result = StabilizeMutationHandler().execute(
+    result = execute_handler(
+        StabilizeMutationHandler(),
         ctx,
         _handler_cmd(scenario, "stabilize-mutation", mutation_id="wrong"),
     )
@@ -1151,7 +1159,8 @@ def test_nukesim_handlers_reject_spent_empty_and_invalid_states_directly():
     character.add_component(
         MutationComponent(mutation_id="rad-adapted", label="Rad-Adapted", stable=True)
     )
-    result = StabilizeMutationHandler().execute(
+    result = execute_handler(
+        StabilizeMutationHandler(),
         ctx,
         _handler_cmd(scenario, "stabilize-mutation", mutation_id="rad-adapted"),
     )
@@ -1418,31 +1427,36 @@ def test_settlement_utility_handlers_reject_bad_state_directly():
     build = BuildPurifierHandler()
     power = PowerGeneratorHandler()
     assert (
-        claim.execute(ctx, _handler_cmd(scenario, "claim", character_id="x")).reason
+        execute_handler(claim, ctx, _handler_cmd(scenario, "claim", character_id="x")).reason
         == "invalid character id"
     )
     assert (
-        claim.execute(ctx, _handler_cmd(scenario, "claim", target_id=str(rock))).reason
+        execute_handler(claim, ctx, _handler_cmd(scenario, "claim", target_id=str(rock))).reason
         == "target is the wrong kind"
     )
     assert (
-        claim.execute(ctx, _handler_cmd(scenario, "claim", target_id=str(claimed))).reason
+        execute_handler(claim, ctx, _handler_cmd(scenario, "claim", target_id=str(claimed))).reason
         == "settlement is already claimed"
     )
-    assert claim.execute(ctx, _handler_cmd(scenario, "claim", target_id=str(settlement))).ok
+    assert execute_handler(
+        claim, ctx, _handler_cmd(scenario, "claim", target_id=str(settlement))
+    ).ok
 
     assert (
-        salvage.execute(ctx, _handler_cmd(scenario, "salvage-settlement", character_id="x")).reason
+        execute_handler(
+            salvage, ctx, _handler_cmd(scenario, "salvage-settlement", character_id="x")
+        ).reason
         == "invalid character id"
     )
     assert (
-        salvage.execute(
-            ctx, _handler_cmd(scenario, "salvage-settlement", settlement_id=str(rock))
+        execute_handler(
+            salvage, ctx, _handler_cmd(scenario, "salvage-settlement", settlement_id=str(rock))
         ).reason
         == "target is the wrong kind"
     )
     assert (
-        salvage.execute(
+        execute_handler(
+            salvage,
             ctx,
             _handler_cmd(
                 scenario,
@@ -1453,73 +1467,87 @@ def test_settlement_utility_handlers_reject_bad_state_directly():
         == "claim the settlement first"
     )
     assert (
-        salvage.execute(
-            ctx, _handler_cmd(scenario, "salvage-settlement", settlement_id=str(bare_claimed))
+        execute_handler(
+            salvage,
+            ctx,
+            _handler_cmd(scenario, "salvage-settlement", settlement_id=str(bare_claimed)),
         ).reason
         == "settlement has no salvage"
     )
     assert (
-        salvage.execute(
-            ctx, _handler_cmd(scenario, "salvage-settlement", settlement_id=str(depleted_salvage))
+        execute_handler(
+            salvage,
+            ctx,
+            _handler_cmd(scenario, "salvage-settlement", settlement_id=str(depleted_salvage)),
         ).reason
         == "settlement salvage is depleted"
     )
     assert (
-        salvage.execute(
-            ctx, _handler_cmd(scenario, "salvage-settlement", settlement_id=str(broken_salvage))
+        execute_handler(
+            salvage,
+            ctx,
+            _handler_cmd(scenario, "salvage-settlement", settlement_id=str(broken_salvage)),
         ).reason
         == "settlement is too damaged to salvage"
     )
 
     assert (
-        build.execute(ctx, _handler_cmd(scenario, "build", character_id="x")).reason
+        execute_handler(build, ctx, _handler_cmd(scenario, "build", character_id="x")).reason
         == "invalid character id"
     )
     assert (
-        build.execute(ctx, _handler_cmd(scenario, "build", target_id=str(rock))).reason
+        execute_handler(build, ctx, _handler_cmd(scenario, "build", target_id=str(rock))).reason
         == "target is the wrong kind"
     )
     assert (
-        build.execute(ctx, _handler_cmd(scenario, "build", target_id=str(unclaimed_build))).reason
+        execute_handler(
+            build, ctx, _handler_cmd(scenario, "build", target_id=str(unclaimed_build))
+        ).reason
         == "claim the settlement first"
     )
     assert (
-        build.execute(ctx, _handler_cmd(scenario, "build", target_id=str(built))).reason
+        execute_handler(build, ctx, _handler_cmd(scenario, "build", target_id=str(built))).reason
         == "purifier is already built"
     )
     assert (
-        build.execute(ctx, _handler_cmd(scenario, "build", target_id=str(claimed))).reason
+        execute_handler(build, ctx, _handler_cmd(scenario, "build", target_id=str(claimed))).reason
         == "not enough scrap to build purifier"
     )
     _scrap(scenario, 2)
-    assert build.execute(ctx, _handler_cmd(scenario, "build", target_id=str(claimed))).ok
+    assert execute_handler(build, ctx, _handler_cmd(scenario, "build", target_id=str(claimed))).ok
     _scrap(scenario, 2)
-    assert build.execute(ctx, _handler_cmd(scenario, "build", target_id=str(bare_claimed))).ok
+    assert execute_handler(
+        build, ctx, _handler_cmd(scenario, "build", target_id=str(bare_claimed))
+    ).ok
     assert scenario.actor.world.get_entity(bare_claimed).get_component(WaterPurifierComponent).built
 
     assert (
-        power.execute(ctx, _handler_cmd(scenario, "power-generator", character_id="x")).reason
+        execute_handler(
+            power, ctx, _handler_cmd(scenario, "power-generator", character_id="x")
+        ).reason
         == "invalid character id"
     )
     assert (
-        power.execute(ctx, _handler_cmd(scenario, "power-generator", generator_id=str(rock))).reason
+        execute_handler(
+            power, ctx, _handler_cmd(scenario, "power-generator", generator_id=str(rock))
+        ).reason
         == "target is the wrong kind"
     )
     assert (
-        power.execute(
-            ctx, _handler_cmd(scenario, "power-generator", generator_id=str(powered))
+        execute_handler(
+            power, ctx, _handler_cmd(scenario, "power-generator", generator_id=str(powered))
         ).reason
         == "generator is already powered"
     )
     assert (
-        power.execute(
-            ctx, _handler_cmd(scenario, "power-generator", generator_id=str(generator))
+        execute_handler(
+            power, ctx, _handler_cmd(scenario, "power-generator", generator_id=str(generator))
         ).reason
         == "not enough fuel to power generator"
     )
     _fuel(scenario, 1)
-    assert power.execute(
-        ctx, _handler_cmd(scenario, "power-generator", generator_id=str(generator))
+    assert execute_handler(
+        power, ctx, _handler_cmd(scenario, "power-generator", generator_id=str(generator))
     ).ok
 
 
@@ -1540,36 +1568,44 @@ def test_old_world_tech_handlers_reject_invalid_and_cover_edges_directly():
 
     # Invalid / wrong-kind / not-yet-identified paths.
     assert (
-        identify.execute(
-            ctx, _handler_cmd(scenario, "identify", character_id="x", tech_id="y")
+        execute_handler(
+            identify, ctx, _handler_cmd(scenario, "identify", character_id="x", tech_id="y")
         ).reason
         == "invalid character id"
     )
     assert (
-        identify.execute(ctx, _handler_cmd(scenario, "identify", tech_id=str(not_tech))).reason
+        execute_handler(
+            identify, ctx, _handler_cmd(scenario, "identify", tech_id=str(not_tech))
+        ).reason
         == "target is the wrong kind"
     )
     assert (
-        restore.execute(ctx, _handler_cmd(scenario, "restore-tech", tech_id=str(tech))).reason
+        execute_handler(
+            restore, ctx, _handler_cmd(scenario, "restore-tech", tech_id=str(tech))
+        ).reason
         == "identify the tech first"
     )
 
     # Identify it; a second identify is rejected.
-    assert identify.execute(ctx, _handler_cmd(scenario, "identify", tech_id=str(tech))).ok
+    assert execute_handler(identify, ctx, _handler_cmd(scenario, "identify", tech_id=str(tech))).ok
     assert (
-        identify.execute(ctx, _handler_cmd(scenario, "identify", tech_id=str(tech))).reason
+        execute_handler(identify, ctx, _handler_cmd(scenario, "identify", tech_id=str(tech))).reason
         == "tech is already identified"
     )
 
     # Restore needs enough scrap.
     assert (
-        restore.execute(ctx, _handler_cmd(scenario, "restore-tech", tech_id=str(tech))).reason
+        execute_handler(
+            restore, ctx, _handler_cmd(scenario, "restore-tech", tech_id=str(tech))
+        ).reason
         == "not enough scrap to restore"
     )
 
     # Exactly enough scrap restores it and consumes the whole stack.
     _scrap(scenario, 2)
-    assert restore.execute(ctx, _handler_cmd(scenario, "restore-tech", tech_id=str(tech))).ok
+    assert execute_handler(
+        restore, ctx, _handler_cmd(scenario, "restore-tech", tech_id=str(tech))
+    ).ok
     character = scenario.actor.world.get_entity(scenario.character)
     remaining_scrap = [
         item_id
@@ -1578,7 +1614,9 @@ def test_old_world_tech_handlers_reject_invalid_and_cover_edges_directly():
     ]
     assert remaining_scrap == []
     assert (
-        restore.execute(ctx, _handler_cmd(scenario, "restore-tech", tech_id=str(tech))).reason
+        execute_handler(
+            restore, ctx, _handler_cmd(scenario, "restore-tech", tech_id=str(tech))
+        ).reason
         == "tech is already functional"
     )
 
@@ -1781,7 +1819,7 @@ def test_chem_and_water_handlers_reject_bad_state_directly():
         ),
     ]
     for handler, command, expected in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert not result.ok, expected
         assert expected in result.reason, (expected, result.reason)
 
@@ -1842,8 +1880,12 @@ def test_resource_stack_helpers_merge_and_skip_missing_inventory_entities():
     junk_a = _inventory_entity(scenario, "junk a", "junk", [JunkComponent(outputs={"scrap": 2})])
     junk_b = _inventory_entity(scenario, "junk b", "junk", [JunkComponent(outputs={"scrap": 3})])
     ctx = HandlerContext(world, scenario.actor.epoch)
-    ScrapItemHandler().execute(ctx, _handler_cmd(scenario, "scrap-item", item_id=str(junk_a)))
-    ScrapItemHandler().execute(ctx, _handler_cmd(scenario, "scrap-item", item_id=str(junk_b)))
+    execute_handler(
+        ScrapItemHandler(), ctx, _handler_cmd(scenario, "scrap-item", item_id=str(junk_a))
+    )
+    execute_handler(
+        ScrapItemHandler(), ctx, _handler_cmd(scenario, "scrap-item", item_id=str(junk_b))
+    )
 
     stacks = [
         world.get_entity(item_id).get_component(ResourceStackComponent)
@@ -1952,8 +1994,10 @@ def test_reduce_radiation_state_skips_absent_sickness_component():
         [DecontaminationComponent(dose_reduction=2.0, sickness_reduction=1.0)],
     )
 
-    result = DecontaminateHandler().execute(
-        ctx, _handler_cmd(scenario, "decontaminate", station_id=str(station))
+    result = execute_handler(
+        DecontaminateHandler(),
+        ctx,
+        _handler_cmd(scenario, "decontaminate", station_id=str(station)),
     )
 
     assert result.ok
@@ -1979,7 +2023,8 @@ def test_decontaminate_resolves_patient_and_item_target_keys():
     )
 
     # patient_id is used when target_character_id is absent.
-    result = DecontaminateHandler().execute(
+    result = execute_handler(
+        DecontaminateHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -1994,7 +2039,8 @@ def test_decontaminate_resolves_patient_and_item_target_keys():
     )
 
     # item_id present routes the fallback to target_id.
-    result = DecontaminateHandler().execute(
+    result = execute_handler(
+        DecontaminateHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2014,7 +2060,8 @@ def test_decontaminate_rejects_nonexistent_resolved_target():
     scenario = build_scenario()
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
-    result = DecontaminateHandler().execute(
+    result = execute_handler(
+        DecontaminateHandler(),
         ctx,
         _handler_cmd(scenario, "decontaminate", patient_id="entity_999999"),
     )
@@ -2033,7 +2080,8 @@ def test_decontaminate_rejects_unreachable_resolved_patient():
     scenario.actor.world.get_entity(scenario.room_b).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), distant.id
     )
-    result = DecontaminateHandler().execute(
+    result = execute_handler(
+        DecontaminateHandler(),
         ctx,
         _handler_cmd(scenario, "decontaminate", patient_id=str(distant.id)),
     )
@@ -2060,7 +2108,7 @@ def test_use_rad_medicine_can_handle_and_multi_use_decrement():
     )
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(RadiationDoseComponent(amount=3.0))
-    result = handler.execute(ctx, _handler_cmd(scenario, "use", item_id=str(meds)))
+    result = execute_handler(handler, ctx, _handler_cmd(scenario, "use", item_id=str(meds)))
     assert result.ok
     assert scenario.actor.world.get_entity(meds).get_component(RadMedicineComponent).uses == 1
 
@@ -2078,7 +2126,9 @@ def test_take_chem_without_relief_and_with_existing_addiction():
         [ChemComponent(chem_type="stimulant", addiction_per_dose=0.3)],
     )
 
-    result = TakeChemHandler().execute(ctx, _handler_cmd(scenario, "take-chem", chem_id=str(chem)))
+    result = execute_handler(
+        TakeChemHandler(), ctx, _handler_cmd(scenario, "take-chem", chem_id=str(chem))
+    )
 
     assert result.ok
     assert character.get_component(AddictionComponent).levels["stimulant"] == 0.5
@@ -2152,7 +2202,8 @@ def test_consumable_and_scrap_handlers_allow_uncontained_self_targets():
             RadMedicineComponent(uses=1),
         ],
     )
-    result = UseRadMedicineHandler().execute(
+    result = execute_handler(
+        UseRadMedicineHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2170,7 +2221,8 @@ def test_consumable_and_scrap_handlers_allow_uncontained_self_targets():
         "medicine",
         [RadMedicineComponent(uses=1)],
     )
-    result = UseRadMedicineHandler().execute(
+    result = execute_handler(
+        UseRadMedicineHandler(),
         ctx,
         _handler_cmd(scenario, "use", item_id=str(carried_medicine)),
     )
@@ -2178,7 +2230,8 @@ def test_consumable_and_scrap_handlers_allow_uncontained_self_targets():
     assert container_of(scenario.actor.world.get_entity(carried_medicine)) is None
 
     loose.add_component(ChemComponent(chem_type="stimulant"))
-    result = TakeChemHandler().execute(
+    result = execute_handler(
+        TakeChemHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2191,7 +2244,8 @@ def test_consumable_and_scrap_handlers_allow_uncontained_self_targets():
     loose.remove_component(ChemComponent)
 
     loose.add_component(JunkComponent(outputs={"scrap": 0}))
-    result = ScrapItemHandler().execute(
+    result = execute_handler(
+        ScrapItemHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2235,7 +2289,7 @@ def test_unlock_crate_can_handle_and_already_unlocked():
         handler.can_handle(ctx, _handler_cmd(scenario, "unlock", target_id="entity_999")) is False
     )
 
-    result = handler.execute(ctx, _handler_cmd(scenario, "unlock", crate_id=str(crate)))
+    result = execute_handler(handler, ctx, _handler_cmd(scenario, "unlock", crate_id=str(crate)))
     assert result.ok is False
     assert result.reason == "crate is already unlocked"
 
@@ -2250,8 +2304,10 @@ def test_claim_faction_salvage_rejects_already_claimed():
         "salvage",
         [FactionSalvageComponent(faction_id="minutemen", claimed_by="someone")],
     )
-    result = ClaimFactionSalvageHandler().execute(
-        ctx, _handler_cmd(scenario, "claim-faction-salvage", salvage_id=str(salvage))
+    result = execute_handler(
+        ClaimFactionSalvageHandler(),
+        ctx,
+        _handler_cmd(scenario, "claim-faction-salvage", salvage_id=str(salvage)),
     )
     assert result.ok is False
     assert result.reason == "faction salvage already claimed"
@@ -2271,7 +2327,8 @@ def test_install_mod_rejects_unreachable_item_and_missing_schematic():
     scenario.actor.world.get_entity(scenario.room_b).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), distant_item.id
     )
-    unreachable = InstallModHandler().execute(
+    unreachable = execute_handler(
+        InstallModHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2285,7 +2342,8 @@ def test_install_mod_rejects_unreachable_item_and_missing_schematic():
     item = _inventory_entity(
         scenario, "rifle", "weapon", [DurabilityComponent(current=1, maximum=5)]
     )
-    bad_schematic = InstallModHandler().execute(
+    bad_schematic = execute_handler(
+        InstallModHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2302,7 +2360,8 @@ def test_field_repair_rejects_no_durability_and_missing_kit():
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     no_durability = _inventory_entity(scenario, "rag", "cloth", [])
-    no_dur_result = FieldRepairHandler().execute(
+    no_dur_result = execute_handler(
+        FieldRepairHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2316,7 +2375,8 @@ def test_field_repair_rejects_no_durability_and_missing_kit():
     item = _inventory_entity(
         scenario, "rifle", "weapon", [DurabilityComponent(current=1, maximum=5)]
     )
-    bad_kit = FieldRepairHandler().execute(
+    bad_kit = execute_handler(
+        FieldRepairHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2338,16 +2398,16 @@ def test_brew_chem_rejects_missing_ingredients():
         "recipe",
         [ChemRecipeComponent(chem_type="rad tonic", resource_inputs=(("scrap", 2),))],
     )
-    result = BrewChemHandler().execute(
-        ctx, _handler_cmd(scenario, "brew-chem", recipe_id=str(recipe))
+    result = execute_handler(
+        BrewChemHandler(), ctx, _handler_cmd(scenario, "brew-chem", recipe_id=str(recipe))
     )
     assert result.ok is False
     assert result.reason == "missing chem ingredients"
 
     # With the ingredients on hand, the brew succeeds and consumes them.
     _scrap(scenario, 2)
-    ok_result = BrewChemHandler().execute(
-        ctx, _handler_cmd(scenario, "brew-chem", recipe_id=str(recipe))
+    ok_result = execute_handler(
+        BrewChemHandler(), ctx, _handler_cmd(scenario, "brew-chem", recipe_id=str(recipe))
     )
     assert ok_result.ok
 
@@ -2372,13 +2432,17 @@ def test_identify_and_restore_tech_can_handle_and_invalid_paths():
 
     restore = RestoreTechHandler()
     assert (
-        restore.execute(
-            ctx, _handler_cmd(scenario, "restore-tech", character_id="not-an-id", tech_id=str(tech))
+        execute_handler(
+            restore,
+            ctx,
+            _handler_cmd(scenario, "restore-tech", character_id="not-an-id", tech_id=str(tech)),
         ).reason
         == "invalid character id"
     )
     assert (
-        restore.execute(ctx, _handler_cmd(scenario, "restore-tech", tech_id="entity_999")).reason
+        execute_handler(
+            restore, ctx, _handler_cmd(scenario, "restore-tech", tech_id="entity_999")
+        ).reason
         == "target does not exist"
     )
 
@@ -2419,7 +2483,8 @@ def test_decontaminate_with_explicit_target_and_limited_uses():
 
     # target_character_id is honored directly (skips the patient_id fallback) and a
     # finite-use station decrements its charges.
-    result = DecontaminateHandler().execute(
+    result = execute_handler(
+        DecontaminateHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2440,8 +2505,8 @@ def test_purify_water_rejects_wrong_kind_target():
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     rock = _room_entity(scenario, "rock", "prop", [])
-    result = PurifyWaterHandler().execute(
-        ctx, _handler_cmd(scenario, "purify-water", water_id=str(rock))
+    result = execute_handler(
+        PurifyWaterHandler(), ctx, _handler_cmd(scenario, "purify-water", water_id=str(rock))
     )
     assert result.ok is False
     assert result.reason == "target is the wrong kind"

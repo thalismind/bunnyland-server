@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     CharacterComponent,
@@ -395,14 +395,18 @@ def test_ignite_and_extinguish_handlers_reject_invalid_state_directly():
                 lane=Lane.WORLD,
                 payload=command.payload,
             )
-        result = IgniteHandler().execute(ctx, command)
+        result = execute_handler(IgniteHandler(), ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
-    result = IgniteHandler().execute(ctx, _cmd(scenario, "ignite", target_id=str(target.id)))
+    result = execute_handler(
+        IgniteHandler(), ctx, _cmd(scenario, "ignite", target_id=str(target.id))
+    )
     assert result.ok is True
     assert target.has_component(FireComponent)
-    result = IgniteHandler().execute(ctx, _cmd(scenario, "ignite", target_id=str(target.id)))
+    result = execute_handler(
+        IgniteHandler(), ctx, _cmd(scenario, "ignite", target_id=str(target.id))
+    )
     assert result.ok is False
     assert result.reason == "target is already burning"
 
@@ -440,7 +444,7 @@ def test_ignite_and_extinguish_handlers_reject_invalid_state_directly():
                 lane=Lane.WORLD,
                 payload=command.payload,
             )
-        result = ExtinguishHandler().execute(ctx, command)
+        result = execute_handler(ExtinguishHandler(), ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -451,11 +455,11 @@ def test_ignite_and_extinguish_default_to_current_room():
     room = scenario.actor.world.get_entity(scenario.room_a)
     room.add_component(FlammableComponent(fuel=1.0))
 
-    result = IgniteHandler().execute(ctx, _cmd(scenario, "ignite"))
+    result = execute_handler(IgniteHandler(), ctx, _cmd(scenario, "ignite"))
     assert result.ok is True
     assert room.has_component(FireComponent)
 
-    result = ExtinguishHandler().execute(ctx, _cmd(scenario, "extinguish"))
+    result = execute_handler(ExtinguishHandler(), ctx, _cmd(scenario, "extinguish"))
     assert result.ok is True
     assert not room.has_component(FireComponent)
 

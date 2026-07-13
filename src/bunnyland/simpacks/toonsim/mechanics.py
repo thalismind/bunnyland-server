@@ -427,7 +427,6 @@ class MoveSpriteHandler:
                     y=y,
                 )
             ),
-            ctx=ctx,
         )
 
 

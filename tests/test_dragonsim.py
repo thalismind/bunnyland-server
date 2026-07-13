@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     CharacterComponent,
@@ -337,16 +337,14 @@ def test_dragonsim_parity_handlers_mutate_state_directly():
     ]
 
     for handler, command_type, payload, event_type in calls:
-        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        result = execute_handler(handler, ctx, _handler_cmd(scenario, command_type, **payload))
         assert result.ok, (command_type, result.reason)
         if event_type is not None:
             assert any(isinstance(event, event_type) for event in result.events)
 
-    assert (
-        TrackQuestHandler()
-        .execute(ctx, _handler_cmd(scenario, "track-quest", quest_id="lost-ring"))
-        .ok
-    )
+    assert execute_handler(
+        TrackQuestHandler(), ctx, _handler_cmd(scenario, "track-quest", quest_id="lost-ring")
+    ).ok
 
     stage = accepted_quest.get_component(QuestStateComponent)
     assert character.has_relationship(TracksQuest, accepted_quest.id)
@@ -431,17 +429,21 @@ def test_dragonsim_parity_handlers_reject_invalid_targets_directly():
     ]
 
     for handler, command_type, payload, invalid_reason, missing_reason in cases:
-        bad_character = handler.execute(
+        bad_character = execute_handler(
+            handler,
             ctx,
             _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
         )
         assert bad_character.ok is False
         assert bad_character.reason == invalid_reason
-        missing_target = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        missing_target = execute_handler(
+            handler, ctx, _handler_cmd(scenario, command_type, **payload)
+        )
         assert missing_target.ok is False
         assert missing_target.reason == missing_reason
 
-    result = RecoverMagicHandler().execute(
+    result = execute_handler(
+        RecoverMagicHandler(),
         ctx,
         _handler_cmd(scenario, "recover-magic", character_id="not-an-id"),
     )
@@ -468,7 +470,8 @@ def test_dragonsim_location_handlers_reject_missing_character_directly():
     ]
 
     for handler, command_type, payload in cases:
-        result = handler.execute(
+        result = execute_handler(
+            handler,
             ctx,
             _handler_cmd(
                 scenario,
@@ -829,7 +832,7 @@ def test_dragonsim_adventure_parity_handlers_reject_wrong_kind_and_state_directl
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -1481,13 +1484,14 @@ def test_dragonsim_handlers_reject_invalid_targets_and_states_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_relationship(MemberOfFaction(rank="member", since_epoch=0), faction.id)
-    result = JoinFactionHandler().execute(
+    result = execute_handler(
+        JoinFactionHandler(),
         ctx,
         _handler_cmd(scenario, "join-faction", faction_id=str(faction.id)),
     )
@@ -1688,15 +1692,21 @@ def test_unlock_perk_rejects_invalid_directly():
 
     unlock = UnlockPerkHandler()
     rejections = {
-        unlock.execute(
-            ctx, _handler_cmd(scenario, "unlock-perk", character_id="not-an-id", perk_id="x")
+        execute_handler(
+            unlock,
+            ctx,
+            _handler_cmd(scenario, "unlock-perk", character_id="not-an-id", perk_id="x"),
         ).reason,
-        unlock.execute(ctx, _handler_cmd(scenario, "unlock-perk", perk_id="entity_999")).reason,
-        unlock.execute(
-            ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(wrong_kind.id))
+        execute_handler(
+            unlock, ctx, _handler_cmd(scenario, "unlock-perk", perk_id="entity_999")
+        ).reason,
+        execute_handler(
+            unlock, ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(wrong_kind.id))
         ).reason,
         # No SkillSetComponent at all -> treated as level 0.
-        unlock.execute(ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))).reason,
+        execute_handler(
+            unlock, ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))
+        ).reason,
     }
     assert "invalid character or perk id" in rejections
     assert "perk does not exist" in rejections
@@ -1705,9 +1715,13 @@ def test_unlock_perk_rejects_invalid_directly():
 
     # Once the gating skill is high enough, unlocking succeeds; a second unlock is rejected.
     _set_skill_level(scenario, "blade", 2)
-    assert unlock.execute(ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))).ok
+    assert execute_handler(
+        unlock, ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))
+    ).ok
     assert (
-        unlock.execute(ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))).reason
+        execute_handler(
+            unlock, ctx, _handler_cmd(scenario, "unlock-perk", perk_id=str(perk.id))
+        ).reason
         == "perk already unlocked"
     )
 
@@ -1801,26 +1815,26 @@ def test_soul_and_word_handlers_reject_invalid_directly():
     speak = SpeakWordOfPowerHandler()
 
     assert (
-        absorb.execute(
-            ctx, _handler_cmd(scenario, "absorb-great-soul", character_id="x", beast_id="y")
+        execute_handler(
+            absorb, ctx, _handler_cmd(scenario, "absorb-great-soul", character_id="x", beast_id="y")
         ).reason
         == "invalid character or beast id"
     )
     assert (
-        absorb.execute(
-            ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id="entity_999")
+        execute_handler(
+            absorb, ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id="entity_999")
         ).reason
         == "beast does not exist"
     )
     assert (
-        absorb.execute(
-            ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(not_a_beast.id))
+        execute_handler(
+            absorb, ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(not_a_beast.id))
         ).reason
         == "target is not an ancient beast"
     )
     assert (
-        absorb.execute(
-            ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(living_beast.id))
+        execute_handler(
+            absorb, ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(living_beast.id))
         ).reason
         == "the beast still lives"
     )
@@ -1833,73 +1847,87 @@ def test_soul_and_word_handlers_reject_invalid_directly():
         ],
     )
     assert (
-        absorb.execute(
-            ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(unreachable.id))
+        execute_handler(
+            absorb, ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(unreachable.id))
         ).reason
         == "beast is not reachable"
     )
 
     # Word handler validation paths.
     assert (
-        learn.execute(
-            ctx, _handler_cmd(scenario, "learn-word-of-power", character_id="x", word_id="y")
+        execute_handler(
+            learn, ctx, _handler_cmd(scenario, "learn-word-of-power", character_id="x", word_id="y")
         ).reason
         == "invalid character or word id"
     )
     assert (
-        learn.execute(
-            ctx, _handler_cmd(scenario, "learn-word-of-power", word_id="entity_999")
+        execute_handler(
+            learn, ctx, _handler_cmd(scenario, "learn-word-of-power", word_id="entity_999")
         ).reason
         == "word does not exist"
     )
     assert (
-        learn.execute(
-            ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(not_a_beast.id))
+        execute_handler(
+            learn, ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(not_a_beast.id))
         ).reason
         == "target is not a word of power"
     )
     assert (
-        speak.execute(
-            ctx, _handler_cmd(scenario, "speak-word-of-power", character_id="x", word_id="y")
+        execute_handler(
+            speak, ctx, _handler_cmd(scenario, "speak-word-of-power", character_id="x", word_id="y")
         ).reason
         == "invalid character or word id"
     )
     assert (
-        speak.execute(
-            ctx, _handler_cmd(scenario, "speak-word-of-power", word_id="entity_999")
+        execute_handler(
+            speak, ctx, _handler_cmd(scenario, "speak-word-of-power", word_id="entity_999")
         ).reason
         == "word does not exist"
     )
 
     # Learning is gated on souls, then on skill level.
     assert (
-        speak.execute(ctx, _handler_cmd(scenario, "speak-word-of-power", word_id=str(word))).reason
+        execute_handler(
+            speak, ctx, _handler_cmd(scenario, "speak-word-of-power", word_id=str(word))
+        ).reason
         == "you have not learned that word"
     )
     assert (
-        learn.execute(ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))).reason
+        execute_handler(
+            learn, ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))
+        ).reason
         == "not enough great souls to learn this word"
     )
 
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(GreatSoulComponent(souls=2))
     assert (
-        learn.execute(ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))).reason
+        execute_handler(
+            learn, ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))
+        ).reason
         == "skill level too low for this word"
     )
 
     _set_skill_level(scenario, "voice", 2)
-    assert learn.execute(ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))).ok
+    assert execute_handler(
+        learn, ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))
+    ).ok
     assert (
-        learn.execute(ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))).reason
+        execute_handler(
+            learn, ctx, _handler_cmd(scenario, "learn-word-of-power", word_id=str(word))
+        ).reason
         == "word already learned"
     )
 
     # Re-absorbing a claimed soul is rejected.
     dead = _dead_beast(scenario, name="Claimed Wyrm")
-    assert absorb.execute(ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(dead))).ok
+    assert execute_handler(
+        absorb, ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(dead))
+    ).ok
     assert (
-        absorb.execute(ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(dead))).reason
+        execute_handler(
+            absorb, ctx, _handler_cmd(scenario, "absorb-great-soul", beast_id=str(dead))
+        ).reason
         == "its great soul is already claimed"
     )
 
@@ -2296,7 +2324,7 @@ def test_crime_handlers_reject_bad_state_directly():
         ),
     ]
     for handler, command, expected in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert not result.ok, expected
         assert expected in result.reason, (expected, result.reason)
 
@@ -2375,7 +2403,7 @@ def test_steal_and_sneak_reject_more_bad_state_directly():
         ),
     ]
     for handler, command, expected in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert not result.ok, expected
         assert expected in result.reason, (expected, result.reason)
 
@@ -2465,7 +2493,7 @@ def test_quest_track_decline_branch_rejections_directly():
         ),
     ]
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -2685,7 +2713,7 @@ def test_adventure_handlers_reject_missing_and_unreachable_ids_directly():
     ]
     assert distant_guard
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False, (reason, result.ok)
         assert result.reason == reason
 
@@ -2706,16 +2734,22 @@ def test_learn_and_cast_spell_extra_state_branches_directly():
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), spell.id)
 
     learn = LearnSpellHandler()
-    assert learn.execute(ctx, _handler_cmd(scenario, "learn-spell", spell_id=str(spell.id))).ok
+    assert execute_handler(
+        learn, ctx, _handler_cmd(scenario, "learn-spell", spell_id=str(spell.id))
+    ).ok
     # Already learned -> rejected (line 1906).
     assert (
-        learn.execute(ctx, _handler_cmd(scenario, "learn-spell", spell_id=str(spell.id))).reason
+        execute_handler(
+            learn, ctx, _handler_cmd(scenario, "learn-spell", spell_id=str(spell.id))
+        ).reason
         == "spell already learned"
     )
 
     # Cast a learned spell with no skill_name -> no XP branch (1975 false).
     cast = CastDragonSpellHandler()
-    result = cast.execute(ctx, _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(spell.id)))
+    result = execute_handler(
+        cast, ctx, _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(spell.id))
+    )
     assert result.ok
     assert character.get_component(MagicComponent).current == 4  # default magic_cost of 1
 
@@ -2739,8 +2773,10 @@ def test_cast_spell_with_cooldown_sets_ready_epoch_directly():
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), spell.id)
     character.add_relationship(KnowsSpell(learned_at_epoch=0), spell.id)
 
-    result = CastDragonSpellHandler().execute(
-        ctx, _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(spell.id))
+    result = execute_handler(
+        CastDragonSpellHandler(),
+        ctx,
+        _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(spell.id)),
     )
     assert result.ok
     cooldown = world.get_entity(spell.id).get_component(SpellCooldownComponent)
@@ -2762,8 +2798,8 @@ def test_brew_potion_without_skill_name_skips_xp_directly():
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), recipe.id)
 
-    result = BrewPotionHandler().execute(
-        ctx, _handler_cmd(scenario, "brew-potion", recipe_id=str(recipe.id))
+    result = execute_handler(
+        BrewPotionHandler(), ctx, _handler_cmd(scenario, "brew-potion", recipe_id=str(recipe.id))
     )
     assert result.ok
     character = world.get_entity(scenario.character)
@@ -2790,7 +2826,7 @@ def test_bribe_guard_branches_no_wanted_and_full_clear_directly():
     bribe = BribeGuardHandler()
 
     # No WantedByFaction edge at all.
-    assert bribe.execute(ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
+    assert execute_handler(bribe, ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
     assert not character.get_relationships(WantedByFaction)
 
     # Wanted by a different faction.
@@ -2798,7 +2834,7 @@ def test_bribe_guard_branches_no_wanted_and_full_clear_directly():
         world, [IdentityComponent(name="Other", kind="faction"), FactionComponent(name="Other")]
     )
     character.add_relationship(WantedByFaction(amount=7), other_faction.id)
-    assert bribe.execute(ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
+    assert execute_handler(bribe, ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
     assert character.get_relationships(WantedByFaction) == [
         (WantedByFaction(amount=7), other_faction.id)
     ]
@@ -2806,7 +2842,7 @@ def test_bribe_guard_branches_no_wanted_and_full_clear_directly():
     # Bribe exactly clears the matching bounty.
     character.remove_relationship(WantedByFaction, other_faction.id)
     character.add_relationship(WantedByFaction(amount=10), faction)
-    assert bribe.execute(ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
+    assert execute_handler(bribe, ctx, _handler_cmd(scenario, "bribe", guard_id=str(guard.id))).ok
     assert not character.get_relationships(WantedByFaction)
 
 
@@ -2820,13 +2856,17 @@ def test_serve_jail_time_branches_directly():
 
     character.add_relationship(JailedByFaction(release_epoch=ctx.epoch + 1000), faction)
     assert (
-        ServeJailTimeHandler().execute(ctx, _handler_cmd(scenario, "serve-jail-time")).reason
+        execute_handler(
+            ServeJailTimeHandler(), ctx, _handler_cmd(scenario, "serve-jail-time")
+        ).reason
         == "sentence is not complete"
     )
 
     # Complete sentence, no WantedByFaction edge.
     character.add_relationship(JailedByFaction(release_epoch=0), faction)
-    assert ServeJailTimeHandler().execute(ctx, _handler_cmd(scenario, "serve-jail-time")).ok
+    assert execute_handler(
+        ServeJailTimeHandler(), ctx, _handler_cmd(scenario, "serve-jail-time")
+    ).ok
     assert not character.get_relationships(JailedByFaction)
 
 
@@ -2849,8 +2889,10 @@ def test_study_voice_inscription_when_word_already_known_skips_relationship():
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), slate.id)
 
-    result = StudyVoiceInscriptionHandler().execute(
-        ctx, _handler_cmd(scenario, "study-voice-inscription", target_id=str(slate.id))
+    result = execute_handler(
+        StudyVoiceInscriptionHandler(),
+        ctx,
+        _handler_cmd(scenario, "study-voice-inscription", target_id=str(slate.id)),
     )
     assert result.ok
     assert str(scenario.character) in slate.get_component(VoiceInscriptionComponent).studied_by
@@ -2910,8 +2952,10 @@ def test_cast_spell_without_skill_name_skips_xp_directly():
     character.add_relationship(KnowsSpell(learned_at_epoch=0), spell.id)
 
     # skill_name is empty -> the XP branch (1975 true) is skipped (1975 -> 1986).
-    result = CastDragonSpellHandler().execute(
-        ctx, _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(spell.id))
+    result = execute_handler(
+        CastDragonSpellHandler(),
+        ctx,
+        _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(spell.id)),
     )
     assert result.ok
     assert character.get_component(MagicComponent).current == 3

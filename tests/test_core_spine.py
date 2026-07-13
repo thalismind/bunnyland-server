@@ -1040,10 +1040,9 @@ async def test_plan_event_failure_rolls_back_state_and_point_cost():
                             replace(original_identity, name="must roll back"),
                         ),
                     )
-                ),
-                fail_event,
-                ctx=ctx,
-            )
+                    ),
+                    fail_event,
+                )
 
     scenario.actor.register_handler(FailingPlannedMove())
     command = replace(move_command(scenario), command_id="failing-plan")

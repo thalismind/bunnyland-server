@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     AffectComponent,
@@ -540,7 +540,7 @@ def test_colonysim_handlers_reject_bad_state_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -802,7 +802,7 @@ def test_colonysim_stockpile_and_stack_handlers_reject_bad_state_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -1578,7 +1578,7 @@ def test_colony_work_medical_handlers_reject_invalid_state_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -1670,7 +1670,8 @@ def test_tend_self_without_medicine_and_orphan_medicine_use_edges():
     )
     character.add_relationship(HasInjury(), injury.id)
 
-    result = TendWoundHandler().execute(
+    result = execute_handler(
+        TendWoundHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -1688,7 +1689,6 @@ def test_tend_self_without_medicine_and_orphan_medicine_use_edges():
     )
     colonysim._consume_medicine_use(ctx, medicine.id)
     assert not scenario.actor.world.has_entity(medicine.id)
-
 
 
 async def test_work_priority_zero_removes_priority():
@@ -1818,9 +1818,7 @@ def test_resource_and_recipe_mutation_helpers_cover_success_paths():
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
 
-    created_id = parse_entity_id(
-        colonysim._add_resource_stack(character, world, "wood", 3)
-    )
+    created_id = parse_entity_id(colonysim._add_resource_stack(character, world, "wood", 3))
     assert created_id is not None
     assert colonysim._add_resource_stack(character, world, "wood", 2) == str(created_id)
     assert colonysim._consume_resource_stack(character, world, "wood", 2) is True
@@ -2630,7 +2628,8 @@ def test_colonysim_catalogue_handlers_reject_bad_state_directly():
         ),
     ]
     for handler, command_type, payload, reason, character_id in cases:
-        result = handler.execute(
+        result = execute_handler(
+            handler,
             ctx,
             _handler_cmd(scenario, command_type, character_id=character_id, **payload),
         )
@@ -2718,7 +2717,8 @@ def test_colonysim_surgery_can_install_reachable_prosthetic_directly():
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), surgery.id)
 
-    result = PerformSurgeryHandler().execute(
+    result = execute_handler(
+        PerformSurgeryHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2845,8 +2845,10 @@ def test_faction_relation_reuses_existing_record_on_trade():
         Contains(mode=ContainmentMode.ROOM_CONTENT), offer.id
     )
 
-    result = CompleteTradeHandler().execute(
-        ctx, _handler_cmd(scenario, "complete-trade", offer_id=str(offer.id))
+    result = execute_handler(
+        CompleteTradeHandler(),
+        ctx,
+        _handler_cmd(scenario, "complete-trade", offer_id=str(offer.id)),
     )
 
     assert result.ok is True
@@ -2895,7 +2897,8 @@ def test_body_part_entity_matches_existing_part_during_surgery():
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), surgery.id)
 
-    result = PerformSurgeryHandler().execute(
+    result = execute_handler(
+        PerformSurgeryHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2931,7 +2934,8 @@ def test_surgery_installs_an_uncontained_prosthetic():
         ],
     )
 
-    result = PerformSurgeryHandler().execute(
+    result = execute_handler(
+        PerformSurgeryHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2968,7 +2972,8 @@ def test_rescue_to_bed_handles_unroomed_and_already_sleeping_patient():
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), patient.id)
 
-    result = RescueToBedHandler().execute(
+    result = execute_handler(
+        RescueToBedHandler(),
         ctx,
         _handler_cmd(scenario, "rescue-to-bed", patient_id=str(patient.id), bed_id=str(bed.id)),
     )
@@ -2995,7 +3000,8 @@ def test_progress_job_bill_completes_without_job_component():
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), bill.id)
 
-    result = ProgressJobBillHandler().execute(
+    result = execute_handler(
+        ProgressJobBillHandler(),
         ctx,
         _handler_cmd(scenario, "progress-job-bill", bill_id=str(bill.id), work=5.0),
     )
@@ -3020,7 +3026,8 @@ def test_recruit_prisoner_accumulates_progress_without_full_recruitment():
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), prisoner.id)
 
-    result = RecruitPrisonerHandler().execute(
+    result = execute_handler(
+        RecruitPrisonerHandler(),
         ctx,
         _handler_cmd(scenario, "recruit-prisoner", prisoner_id=str(prisoner.id), progress=2.0),
     )
@@ -3046,7 +3053,8 @@ def test_research_project_progress_without_unlock():
     )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), project.id)
 
-    result = ResearchProjectHandler().execute(
+    result = execute_handler(
+        ResearchProjectHandler(),
         ctx,
         _handler_cmd(scenario, "research-project", project_id=str(project.id), work=3.0),
     )
@@ -3067,7 +3075,8 @@ def test_form_caravan_skips_zero_quantity_cargo():
     character = world.get_entity(scenario.character)
     _stack(scenario, "wood", 3)
 
-    result = FormCaravanHandler().execute(
+    result = execute_handler(
+        FormCaravanHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -3115,8 +3124,8 @@ def test_invalid_character_id_rejections():
         (FormCaravanHandler(), "form-caravan", {"destination": "town"}, "invalid character id"),
     ]
     for handler, command_type, payload, reason in cases:
-        result = handler.execute(
-            ctx, _handler_cmd(scenario, command_type, character_id="not-an-id", **payload)
+        result = execute_handler(
+            handler, ctx, _handler_cmd(scenario, command_type, character_id="not-an-id", **payload)
         )
         assert result.ok is False
         assert result.reason == reason

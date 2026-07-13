@@ -18,7 +18,7 @@ from relics import EntityId, World
 from ..commands import SubmittedCommand
 from ..ecs import parse_entity_id, reachable_ids
 from ..events import DomainEvent, event_base
-from ..mutations import MutationPlan, execute_mutation_plan
+from ..mutations import MutationPlan
 
 
 @dataclass(frozen=True)
@@ -37,20 +37,11 @@ def rejected(reason: str) -> HandlerResult:
 def planned(
     plan: MutationPlan,
     *events: DomainEvent | Callable[[], DomainEvent],
-    ctx: HandlerContext | None = None,
 ) -> HandlerResult:
-    """Return a plan, applying it immediately only for standalone handler calls."""
+    """Return a validated command's unapplied mutation plan and resulting events."""
 
     immediate = tuple(event for event in events if isinstance(event, DomainEvent))
     factories = tuple(event for event in events if not isinstance(event, DomainEvent))
-    if ctx is not None and not ctx.defer_plans:
-        _summary, deferred = execute_mutation_plan(
-            ctx.world,
-            plan,
-            after_apply=lambda: tuple(factory() for factory in factories),
-        )
-        immediate = (*immediate, *deferred)
-        factories = ()
     return HandlerResult(
         ok=True,
         events=immediate,
@@ -61,12 +52,11 @@ def planned(
 
 @dataclass
 class HandlerContext:
-    """What a handler needs to read and mutate the world during execution."""
+    """Read-only world context available while a handler builds a mutation plan."""
 
     world: World
     epoch: int
     actor: Any | None = None
-    defer_plans: bool = False
 
     def entity(self, entity_id: EntityId):
         return self.world.get_entity(entity_id)

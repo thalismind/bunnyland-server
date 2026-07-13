@@ -125,7 +125,6 @@ class TakeHandler:
                     from_container_id=str(source_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -217,7 +216,7 @@ class PutHandler:
                     to_container_id=str(target_id),
                 )
             )
-        return planned(MutationPlan(tuple(operations)), event, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), event)
 
 
 class DropHandler(PutHandler):
@@ -262,9 +261,7 @@ class HoldHandler:
         if character.has_relationship(Holding, item.id):
             return rejected("already holding item")
         return planned(
-            MutationPlan(
-                (AddEdge(character.id, item.id, Holding(slot=holdable.slot)),)
-            ),
+            MutationPlan((AddEdge(character.id, item.id, Holding(slot=holdable.slot)),)),
             ItemHeldEvent(
                 **ctx.event_base(
                     actor_id=command.character_id,
@@ -274,7 +271,6 @@ class HoldHandler:
                     slot=holdable.slot,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -301,7 +297,6 @@ class UnholdHandler:
                     slot=held[0].slot,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -318,9 +313,7 @@ class WearHandler:
         if character.has_relationship(Wearing, item.id):
             return rejected("already wearing item")
         return planned(
-            MutationPlan(
-                (AddEdge(character.id, item.id, Wearing(slot=wearable.slot)),)
-            ),
+            MutationPlan((AddEdge(character.id, item.id, Wearing(slot=wearable.slot)),)),
             ItemWornEvent(
                 **ctx.event_base(
                     actor_id=command.character_id,
@@ -330,7 +323,6 @@ class WearHandler:
                     slot=wearable.slot,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -357,7 +349,6 @@ class RemoveHandler:
                     slot=worn[0].slot,
                 )
             ),
-            ctx=ctx,
         )
 
 

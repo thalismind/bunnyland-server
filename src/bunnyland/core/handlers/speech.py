@@ -148,7 +148,6 @@ def _end_conversation(
                 reason=reason,
             )
         ),
-        ctx=ctx,
     )
 
 
@@ -203,7 +202,6 @@ class SayHandler:
                     approach=approach,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -256,7 +254,6 @@ class TellHandler:
                     overhearer_ids=overhearers,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -306,12 +303,12 @@ class StartConversationHandler:
         operations = [
             AddEntity(
                 (
-                IdentityComponent(name=topic or "conversation", kind="conversation"),
-                ConversationComponent(
-                    topic=topic,
-                    active_turn=0,
-                    started_at_epoch=ctx.epoch,
-                    expires_at_epoch=ctx.epoch + timeout_seconds,
+                    IdentityComponent(name=topic or "conversation", kind="conversation"),
+                    ConversationComponent(
+                        topic=topic,
+                        active_turn=0,
+                        started_at_epoch=ctx.epoch,
+                        expires_at_epoch=ctx.epoch + timeout_seconds,
                     ),
                 ),
                 reference=conversation,
@@ -341,7 +338,6 @@ class StartConversationHandler:
                     expires_at_epoch=ctx.epoch + timeout_seconds,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -423,7 +419,6 @@ class ConversationLineHandler:
                     approach=approach,
                 )
             ),
-            ctx=ctx,
         )
 
 

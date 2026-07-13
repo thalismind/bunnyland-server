@@ -173,6 +173,73 @@ def test_removed_compatibility_surfaces_cannot_return():
             for node in ast.walk(tree)
         ), path
 
+
+def test_all_440_bundled_handlers_use_the_pure_plan_contract():
+    plugins = bunnyland_plugins()
+    handlers = tuple(
+        handler for plugin in plugins for handler in plugin.commands.action_handlers
+    )
+    assert len(handlers) == 440
+
+    root = Path(__file__).parents[1] / "src" / "bunnyland"
+    forbidden_mutations = {
+        "add_component",
+        "add_relationship",
+        "add_to_container",
+        "remove",
+        "remove_component",
+        "remove_from_container",
+        "remove_relationship",
+        "replace_component",
+        "spawn_entity",
+    }
+    violations: list[str] = []
+    for path in root.rglob("*.py"):
+        tree = ast.parse(path.read_text())
+        for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+            if isinstance(call.func, ast.Name) and call.func.id == "planned":
+                if any(keyword.arg == "ctx" for keyword in call.keywords):
+                    violations.append(f"{path}: planned(ctx=...) compatibility call")
+            if isinstance(call.func, ast.Name) and call.func.id == "HandlerResult":
+                if any(
+                    keyword.arg == "ok"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is True
+                    for keyword in call.keywords
+                ) and not any(keyword.arg == "plan" for keyword in call.keywords):
+                    violations.append(f"{path}: planless successful HandlerResult")
+
+        for handler in (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef) and node.name.endswith("Handler")
+        ):
+            execute = next(
+                (
+                    node
+                    for node in handler.body
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == "execute"
+                ),
+                None,
+            )
+            if execute is None:
+                continue
+            for call in (node for node in ast.walk(execute) if isinstance(node, ast.Call)):
+                name = (
+                    call.func.id
+                    if isinstance(call.func, ast.Name)
+                    else call.func.attr
+                    if isinstance(call.func, ast.Attribute)
+                    else ""
+                )
+                if name in forbidden_mutations:
+                    violations.append(
+                        f"{path}:{call.lineno}: {handler.name}.execute calls {name}"
+                    )
+
+    assert violations == []
+
     assert not (root / "tui" / "verbs.py").exists()
     tui_source = (root / "tui" / "app.py").read_text()
     assert "ACTION_VERBS" not in tui_source

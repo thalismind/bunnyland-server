@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 import bunnyland.core.world_actor as world_actor_module
 from bunnyland.claims import controlled_character
@@ -33,6 +33,7 @@ from bunnyland.core import (
     Lane,
     MCPControllerComponent,
     MoveHandler,
+    MutationPlan,
     NoiseComponent,
     OnInsufficientPoints,
     PainComponent,
@@ -288,23 +289,23 @@ def test_move_handler_rejects_invalid_detached_and_unmatched_exits():
     handler = MoveHandler()
 
     invalid = _command(scenario, character_id="not-an-id")
-    assert handler.execute(ctx, invalid).reason == "invalid character id"
+    assert execute_handler(handler, ctx, invalid).reason == "invalid character id"
 
     missing = _command(scenario, character_id="entity_999")
-    assert handler.execute(ctx, missing).reason == "character does not exist"
+    assert execute_handler(handler, ctx, missing).reason == "character does not exist"
 
     scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
         Contains,
         scenario.character,
     )
-    assert handler.execute(ctx, _command(scenario)).reason == "character is not in a room"
+    assert execute_handler(handler, ctx, _command(scenario)).reason == "character is not in a room"
 
     scenario.actor.world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT),
         scenario.character,
     )
     assert (
-        handler.execute(ctx, _command(scenario, payload={"direction": "west"})).reason
+        execute_handler(handler, ctx, _command(scenario, payload={"direction": "west"})).reason
         == "no matching exit"
     )
 
@@ -316,7 +317,7 @@ def test_move_handler_rejects_dangling_exit_target():
         parse_entity_id("entity_999")
     ] = ExitTo(direction="down")
 
-    result = MoveHandler().execute(ctx, _command(scenario, payload={"direction": "down"}))
+    result = execute_handler(MoveHandler(), ctx, _command(scenario, payload={"direction": "down"}))
 
     assert result.reason == "destination does not exist"
 
@@ -329,7 +330,7 @@ def test_move_handler_can_select_exit_by_target_id_and_custom_noise():
         payload={"exit_id": str(scenario.room_b), "noise": 2.5},
     )
 
-    result = MoveHandler().execute(ctx, command)
+    result = execute_handler(MoveHandler(), ctx, command)
 
     assert result.ok is True
     event = result.events[0]
@@ -487,7 +488,7 @@ async def test_world_actor_tries_latest_matching_handler_for_shared_verbs():
 
         def execute(self, _ctx, _command):
             events.append("fallback")
-            return HandlerResult(ok=True)
+            return HandlerResult(ok=True, plan=MutationPlan())
 
     class SpecificHandler:
         command_type = "shared"
@@ -497,7 +498,7 @@ async def test_world_actor_tries_latest_matching_handler_for_shared_verbs():
 
         def execute(self, _ctx, _command):
             events.append("specific")
-            return HandlerResult(ok=True)
+            return HandlerResult(ok=True, plan=MutationPlan())
 
     scenario.actor.register_handler(FallbackHandler())
     scenario.actor.register_handler(SpecificHandler())
@@ -518,7 +519,7 @@ async def test_world_actor_rejects_handler_without_owned_action_definition():
         command_type = "unowned"
 
         def execute(self, _ctx, _command):
-            return HandlerResult(ok=True)
+            return HandlerResult(ok=True, plan=MutationPlan())
 
     scenario.actor.register_handler(UnownedHandler())
     outcome = await scenario.actor.submit(_command(scenario, "unowned", payload={}))
@@ -547,7 +548,7 @@ async def test_world_actor_spends_action_and_focus_on_success():
         command_type = "focus-test"
 
         def execute(self, _ctx, _command):
-            return HandlerResult(ok=True)
+            return HandlerResult(ok=True, plan=MutationPlan())
 
     scenario.actor.register_handler(FocusHandler())
     scenario.actor.register_action_definition(ActionDefinition("focus-test"))
@@ -558,6 +559,30 @@ async def test_world_actor_spends_action_and_focus_on_success():
 
     assert action_changes[-1].current == pytest.approx(3.0)
     assert focus_changes[-1].current == pytest.approx(2.0)
+
+
+async def test_world_actor_rejects_planless_handler_success():
+    scenario = build_scenario(action_current=5.0)
+    rejected = collect(scenario.actor, CommandRejectedEvent)
+
+    class PlanlessHandler:
+        command_type = "planless-test"
+
+        def execute(self, _ctx, _command):
+            return HandlerResult(ok=True)
+
+    scenario.actor.register_handler(PlanlessHandler())
+    scenario.actor.register_action_definition(ActionDefinition("planless-test"))
+    scenario.actor.submit_nowait(
+        _command(scenario, "planless-test", cost=CommandCost(action=2), payload={})
+    )
+    await scenario.actor.tick(0.0)
+
+    assert rejected[-1].reason == "handler returned success without a mutation plan"
+    points = scenario.actor.world.get_entity(scenario.character).get_component(
+        ActionPointsComponent
+    )
+    assert points.current == pytest.approx(5.0)
 
 
 async def test_world_actor_control_commands_and_controller_kinds():

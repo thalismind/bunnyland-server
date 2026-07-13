@@ -1124,7 +1124,6 @@ def _resolve_attack(
     return planned(
         MutationPlan(tuple(operations)),
         *(event if callable(event) else (lambda event=event: event) for event in events),
-        ctx=ctx,
     )
 
 
@@ -1163,7 +1162,7 @@ class DefendHandler:
                 )
             )
         )
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class ChallengeHandler:
@@ -1191,7 +1190,6 @@ class ChallengeHandler:
                     terms=terms,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1237,7 +1235,6 @@ class FortifyHandler:
                     rating=updated.rating,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1283,7 +1280,6 @@ class ClaimBaseHandler:
                     clan=clan,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1329,7 +1325,6 @@ class PlaceTrapHandler:
                 )
             ),
             trap_event,
-            ctx=ctx,
         )
 
 
@@ -1363,7 +1358,6 @@ class DisarmTrapHandler:
                     trap_id=str(trap_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1415,7 +1409,6 @@ class RaidHandler:
                     damage=damage,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1450,7 +1443,6 @@ class BridgeSurvivalGapHandler:
                     gap_type=gap.gap_type,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1490,7 +1482,6 @@ class DecayBuildingHandler:
                     maximum_integrity=updated.maximum_integrity,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1536,7 +1527,6 @@ class UpgradeBuildingHandler:
                     integrity=updated.integrity,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1577,7 +1567,6 @@ class DemolishBuildingHandler:
                     building_id=str(building_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1623,7 +1612,6 @@ class PrepareSiegeHandler:
                     score=updated.score,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1671,7 +1659,6 @@ class StartPurgeWaveHandler:
                     intensity=updated.intensity,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1774,7 +1761,7 @@ class PerformRitualHandler:
                     )
                 )
             )
-        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
+        return planned(MutationPlan(tuple(operations)), *events)
 
 
 class ExploreDangerZoneHandler:
@@ -1818,7 +1805,6 @@ class ExploreDangerZoneHandler:
                     danger_rating=zone.danger_rating,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1854,7 +1840,6 @@ class DefeatBossHandler:
                     boss_name=updated.name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1904,7 +1889,6 @@ class UnlockTreasureHandler:
                     key_name=treasure.key_name,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1942,7 +1926,6 @@ class ClaimTreasureHandler:
                     treasure_type=treasure.treasure_type,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -1982,7 +1965,6 @@ class ClimbHandler:
                     required_level=gate.required_level,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2024,7 +2006,6 @@ class RepairItemHandler:
                     maximum=durability.maximum,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2065,7 +2046,6 @@ class PoisonCharacterHandler:
                     severity=severity,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2094,7 +2074,6 @@ class TreatPoisonHandler:
                     character_id=str(target_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2128,7 +2107,6 @@ class GainCorruptionHandler:
                     amount=updated.amount,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2151,7 +2129,6 @@ class CleanseCorruptionHandler:
                     character_id=str(actor_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2199,7 +2176,6 @@ class PickpocketHandler:
                     item_id=str(item_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2261,7 +2237,6 @@ class SubdueHandler:
                     task=task,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2306,7 +2281,6 @@ class RecruitFollowerHandler:
                     follower_id=str(target_id),
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2354,7 +2328,6 @@ class CommandFollowerHandler:
                     orders=orders,
                 )
             ),
-            ctx=ctx,
         )
 
 
@@ -2386,7 +2359,6 @@ class ReleaseThrallHandler:
                     subordinate_id=str(target_id),
                 )
             ),
-            ctx=ctx,
         )
 
 

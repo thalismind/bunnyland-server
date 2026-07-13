@@ -26,7 +26,6 @@ class SleepHandler:
             MutationPlan(
                 (SetComponent(character.id, SleepingComponent(started_at_epoch=ctx.epoch)),)
             ),
-            ctx=ctx,
         )
 
 
@@ -41,7 +40,6 @@ class WakeHandler:
             return rejected("not asleep")
         return planned(
             MutationPlan((RemoveComponent(character.id, SleepingComponent),)),
-            ctx=ctx,
         )
 
 
@@ -54,7 +52,7 @@ class WaitHandler:
         _, _, error = require_character(ctx, command.character_id)
         if error is not None:
             return error
-        return planned(MutationPlan(), ctx=ctx)
+        return planned(MutationPlan())
 
 
 __all__ = ["SleepHandler", "WaitHandler", "WakeHandler"]

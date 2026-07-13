@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -207,16 +207,16 @@ from bunnyland.simpacks.daggersim.mechanics import (
     ViewMapHandler,
     WereformComponent,
     WithdrawHandler,
-    _spell_effect_operation,
     _current_law_region,
-    _service_access_operation,
     _institution_membership,
     _name,
     _payload_entity_id,
     _rank_allows,
     _route_between,
     _selected_rumor_id,
+    _service_access_operation,
     _service_institution,
+    _spell_effect_operation,
     _string_tuple,
     daggersim_fragments,
     install_daggersim,
@@ -624,7 +624,7 @@ def test_daggersim_parity_handlers_mutate_state_directly():
     ]
 
     for handler, command_type, payload, event_type in calls:
-        result = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        result = execute_handler(handler, ctx, _handler_cmd(scenario, command_type, **payload))
         assert result.ok, (command_type, result.reason)
         if event_type is not None:
             assert any(isinstance(event, event_type) for event in result.events)
@@ -786,13 +786,16 @@ def test_daggersim_parity_handlers_reject_invalid_targets_directly():
     ]
 
     for handler, command_type, payload, invalid_reason, missing_reason in cases:
-        bad_character = handler.execute(
+        bad_character = execute_handler(
+            handler,
             ctx,
             _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
         )
         assert bad_character.ok is False
         assert bad_character.reason == invalid_reason
-        missing_target = handler.execute(ctx, _handler_cmd(scenario, command_type, **payload))
+        missing_target = execute_handler(
+            handler, ctx, _handler_cmd(scenario, command_type, **payload)
+        )
         assert missing_target.ok is False
         assert missing_target.reason == missing_reason
 
@@ -819,24 +822,31 @@ def test_daggersim_parity_handlers_reject_invalid_targets_directly():
         (RequestCureHandler(), "request-cure-quest", {}, "invalid character id"),
     ]
     for handler, command_type, payload, reason in character_only_cases:
-        result = handler.execute(
+        result = execute_handler(
+            handler,
             ctx,
             _handler_cmd(scenario, command_type, character_id="not-an-id", **payload),
         )
         assert result.ok is False
         assert result.reason == reason
 
-    no_affliction = ProgressAfflictionIncubationHandler().execute(
-        ctx, _handler_cmd(scenario, "progress-affliction-incubation")
+    no_affliction = execute_handler(
+        ProgressAfflictionIncubationHandler(),
+        ctx,
+        _handler_cmd(scenario, "progress-affliction-incubation"),
     )
     assert no_affliction.ok is False
     assert no_affliction.reason == "character has no supernatural affliction"
-    bad_stigma = MarkAfflictionStigmaHandler().execute(
-        ctx, _handler_cmd(scenario, "mark-affliction-stigma", severity=0)
+    bad_stigma = execute_handler(
+        MarkAfflictionStigmaHandler(),
+        ctx,
+        _handler_cmd(scenario, "mark-affliction-stigma", severity=0),
     )
     assert bad_stigma.ok is False
     assert bad_stigma.reason == "stigma severity must be positive"
-    no_cure = RequestCureHandler().execute(ctx, _handler_cmd(scenario, "request-cure-quest"))
+    no_cure = execute_handler(
+        RequestCureHandler(), ctx, _handler_cmd(scenario, "request-cure-quest")
+    )
     assert no_cure.ok is False
     assert no_cure.reason == "character has no supernatural affliction"
 
@@ -943,7 +953,8 @@ def test_daggersim_parity_handlers_reject_wrong_kind_and_state_directly():
         [IdentityComponent(name="seal", kind="item"), PortableComponent(can_pick_up=True)],
     )
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), second_carried_item.id)
-    stored = StoreSafeItemHandler().execute(
+    stored = execute_handler(
+        StoreSafeItemHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -1283,7 +1294,7 @@ def test_daggersim_parity_handlers_reject_wrong_kind_and_state_directly():
 
     assert poor_account.has_component(BankAccountComponent)
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -1639,7 +1650,7 @@ def test_investigate_rumor_rejects_invalid_targets_and_states():
     ]
 
     for command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -1761,7 +1772,7 @@ def test_expand_ask_rumor_and_travel_handlers_reject_bad_state_directly():
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -1770,7 +1781,8 @@ def test_expand_ask_rumor_and_travel_handlers_reject_bad_state_directly():
         no_rumor_scenario.actor.world,
         no_rumor_scenario.actor.epoch,
     )
-    result = AskRumorHandler().execute(
+    result = execute_handler(
+        AskRumorHandler(),
         no_rumor_ctx,
         _handler_cmd(no_rumor_scenario, "ask-rumor"),
     )
@@ -1786,7 +1798,8 @@ def test_expand_ask_rumor_and_travel_handlers_reject_bad_state_directly():
         ),
         traveling_scenario.room_b,
     )
-    result = PlanTravelHandler().execute(
+    result = execute_handler(
+        PlanTravelHandler(),
         HandlerContext(traveling_scenario.actor.world, traveling_scenario.actor.epoch),
         _handler_cmd(
             traveling_scenario,
@@ -1802,7 +1815,8 @@ def test_expand_ask_rumor_and_travel_handlers_reject_bad_state_directly():
         Contains,
         detached_scenario.character,
     )
-    result = PlanTravelHandler().execute(
+    result = execute_handler(
+        PlanTravelHandler(),
         HandlerContext(detached_scenario.actor.world, detached_scenario.actor.epoch),
         _handler_cmd(
             detached_scenario,
@@ -1817,7 +1831,8 @@ def test_expand_ask_rumor_and_travel_handlers_reject_bad_state_directly():
     no_route_scenario.actor.world.get_entity(no_route_scenario.room_a).add_component(
         TravelHubComponent(name="Origin", region_id="moss-road")
     )
-    result = PlanTravelHandler().execute(
+    result = execute_handler(
+        PlanTravelHandler(),
         HandlerContext(no_route_scenario.actor.world, no_route_scenario.actor.epoch),
         _handler_cmd(
             no_route_scenario,
@@ -1831,7 +1846,8 @@ def test_expand_ask_rumor_and_travel_handlers_reject_bad_state_directly():
     no_route_scenario.actor.world.get_entity(no_route_scenario.room_b).add_component(
         TravelHubComponent(name="Destination", region_id="moss-road")
     )
-    result = PlanTravelHandler().execute(
+    result = execute_handler(
+        PlanTravelHandler(),
         HandlerContext(no_route_scenario.actor.world, no_route_scenario.actor.epoch),
         _handler_cmd(
             no_route_scenario,
@@ -2250,19 +2266,21 @@ def test_daggersim_institution_quest_and_bank_handlers_reject_bad_state_directly
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
     character.add_relationship(MemberOfInstitution(rank="member", since_epoch=0), institution_id)
-    result = UseInstitutionServiceHandler().execute(
+    result = execute_handler(
+        UseInstitutionServiceHandler(),
         ctx,
         _handler_cmd(scenario, "use-institution-service", service_id=str(service_id)),
     )
     assert result.ok is False
     assert result.reason == "institution rank is too low"
 
-    result = JoinInstitutionHandler().execute(
+    result = execute_handler(
+        JoinInstitutionHandler(),
         ctx,
         _handler_cmd(scenario, "join-institution", institution_id=str(institution_id)),
     )
@@ -2284,7 +2302,7 @@ def test_daggersim_institution_quest_and_bank_handlers_reject_bad_state_directly
             "insufficient bank balance",
         ),
     ):
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -2320,7 +2338,8 @@ def test_investigate_rumor_ignores_invalid_or_non_site_targets():
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), no_target_rumor.id)
 
     for rumor_id in (non_site_rumor.id, no_target_rumor.id):
-        result = InvestigateRumorHandler().execute(
+        result = execute_handler(
+            InvestigateRumorHandler(),
             ctx,
             _handler_cmd(scenario, "investigate-rumor", rumor_id=str(rumor_id)),
         )
@@ -2354,7 +2373,8 @@ def test_use_institution_service_can_succeed_without_output_item():
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_relationship(MemberOfInstitution(rank="member", since_epoch=0), institution.id)
 
-    result = UseInstitutionServiceHandler().execute(
+    result = execute_handler(
+        UseInstitutionServiceHandler(),
         ctx,
         _handler_cmd(scenario, "use-institution-service", service_id=str(service.id)),
     )
@@ -2363,7 +2383,8 @@ def test_use_institution_service_can_succeed_without_output_item():
     event = result.events[0]
     assert isinstance(event, InstitutionServiceUsedEvent)
     assert event.output_item_id is None
-    repeated = UseInstitutionServiceHandler().execute(
+    repeated = execute_handler(
+        UseInstitutionServiceHandler(),
         ctx,
         _handler_cmd(scenario, "use-institution-service", service_id=str(service.id)),
     )
@@ -2467,7 +2488,8 @@ def test_daggersim_repay_loan_handler_rejects_bad_entities_and_components():
         (str(accountless_loan.id), "bank account does not exist"),
         (str(payable_loan.id), "insufficient bank balance"),
     ):
-        result = RepayLoanHandler().execute(
+        result = execute_handler(
+            RepayLoanHandler(),
             ctx,
             _handler_cmd(scenario, "repay-loan", loan_id=loan_id, amount=1),
         )
@@ -2841,7 +2863,7 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
     ]
 
     for handler, command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -2850,7 +2872,8 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
         scenario.actor.world.get_entity(scenario.room_a),
         LawRegionComponent(region_id="moss-road", fines={"trespass": 15}),
     )
-    result = CommitCrimeHandler().execute(
+    result = execute_handler(
+        CommitCrimeHandler(),
         ctx,
         _handler_cmd(scenario, "commit-crime", crime_type="unknown"),
     )
@@ -2858,7 +2881,8 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
     assert result.reason == "crime is not fineable"
 
     character.add_component(CustomClassComponent(class_name="Moonlit Forager"))
-    result = CreateCustomClassHandler().execute(
+    result = execute_handler(
+        CreateCustomClassHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -2875,7 +2899,8 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
             contracted_at_epoch=scenario.actor.epoch,
         )
     )
-    result = ContractAfflictionHandler().execute(
+    result = execute_handler(
+        ContractAfflictionHandler(),
         ctx,
         _handler_cmd(scenario, "contract-affliction", affliction_type="vampire"),
     )
@@ -2885,7 +2910,7 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
     character.add_component(
         WereformComponent(form_name="werehare", transformed_at_epoch=scenario.actor.epoch)
     )
-    result = TransformHandler().execute(ctx, _handler_cmd(scenario, "transform"))
+    result = execute_handler(TransformHandler(), ctx, _handler_cmd(scenario, "transform"))
     assert result.ok is False
     assert result.reason == "character is already transformed"
 
@@ -2924,7 +2949,8 @@ def test_pay_fine_succeeds_when_crime_has_no_bounty_component():
         scenario.actor.world,
         [LawRegionComponent(region_id="other-road", fines={})],
     )
-    missing_region = PayFineHandler().execute(
+    missing_region = execute_handler(
+        PayFineHandler(),
         ctx,
         _handler_cmd(scenario, "pay-fine", crime_id=str(crime.id)),
     )
@@ -2936,7 +2962,8 @@ def test_pay_fine_succeeds_when_crime_has_no_bounty_component():
         LawRegionComponent(region_id="moss-road", fines={}),
     )
 
-    result = PayFineHandler().execute(
+    result = execute_handler(
+        PayFineHandler(),
         ctx,
         _handler_cmd(scenario, "pay-fine", crime_id=str(crime.id)),
     )
@@ -3001,7 +3028,7 @@ def test_buy_property_handler_rejects_bad_state_directly():
         ),
     ]
     for command, reason in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -3016,7 +3043,8 @@ def test_buy_property_handler_rejects_bad_state_directly():
     scenario.actor.world.get_entity(bank_id).add_relationship(
         Contains(mode=ContainmentMode.CONTAINER), account.id
     )
-    result = handler.execute(
+    result = execute_handler(
+        handler,
         ctx,
         _handler_cmd(scenario, "buy-property", property_id=str(property_id)),
     )
@@ -3039,7 +3067,8 @@ def test_enchant_item_can_use_spell_template_as_source():
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), charm.id)
 
-    result = EnchantItemHandler().execute(
+    result = execute_handler(
+        EnchantItemHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -3227,7 +3256,8 @@ def test_daggersim_handlers_reject_invalid_character_ids_directly():
     ]
 
     for handler, command_type, payload, reason in cases:
-        result = handler.execute(
+        result = execute_handler(
+            handler,
             ctx,
             _handler_cmd(
                 scenario,
@@ -3239,7 +3269,8 @@ def test_daggersim_handlers_reject_invalid_character_ids_directly():
         assert result.ok is False
         assert result.reason == reason
 
-    missing = CommitCrimeHandler().execute(
+    missing = execute_handler(
+        CommitCrimeHandler(),
         ctx,
         _handler_cmd(
             scenario,
@@ -4466,7 +4497,7 @@ def test_dungeon_handlers_reject_bad_entities_and_components_directly():
             "not currently in this dungeon",
         ),
     ):
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -4486,7 +4517,7 @@ def test_dungeon_utility_handlers_reject_missing_room_or_state_directly():
         (SetRecallHandler(), _handler_cmd(scenario, "set-recall"), "character is not in a room"),
         (RestHandler(), _handler_cmd(scenario, "rest"), "character is not in a room"),
     ):
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert result.ok is False
         assert result.reason == reason
 
@@ -4494,16 +4525,16 @@ def test_dungeon_utility_handlers_reject_missing_room_or_state_directly():
         Contains(mode=ContainmentMode.ROOM_CONTENT),
         scenario.character,
     )
-    result = ViewMapHandler().execute(ctx, _handler_cmd(scenario, "view-map"))
+    result = execute_handler(ViewMapHandler(), ctx, _handler_cmd(scenario, "view-map"))
     assert result.ok is False
     assert result.reason == "you have no map to view"
 
-    result = UseRecallHandler().execute(ctx, _handler_cmd(scenario, "use-recall"))
+    result = execute_handler(UseRecallHandler(), ctx, _handler_cmd(scenario, "use-recall"))
     assert result.ok is False
     assert result.reason == "no recall anchor is set"
 
     character.add_relationship(AnchoredToRoom(), scenario.room_a)
-    result = UseRecallHandler().execute(ctx, _handler_cmd(scenario, "use-recall"))
+    result = execute_handler(UseRecallHandler(), ctx, _handler_cmd(scenario, "use-recall"))
     assert result.ok is False
     assert result.reason == "already at the recall anchor"
 
@@ -4519,7 +4550,7 @@ def test_dungeon_utility_handlers_reject_missing_room_or_state_directly():
         scenario.character,
     )
     empty_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), scenario.character)
-    result = SearchRoomHandler().execute(ctx, _handler_cmd(scenario, "search-room"))
+    result = execute_handler(SearchRoomHandler(), ctx, _handler_cmd(scenario, "search-room"))
     assert result.ok is False
     assert result.reason == "you find nothing of note"
 
@@ -5025,7 +5056,7 @@ def test_curse_handlers_reject_bad_state_directly():
         ),
     ]
     for handler, command, expected in cases:
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
         assert not result.ok, expected
         assert expected in result.reason, (expected, result.reason)
 
@@ -5045,7 +5076,7 @@ def test_curse_handlers_reject_bad_state_directly():
         (_handler_cmd(scenario, "feed-on", target_id=str(far_victim.id)), "not reachable"),
     ]
     for command, expected in feed_cases:
-        result = FeedOnHandler().execute(ctx, command)
+        result = execute_handler(FeedOnHandler(), ctx, command)
         assert not result.ok, expected
         assert expected in result.reason, (expected, result.reason)
 
@@ -5358,8 +5389,10 @@ def test_daggersim_use_service_rejects_non_institution_container():
     world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), service.id
     )
-    result = UseInstitutionServiceHandler().execute(
-        ctx, _handler_cmd(scenario, "use-institution-service", service_id=str(service.id))
+    result = execute_handler(
+        UseInstitutionServiceHandler(),
+        ctx,
+        _handler_cmd(scenario, "use-institution-service", service_id=str(service.id)),
     )
     assert not result.ok
     assert result.reason == "service institution is invalid"
@@ -5370,8 +5403,8 @@ def test_daggersim_commit_crime_rejects_blank_crime_type():
     scenario = build_scenario()
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
-    result = CommitCrimeHandler().execute(
-        ctx, _handler_cmd(scenario, "commit-crime", crime_type="   ")
+    result = execute_handler(
+        CommitCrimeHandler(), ctx, _handler_cmd(scenario, "commit-crime", crime_type="   ")
     )
     assert not result.ok
     assert result.reason == "invalid character or crime type"
@@ -5384,7 +5417,7 @@ def test_daggersim_camp_rejects_character_without_room():
     ctx = HandlerContext(world, scenario.actor.epoch)
     # Detach the character from its room so container_of returns None (line 2673).
     world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
-    result = CampHandler().execute(ctx, _handler_cmd(scenario, "camp"))
+    result = execute_handler(CampHandler(), ctx, _handler_cmd(scenario, "camp"))
     assert not result.ok
     assert result.reason == "character is not in a room"
 
@@ -5395,7 +5428,7 @@ def test_daggersim_search_room_rejects_character_without_room():
     world = scenario.actor.world
     ctx = HandlerContext(world, scenario.actor.epoch)
     world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
-    result = SearchRoomHandler().execute(ctx, _handler_cmd(scenario, "search-room"))
+    result = execute_handler(SearchRoomHandler(), ctx, _handler_cmd(scenario, "search-room"))
     assert not result.ok
     assert result.reason == "character is not in a room"
 
@@ -5404,7 +5437,7 @@ def test_daggersim_use_recall_rejects_without_anchor():
     scenario = build_scenario()
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
-    result = UseRecallHandler().execute(ctx, _handler_cmd(scenario, "use-recall"))
+    result = execute_handler(UseRecallHandler(), ctx, _handler_cmd(scenario, "use-recall"))
     assert not result.ok
     assert result.reason == "no recall anchor is set"
 
@@ -5427,7 +5460,8 @@ def test_daggersim_pacify_fail_leaves_creature_hostile():
     world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), creature.id
     )
-    result = AttemptPacifyHandler().execute(
+    result = execute_handler(
+        AttemptPacifyHandler(),
         ctx,
         _handler_cmd(scenario, "attempt-pacify", target_id=str(creature.id), language="growl"),
     )
@@ -5455,7 +5489,8 @@ def test_daggersim_pacify_succeeds_on_nonhostile_creature():
     world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), creature.id
     )
-    result = AttemptPacifyHandler().execute(
+    result = execute_handler(
+        AttemptPacifyHandler(),
         ctx,
         _handler_cmd(scenario, "attempt-pacify", target_id=str(creature.id), language="growl"),
     )
@@ -5472,7 +5507,9 @@ def test_daggersim_end_transformation_without_affliction():
     character = world.get_entity(scenario.character)
     # Transformed but with no SupernaturalAfflictionComponent (3458->3462).
     character.add_component(WereformComponent(form_name="wolf", transformed_at_epoch=0))
-    result = EndTransformationHandler().execute(ctx, _handler_cmd(scenario, "end-transformation"))
+    result = execute_handler(
+        EndTransformationHandler(), ctx, _handler_cmd(scenario, "end-transformation")
+    )
     assert result.ok
     assert not world.get_entity(scenario.character).has_component(WereformComponent)
 
@@ -5487,7 +5524,9 @@ def test_daggersim_cure_affliction_without_feeding_or_wereform():
     character.add_component(
         SupernaturalAfflictionComponent(affliction_type="ghoul", contracted_at_epoch=0)
     )
-    result = CureAfflictionHandler().execute(ctx, _handler_cmd(scenario, "cure-affliction"))
+    result = execute_handler(
+        CureAfflictionHandler(), ctx, _handler_cmd(scenario, "cure-affliction")
+    )
     assert result.ok
     assert not world.get_entity(scenario.character).has_component(SupernaturalAfflictionComponent)
 
@@ -5500,7 +5539,7 @@ def test_daggersim_rest_allows_low_risk_area():
     room = world.get_entity(scenario.room_a)
     room.add_component(RestRiskComponent(band="low"))
     # Low-risk band is not high/ambush, so rest is allowed (3979->3981).
-    result = RestHandler().execute(ctx, _handler_cmd(scenario, "rest"))
+    result = execute_handler(RestHandler(), ctx, _handler_cmd(scenario, "rest"))
     assert result.ok
 
 
@@ -5530,14 +5569,16 @@ def test_daggersim_withdraw_and_string_tuple_and_identify_can_handle():
 
     # Withdraw success path (lines 2127-2129).
     bank_id = _bank(scenario)
-    OpenBankAccountHandler().execute(
-        ctx, _handler_cmd(scenario, "open-bank-account", bank_id=str(bank_id))
+    execute_handler(
+        OpenBankAccountHandler(),
+        ctx,
+        _handler_cmd(scenario, "open-bank-account", bank_id=str(bank_id)),
     )
-    DepositHandler().execute(
-        ctx, _handler_cmd(scenario, "deposit", bank_id=str(bank_id), amount=10)
+    execute_handler(
+        DepositHandler(), ctx, _handler_cmd(scenario, "deposit", bank_id=str(bank_id), amount=10)
     )
-    result = WithdrawHandler().execute(
-        ctx, _handler_cmd(scenario, "withdraw", bank_id=str(bank_id), amount=4)
+    result = execute_handler(
+        WithdrawHandler(), ctx, _handler_cmd(scenario, "withdraw", bank_id=str(bank_id), amount=4)
     )
     assert result.ok
     del character
@@ -5577,7 +5618,7 @@ def test_daggersim_search_room_discovers_door_and_objective():
     dungeon_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), door.id)
     dungeon_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), objective.id)
 
-    result = SearchRoomHandler().execute(ctx, _handler_cmd(scenario, "search-room"))
+    result = execute_handler(SearchRoomHandler(), ctx, _handler_cmd(scenario, "search-room"))
     assert result.ok
     # Fresh room gets discovered + noted on automap (lines 3778-3779).
     character = world.get_entity(scenario.character)
@@ -5588,7 +5629,7 @@ def test_daggersim_search_room_discovers_door_and_objective():
 
     # Searching again: room already discovered, door & objective already found
     # (branches 3796->3810, 3812->3792 take the "already found" path).
-    again = SearchRoomHandler().execute(ctx, _handler_cmd(scenario, "search-room"))
+    again = execute_handler(SearchRoomHandler(), ctx, _handler_cmd(scenario, "search-room"))
     assert not again.ok
     assert again.reason == "you find nothing of note"
 
@@ -5601,7 +5642,7 @@ def test_daggersim_use_recall_moves_character_to_anchor():
     character = world.get_entity(scenario.character)
     anchor = world.get_entity(scenario.room_b)
     character.add_relationship(AnchoredToRoom(), anchor.id)
-    result = UseRecallHandler().execute(ctx, _handler_cmd(scenario, "use-recall"))
+    result = execute_handler(UseRecallHandler(), ctx, _handler_cmd(scenario, "use-recall"))
     assert result.ok
     assert container_of(world.get_entity(scenario.character)) == anchor.id
 
@@ -5637,8 +5678,10 @@ def test_daggersim_send_debt_collector_without_borrower_room():
     # Borrower (the acting character) is not in any room (2434->2438).
     world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
     debt = spawn_entity(world, [DebtComponent(amount=10, defaulted_at_epoch=0)])
-    result = SendDebtCollectorHandler().execute(
-        ctx, _handler_cmd(scenario, "send-debt-collector", debt_id=str(debt.id))
+    result = execute_handler(
+        SendDebtCollectorHandler(),
+        ctx,
+        _handler_cmd(scenario, "send-debt-collector", debt_id=str(debt.id)),
     )
     assert result.ok
 
@@ -5705,7 +5748,7 @@ def test_daggersim_use_recall_from_roomless_character():
     character.add_relationship(AnchoredToRoom(), anchor.id)
     # Detach the character from any room so _move_character sees no origin (3616->3618).
     world.get_entity(scenario.room_a).remove_relationship(Contains, character.id)
-    result = UseRecallHandler().execute(ctx, _handler_cmd(scenario, "use-recall"))
+    result = execute_handler(UseRecallHandler(), ctx, _handler_cmd(scenario, "use-recall"))
     assert result.ok
     assert container_of(world.get_entity(scenario.character)) == anchor.id
 
@@ -5781,9 +5824,9 @@ def test_daggersim_mark_path_twice_keeps_single_discovery():
     world = scenario.actor.world
     ctx = HandlerContext(world, scenario.actor.epoch)
     room_id = str(scenario.room_a)
-    assert MarkPathHandler().execute(ctx, _handler_cmd(scenario, "mark-path")).ok
+    assert execute_handler(MarkPathHandler(), ctx, _handler_cmd(scenario, "mark-path")).ok
     # Second mark: the room is already in discovered_rooms (branch 3639->3641).
-    assert MarkPathHandler().execute(ctx, _handler_cmd(scenario, "mark-path")).ok
+    assert execute_handler(MarkPathHandler(), ctx, _handler_cmd(scenario, "mark-path")).ok
     automap = world.get_entity(scenario.character).get_component(AutomapComponent)
     assert automap.discovered_rooms.count(room_id) == 1
     assert automap.marked_rooms.count(room_id) == 1

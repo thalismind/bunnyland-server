@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 import pytest
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     ActionPointsComponent,
@@ -552,8 +552,8 @@ def test_memory_handlers_reject_invalid_character_ids():
         invalid = with_character_id(command, scenario, "not-an-id")
         missing = with_character_id(command, scenario, "entity_999")
 
-        assert handler.execute(ctx, invalid).reason == "invalid character id"
-        assert handler.execute(ctx, missing).reason == "character does not exist"
+        assert execute_handler(handler, ctx, invalid).reason == "invalid character id"
+        assert execute_handler(handler, ctx, missing).reason == "character does not exist"
 
 
 def test_take_note_rejects_blank_text_and_bad_memory_scopes():
@@ -561,7 +561,7 @@ def test_take_note_rejects_blank_text_and_bad_memory_scopes():
     ctx = handler_context(scenario)
     handler = TakeNoteHandler(store)
 
-    assert handler.execute(ctx, note_cmd(scenario, "   ")).reason == "nothing to note"
+    assert execute_handler(handler, ctx, note_cmd(scenario, "   ")).reason == "nothing to note"
 
     bad_scope = build_submitted_command(
         character_id=str(scenario.character),
@@ -572,7 +572,9 @@ def test_take_note_rejects_blank_text_and_bad_memory_scopes():
         lane=Lane.FOCUS,
         payload={"text": "note", "scope": "guild"},
     )
-    assert handler.execute(ctx, bad_scope).reason == "memory scope must be private or shared"
+    assert (
+        execute_handler(handler, ctx, bad_scope).reason == "memory scope must be private or shared"
+    )
 
     shared_missing = build_submitted_command(
         character_id=str(scenario.character),
@@ -583,7 +585,7 @@ def test_take_note_rejects_blank_text_and_bad_memory_scopes():
         lane=Lane.FOCUS,
         payload={"text": "note", "scope": "shared"},
     )
-    assert handler.execute(ctx, shared_missing).reason == "shared collection is required"
+    assert execute_handler(handler, ctx, shared_missing).reason == "shared collection is required"
 
 
 def test_take_note_defaults_null_and_blank_scope_to_private():
@@ -602,7 +604,7 @@ def test_take_note_defaults_null_and_blank_scope_to_private():
             payload={"text": f"note with scope {scope!r}", "scope": scope},
         )
 
-        result = handler.execute(ctx, command)
+        result = execute_handler(handler, ctx, command)
 
         assert result.ok is True
         assert result.events[0].scope == "private"
@@ -630,7 +632,7 @@ def test_shared_collection_defaults_when_profile_has_one_shared_collection():
         payload={"text": "shared by default", "scope": "shared"},
     )
 
-    result = TakeNoteHandler(store).execute(ctx, command)
+    result = execute_handler(TakeNoteHandler(store), ctx, command)
 
     assert result.ok is True
     assert result.events[0].collection == "burrow-board"
@@ -643,12 +645,12 @@ def test_remember_and_forget_reject_collection_errors_and_missing_note_ids():
     character = scenario.actor.world.get_entity(scenario.character)
     character.remove_component(MemoryProfileComponent)
 
-    assert RememberHandler(store).execute(ctx, remember_cmd(scenario)).reason == (
+    assert execute_handler(RememberHandler(store), ctx, remember_cmd(scenario)).reason == (
         "character has no memory profile"
     )
 
     character.add_component(MemoryProfileComponent(vector_collection="juniper"))
-    assert ForgetHandler(store).execute(ctx, forget_cmd(scenario, " ")).reason == (
+    assert execute_handler(ForgetHandler(store), ctx, forget_cmd(scenario, " ")).reason == (
         "note id is required"
     )
 
@@ -661,7 +663,7 @@ def test_remember_and_forget_reject_collection_errors_and_missing_note_ids():
         lane=Lane.FOCUS,
         payload={"note_id": "note-1", "scope": "shared", "collection": "unknown"},
     )
-    assert ForgetHandler(store).execute(ctx, bad_shared).reason == (
+    assert execute_handler(ForgetHandler(store), ctx, bad_shared).reason == (
         "shared collection is not available"
     )
 
@@ -672,16 +674,18 @@ def test_reflect_rejects_missing_profile_nonpositive_limit_and_accepts_explicit_
     character = scenario.actor.world.get_entity(scenario.character)
     character.remove_component(MemoryProfileComponent)
 
-    assert ReflectHandler(store).execute(ctx, reflect_cmd(scenario, text="x")).reason == (
+    assert execute_handler(ReflectHandler(store), ctx, reflect_cmd(scenario, text="x")).reason == (
         "character has no memory profile"
     )
 
     character.add_component(MemoryProfileComponent(vector_collection="juniper"))
-    assert ReflectHandler(store).execute(ctx, reflect_cmd(scenario, limit=0)).reason == (
+    assert execute_handler(ReflectHandler(store), ctx, reflect_cmd(scenario, limit=0)).reason == (
         "reflection limit must be positive"
     )
 
-    result = ReflectHandler(store).execute(ctx, reflect_cmd(scenario, text="  I learned.  "))
+    result = execute_handler(
+        ReflectHandler(store), ctx, reflect_cmd(scenario, text="  I learned.  ")
+    )
 
     assert result.ok is True
     assert result.events[0].text == "I learned."

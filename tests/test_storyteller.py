@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import build_scenario
+from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     AdminComponent,
@@ -422,14 +422,16 @@ def test_incident_ready_and_resolve_handler_cover_error_paths_directly(scenario)
     )
     assert story._incident_ready_to_resolve(world, empty_incident) is False
 
-    result = ResolveIncidentHandler().execute(
+    result = execute_handler(
+        ResolveIncidentHandler(),
         ctx,
         _cmd(scenario, "resolve-incident", incident_id="not-an-id"),
     )
     assert result.ok is False
     assert result.reason == "invalid character or incident id"
 
-    result = ResolveIncidentHandler().execute(
+    result = execute_handler(
+        ResolveIncidentHandler(),
         ctx,
         _cmd(scenario, "resolve-incident", incident_id="entity_999999"),
     )
@@ -437,7 +439,8 @@ def test_incident_ready_and_resolve_handler_cover_error_paths_directly(scenario)
     assert result.reason == "incident does not exist"
 
     wrong_kind = spawn_entity(world, [IdentityComponent(name="not incident", kind="prop")])
-    result = ResolveIncidentHandler().execute(
+    result = execute_handler(
+        ResolveIncidentHandler(),
         ctx,
         _cmd(scenario, "resolve-incident", incident_id=str(wrong_kind.id)),
     )
@@ -448,7 +451,8 @@ def test_incident_ready_and_resolve_handler_cover_error_paths_directly(scenario)
         world,
         [IncidentComponent(kind="done", budget_spent=0, started_at_epoch=0, resolved_at_epoch=1)],
     )
-    result = ResolveIncidentHandler().execute(
+    result = execute_handler(
+        ResolveIncidentHandler(),
         ctx,
         _cmd(scenario, "resolve-incident", incident_id=str(resolved.id)),
     )
