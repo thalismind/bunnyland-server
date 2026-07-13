@@ -731,31 +731,6 @@ def _skill_xp_update(
     return updated, events
 
 
-def _add_skill_xp(
-    ctx: HandlerContext,
-    entity: Entity,
-    *,
-    skill: str,
-    amount: float,
-    actor_id: str,
-    visibility: EventVisibility = EventVisibility.PRIVATE,
-    target_ids: tuple[str, ...] = (),
-) -> list[DomainEvent]:
-    """Compatibility helper for separately ordered systems and bundled packs."""
-
-    updated, events = _skill_xp_update(
-        ctx,
-        entity,
-        skill=skill,
-        amount=amount,
-        actor_id=actor_id,
-        visibility=visibility,
-        target_ids=target_ids,
-    )
-    replace_component(entity, updated)
-    return events
-
-
 def _participant_ids(command: SubmittedCommand, *payload_keys: str) -> list[str]:
     ids = [command.character_id]
     for key in payload_keys:

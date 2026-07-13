@@ -7,7 +7,7 @@ from dataclasses import replace
 from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, World
 
-from bunnyland.simpacks.lifesim.mechanics import SkillSetComponent, _add_skill_xp
+from bunnyland.simpacks.lifesim.mechanics import SkillSetComponent, _skill_xp_update
 
 from ...core.commands import SubmittedCommand
 from ...core.components import (
@@ -25,8 +25,6 @@ from ...core.ecs import (
     contents,
     parse_entity_id,
     reachable_ids,
-    replace_component,
-    spawn_entity,
 )
 from ...core.ecs import (
     entity_name as _name,
@@ -36,7 +34,17 @@ from ...core.ecs import (
 )
 from ...core.edges import ContainmentMode, Contains
 from ...core.events import DomainEvent, EventVisibility
-from ...core.handlers import HandlerContext, HandlerResult, ok, rejected, require_entity
+from ...core.handlers import HandlerContext, HandlerResult, planned, rejected, require_entity
+from ...core.mutations import (
+    AddComponent,
+    AddEdge,
+    AddEntity,
+    EntityReference,
+    MutationOperation,
+    MutationPlan,
+    RemoveEdge,
+    SetComponent,
+)
 from ...prompts import ComponentPromptContext
 
 
@@ -811,16 +819,22 @@ class DiscoverLocationHandler:
             return rejected("location already discovered")
 
         discovered_by = tuple((*discovery.discovered_by, str(character_id)))
-        replace_component(location, replace(poi, discovered=True))
-        replace_component(
-            location,
-            replace(
-                discovery,
-                discovered_by=discovered_by,
-                first_discovered_at_epoch=discovery.first_discovered_at_epoch or ctx.epoch,
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(location_id, replace(poi, discovered=True)),
+                    SetComponent(
+                        location_id,
+                        replace(
+                            discovery,
+                            discovered_by=discovered_by,
+                            first_discovered_at_epoch=(
+                                discovery.first_discovered_at_epoch or ctx.epoch
+                            ),
+                        ),
+                    ),
+                )
             ),
-        )
-        return ok(
             LocationDiscoveredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -831,7 +845,8 @@ class DiscoverLocationHandler:
                     location_type=poi.location_type,
                     region=poi.region,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -880,8 +895,8 @@ class MarkMapHandler:
             marked_by=marked_by,
             marked_at_epoch=ctx.epoch,
         )
-        replace_component(location, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(location_id, updated),)),
             MapMarkerAddedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -892,7 +907,8 @@ class MarkMapHandler:
                     label=updated.label,
                     marker_type=updated.marker_type,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -924,8 +940,10 @@ class TriggerEncounterHandler:
         if not zone.active:
             return rejected("encounter zone is inactive")
 
-        replace_component(zone_entity, replace(zone, last_triggered_at_epoch=ctx.epoch))
-        return ok(
+        return planned(
+            MutationPlan(
+                (SetComponent(zone_id, replace(zone, last_triggered_at_epoch=ctx.epoch)),)
+            ),
             EncounterTriggeredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -936,7 +954,8 @@ class TriggerEncounterHandler:
                     zone_type=zone.zone_type,
                     danger_rating=zone.danger_rating,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -962,12 +981,20 @@ class AcceptQuestHandler:
         if _accepted_by(quest_entity, character_id):
             return rejected("quest already accepted")
 
-        quest_entity.add_relationship(QuestAcceptedBy(accepted_at_epoch=ctx.epoch), character_id)
-        replace_component(
-            quest_entity,
-            replace(state, status="active", accepted_at_epoch=ctx.epoch),
-        )
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    AddEdge(
+                        quest_entity_id,
+                        character_id,
+                        QuestAcceptedBy(accepted_at_epoch=ctx.epoch),
+                    ),
+                    SetComponent(
+                        quest_entity_id,
+                        replace(state, status="active", accepted_at_epoch=ctx.epoch),
+                    ),
+                )
+            ),
             QuestAcceptedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -978,7 +1005,8 @@ class AcceptQuestHandler:
                     quest_key=quest.quest_id,
                     title=quest.title,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1029,15 +1057,17 @@ class CompleteObjectiveHandler:
                 ):
                     reward_items.append((item_id, ctx.world.get_entity(item_id)))
 
-        replace_component(
-            objective_entity,
-            replace(
-                objective,
-                completed=True,
-                completed_by=str(character_id),
-                completed_at_epoch=ctx.epoch,
-            ),
-        )
+        operations: list[MutationOperation] = [
+            SetComponent(
+                objective_id,
+                replace(
+                    objective,
+                    completed=True,
+                    completed_by=str(character_id),
+                    completed_at_epoch=ctx.epoch,
+                ),
+            )
+        ]
         events: list[DomainEvent] = [
             QuestObjectiveCompletedEvent(
                 **ctx.event_base(
@@ -1052,25 +1082,30 @@ class CompleteObjectiveHandler:
             )
         ]
         if will_complete_quest:
-            replace_component(
-                quest_entity,
-                replace(state, status="completed", completed_at_epoch=ctx.epoch),
+            operations.append(
+                SetComponent(
+                    quest_entity_id,
+                    replace(state, status="completed", completed_at_epoch=ctx.epoch),
+                )
             )
-            character = ctx.entity(character_id)
             for item_id, item in reward_items:
                 source_id = container_of(item)
                 if source_id is not None:
-                    ctx.entity(source_id).remove_relationship(Contains, item_id)
-                character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
+                    operations.append(RemoveEdge(source_id, item_id, Contains))
+                operations.append(
+                    AddEdge(character_id, item_id, Contains(mode=ContainmentMode.INVENTORY))
+                )
             for reward in rewards:
                 component = reward.get_component(QuestRewardComponent)
-                replace_component(
-                    reward,
-                    replace(
-                        component,
-                        claimed=True,
-                        claimed_by=str(character_id),
-                        claimed_at_epoch=ctx.epoch,
+                operations.append(
+                    SetComponent(
+                        reward.id,
+                        replace(
+                            component,
+                            claimed=True,
+                            claimed_by=str(character_id),
+                            claimed_at_epoch=ctx.epoch,
+                        ),
                     ),
                 )
             events.append(
@@ -1086,7 +1121,7 @@ class CompleteObjectiveHandler:
                     )
                 )
             )
-        return ok(*events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class TrackQuestHandler:
@@ -1105,9 +1140,13 @@ class TrackQuestHandler:
         if not _accepted_by(quest_entity, character_id):
             return rejected("quest is not accepted")
         character = ctx.entity(character_id)
-        if not character.has_relationship(TracksQuest, quest_id):
-            character.add_relationship(TracksQuest(tracked_at_epoch=ctx.epoch), quest_id)
-        return ok(
+        operations = (
+            ()
+            if character.has_relationship(TracksQuest, quest_id)
+            else (AddEdge(character_id, quest_id, TracksQuest(tracked_at_epoch=ctx.epoch)),)
+        )
+        return planned(
+            MutationPlan(operations),
             QuestTrackedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1117,7 +1156,8 @@ class TrackQuestHandler:
                     quest_id=str(quest_id),
                     title=quest.title,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1139,8 +1179,8 @@ class DeclineQuestHandler:
             return rejected("quest is already complete")
         if _accepted_by(quest_entity, character_id):
             return rejected("accepted quest cannot be declined")
-        replace_component(quest_entity, replace(state, status="declined"))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(quest_id, replace(state, status="declined")),)),
             QuestDeclinedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1150,7 +1190,8 @@ class DeclineQuestHandler:
                     quest_id=str(quest_id),
                     title=quest.title,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1170,8 +1211,8 @@ class ChooseQuestBranchHandler:
         if not _accepted_by(quest_entity, character_id):
             return rejected("quest is not accepted")
         state = quest_entity.get_component(QuestStateComponent)
-        replace_component(quest_entity, replace(state, branch=branch))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(quest_id, replace(state, branch=branch)),)),
             QuestBranchChosenEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1181,7 +1222,8 @@ class ChooseQuestBranchHandler:
                     quest_id=str(quest_id),
                     branch=branch,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1203,9 +1245,17 @@ class JoinFactionHandler:
         if character.has_relationship(MemberOfFaction, faction_id):
             return rejected("already a faction member")
 
-        character.add_relationship(MemberOfFaction(rank=rank, since_epoch=ctx.epoch), faction_id)
         faction_name = faction.get_component(FactionComponent).name
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    AddEdge(
+                        character_id,
+                        faction_id,
+                        MemberOfFaction(rank=rank, since_epoch=ctx.epoch),
+                    ),
+                )
+            ),
             FactionJoinedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1216,7 +1266,8 @@ class JoinFactionHandler:
                     faction_name=faction_name,
                     rank=rank,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1237,9 +1288,9 @@ class LeaveFactionHandler:
         if not character.has_relationship(MemberOfFaction, faction_id):
             return rejected("not a faction member")
 
-        character.remove_relationship(MemberOfFaction, faction_id)
         faction_name = faction.get_component(FactionComponent).name
-        return ok(
+        return planned(
+            MutationPlan((RemoveEdge(character_id, faction_id, MemberOfFaction),)),
             FactionLeftEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1249,7 +1300,8 @@ class LeaveFactionHandler:
                     faction_id=str(faction_id),
                     faction_name=faction_name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1281,8 +1333,8 @@ class UnlockPerkHandler:
         if _skill_level(character, perk.skill_name) < perk.min_level:
             return rejected("skill level too low for this perk")
 
-        character.add_relationship(HasPerk(unlocked_at_epoch=ctx.epoch), perk_id)
-        return ok(
+        return planned(
+            MutationPlan((AddEdge(character_id, perk_id, HasPerk(unlocked_at_epoch=ctx.epoch)),)),
             PerkUnlockedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1293,7 +1345,8 @@ class UnlockPerkHandler:
                     perk_name=perk.name,
                     skill_name=perk.skill_name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1319,15 +1372,19 @@ class AbsorbGreatSoulHandler:
         if ancient.soul_absorbed:
             return rejected("its great soul is already claimed")
 
-        replace_component(beast, replace(ancient, soul_absorbed=True))
         current = (
             character.get_component(GreatSoulComponent)
             if character.has_component(GreatSoulComponent)
             else GreatSoulComponent()
         )
         souls = current.souls + 1
-        replace_component(character, replace(current, souls=souls))
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(beast_id, replace(ancient, soul_absorbed=True)),
+                    SetComponent(character_id, replace(current, souls=souls)),
+                )
+            ),
             GreatSoulAbsorbedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1338,7 +1395,8 @@ class AbsorbGreatSoulHandler:
                     beast_name=ancient.name,
                     souls=souls,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1370,8 +1428,8 @@ class LearnWordOfPowerHandler:
         if word.skill_name and _skill_level(character, word.skill_name) < word.min_skill_level:
             return rejected("skill level too low for this word")
 
-        character.add_relationship(KnowsWord(learned_at_epoch=ctx.epoch), word_id)
-        return ok(
+        return planned(
+            MutationPlan((AddEdge(character_id, word_id, KnowsWord(learned_at_epoch=ctx.epoch)),)),
             WordOfPowerLearnedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1381,7 +1439,8 @@ class LearnWordOfPowerHandler:
                     word_id=str(word_id),
                     word_name=word.name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1404,7 +1463,8 @@ class SpeakWordOfPowerHandler:
             if word_entity.has_component(WordOfPowerComponent)
             else _name(word_entity)
         )
-        return ok(
+        return planned(
+            MutationPlan(),
             WordOfPowerSpokenEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1414,7 +1474,8 @@ class SpeakWordOfPowerHandler:
                     word_id=str(word_id),
                     word_name=word_name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1476,8 +1537,8 @@ class SneakHandler:
         character = ctx.entity(character_id)
         sneaking = not _is_sneaking(character)
         if character.has_component(SneakingComponent):
-            replace_component(
-                character,
+            operation: MutationOperation = SetComponent(
+                character_id,
                 replace(
                     character.get_component(SneakingComponent),
                     sneaking=sneaking,
@@ -1485,8 +1546,12 @@ class SneakHandler:
                 ),
             )
         else:
-            character.add_component(SneakingComponent(sneaking=sneaking, since_epoch=ctx.epoch))
-        return ok(
+            operation = AddComponent(
+                character_id,
+                SneakingComponent(sneaking=sneaking, since_epoch=ctx.epoch),
+            )
+        return planned(
+            MutationPlan((operation,)),
             StealthChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1495,7 +1560,8 @@ class SneakHandler:
                     character_id=str(character_id),
                     sneaking=sneaking,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1524,8 +1590,10 @@ class StealHandler:
         ):
             return rejected("item cannot be taken")
 
-        victim.remove_relationship(Contains, item_id)
-        thief.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
+        operations: list[MutationOperation] = [
+            RemoveEdge(victim_id, item_id, Contains),
+            AddEdge(thief_id, item_id, Contains(mode=ContainmentMode.INVENTORY)),
+        ]
         events: list[DomainEvent] = [
             TheftCommittedEvent(
                 **ctx.event_base(
@@ -1539,14 +1607,16 @@ class StealHandler:
                 )
             )
         ]
-        events.extend(self._witness_bounties(ctx, thief, thief_id, room_id))
-        return ok(*events)
+        bounty_operations, bounty_events = self._witness_bounties(ctx, thief, thief_id, room_id)
+        operations.extend(bounty_operations)
+        events.extend(bounty_events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
     def _witness_bounties(
         self, ctx: HandlerContext, thief: Entity, thief_id: EntityId, room_id: EntityId
-    ) -> list[DomainEvent]:
+    ) -> tuple[list[MutationOperation], list[DomainEvent]]:
         if _is_sneaking(thief):
-            return []
+            return [], []
         faction_witnesses: dict[EntityId, list[str]] = {}
         for witness_id in _awake_witnesses(ctx.world, room_id, thief_id):
             for _edge, faction_id in ctx.world.get_entity(witness_id).get_relationships(
@@ -1554,13 +1624,14 @@ class StealHandler:
             ):
                 faction_witnesses.setdefault(faction_id, []).append(str(witness_id))
         if not faction_witnesses:
-            return []
+            return [], []
 
+        operations: list[MutationOperation] = []
         events: list[DomainEvent] = []
         for faction_id, witness_ids in faction_witnesses.items():
             current = _faction_bounty(thief, faction_id)
             amount = (current.amount if current is not None else 0) + DEFAULT_BOUNTY
-            thief.add_relationship(WantedByFaction(amount=amount), faction_id)
+            operations.append(AddEdge(thief_id, faction_id, WantedByFaction(amount=amount)))
             faction = ctx.world.get_entity(faction_id)
             faction_name = (
                 faction.get_component(FactionComponent).name
@@ -1582,7 +1653,7 @@ class StealHandler:
                     )
                 )
             )
-        return events
+        return operations, events
 
 
 class PayBountyHandler:
@@ -1599,8 +1670,8 @@ class PayBountyHandler:
             return rejected("you have no bounties")
         if bounty is None:
             return rejected("you have no bounty with that faction")
-        character.remove_relationship(WantedByFaction, faction_id)
-        return ok(
+        return planned(
+            MutationPlan((RemoveEdge(character_id, faction_id, WantedByFaction),)),
             BountyPaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1611,7 +1682,8 @@ class PayBountyHandler:
                     faction_id=str(faction_id),
                     amount=bounty.amount,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1635,12 +1707,18 @@ class ChangeFactionRankHandler:
         if current is None:
             return rejected("not a faction member")
 
-        character.remove_relationship(MemberOfFaction, faction_id)
-        character.add_relationship(
-            MemberOfFaction(rank=new_rank, since_epoch=current.since_epoch), faction_id
-        )
         faction_name = faction.get_component(FactionComponent).name
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    RemoveEdge(character_id, faction_id, MemberOfFaction),
+                    AddEdge(
+                        character_id,
+                        faction_id,
+                        MemberOfFaction(rank=new_rank, since_epoch=current.since_epoch),
+                    ),
+                )
+            ),
             FactionRankChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1652,7 +1730,8 @@ class ChangeFactionRankHandler:
                     old_rank=current.rank,
                     new_rank=new_rank,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1685,12 +1764,14 @@ class BribeGuardHandler:
             return rejected("target is not a guard")
         component, faction_id = assignment
         bounty = _faction_bounty(character, faction_id)
+        operations: list[MutationOperation] = []
         if bounty is not None:
             amount = max(0, bounty.amount - component.bribe_amount)
-            character.remove_relationship(WantedByFaction, faction_id)
+            operations.append(RemoveEdge(character_id, faction_id, WantedByFaction))
             if amount:
-                character.add_relationship(WantedByFaction(amount=amount), faction_id)
-        return ok(
+                operations.append(AddEdge(character_id, faction_id, WantedByFaction(amount=amount)))
+        return planned(
+            MutationPlan(tuple(operations)),
             GuardBribedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1701,7 +1782,8 @@ class BribeGuardHandler:
                     faction_id=str(faction_id),
                     amount=component.bribe_amount,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1719,9 +1801,13 @@ class ServeJailTimeHandler:
         sentence, faction_id = sentence_record
         if ctx.epoch < sentence.release_epoch:
             return rejected("sentence is not complete")
-        character.remove_relationship(JailedByFaction, faction_id)
-        character.remove_relationship(WantedByFaction, faction_id)
-        return ok(
+        operations: list[MutationOperation] = [
+            RemoveEdge(character_id, faction_id, JailedByFaction)
+        ]
+        if character.has_relationship(WantedByFaction, faction_id):
+            operations.append(RemoveEdge(character_id, faction_id, WantedByFaction))
+        return planned(
+            MutationPlan(tuple(operations)),
             JailSentenceServedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1730,7 +1816,8 @@ class ServeJailTimeHandler:
                     character_id=str(character_id),
                     faction_id=str(faction_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1759,8 +1846,8 @@ class PersuadeHandler:
             disposition=current.disposition + amount,
             persuaded_by=tuple(sorted((*current.persuaded_by, str(character_id)))),
         )
-        replace_component(target, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(target_id, updated),)),
             PersuasionAttemptedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.DIRECTED,
@@ -1770,7 +1857,8 @@ class PersuadeHandler:
                     target_id=str(target_id),
                     disposition=updated.disposition,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1782,20 +1870,23 @@ class SurrenderHandler:
         target_id = parse_entity_id(command.payload.get("target_id"))
         if character_id is None:
             return rejected("invalid character id")
-        character = ctx.entity(character_id)
         if target_id is not None and not ctx.world.has_entity(target_id):
             return rejected("target does not exist")
         surrendered_to = str(target_id) if target_id is not None else ""
         reason = str(command.payload.get("reason", "")).strip()
-        replace_component(
-            character,
-            SurrenderComponent(
-                surrendered_to=surrendered_to or None,
-                reason=reason,
-                at_epoch=ctx.epoch,
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        character_id,
+                        SurrenderComponent(
+                            surrendered_to=surrendered_to or None,
+                            reason=reason,
+                            at_epoch=ctx.epoch,
+                        ),
+                    ),
+                )
             ),
-        )
-        return ok(
             SurrenderedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1805,7 +1896,8 @@ class SurrenderHandler:
                     character_id=str(character_id),
                     surrendered_to=surrendered_to,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1832,8 +1924,8 @@ class ReportCrimeHandler:
         criminal = ctx.entity(criminal_id)
         current = _faction_bounty(criminal, faction_id)
         amount = (current.amount if current is not None else 0) + bounty
-        criminal.add_relationship(WantedByFaction(amount=amount), faction_id)
-        return ok(
+        return planned(
+            MutationPlan((AddEdge(criminal_id, faction_id, WantedByFaction(amount=amount)),)),
             CrimeReportedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1845,7 +1937,8 @@ class ReportCrimeHandler:
                     reporter_id=str(reporter_id),
                     bounty=bounty,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1871,7 +1964,14 @@ class PickLockHandler:
         if _skill_level(character, "lockpicking") < difficulty.difficulty:
             return rejected("lockpicking skill too low")
 
-        replace_component(locked, replace(difficulty, locked=False))
+        skill_update, skill_events = _skill_xp_update(
+            ctx,
+            character,
+            skill="lockpicking",
+            amount=float(difficulty.difficulty),
+            actor_id=str(character_id),
+            target_ids=(str(lock_id),),
+        )
         events: list[DomainEvent] = [
             LockPickedEvent(
                 **ctx.event_base(
@@ -1884,17 +1984,17 @@ class PickLockHandler:
                 )
             )
         ]
-        events.extend(
-            _add_skill_xp(
-                ctx,
-                character,
-                skill="lockpicking",
-                amount=float(difficulty.difficulty),
-                actor_id=str(character_id),
-                target_ids=(str(lock_id),),
-            )
+        events.extend(skill_events)
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(lock_id, replace(difficulty, locked=False)),
+                    SetComponent(character_id, skill_update),
+                )
+            ),
+            *events,
+            ctx=ctx,
         )
-        return ok(*events)
 
 
 class ReadLoreBookHandler:
@@ -1916,10 +2016,16 @@ class ReadLoreBookHandler:
         first_read = str(character_id) not in read_by
         skill_name = component.skill_name.strip().lower()
         skill_xp_awarded = component.skill_xp if first_read and skill_name else 0.0
+        operations: list[MutationOperation] = []
         if first_read:
-            replace_component(
-                book,
-                replace(component, read_by=tuple(sorted((*component.read_by, str(character_id))))),
+            operations.append(
+                SetComponent(
+                    book_id,
+                    replace(
+                        component,
+                        read_by=tuple(sorted((*component.read_by, str(character_id)))),
+                    ),
+                )
             )
 
         events: list[DomainEvent] = [
@@ -1937,17 +2043,17 @@ class ReadLoreBookHandler:
             )
         ]
         if skill_xp_awarded > 0:
-            events.extend(
-                _add_skill_xp(
-                    ctx,
-                    ctx.entity(character_id),
-                    skill=skill_name,
-                    amount=skill_xp_awarded,
-                    actor_id=str(character_id),
-                    target_ids=(str(book_id),),
-                )
+            skill_update, skill_events = _skill_xp_update(
+                ctx,
+                ctx.entity(character_id),
+                skill=skill_name,
+                amount=skill_xp_awarded,
+                actor_id=str(character_id),
+                target_ids=(str(book_id),),
             )
-        return ok(*events)
+            operations.append(SetComponent(character_id, skill_update))
+            events.extend(skill_events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class LearnSpellHandler:
@@ -1972,8 +2078,10 @@ class LearnSpellHandler:
         if spell.skill_name and _skill_level(character, spell.skill_name) < spell.min_skill_level:
             return rejected("skill level too low for this spell")
 
-        character.add_relationship(KnowsSpell(learned_at_epoch=ctx.epoch), spell_id)
-        return ok(
+        return planned(
+            MutationPlan(
+                (AddEdge(character_id, spell_id, KnowsSpell(learned_at_epoch=ctx.epoch)),)
+            ),
             SpellLearnedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1983,7 +2091,8 @@ class LearnSpellHandler:
                     spell_id=str(spell_id),
                     spell_name=spell.name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2016,12 +2125,16 @@ class CastDragonSpellHandler:
         if magic.current < spell.magic_cost:
             return rejected("not enough magic")
 
-        replace_component(character, replace(magic, current=magic.current - spell.magic_cost))
+        operations: list[MutationOperation] = [
+            SetComponent(character_id, replace(magic, current=magic.current - spell.magic_cost))
+        ]
         if spell_entity.has_component(SpellCooldownComponent):
             cooldown = spell_entity.get_component(SpellCooldownComponent)
-            replace_component(
-                spell_entity,
-                replace(cooldown, ready_at_epoch=ctx.epoch + cooldown.cooldown_seconds),
+            operations.append(
+                SetComponent(
+                    spell_id,
+                    replace(cooldown, ready_at_epoch=ctx.epoch + cooldown.cooldown_seconds),
+                )
             )
         events: list[DomainEvent] = [
             DragonSpellCastEvent(
@@ -2038,17 +2151,17 @@ class CastDragonSpellHandler:
             )
         ]
         if spell.skill_name:
-            events.extend(
-                _add_skill_xp(
-                    ctx,
-                    character,
-                    skill=spell.skill_name,
-                    amount=max(1.0, float(spell.magic_cost)),
-                    actor_id=str(character_id),
-                    target_ids=(str(spell_id),),
-                )
+            skill_update, skill_events = _skill_xp_update(
+                ctx,
+                character,
+                skill=spell.skill_name,
+                amount=max(1.0, float(spell.magic_cost)),
+                actor_id=str(character_id),
+                target_ids=(str(spell_id),),
             )
-        return ok(*events)
+            operations.append(SetComponent(character_id, skill_update))
+            events.extend(skill_events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class BrewPotionHandler:
@@ -2081,42 +2194,52 @@ class BrewPotionHandler:
             if container_of(ctx.world.get_entity(ingredient_id)) != character_id:
                 return rejected("required ingredient is not carried")
 
-        for _edge, ingredient_id in ingredients:
-            character.remove_relationship(Contains, ingredient_id)
-        potion = spawn_entity(
-            ctx.world,
-            [
-                IdentityComponent(name=recipe.potion_name, kind="potion"),
-                PortableComponent(),
-                PotionComponent(name=recipe.potion_name, effect=recipe.effect),
-            ],
+        operations: list[MutationOperation] = [
+            RemoveEdge(character_id, ingredient_id, Contains)
+            for _edge, ingredient_id in ingredients
+        ]
+        potion = EntityReference()
+        operations.extend(
+            (
+                AddEntity(
+                    (
+                        IdentityComponent(name=recipe.potion_name, kind="potion"),
+                        PortableComponent(),
+                        PotionComponent(name=recipe.potion_name, effect=recipe.effect),
+                    ),
+                    reference=potion,
+                ),
+                AddEdge(character_id, potion, Contains(mode=ContainmentMode.INVENTORY)),
+            )
         )
-        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), potion.id)
-        events: list[DomainEvent] = [
-            PotionBrewedEvent(
+
+        def brewed_event() -> DomainEvent:
+            potion_id = str(potion.require())
+            return PotionBrewedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(recipe_id), str(potion.id)),
+                    target_ids=(str(recipe_id), potion_id),
                     recipe_id=str(recipe_id),
-                    potion_id=str(potion.id),
+                    potion_id=potion_id,
                     potion_name=recipe.potion_name,
                 )
             )
-        ]
+
+        events = [brewed_event]
         if recipe.skill_name:
-            events.extend(
-                _add_skill_xp(
-                    ctx,
-                    character,
-                    skill=recipe.skill_name,
-                    amount=2.0,
-                    actor_id=str(character_id),
-                    target_ids=(str(recipe_id),),
-                )
+            skill_update, skill_events = _skill_xp_update(
+                ctx,
+                character,
+                skill=recipe.skill_name,
+                amount=2.0,
+                actor_id=str(character_id),
+                target_ids=(str(recipe_id),),
             )
-        return ok(*events)
+            operations.append(SetComponent(character_id, skill_update))
+            events.extend(lambda event=event: event for event in skill_events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class UseArtifactHandler:
@@ -2150,8 +2273,8 @@ class UseArtifactHandler:
             return rejected("artifact has no charges")
         identified_by = tuple(sorted((*artifact.identified_by, str(character_id))))
         updated = replace(artifact, charges=artifact.charges - 1, identified_by=identified_by)
-        replace_component(artifact_entity, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(artifact_id, updated),)),
             ArtifactUsedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2162,7 +2285,8 @@ class UseArtifactHandler:
                     artifact_name=artifact.name,
                     remaining_charges=updated.charges,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2187,8 +2311,8 @@ class RecoverMagicHandler:
             current=min(magic.maximum, magic.current + amount),
             last_updated_epoch=ctx.epoch,
         )
-        replace_component(character, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(character_id, updated),)),
             MagicRecoveredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2199,7 +2323,8 @@ class RecoverMagicHandler:
                     current=updated.current,
                     maximum=updated.maximum,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2236,8 +2361,8 @@ class IdentifyArtifactHandler:
             artifact,
             identified_by=tuple(sorted((*artifact.identified_by, str(character_id)))),
         )
-        replace_component(artifact_entity, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(artifact_id, updated),)),
             ArtifactIdentifiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2247,7 +2372,8 @@ class IdentifyArtifactHandler:
                     artifact_id=str(artifact_id),
                     artifact_name=artifact.name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2269,7 +2395,8 @@ class AppeaseAncientBeastHandler:
             return rejected("target is not an ancient beast")
         beast = beast_entity.get_component(AncientBeastComponent)
         method = str(command.payload.get("method", "parley")).strip() or "parley"
-        return ok(
+        return planned(
+            MutationPlan(),
             AncientBeastAppeasedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2280,7 +2407,8 @@ class AppeaseAncientBeastHandler:
                     beast_name=beast.name,
                     method=method,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2329,22 +2457,31 @@ class InscribeVoicePhraseHandler:
             else ReadableComponent()
         )
         new_text = phrase if not existing.text else f"{existing.text}\n{phrase}"
-        replace_component(target, replace(existing, text=new_text))
+        operations: list[MutationOperation] = [
+            SetComponent(target_id, replace(existing, text=new_text))
+        ]
         if writable is not None and writable.remaining_space is not None:
-            replace_component(
-                target,
-                replace(writable, remaining_space=writable.remaining_space - len(phrase)),
+            operations.append(
+                SetComponent(
+                    target_id,
+                    replace(writable, remaining_space=writable.remaining_space - len(phrase)),
+                )
             )
         if carvable is not None and carvable.remaining_space is not None:
-            replace_component(
-                target,
-                replace(carvable, remaining_space=carvable.remaining_space - len(phrase)),
+            operations.append(
+                SetComponent(
+                    target_id,
+                    replace(carvable, remaining_space=carvable.remaining_space - len(phrase)),
+                )
             )
-        replace_component(
-            target,
-            VoiceInscriptionComponent(word_id=str(word_id), phrase=phrase),
+        operations.append(
+            SetComponent(
+                target_id,
+                VoiceInscriptionComponent(word_id=str(word_id), phrase=phrase),
+            )
         )
-        return ok(
+        return planned(
+            MutationPlan(tuple(operations)),
             VoicePhraseInscribedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2355,7 +2492,8 @@ class InscribeVoicePhraseHandler:
                     word_id=str(word_id),
                     phrase=phrase,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2382,16 +2520,19 @@ class StudyVoiceInscriptionHandler:
         if str(character_id) in inscription.studied_by:
             return rejected("voice inscription already studied")
 
-        replace_component(
-            target,
-            replace(
-                inscription,
-                studied_by=tuple(sorted((*inscription.studied_by, str(character_id)))),
-            ),
-        )
+        operations: list[MutationOperation] = [
+            SetComponent(
+                target_id,
+                replace(
+                    inscription,
+                    studied_by=tuple(sorted((*inscription.studied_by, str(character_id)))),
+                ),
+            )
+        ]
         if not character.has_relationship(KnowsWord, word_id):
-            character.add_relationship(KnowsWord(learned_at_epoch=ctx.epoch), word_id)
-        return ok(
+            operations.append(AddEdge(character_id, word_id, KnowsWord(learned_at_epoch=ctx.epoch)))
+        return planned(
+            MutationPlan(tuple(operations)),
             VoiceInscriptionStudiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2401,7 +2542,8 @@ class StudyVoiceInscriptionHandler:
                     target_id=str(target_id),
                     word_id=str(word_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 

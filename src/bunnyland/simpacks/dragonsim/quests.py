@@ -15,14 +15,20 @@ from ...core.ecs import (
     parse_entity_id,
     reachable_ids,
     replace_component,
-    spawn_entity,
 )
 from ...core.ecs import (
     room_id_for as _room_id,
 )
 from ...core.edges import ContainmentMode, Contains
 from ...core.events import DomainEvent, EventVisibility
-from ...core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
+from ...core.mutations import (
+    AddEdge,
+    AddEntity,
+    EntityReference,
+    MutationPlan,
+    SetComponent,
+)
 from ...prompts import ComponentPromptContext
 from .mechanics import (
     QuestAcceptedBy,
@@ -96,15 +102,6 @@ def generated_quest_fragments(world: World, character: Entity) -> list[str]:
     return sorted(lines)
 
 
-def _spawn_inventory_item(world: World, character: Entity, name: str, *, kind: str) -> Entity:
-    output = spawn_entity(
-        world,
-        [IdentityComponent(name=name, kind=kind), PortableComponent()],
-    )
-    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), output.id)
-    return output
-
-
 def _travel_event_base(epoch: int, **kwargs) -> dict:
     base = {"event_id": uuid4().hex, "world_epoch": epoch, "created_at": datetime.now(UTC)}
     base.update(kwargs)
@@ -129,50 +126,61 @@ class AskForWorkHandler:
         if not template_entity.has_component(QuestTemplateComponent):
             return rejected("target is not a quest template")
 
-        from ...core.ecs import spawn_entity
-
         template = template_entity.get_component(QuestTemplateComponent)
         due_at = ctx.epoch + template.duration_seconds
-        quest = spawn_entity(
-            ctx.world,
-            [
-                IdentityComponent(name=template.title, kind="quest"),
-                QuestComponent(
-                    quest_id=f"generated:{template_id}",
-                    title=template.title,
-                    description=template.objective,
-                ),
-                QuestStateComponent(due_at_epoch=due_at),
-                QuestProvenanceComponent(
-                    generator="bunnyland.dragonsim",
-                    source_id=str(template_id),
-                    generated_at_epoch=ctx.epoch,
-                ),
-            ],
-        )
-        objective = spawn_entity(
-            ctx.world,
-            [QuestObjectiveComponent(description=template.objective)],
-        )
-        reward = spawn_entity(
-            ctx.world,
-            [QuestRewardComponent(description=template.reward_item_name)],
-        )
-        quest.add_relationship(QuestHasObjective(), objective.id)
-        quest.add_relationship(QuestHasReward(), reward.id)
-        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), quest.id)
-        return ok(
-            QuestGeneratedEvent(
+        quest = EntityReference()
+        objective = EntityReference()
+        reward = EntityReference()
+
+        def generated_event() -> DomainEvent:
+            quest_id = str(quest.require())
+            return QuestGeneratedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(quest.id),),
-                    quest_id=str(quest.id),
+                    target_ids=(quest_id,),
+                    quest_id=quest_id,
                     title=template.title,
                     due_at_epoch=due_at,
                 )
             )
+
+        return planned(
+            MutationPlan(
+                (
+                    AddEntity(
+                        (
+                            IdentityComponent(name=template.title, kind="quest"),
+                            QuestComponent(
+                                quest_id=f"generated:{template_id}",
+                                title=template.title,
+                                description=template.objective,
+                            ),
+                            QuestStateComponent(due_at_epoch=due_at),
+                            QuestProvenanceComponent(
+                                generator="bunnyland.dragonsim",
+                                source_id=str(template_id),
+                                generated_at_epoch=ctx.epoch,
+                            ),
+                        ),
+                        reference=quest,
+                    ),
+                    AddEntity(
+                        (QuestObjectiveComponent(description=template.objective),),
+                        reference=objective,
+                    ),
+                    AddEntity(
+                        (QuestRewardComponent(description=template.reward_item_name),),
+                        reference=reward,
+                    ),
+                    AddEdge(quest, objective, QuestHasObjective()),
+                    AddEdge(quest, reward, QuestHasReward()),
+                    AddEdge(character_id, quest, Contains(mode=ContainmentMode.INVENTORY)),
+                ),
+            ),
+            generated_event,
+            ctx=ctx,
         )
 
 
@@ -198,12 +206,20 @@ class AcceptGeneratedQuestHandler:
         if state.status != "offered":
             return rejected("quest is not offered")
 
-        quest.add_relationship(QuestAcceptedBy(accepted_at_epoch=ctx.epoch), character_id)
-        replace_component(
-            quest,
-            replace(state, status="active", accepted_at_epoch=ctx.epoch),
-        )
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    AddEdge(
+                        quest_id,
+                        character_id,
+                        QuestAcceptedBy(accepted_at_epoch=ctx.epoch),
+                    ),
+                    SetComponent(
+                        quest_id,
+                        replace(state, status="active", accepted_at_epoch=ctx.epoch),
+                    ),
+                )
+            ),
             QuestAcceptedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -213,7 +229,8 @@ class AcceptGeneratedQuestHandler:
                     quest_id=str(quest_id),
                     title=component.title,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -252,32 +269,50 @@ class CompleteGeneratedQuestHandler:
 
         reward_entity = rewards[0]
         reward = reward_entity.get_component(QuestRewardComponent)
-        item = _spawn_inventory_item(ctx.world, character, reward.description, kind="quest-reward")
-        replace_component(
-            quest,
-            replace(state, status="completed", completed_at_epoch=ctx.epoch),
-        )
-        replace_component(
-            reward_entity,
-            replace(
-                reward,
-                claimed=True,
-                claimed_by=str(character_id),
-                claimed_at_epoch=ctx.epoch,
-            ),
-        )
-        return ok(
-            QuestCompletedEvent(
+        item = EntityReference()
+
+        def completed_event() -> DomainEvent:
+            item_id = str(item.require())
+            return QuestCompletedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(quest_id), str(item.id)),
+                    target_ids=(str(quest_id), item_id),
                     quest_id=str(quest_id),
                     title=component.title,
-                    reward_item_id=str(item.id),
+                    reward_item_id=item_id,
                 )
             )
+
+        return planned(
+            MutationPlan(
+                (
+                    AddEntity(
+                        (
+                            IdentityComponent(name=reward.description, kind="quest-reward"),
+                            PortableComponent(),
+                        ),
+                        reference=item,
+                    ),
+                    AddEdge(character_id, item, Contains(mode=ContainmentMode.INVENTORY)),
+                    SetComponent(
+                        quest_id,
+                        replace(state, status="completed", completed_at_epoch=ctx.epoch),
+                    ),
+                    SetComponent(
+                        reward_entity.id,
+                        replace(
+                            reward,
+                            claimed=True,
+                            claimed_by=str(character_id),
+                            claimed_at_epoch=ctx.epoch,
+                        ),
+                    ),
+                )
+            ),
+            completed_event,
+            ctx=ctx,
         )
 
 
@@ -298,8 +333,8 @@ class RefuseGeneratedQuestHandler:
         state = quest.get_component(QuestStateComponent)
         if state.status != "offered":
             return rejected("quest is not offered")
-        replace_component(quest, replace(state, status="refused"))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(quest_id, replace(state, status="refused")),)),
             QuestRefusedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -309,7 +344,8 @@ class RefuseGeneratedQuestHandler:
                     quest_id=str(quest_id),
                     title=component.title,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -330,8 +366,8 @@ class AbandonGeneratedQuestHandler:
         state = quest.get_component(QuestStateComponent)
         if state.status != "active" or not quest.has_relationship(QuestAcceptedBy, character_id):
             return rejected("quest is not active for character")
-        replace_component(quest, replace(state, status="abandoned"))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(quest_id, replace(state, status="abandoned")),)),
             QuestAbandonedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -341,7 +377,8 @@ class AbandonGeneratedQuestHandler:
                     quest_id=str(quest_id),
                     title=component.title,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -365,8 +402,8 @@ class ExtendGeneratedQuestHandler:
         if state.due_at_epoch is None:
             return rejected("quest has no deadline")
         updated = replace(state, due_at_epoch=state.due_at_epoch + seconds)
-        replace_component(quest, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(quest_id, updated),)),
             QuestExtendedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -376,7 +413,8 @@ class ExtendGeneratedQuestHandler:
                     quest_id=str(quest_id),
                     due_at_epoch=updated.due_at_epoch,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -394,11 +432,15 @@ class LieAboutQuestHandler:
         quest = ctx.entity(quest_id)
         if not quest.has_component(QuestProvenanceComponent):
             return rejected("target is not a generated quest")
-        replace_component(
-            quest,
-            replace(quest.get_component(QuestStateComponent), status="lied"),
-        )
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        quest_id,
+                        replace(quest.get_component(QuestStateComponent), status="lied"),
+                    ),
+                )
+            ),
             QuestLieToldEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -408,7 +450,8 @@ class LieAboutQuestHandler:
                     quest_id=str(quest_id),
                     lie=lie,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -446,6 +489,7 @@ class QuestDeadlineConsequence:
                 )
             )
         return events
+
 
 __all__ = [
     "AbandonGeneratedQuestHandler",
