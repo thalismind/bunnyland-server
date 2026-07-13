@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from conftest import build_scenario
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -13,10 +15,12 @@ from bunnyland.core import (
     ExitTo,
     IdentityComponent,
     Lane,
+    MutationPlan,
     PortableComponent,
     RoomComponent,
     build_submitted_command,
     container_of,
+    execute_mutation_plan,
     parse_entity_id,
     replace_component,
     spawn_entity,
@@ -203,9 +207,9 @@ from bunnyland.simpacks.daggersim.mechanics import (
     ViewMapHandler,
     WereformComponent,
     WithdrawHandler,
-    _apply_spell_effect,
+    _spell_effect_operation,
     _current_law_region,
-    _grant_service_access,
+    _service_access_operation,
     _institution_membership,
     _name,
     _payload_entity_id,
@@ -2359,6 +2363,13 @@ def test_use_institution_service_can_succeed_without_output_item():
     event = result.events[0]
     assert isinstance(event, InstitutionServiceUsedEvent)
     assert event.output_item_id is None
+    repeated = UseInstitutionServiceHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "use-institution-service", service_id=str(service.id)),
+    )
+    assert repeated.ok is True
+    assert isinstance(repeated.events[1], ServiceAccessChangedEvent)
+    assert repeated.events[1].granted is False
 
 
 def test_daggersim_repay_loan_handler_rejects_bad_entities_and_components():
@@ -3312,7 +3323,7 @@ async def test_join_institution_and_use_member_service_grants_output_item():
         (HasStandingWithInstitution(score=2), institution_id)
     ]
     assert character.get_relationships(HasAccessToService) == [(HasAccessToService(), service_id)]
-    assert _grant_service_access(character, service_id) is False
+    assert _service_access_operation(character, service_id) == (False, None)
     assert "Unlocked institution services: 1." in daggersim_fragments(
         scenario.actor.world, character
     )
@@ -3652,41 +3663,33 @@ async def test_create_and_cast_custom_spell_heals_target_health():
     assert cast[0].target_health == 7.0
 
 
-def test_apply_spell_effect_handles_health_branches():
+def test_spell_effect_plan_handles_health_branches():
     scenario = build_scenario()
     target = scenario.actor.world.get_entity(scenario.character)
     no_health = spawn_entity(scenario.actor.world, [IdentityComponent(name="rock", kind="item")])
 
-    assert (
-        _apply_spell_effect(
-            no_health,
-            CustomSpellComponent(spell_name="Mend", effect_type="heal", magnitude=4.0),
-        )
-        is None
-    )
+    assert _spell_effect_operation(
+        no_health,
+        CustomSpellComponent(spell_name="Mend", effect_type="heal", magnitude=4.0),
+    ) == (None, None)
 
     target.add_component(HealthComponent(current=8.0, maximum=10.0))
-    assert (
-        _apply_spell_effect(
-            target,
-            CustomSpellComponent(spell_name="Mend", effect_type="heal", magnitude=4.0),
-        )
-        == 10.0
+    value, operation = _spell_effect_operation(
+        target,
+        CustomSpellComponent(spell_name="Mend", effect_type="heal", magnitude=4.0),
     )
-    assert (
-        _apply_spell_effect(
-            target,
-            EnchantedItemComponent(spell_name="Bolt", effect_type="harm", magnitude=12.0),
-        )
-        == 0.0
+    assert value == 10.0 and operation is not None
+    execute_mutation_plan(scenario.actor.world, MutationPlan((operation,)))
+    value, operation = _spell_effect_operation(
+        target,
+        EnchantedItemComponent(spell_name="Bolt", effect_type="harm", magnitude=12.0),
     )
-    assert (
-        _apply_spell_effect(
-            target,
-            CustomSpellComponent(spell_name="Glow", effect_type="light", magnitude=1.0),
-        )
-        == 0.0
-    )
+    assert value == 0.0 and operation is not None
+    execute_mutation_plan(scenario.actor.world, MutationPlan((operation,)))
+    assert _spell_effect_operation(
+        target,
+        CustomSpellComponent(spell_name="Glow", effect_type="light", magnitude=1.0),
+    ) == (0.0, None)
 
 
 async def test_enchant_item_with_created_spell_and_cast_from_item():
@@ -4559,6 +4562,24 @@ async def test_enter_dungeon_moves_character_and_discovers_entry():
     entry_room = scenario.actor.world.get_entity(entry_id)
     assert entry_room.get_component(DungeonRoomComponent).discovered is True
     assert str(entry_id) in character.get_component(AutomapComponent).discovered_rooms
+
+
+async def test_enter_dungeon_accepts_an_already_discovered_entry():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    dungeon_id, entry_id = _dungeon(scenario)
+    entry = scenario.actor.world.get_entity(entry_id)
+    replace_component(entry, replace(entry.get_component(DungeonRoomComponent), discovered=True))
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.remove_relationship(Contains, dungeon_id)
+    room.remove_relationship(Contains, scenario.character)
+    entry.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), dungeon_id)
+    entry.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), scenario.character)
+
+    await scenario.actor.submit(_cmd(scenario, "enter-dungeon", dungeon_id=str(dungeon_id)))
+    await scenario.actor.tick(HOUR)
+
+    assert container_of(scenario.actor.world.get_entity(scenario.character)) == entry_id
 
 
 async def test_enter_dungeon_rejected_until_generated():

@@ -962,9 +962,6 @@ def _add_daggersim_dungeon_world(scenario):
     scenario.actor.world.get_entity(entry.id).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), objective.id
     )
-    scenario.actor.world.get_entity(entry.id).add_relationship(
-        Contains(mode=ContainmentMode.ROOM_CONTENT), dungeon
-    )
     return dungeon, entry.id, deeper.id, door.id, objective.id
 
 

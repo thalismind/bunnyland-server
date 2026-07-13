@@ -31,7 +31,17 @@ from ...core.ecs import (
 )
 from ...core.edges import ContainmentMode, Contains, ExitTo
 from ...core.events import DomainEvent, EventVisibility, SpeechSaidEvent, SpeechToldEvent
-from ...core.handlers import HandlerContext, HandlerResult, ok, rejected, require_character
+from ...core.handlers import HandlerContext, HandlerResult, planned, rejected, require_character
+from ...core.mutations import (
+    AddEdge,
+    AddEntity,
+    EntityReference,
+    MutationOperation,
+    MutationPlan,
+    RemoveComponent,
+    RemoveEdge,
+    SetComponent,
+)
 from ...prompts import ComponentPromptContext
 
 
@@ -1124,7 +1134,9 @@ class DungeonExitedEvent(DomainEvent):
     dungeon_id: str
 
 
-def _adjust_institution_reputation(character: Entity, institution_id: EntityId, delta: int) -> int:
+def _institution_reputation_operation(
+    character: Entity, institution_id: EntityId, delta: int
+) -> tuple[int, MutationOperation]:
     current = next(
         (
             edge
@@ -1134,11 +1146,14 @@ def _adjust_institution_reputation(character: Entity, institution_id: EntityId, 
         None,
     )
     score = (current.score if current is not None else 0) + delta
-    character.add_relationship(HasStandingWithInstitution(score=score), institution_id)
-    return score
+    return score, AddEdge(
+        character.id, institution_id, HasStandingWithInstitution(score=score)
+    )
 
 
-def _adjust_legal_reputation(character: Entity, region_id: EntityId, delta: int) -> int:
+def _legal_reputation_operation(
+    character: Entity, region_id: EntityId, delta: int
+) -> tuple[int, MutationOperation]:
     current = next(
         (
             edge
@@ -1148,18 +1163,18 @@ def _adjust_legal_reputation(character: Entity, region_id: EntityId, delta: int)
         None,
     )
     score = (current.score if current is not None else 0) + delta
-    character.add_relationship(HasLegalStandingInRegion(score=score), region_id)
-    return score
+    return score, AddEdge(character.id, region_id, HasLegalStandingInRegion(score=score))
 
 
-def _grant_service_access(character: Entity, service_id: EntityId) -> bool:
+def _service_access_operation(
+    character: Entity, service_id: EntityId
+) -> tuple[bool, MutationOperation | None]:
     if any(
         target_id == service_id
         for _edge, target_id in character.get_relationships(HasAccessToService)
     ):
-        return False
-    character.add_relationship(HasAccessToService(), service_id)
-    return True
+        return False, None
+    return True, AddEdge(character.id, service_id, HasAccessToService())
 
 
 def _deed_reputation_score(character: Entity, tag: str) -> float:
@@ -1211,12 +1226,10 @@ class ExpandSiteHandler:
             command.payload.get("trigger", hook.trigger if hook is not None else "manual")
         )
 
-        replace_component(
-            site,
-            replace(procedural, generated=True, generator_id=generator_id),
-        )
-        replace_component(site, replace(unrealized, detail_level="instantiated"))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(site.id, replace(procedural, generated=True, generator_id=generator_id)),
+            SetComponent(site.id, replace(unrealized, detail_level="instantiated")),
+        )),
             ExpansionRequestedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1240,7 +1253,7 @@ class ExpandSiteHandler:
                     detail_level="instantiated",
                     generator_plugin_id=generator_id,
                 )
-            ),
+            ), ctx=ctx,
         )
 
 
@@ -1266,8 +1279,7 @@ class AskRumorHandler:
         if rumor_entity.has_relationship(RumorHeardBy, character_id):
             return rejected("rumor already heard")
 
-        rumor_entity.add_relationship(RumorHeardBy(), character_id)
-        return ok(
+        return planned(MutationPlan((AddEdge(rumor_id, character_id, RumorHeardBy()),)),
             RumorHeardEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1277,7 +1289,7 @@ class AskRumorHandler:
                     rumor_id=str(rumor_id),
                     text=rumor.text,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1312,8 +1324,6 @@ class InvestigateRumorHandler:
         )
         verified = reliability >= 0.5
         state = "verified" if verified else "disproven"
-        replace_component(rumor_entity, replace(rumor, state=state))
-
         events: list[DomainEvent] = []
         event_type = RumorVerifiedEvent if verified else RumorDisprovenEvent
         events.append(
@@ -1369,7 +1379,9 @@ class InvestigateRumorHandler:
                             )
                         )
                     )
-        return ok(*events)
+        return planned(MutationPlan((
+            SetComponent(rumor_id, replace(rumor, state=state)),
+        )), *events, ctx=ctx)
 
 
 class PlanTravelHandler:
@@ -1406,16 +1418,16 @@ class PlanTravelHandler:
         )
         travel_seconds = max(1, int(route.travel_seconds / max(0.1, mode.speed_multiplier)))
         arrive_at = ctx.epoch + travel_seconds
-        character.add_relationship(
+        return planned(MutationPlan((AddEdge(
+            character_id,
+            destination_id,
             TravelingToDestination(
                 started_at_epoch=ctx.epoch,
                 arrive_at_epoch=arrive_at,
                 mode=mode.mode,
                 route_label=route.label,
             ),
-            destination_id,
-        )
-        return ok(
+        ),)),
             TravelStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1426,7 +1438,7 @@ class PlanTravelHandler:
                     arrive_at_epoch=arrive_at,
                     mode=mode.mode,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1497,12 +1509,18 @@ class JoinInstitutionHandler:
         if character.has_relationship(MemberOfInstitution, institution_id):
             return rejected("already an institution member")
 
-        character.add_relationship(
-            MemberOfInstitution(rank=rank, since_epoch=ctx.epoch), institution_id
-        )
         component = institution.get_component(InstitutionComponent)
-        reputation = _adjust_institution_reputation(character, institution_id, 1)
-        return ok(
+        reputation, reputation_operation = _institution_reputation_operation(
+            character, institution_id, 1
+        )
+        return planned(MutationPlan((
+            AddEdge(
+                character_id,
+                institution_id,
+                MemberOfInstitution(rank=rank, since_epoch=ctx.epoch),
+            ),
+            reputation_operation,
+        )),
             InstitutionJoinedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1523,7 +1541,7 @@ class JoinInstitutionHandler:
                     institution_id=str(institution_id),
                     score=reputation,
                 )
-            ),
+            ), ctx=ctx,
         )
 
 
@@ -1568,16 +1586,22 @@ class UseInstitutionServiceHandler:
         ):
             return rejected("required deed reputation is too low")
 
-        output_item_id: str | None = None
+        operations: list[MutationOperation] = []
+        output: EntityReference | None = None
         if service.output_item_name:
-            output = _spawn_inventory_item(
-                ctx.world, character, service.output_item_name, kind="service-output"
+            output_operations, output = _spawn_inventory_item_operations(
+                character_id, service.output_item_name, kind="service-output"
             )
-            output_item_id = str(output.id)
-        access_granted = _grant_service_access(character, service_id)
-        reputation = _adjust_institution_reputation(character, institution_id, 1)
-        return ok(
-            InstitutionServiceUsedEvent(
+            operations.extend(output_operations)
+        access_granted, access_operation = _service_access_operation(character, service_id)
+        if access_operation is not None:
+            operations.append(access_operation)
+        reputation, reputation_operation = _institution_reputation_operation(
+            character, institution_id, 1
+        )
+        operations.append(reputation_operation)
+        return planned(MutationPlan(tuple(operations)),
+            lambda: InstitutionServiceUsedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
@@ -1586,10 +1610,10 @@ class UseInstitutionServiceHandler:
                     institution_id=str(institution_id),
                     service_id=str(service_id),
                     service_name=service.service_name,
-                    output_item_id=output_item_id,
+                    output_item_id=str(output.require()) if output is not None else None,
                 )
             ),
-            ServiceAccessChangedEvent(
+            lambda: ServiceAccessChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
@@ -1599,7 +1623,7 @@ class UseInstitutionServiceHandler:
                     granted=access_granted,
                 )
             ),
-            InstitutionReputationChangedEvent(
+            lambda: InstitutionReputationChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
@@ -1608,7 +1632,7 @@ class UseInstitutionServiceHandler:
                     institution_id=str(institution_id),
                     score=reputation,
                 )
-            ),
+            ), ctx=ctx,
         )
 
 
@@ -1627,13 +1651,18 @@ class PromoteInstitutionHandler:
         membership = _institution_membership(character, institution_id)
         if membership is None:
             return rejected("not an institution member")
-        character.remove_relationship(MemberOfInstitution, institution_id)
-        character.add_relationship(
-            MemberOfInstitution(rank=rank, since_epoch=membership.since_epoch),
-            institution_id,
+        reputation, reputation_operation = _institution_reputation_operation(
+            character, institution_id, 2
         )
-        reputation = _adjust_institution_reputation(character, institution_id, 2)
-        return ok(
+        return planned(MutationPlan((
+            RemoveEdge(character_id, institution_id, MemberOfInstitution),
+            AddEdge(
+                character_id,
+                institution_id,
+                MemberOfInstitution(rank=rank, since_epoch=membership.since_epoch),
+            ),
+            reputation_operation,
+        )),
             InstitutionPromotedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1653,7 +1682,7 @@ class PromoteInstitutionHandler:
                     institution_id=str(institution_id),
                     score=reputation,
                 )
-            ),
+            ), ctx=ctx,
         )
 
 
@@ -1680,11 +1709,10 @@ class PayInstitutionDuesHandler:
             return rejected("no dues are owed")
         if str(character_id) in dues.paid_by:
             return rejected("dues already paid")
-        replace_component(
-            institution,
+        return planned(MutationPlan((SetComponent(
+            institution.id,
             replace(dues, paid_by=tuple(sorted((*dues.paid_by, str(character_id))))),
-        )
-        return ok(
+        ),)),
             InstitutionDuesPaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1694,7 +1722,7 @@ class PayInstitutionDuesHandler:
                     institution_id=str(institution_id),
                     amount=dues.amount_due,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1717,31 +1745,29 @@ class OpenBankAccountHandler:
         if _bank_account(ctx.world, character_id, bank_id) is not None:
             return rejected("bank account already exists")
 
-        from ...core.ecs import spawn_entity
-
-        account = spawn_entity(
-            ctx.world,
-            [
+        account = EntityReference()
+        plan = MutationPlan((
+            AddEntity((
                 IdentityComponent(
                     name=f"{bank.get_component(BankComponent).name} account",
                     kind="bank-account",
                 ),
                 BankAccountComponent(bank_id=str(bank_id), owner_id=str(character_id)),
-            ],
-        )
-        bank.add_relationship(Contains(mode=ContainmentMode.CONTAINER), account.id)
-        return ok(
-            AccountOpenedEvent(
+            ), reference=account),
+            AddEdge(bank_id, account, Contains(mode=ContainmentMode.CONTAINER)),
+        ))
+        return planned(plan,
+            lambda: AccountOpenedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(bank_id), str(account.id)),
+                    target_ids=(str(bank_id), str(account.require())),
                     bank_id=str(bank_id),
-                    account_id=str(account.id),
+                    account_id=str(account.require()),
                     balance=0,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1761,8 +1787,7 @@ class DepositHandler:
             return rejected("bank account does not exist")
         account_component = account.get_component(BankAccountComponent)
         updated = replace(account_component, balance=account_component.balance + amount)
-        replace_component(account, updated)
-        return ok(
+        return planned(MutationPlan((SetComponent(account.id, updated),)),
             DepositMadeEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1773,7 +1798,7 @@ class DepositHandler:
                     amount=amount,
                     balance=updated.balance,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1795,8 +1820,7 @@ class WithdrawHandler:
         if account_component.balance < amount:
             return rejected("insufficient bank balance")
         updated = replace(account_component, balance=account_component.balance - amount)
-        replace_component(account, updated)
-        return ok(
+        return planned(MutationPlan((SetComponent(account.id, updated),)),
             WithdrawalMadeEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1807,7 +1831,7 @@ class WithdrawHandler:
                     amount=amount,
                     balance=updated.balance,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1827,16 +1851,14 @@ class TakeLoanHandler:
         if account is None:
             return rejected("bank account does not exist")
 
-        from ...core.ecs import spawn_entity
-
         account_component = account.get_component(BankAccountComponent)
-        replace_component(
-            account, replace(account_component, balance=account_component.balance + amount)
-        )
         due_at = ctx.epoch + duration_seconds
-        loan = spawn_entity(
-            ctx.world,
-            [
+        loan = EntityReference()
+        plan = MutationPlan((
+            SetComponent(
+                account.id, replace(account_component, balance=account_component.balance + amount)
+            ),
+            AddEntity((
                 IdentityComponent(name="bank loan", kind="loan"),
                 LoanComponent(
                     bank_id=str(bank_id),
@@ -1845,22 +1867,22 @@ class TakeLoanHandler:
                     balance=amount,
                     due_at_epoch=due_at,
                 ),
-            ],
-        )
-        ctx.entity(character_id).add_relationship(Contains(mode=ContainmentMode.INVENTORY), loan.id)
-        return ok(
-            LoanIssuedEvent(
+            ), reference=loan),
+            AddEdge(character_id, loan, Contains(mode=ContainmentMode.INVENTORY)),
+        ))
+        return planned(plan,
+            lambda: LoanIssuedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(bank_id), str(loan.id), str(account.id)),
+                    target_ids=(str(bank_id), str(loan.require()), str(account.id)),
                     bank_id=str(bank_id),
-                    loan_id=str(loan.id),
+                    loan_id=str(loan.require()),
                     amount=amount,
                     due_at_epoch=due_at,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1896,13 +1918,14 @@ class RepayLoanHandler:
         if account_component.balance < payment:
             return rejected("insufficient bank balance")
 
-        replace_component(
-            account, replace(account_component, balance=account_component.balance - payment)
-        )
         next_balance = loan.balance - payment
         status = "repaid" if next_balance == 0 else loan.status
-        replace_component(loan_entity, replace(loan, balance=next_balance, status=status))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(
+                account.id, replace(account_component, balance=account_component.balance - payment)
+            ),
+            SetComponent(loan_entity.id, replace(loan, balance=next_balance, status=status)),
+        )),
             LoanRepaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1913,7 +1936,7 @@ class RepayLoanHandler:
                     amount=payment,
                     balance=next_balance,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1961,14 +1984,12 @@ class IssueLetterOfCreditHandler:
         account_component = account.get_component(BankAccountComponent)
         if account_component.balance < amount:
             return rejected("insufficient bank balance")
-        replace_component(
-            account, replace(account_component, balance=account_component.balance - amount)
-        )
-        from ...core.ecs import spawn_entity
-
-        letter = spawn_entity(
-            ctx.world,
-            [
+        letter = EntityReference()
+        plan = MutationPlan((
+            SetComponent(
+                account.id, replace(account_component, balance=account_component.balance - amount)
+            ),
+            AddEntity((
                 IdentityComponent(name="letter of credit", kind="letter-of-credit"),
                 PortableComponent(can_pick_up=True),
                 LetterOfCreditComponent(
@@ -1976,22 +1997,20 @@ class IssueLetterOfCreditHandler:
                     owner_id=str(character_id),
                     amount=amount,
                 ),
-            ],
-        )
-        ctx.entity(character_id).add_relationship(
-            Contains(mode=ContainmentMode.INVENTORY), letter.id
-        )
-        return ok(
-            LetterOfCreditIssuedEvent(
+            ), reference=letter),
+            AddEdge(character_id, letter, Contains(mode=ContainmentMode.INVENTORY)),
+        ))
+        return planned(plan,
+            lambda: LetterOfCreditIssuedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(letter.id),),
-                    letter_id=str(letter.id),
+                    target_ids=(str(letter.require()),),
+                    letter_id=str(letter.require()),
                     amount=amount,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2017,12 +2036,15 @@ class StoreSafeItemHandler:
         )
         if safe.owner_id != str(character_id):
             return rejected("safe storage belongs to someone else")
+        operations: list[MutationOperation] = []
         if not storage.has_component(SafeStorageComponent):
-            storage.add_component(safe)
-        character.remove_relationship(Contains, item_id)
-        storage.add_relationship(Contains(mode=ContainmentMode.CONTAINER), item_id)
-        ctx.entity(item_id).add_relationship(StoredIn(), storage_id)
-        return ok(
+            operations.append(SetComponent(storage_id, safe))
+        operations.extend((
+            RemoveEdge(character_id, item_id, Contains),
+            AddEdge(storage_id, item_id, Contains(mode=ContainmentMode.CONTAINER)),
+            AddEdge(item_id, storage_id, StoredIn()),
+        ))
+        return planned(MutationPlan(tuple(operations)),
             SafeStorageUpdatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2033,7 +2055,7 @@ class StoreSafeItemHandler:
                     item_id=str(item_id),
                     stored=True,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2059,10 +2081,11 @@ class RetrieveSafeItemHandler:
             for _edge, target_id in ctx.entity(item_id).get_relationships(StoredIn)
         ):
             return rejected("item is not in safe storage")
-        storage.remove_relationship(Contains, item_id)
-        ctx.entity(item_id).remove_relationship(StoredIn, storage_id)
-        ctx.entity(character_id).add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
-        return ok(
+        return planned(MutationPlan((
+            RemoveEdge(storage_id, item_id, Contains),
+            RemoveEdge(item_id, storage_id, StoredIn),
+            AddEdge(character_id, item_id, Contains(mode=ContainmentMode.INVENTORY)),
+        )),
             SafeStorageUpdatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2073,7 +2096,7 @@ class RetrieveSafeItemHandler:
                     item_id=str(item_id),
                     stored=False,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2090,31 +2113,29 @@ class SendDebtCollectorHandler:
         debt = ctx.entity(debt_id)
         if not debt.has_component(DebtComponent):
             return rejected("target is not debt")
-        from ...core.ecs import spawn_entity
-
-        collector = spawn_entity(
-            ctx.world,
-            [
+        collector = EntityReference()
+        operations: list[MutationOperation] = [
+            AddEntity((
                 IdentityComponent(name="debt collector", kind="debt-collector"),
                 DebtCollectorComponent(borrower_id=str(character_id), debt_id=str(debt_id)),
-            ],
-        )
+            ), reference=collector)
+        ]
         room_id = container_of(ctx.entity(character_id))
         if room_id is not None:
-            ctx.entity(room_id).add_relationship(
-                Contains(mode=ContainmentMode.ROOM_CONTENT), collector.id
+            operations.append(
+                AddEdge(room_id, collector, Contains(mode=ContainmentMode.ROOM_CONTENT))
             )
-        return ok(
-            DebtCollectorSentEvent(
+        return planned(MutationPlan(tuple(operations)),
+            lambda: DebtCollectorSentEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
                     room_id=str(room_id) if room_id else None,
-                    target_ids=(str(collector.id), str(debt_id)),
-                    collector_id=str(collector.id),
+                    target_ids=(str(collector.require()), str(debt_id)),
+                    collector_id=str(collector.require()),
                     borrower_id=str(character_id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2148,11 +2169,10 @@ class CommitCrimeHandler:
         if fine <= 0:
             return rejected("crime is not fineable")
 
-        from ...core.ecs import spawn_entity
-
-        crime = spawn_entity(
-            ctx.world,
-            [
+        crime = EntityReference()
+        legal_score, legal_operation = _legal_reputation_operation(character, region_id, -fine)
+        plan = MutationPlan((
+            AddEntity((
                 IdentityComponent(name=f"{crime_type} charge", kind="crime-record"),
                 CrimeRecordComponent(
                     crime_type=crime_type,
@@ -2160,42 +2180,42 @@ class CommitCrimeHandler:
                     fine=fine,
                 ),
                 BountyComponent(amount=fine, region_id=law.region_id),
-            ],
-        )
-        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), crime.id)
-        legal_score = _adjust_legal_reputation(character, region_id, -fine)
-        return ok(
-            CrimeCommittedEvent(
+            ), reference=crime),
+            AddEdge(character_id, crime, Contains(mode=ContainmentMode.INVENTORY)),
+            legal_operation,
+        ))
+        return planned(plan,
+            lambda: CrimeCommittedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=str(region_id),
-                    target_ids=(str(crime.id),),
-                    crime_id=str(crime.id),
+                    target_ids=(str(crime.require()),),
+                    crime_id=str(crime.require()),
                     crime_type=crime_type,
                     fine=fine,
                 )
             ),
-            BountyPostedEvent(
+            lambda: BountyPostedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=str(region_id),
-                    target_ids=(str(crime.id),),
-                    crime_id=str(crime.id),
+                    target_ids=(str(crime.require()),),
+                    crime_id=str(crime.require()),
                     amount=fine,
                 )
             ),
-            LegalReputationChangedEvent(
+            lambda: LegalReputationChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=str(region_id),
-                    target_ids=(str(crime.id),),
+                    target_ids=(str(crime.require()),),
                     region_id=law.region_id,
                     score=legal_score,
                 )
-            ),
+            ), ctx=ctx,
         )
 
 
@@ -2228,15 +2248,20 @@ class PayFineHandler:
         if region_id is None:
             return rejected("crime law region does not exist")
 
-        replace_component(
-            account,
-            replace(account_component, balance=account_component.balance - crime.fine),
-        )
-        replace_component(crime_entity, replace(crime, status="paid"))
+        operations: list[MutationOperation] = [
+            SetComponent(
+                account.id,
+                replace(account_component, balance=account_component.balance - crime.fine),
+            ),
+            SetComponent(crime_entity.id, replace(crime, status="paid")),
+        ]
         if crime_entity.has_component(BountyComponent):
-            crime_entity.remove_component(BountyComponent)
-        legal_score = _adjust_legal_reputation(character, region_id, crime.fine)
-        return ok(
+            operations.append(RemoveComponent(crime_entity.id, BountyComponent))
+        legal_score, legal_operation = _legal_reputation_operation(
+            character, region_id, crime.fine
+        )
+        operations.append(legal_operation)
+        return planned(MutationPlan(tuple(operations)),
             FinePaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2256,7 +2281,7 @@ class PayFineHandler:
                     region_id=crime.region_id,
                     score=legal_score,
                 )
-            ),
+            ), ctx=ctx,
         )
 
 
@@ -2275,8 +2300,9 @@ class SentenceCrimeHandler:
         if not crime_entity.has_component(CrimeRecordComponent):
             return rejected("target is not a crime record")
         crime = crime_entity.get_component(CrimeRecordComponent)
-        replace_component(crime_entity, replace(crime, status=f"sentenced:{sentence}"))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(crime_entity.id, replace(crime, status=f"sentenced:{sentence}")),
+        )),
             CourtSentenceIssuedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2287,7 +2313,7 @@ class SentenceCrimeHandler:
                     sentence=sentence,
                     fine=crime.fine,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2318,8 +2344,7 @@ class RentLodgingHandler:
             occupied_by=str(character_id),
             paid_until_epoch=ctx.epoch + duration_seconds,
         )
-        replace_component(lodging_entity, updated)
-        return ok(
+        return planned(MutationPlan((SetComponent(lodging_entity.id, updated),)),
             LodgingRentedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2329,7 +2354,7 @@ class RentLodgingHandler:
                     lodging_id=str(lodging_id),
                     paid_until_epoch=updated.paid_until_epoch,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2346,11 +2371,10 @@ class CampHandler:
             return rejected("character is not in a room")
         risk = str(command.payload.get("risk", "low")).strip() or "low"
         room = ctx.entity(room_id)
-        replace_component(
-            room,
+        return planned(MutationPlan((SetComponent(
+            room.id,
             CampingComponent(camped_by=str(character_id), risk=risk, started_at_epoch=ctx.epoch),
-        )
-        return ok(
+        ),)),
             CampMadeEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2360,7 +2384,7 @@ class CampHandler:
                     camp_room_id=str(room_id),
                     risk=risk,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2374,30 +2398,26 @@ class BuyTravelSuppliesHandler:
             return rejected("invalid character id")
         if quantity <= 0:
             return rejected("supply quantity must be positive")
-        from ...core.ecs import spawn_entity
-
-        supply = spawn_entity(
-            ctx.world,
-            [
+        supply = EntityReference()
+        plan = MutationPlan((
+            AddEntity((
                 IdentityComponent(name="travel supplies", kind="travel-supplies"),
                 PortableComponent(can_pick_up=True),
                 TravelSupplyComponent(quantity=quantity),
-            ],
-        )
-        ctx.entity(character_id).add_relationship(
-            Contains(mode=ContainmentMode.INVENTORY), supply.id
-        )
-        return ok(
-            TravelSuppliesBoughtEvent(
+            ), reference=supply),
+            AddEdge(character_id, supply, Contains(mode=ContainmentMode.INVENTORY)),
+        ))
+        return planned(plan,
+            lambda: TravelSuppliesBoughtEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(supply.id),),
-                    supply_id=str(supply.id),
+                    target_ids=(str(supply.require()),),
+                    supply_id=str(supply.require()),
                     quantity=quantity,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2417,8 +2437,9 @@ class ResolveTravelInterruptionHandler:
         interruption = interruption_entity.get_component(TravelInterruptionComponent)
         if interruption.resolved:
             return rejected("travel interruption is already resolved")
-        replace_component(interruption_entity, replace(interruption, resolved=True))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(interruption_entity.id, replace(interruption, resolved=True)),
+        )),
             TravelInterruptionResolvedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2428,7 +2449,7 @@ class ResolveTravelInterruptionHandler:
                     interruption_id=str(interruption_id),
                     reason=interruption.reason,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2462,21 +2483,24 @@ class BuyPropertyHandler:
         if account_component.balance < deed.price:
             return rejected("insufficient bank balance")
 
-        replace_component(
-            account, replace(account_component, balance=account_component.balance - deed.price)
-        )
         updated = replace(
             deed,
             property_id=deed.property_id or str(property_id),
             owner_id=str(character_id),
             purchased_at_epoch=ctx.epoch,
         )
-        replace_component(property_entity, updated)
-        character.add_relationship(
-            OwnsProperty(deed_id=str(property_id), purchased_at_epoch=ctx.epoch),
-            property_id,
-        )
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(
+                account.id,
+                replace(account_component, balance=account_component.balance - deed.price),
+            ),
+            SetComponent(property_entity.id, updated),
+            AddEdge(
+                character_id,
+                property_id,
+                OwnsProperty(deed_id=str(property_id), purchased_at_epoch=ctx.epoch),
+            ),
+        )),
             PropertyPurchasedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2526,8 +2550,7 @@ class CreateCustomClassHandler:
             ),
             finalized_at_epoch=ctx.epoch,
         )
-        replace_component(character, custom_class)
-        return ok(
+        return planned(MutationPlan((SetComponent(character_id, custom_class),)),
             CustomClassCreatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2539,7 +2562,7 @@ class CreateCustomClassHandler:
                     major_skills=custom_class.major_skills,
                     minor_skills=custom_class.minor_skills,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2561,8 +2584,6 @@ class CreateSpellHandler:
         if not template_entity.has_component(SpellTemplateComponent):
             return rejected("target is not a spell template")
 
-        from ...core.ecs import spawn_entity
-
         template = template_entity.get_component(SpellTemplateComponent)
         spell_name = str(command.payload.get("spell_name", template.spell_name)).strip()
         spell = CustomSpellComponent(
@@ -2572,27 +2593,27 @@ class CreateSpellHandler:
             cost=template.cost,
             creator_id=str(character_id),
         )
-        spell_entity = spawn_entity(
-            ctx.world,
-            [
+        spell_entity = EntityReference()
+        plan = MutationPlan((
+            AddEntity((
                 IdentityComponent(name=spell.spell_name, kind="spell"),
                 spell,
-            ],
-        )
-        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), spell_entity.id)
-        return ok(
-            SpellCreatedEvent(
+            ), reference=spell_entity),
+            AddEdge(character_id, spell_entity, Contains(mode=ContainmentMode.INVENTORY)),
+        ))
+        return planned(plan,
+            lambda: SpellCreatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(spell_entity.id),),
-                    spell_id=str(spell_entity.id),
+                    target_ids=(str(spell_entity.require()),),
+                    spell_id=str(spell_entity.require()),
                     spell_name=spell.spell_name,
                     effect_type=spell.effect_type,
                     magnitude=spell.magnitude,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2616,8 +2637,9 @@ class CastSpellHandler:
         if spell is None:
             return rejected("target is not a spell or enchanted item")
         target = ctx.entity(target_id)
-        target_health = _apply_spell_effect(target, spell)
-        return ok(
+        target_health, operation = _spell_effect_operation(target, spell)
+        operations = (operation,) if operation is not None else ()
+        return planned(MutationPlan(operations),
             SpellCastEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2631,7 +2653,7 @@ class CastSpellHandler:
                     magnitude=spell.magnitude,
                     target_health=target_health,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2683,8 +2705,7 @@ class EnchantItemHandler:
             enchanter_id=str(character_id),
             enchanted_at_epoch=ctx.epoch,
         )
-        replace_component(item, enchantment)
-        return ok(
+        return planned(MutationPlan((SetComponent(item.id, enchantment),)),
             ItemEnchantedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2697,7 +2718,7 @@ class EnchantItemHandler:
                     effect_type=enchantment.effect_type,
                     magnitude=enchantment.magnitude,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2718,23 +2739,22 @@ class MakePotionHandler:
         if not maker.has_component(PotionMakerComponent):
             return rejected("target is not a potion maker")
         component = maker.get_component(PotionMakerComponent)
-        item = _spawn_inventory_item(
-            ctx.world,
-            character,
+        operations, item = _spawn_inventory_item_operations(
+            character_id,
             component.output_item_name,
             kind="potion",
         )
-        return ok(
-            PotionMadeEvent(
+        return planned(MutationPlan(tuple(operations)),
+            lambda: PotionMadeEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(maker_id), str(item.id)),
-                    potion_id=str(item.id),
+                    target_ids=(str(maker_id), str(item.require())),
+                    potion_id=str(item.require()),
                     potion_name=component.output_item_name,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2761,10 +2781,10 @@ class RechargeEnchantedItemHandler:
             return rejected("target is not a recharge service")
         enchantment = item.get_component(EnchantedItemComponent)
         recharge = service.get_component(RechargeServiceComponent)
-        replace_component(
-            item, replace(enchantment, cost=max(1, enchantment.cost - recharge.charge_amount))
+        updated = replace(
+            enchantment, cost=max(1, enchantment.cost - recharge.charge_amount)
         )
-        return ok(
+        return planned(MutationPlan((SetComponent(item.id, updated),)),
             EnchantedItemRechargedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2772,9 +2792,9 @@ class RechargeEnchantedItemHandler:
                     room_id=_room_id(ctx.world, character_id),
                     target_ids=(str(item_id), str(service_id)),
                     item_id=str(item_id),
-                    cost=item.get_component(EnchantedItemComponent).cost,
+                    cost=updated.cost,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2807,14 +2827,13 @@ class IdentifyIngredientHandler:
         ingredient = ingredient_entity.get_component(IngredientComponent)
         if str(character_id) in ingredient.identified_by:
             return rejected("ingredient already identified")
-        replace_component(
-            ingredient_entity,
+        return planned(MutationPlan((SetComponent(
+            ingredient_entity.id,
             replace(
                 ingredient,
                 identified_by=tuple(sorted((*ingredient.identified_by, str(character_id)))),
             ),
-        )
-        return ok(
+        ),)),
             IngredientIdentifiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2824,7 +2843,7 @@ class IdentifyIngredientHandler:
                     ingredient_id=str(ingredient_id),
                     effect=ingredient.effect,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2836,20 +2855,19 @@ def _spell_from_entity(entity: Entity) -> CustomSpellComponent | EnchantedItemCo
     return None
 
 
-def _apply_spell_effect(
+def _spell_effect_operation(
     target: Entity, spell: CustomSpellComponent | EnchantedItemComponent
-) -> float | None:
+) -> tuple[float | None, MutationOperation | None]:
     if not target.has_component(HealthComponent):
-        return None
+        return None, None
     health = target.get_component(HealthComponent)
     if spell.effect_type == "heal":
         current = min(health.maximum, health.current + spell.magnitude)
     elif spell.effect_type == "harm":
         current = max(0.0, health.current - spell.magnitude)
     else:
-        return health.current
-    replace_component(target, replace(health, current=current))
-    return current
+        return health.current, None
+    return current, SetComponent(target.id, replace(health, current=current))
 
 
 class AttemptPacifyHandler:
@@ -2894,20 +2912,23 @@ class AttemptPacifyHandler:
                 )
             )
         ]
+        operations: list[MutationOperation] = []
         if succeeded:
             if target.has_component(HostilityComponent):
-                replace_component(
-                    target,
-                    replace(target.get_component(HostilityComponent), hostile=False),
+                operations.append(
+                    SetComponent(
+                        target.id,
+                        replace(target.get_component(HostilityComponent), hostile=False),
+                    )
                 )
-            replace_component(
-                target,
+            operations.append(SetComponent(
+                target.id,
                 PacifiedComponent(
                     pacified_by=str(character_id),
                     language=requested,
                     pacified_at_epoch=ctx.epoch,
                 ),
-            )
+            ))
             events.append(
                 CreaturePacifiedEvent(
                     **ctx.event_base(
@@ -2920,7 +2941,7 @@ class AttemptPacifyHandler:
                     )
                 )
             )
-        return ok(*events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class ContractAfflictionHandler:
@@ -2935,18 +2956,13 @@ class ContractAfflictionHandler:
         if character.has_component(SupernaturalAfflictionComponent):
             return rejected("character already has a supernatural affliction")
 
-        replace_component(
-            character,
-            SupernaturalAfflictionComponent(
+        return planned(MutationPlan((
+            SetComponent(character_id, SupernaturalAfflictionComponent(
                 affliction_type=affliction_type,
                 contracted_at_epoch=ctx.epoch,
-            ),
-        )
-        replace_component(
-            character,
-            FeedingNeedComponent(last_updated_epoch=ctx.epoch),
-        )
-        return ok(
+            )),
+            SetComponent(character_id, FeedingNeedComponent(last_updated_epoch=ctx.epoch)),
+        )),
             AfflictionContractedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2954,7 +2970,7 @@ class ContractAfflictionHandler:
                     room_id=_room_id(ctx.world, character_id),
                     affliction_type=affliction_type,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2970,8 +2986,9 @@ class ProgressAfflictionIncubationHandler:
         if not character.has_component(SupernaturalAfflictionComponent):
             return rejected("character has no supernatural affliction")
         affliction = character.get_component(SupernaturalAfflictionComponent)
-        replace_component(character, replace(affliction, stage=stage))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(character_id, replace(affliction, stage=stage)),
+        )),
             AfflictionIncubationProgressedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2980,7 +2997,7 @@ class ProgressAfflictionIncubationHandler:
                     affliction_type=affliction.affliction_type,
                     stage=stage,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2996,10 +3013,9 @@ class MarkAfflictionStigmaHandler:
         if severity <= 0:
             return rejected("stigma severity must be positive")
         character = ctx.entity(character_id)
-        replace_component(
-            character, AfflictionStigmaComponent(region_id=region_id, severity=severity)
-        )
-        return ok(
+        return planned(MutationPlan((SetComponent(
+            character_id, AfflictionStigmaComponent(region_id=region_id, severity=severity)
+        ),)),
             AfflictionStigmaMarkedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3008,7 +3024,7 @@ class MarkAfflictionStigmaHandler:
                     region_id=region_id,
                     severity=severity,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3024,14 +3040,13 @@ class RequestCureHandler:
         if not character.has_component(SupernaturalAfflictionComponent):
             return rejected("character has no supernatural affliction")
         affliction = character.get_component(SupernaturalAfflictionComponent)
-        replace_component(
-            character,
+        return planned(MutationPlan((SetComponent(
+            character_id,
             CureRequestComponent(
                 affliction_type=affliction.affliction_type,
                 quest_id=quest_id,
             ),
-        )
-        return ok(
+        ),)),
             CureRequestedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3040,7 +3055,7 @@ class RequestCureHandler:
                     affliction_type=affliction.affliction_type,
                     quest_id=quest_id,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3059,15 +3074,13 @@ class TransformHandler:
 
         affliction = character.get_component(SupernaturalAfflictionComponent)
         form_name = str(command.payload.get("form_name", affliction.affliction_type)).strip()
-        replace_component(character, replace(affliction, stage="active"))
-        replace_component(
-            character,
-            WereformComponent(
+        return planned(MutationPlan((
+            SetComponent(character_id, replace(affliction, stage="active")),
+            SetComponent(character_id, WereformComponent(
                 form_name=form_name or affliction.affliction_type,
                 transformed_at_epoch=ctx.epoch,
-            ),
-        )
-        return ok(
+            )),
+        )),
             TransformationStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3076,7 +3089,7 @@ class TransformHandler:
                     affliction_type=affliction.affliction_type,
                     form_name=form_name or affliction.affliction_type,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3101,8 +3114,11 @@ class FeedOnHandler:
             return rejected("feeding target is not reachable")
 
         need = character.get_component(FeedingNeedComponent)
-        replace_component(character, replace(need, current=0.0, last_updated_epoch=ctx.epoch))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(
+                character_id, replace(need, current=0.0, last_updated_epoch=ctx.epoch)
+            ),
+        )),
             FeedingNeedChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3112,7 +3128,7 @@ class FeedOnHandler:
                     current=0.0,
                     maximum=need.maximum,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3128,13 +3144,15 @@ class EndTransformationHandler:
             return rejected("character is not transformed")
 
         wereform = character.get_component(WereformComponent)
-        character.remove_component(WereformComponent)
+        operations: list[MutationOperation] = [
+            RemoveComponent(character_id, WereformComponent)
+        ]
         affliction_type = wereform.form_name
         if character.has_component(SupernaturalAfflictionComponent):
             affliction = character.get_component(SupernaturalAfflictionComponent)
             affliction_type = affliction.affliction_type
-            replace_component(character, replace(affliction, stage="dormant"))
-        return ok(
+            operations.append(SetComponent(character_id, replace(affliction, stage="dormant")))
+        return planned(MutationPlan(tuple(operations)),
             TransformationEndedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3143,7 +3161,7 @@ class EndTransformationHandler:
                     affliction_type=affliction_type,
                     form_name=wereform.form_name,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3159,12 +3177,14 @@ class CureAfflictionHandler:
             return rejected("character has no supernatural affliction")
 
         affliction_type = character.get_component(SupernaturalAfflictionComponent).affliction_type
-        character.remove_component(SupernaturalAfflictionComponent)
+        operations: list[MutationOperation] = [
+            RemoveComponent(character_id, SupernaturalAfflictionComponent)
+        ]
         if character.has_component(FeedingNeedComponent):
-            character.remove_component(FeedingNeedComponent)
+            operations.append(RemoveComponent(character_id, FeedingNeedComponent))
         if character.has_component(WereformComponent):
-            character.remove_component(WereformComponent)
-        return ok(
+            operations.append(RemoveComponent(character_id, WereformComponent))
+        return planned(MutationPlan(tuple(operations)),
             AfflictionCuredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3172,7 +3192,7 @@ class CureAfflictionHandler:
                     room_id=_room_id(ctx.world, character_id),
                     affliction_type=affliction_type,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3263,16 +3283,16 @@ def _rank_allows(actual: str, required: str) -> bool:
     return actual == required
 
 
-def _spawn_inventory_item(world: World, character: Entity, name: str, *, kind: str) -> Entity:
-    from ...core.components import PortableComponent
-    from ...core.ecs import spawn_entity
-
-    output = spawn_entity(
-        world,
-        [IdentityComponent(name=name, kind=kind), PortableComponent()],
-    )
-    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), output.id)
-    return output
+def _spawn_inventory_item_operations(
+    character_id: EntityId, name: str, *, kind: str
+) -> tuple[list[MutationOperation], EntityReference]:
+    output = EntityReference()
+    return [
+        AddEntity(
+            (IdentityComponent(name=name, kind=kind), PortableComponent()), reference=output
+        ),
+        AddEdge(character_id, output, Contains(mode=ContainmentMode.INVENTORY)),
+    ], output
 
 
 def _selected_rumor_id(
@@ -3291,25 +3311,30 @@ def _selected_rumor_id(
     return None
 
 
-def _move_character(world: World, character: Entity, destination_id: EntityId) -> None:
+def _move_character_operations(
+    world: World, character: Entity, destination_id: EntityId
+) -> list[MutationOperation]:
+    operations: list[MutationOperation] = []
     origin_id = container_of(character)
     if origin_id is not None and world.has_entity(origin_id):
-        world.get_entity(origin_id).remove_relationship(Contains, character.id)
-    world.get_entity(destination_id).add_relationship(
-        Contains(mode=ContainmentMode.ROOM_CONTENT), character.id
+        operations.append(RemoveEdge(origin_id, character.id, Contains))
+    operations.append(
+        AddEdge(destination_id, character.id, Contains(mode=ContainmentMode.ROOM_CONTENT))
     )
+    return operations
 
 
-def _discover_room(room: Entity) -> bool:
+def _discover_room_operation(room: Entity) -> tuple[bool, MutationOperation | None]:
     """Mark a dungeon room discovered; return True if this changed it."""
     dungeon_room = room.get_component(DungeonRoomComponent)
     if dungeon_room.discovered:
-        return False
-    replace_component(room, replace(dungeon_room, discovered=True))
-    return True
+        return False, None
+    return True, SetComponent(room.id, replace(dungeon_room, discovered=True))
 
 
-def _note_on_automap(character: Entity, room_id: str, *, marked: bool = False) -> None:
+def _automap_operation(
+    character: Entity, room_id: str, *, marked: bool = False
+) -> MutationOperation:
     automap = (
         character.get_component(AutomapComponent)
         if character.has_component(AutomapComponent)
@@ -3321,8 +3346,8 @@ def _note_on_automap(character: Entity, room_id: str, *, marked: bool = False) -
     marked_rooms = automap.marked_rooms
     if marked and room_id not in marked_rooms:
         marked_rooms = (*marked_rooms, room_id)
-    replace_component(
-        character, replace(automap, discovered_rooms=discovered, marked_rooms=marked_rooms)
+    return SetComponent(
+        character.id, replace(automap, discovered_rooms=discovered, marked_rooms=marked_rooms)
     )
 
 
@@ -3354,9 +3379,10 @@ class RequestDungeonHandler:
             else None
         )
         generator_id = hook.generator_plugin_id if hook is not None else None
-        replace_component(dungeon_entity, replace(dungeon, generated=True))
         room_id = _room_id(ctx.world, character_id)
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(dungeon_entity.id, replace(dungeon, generated=True)),
+        )),
             DungeonRequestedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3376,7 +3402,7 @@ class RequestDungeonHandler:
                     target_ids=(str(dungeon_entity_id),),
                     dungeon_id=dungeon.dungeon_id,
                 )
-            ),
+            ), ctx=ctx,
         )
 
 
@@ -3409,12 +3435,26 @@ class EnterDungeonHandler:
         if not entry_room.has_component(DungeonRoomComponent):
             return rejected("entry is not a dungeon room")
 
-        replace_component(dungeon_entity, replace(dungeon, entered=True))
-        _move_character(ctx.world, character, entry_room_id)
-        _discover_room(entry_room)
-        _note_on_automap(character, str(entry_room_id))
+        operations: list[MutationOperation] = [
+            SetComponent(dungeon_entity.id, replace(dungeon, entered=True))
+        ]
+        dungeon_origin_id = container_of(dungeon_entity)
+        if dungeon_origin_id is not None and dungeon_origin_id != entry_room_id:
+            operations.extend((
+                RemoveEdge(dungeon_origin_id, dungeon_entity.id, Contains),
+                AddEdge(
+                    entry_room_id,
+                    dungeon_entity.id,
+                    Contains(mode=ContainmentMode.ROOM_CONTENT),
+                ),
+            ))
+        operations.extend(_move_character_operations(ctx.world, character, entry_room_id))
+        _changed, discovery_operation = _discover_room_operation(entry_room)
+        if discovery_operation is not None:
+            operations.append(discovery_operation)
+        operations.append(_automap_operation(character, str(entry_room_id)))
         depth = entry_room.get_component(DungeonRoomComponent).depth
-        return ok(
+        return planned(MutationPlan(tuple(operations)),
             DungeonEnteredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3434,7 +3474,7 @@ class EnterDungeonHandler:
                     dungeon_room_id=str(entry_room_id),
                     depth=depth,
                 )
-            ),
+            ), ctx=ctx,
         )
 
 
@@ -3455,8 +3495,11 @@ class SearchRoomHandler:
 
         dungeon_id = room.get_component(DungeonRoomComponent).dungeon_id
         events: list[DomainEvent] = []
-        if _discover_room(room):
-            _note_on_automap(character, str(room_id))
+        operations: list[MutationOperation] = []
+        discovered, discovery_operation = _discover_room_operation(room)
+        if discovered:
+            operations.append(discovery_operation)
+            operations.append(_automap_operation(character, str(room_id)))
             events.append(
                 DungeonRoomDiscoveredEvent(
                     **ctx.event_base(
@@ -3475,7 +3518,7 @@ class SearchRoomHandler:
             if content.has_component(SecretDoorComponent):
                 door = content.get_component(SecretDoorComponent)
                 if not door.found:
-                    replace_component(content, replace(door, found=True))
+                    operations.append(SetComponent(content.id, replace(door, found=True)))
                     events.append(
                         SecretDoorFoundEvent(
                             **ctx.event_base(
@@ -3491,7 +3534,9 @@ class SearchRoomHandler:
             if content.has_component(DungeonObjectiveComponent):
                 objective = content.get_component(DungeonObjectiveComponent)
                 if not objective.found:
-                    replace_component(content, replace(objective, found=True))
+                    operations.append(
+                        SetComponent(content.id, replace(objective, found=True))
+                    )
                     events.append(
                         DungeonObjectiveFoundEvent(
                             **ctx.event_base(
@@ -3507,7 +3552,7 @@ class SearchRoomHandler:
 
         if not events:
             return rejected("you find nothing of note")
-        return ok(*events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class OpenSecretDoorHandler:
@@ -3537,8 +3582,6 @@ class OpenSecretDoorHandler:
             return rejected("door leads nowhere")
         _door_edge, target_room_id = destination
 
-        replace_component(door_entity, replace(door, opened=True))
-        ctx.entity(room_id).add_relationship(ExitTo(direction=door.direction), target_room_id)
         target_room = ctx.entity(target_room_id)
         depth = (
             target_room.get_component(DungeonRoomComponent).depth
@@ -3550,7 +3593,10 @@ class OpenSecretDoorHandler:
             if target_room.has_component(DungeonRoomComponent)
             else ""
         )
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(door_entity.id, replace(door, opened=True)),
+            AddEdge(room_id, target_room_id, ExitTo(direction=door.direction)),
+        )),
             DungeonRoomDiscoveredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3561,7 +3607,7 @@ class OpenSecretDoorHandler:
                     dungeon_room_id=str(target_room_id),
                     depth=depth,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3576,8 +3622,9 @@ class MarkPathHandler:
         room_id = container_of(character)
         if room_id is None or not ctx.world.has_entity(room_id):
             return rejected("character is not in a room")
-        _note_on_automap(character, str(room_id), marked=True)
-        return ok()
+        return planned(
+            MutationPlan((_automap_operation(character, str(room_id), marked=True),)), ctx=ctx
+        )
 
 
 class ViewMapHandler:
@@ -3590,7 +3637,7 @@ class ViewMapHandler:
         character = ctx.entity(character_id)
         if not character.has_component(AutomapComponent):
             return rejected("you have no map to view")
-        return ok()
+        return planned(MutationPlan(), ctx=ctx)
 
 
 class SetRecallHandler:
@@ -3604,10 +3651,12 @@ class SetRecallHandler:
         room_id = container_of(character)
         if room_id is None or not ctx.world.has_entity(room_id):
             return rejected("character is not in a room")
-        for _edge, anchor_id in tuple(character.get_relationships(AnchoredToRoom)):
-            character.remove_relationship(AnchoredToRoom, anchor_id)
-        character.add_relationship(AnchoredToRoom(), room_id)
-        return ok(
+        operations: list[MutationOperation] = [
+            RemoveEdge(character_id, anchor_id, AnchoredToRoom)
+            for _edge, anchor_id in tuple(character.get_relationships(AnchoredToRoom))
+        ]
+        operations.append(AddEdge(character_id, room_id, AnchoredToRoom()))
+        return planned(MutationPlan(tuple(operations)),
             RecallAnchorSetEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3615,7 +3664,7 @@ class SetRecallHandler:
                     room_id=str(room_id),
                     anchor_room_id=str(room_id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3633,8 +3682,9 @@ class UseRecallHandler:
         _anchor_edge, anchor_id = anchor
         if container_of(character) == anchor_id:
             return rejected("already at the recall anchor")
-        _move_character(ctx.world, character, anchor_id)
-        return ok(
+        return planned(MutationPlan(tuple(
+            _move_character_operations(ctx.world, character, anchor_id)
+        )),
             RecallUsedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3642,7 +3692,7 @@ class UseRecallHandler:
                     room_id=str(anchor_id),
                     anchor_room_id=str(anchor_id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3662,7 +3712,7 @@ class RestHandler:
             risk = room.get_component(RestRiskComponent)
             if risk.band in ("high", "ambush"):
                 return rejected("this area is too dangerous to rest")
-        return ok()
+        return planned(MutationPlan(), ctx=ctx)
 
 
 class LeaveDungeonHandler:
@@ -3682,8 +3732,9 @@ class LeaveDungeonHandler:
         if not dungeon.entered:
             return rejected("not currently in this dungeon")
 
-        replace_component(dungeon_entity, replace(dungeon, entered=False))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(dungeon_entity.id, replace(dungeon, entered=False)),
+        )),
             DungeonExitedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3692,7 +3743,7 @@ class LeaveDungeonHandler:
                     target_ids=(str(dungeon_entity_id),),
                     dungeon_id=dungeon.dungeon_id,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
