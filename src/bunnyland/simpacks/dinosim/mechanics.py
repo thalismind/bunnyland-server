@@ -38,15 +38,22 @@ from ...core.ecs import (
     reachable_entity as _reachable_entity,
 )
 from ...core.ecs import (
-    remove_from_container as _remove_from_container,
-)
-from ...core.ecs import (
     room_id_for as _room_id,
 )
 from ...core.edges import ContainmentMode, Contains, ExitTo
 from ...core.events import DomainEvent, EventVisibility
 from ...core.events import event_base as _event_base
-from ...core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
+from ...core.mutations import (
+    AddEdge,
+    AddEntity,
+    EntityReference,
+    MutationOperation,
+    MutationPlan,
+    RemoveComponent,
+    RemoveEdge,
+    SetComponent,
+)
 from ...prompts import ComponentPromptContext
 
 DEFAULT_INCUBATION_SECONDS = 24 * 60 * 60
@@ -1329,7 +1336,21 @@ def _sedation_bonus(creature: Entity, epoch: int) -> float:
     return max(0.0, tranquilizer.potency)
 
 
+def _move_to_room_operations(
+    world: World, entity: Entity, room_id: EntityId
+) -> list[MutationOperation]:
+    operations: list[MutationOperation] = []
+    parent_id = container_of(entity)
+    if parent_id is not None and world.has_entity(parent_id):
+        operations.append(RemoveEdge(parent_id, entity.id, Contains))
+    operations.append(
+        AddEdge(room_id, entity.id, Contains(mode=ContainmentMode.ROOM_CONTENT))
+    )
+    return operations
+
+
 def _move_to_room(world: World, entity: Entity, room_id: EntityId) -> None:
+    """Move an entity for passive-system transactions."""
     parent_id = container_of(entity)
     if parent_id is not None and world.has_entity(parent_id):
         world.get_entity(parent_id).remove_relationship(Contains, entity.id)
@@ -1411,7 +1432,7 @@ def _signal_room(
     return room, None
 
 
-def _spawn_egg(
+def _spawn_egg_operations(
     world: World,
     species_name: str,
     epoch: int,
@@ -1419,10 +1440,10 @@ def _spawn_egg(
     fertilized: bool = False,
     parent_ids: tuple[str, ...] = (),
     source: str = "natural",
-) -> Entity:
-    egg = spawn_entity(
-        world,
-        [
+) -> tuple[list[MutationOperation], EntityReference]:
+    egg = EntityReference()
+    operations: list[MutationOperation] = [
+        AddEntity((
             IdentityComponent(name=f"{species_name} egg", kind="egg", tags=("dinosim",)),
             EggComponent(
                 species_name=species_name,
@@ -1431,27 +1452,26 @@ def _spawn_egg(
                 source=source,
             ),
             PortableComponent(can_pick_up=True),
-        ],
-    )
+        ), reference=egg)
+    ]
     for order, raw_parent_id in enumerate(parent_ids):
         parent_id = parse_entity_id(raw_parent_id)
         if parent_id is not None and world.has_entity(parent_id):
-            egg.add_relationship(DescendsFromParent(order=order), parent_id)
-    return egg
+            operations.append(AddEdge(egg, parent_id, DescendsFromParent(order=order)))
+    return operations, egg
 
 
-def _spawn_creature_product(
-    world: World,
-    character: Entity,
+def _spawn_creature_product_operations(
+    character_id: EntityId,
     *,
     product_type: str,
     quantity: float,
     source_creature_id: str,
     epoch: int,
-) -> Entity:
-    product = spawn_entity(
-        world,
-        [
+) -> tuple[list[MutationOperation], EntityReference]:
+    product = EntityReference()
+    return [
+        AddEntity((
             IdentityComponent(
                 name=f"{product_type} product",
                 kind="creature_product",
@@ -1464,10 +1484,9 @@ def _spawn_creature_product(
                 collected_at_epoch=epoch,
             ),
             PortableComponent(can_pick_up=True),
-        ],
-    )
-    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), product.id)
-    return product
+        ), reference=product),
+        AddEdge(character_id, product, Contains(mode=ContainmentMode.INVENTORY)),
+    ], product
 
 
 def ensure_dinosim_policy(actor) -> DinosimPolicyComponent:
@@ -1611,14 +1630,15 @@ class IdentifyFossilHandler:
             return rejected("target is not a fossil")
 
         fossil_component = fossil.get_component(FossilFragmentComponent)
-        replace_component(fossil, replace(fossil_component, cleaned=True))
         identification = SpeciesIdentificationComponent(
             species_name=species_name,
             confidence=max(0.0, min(1.0, fossil_component.sample_quality)),
             identified_at_epoch=ctx.epoch,
         )
-        replace_component(fossil, identification)
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(fossil.id, replace(fossil_component, cleaned=True)),
+            SetComponent(fossil.id, identification),
+        )),
             FossilIdentifiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1629,7 +1649,7 @@ class IdentifyFossilHandler:
                     species_name=species_name,
                     confidence=identification.confidence,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1653,9 +1673,9 @@ class ExtractAncientSampleHandler:
             return rejected("fossil has not been identified")
 
         identification = fossil.get_component(SpeciesIdentificationComponent)
-        sample = spawn_entity(
-            ctx.world,
-            [
+        sample = EntityReference()
+        plan = MutationPlan((
+            AddEntity((
                 IdentityComponent(
                     name=f"{identification.species_name} ancient sample",
                     kind="sample",
@@ -1667,21 +1687,21 @@ class ExtractAncientSampleHandler:
                     source_fossil_id=str(fossil_id),
                 ),
                 PortableComponent(can_pick_up=True),
-            ],
-        )
-        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), sample.id)
-        return ok(
-            AncientSampleExtractedEvent(
+            ), reference=sample),
+            AddEdge(character_id, sample, Contains(mode=ContainmentMode.INVENTORY)),
+        ))
+        return planned(plan,
+            lambda: AncientSampleExtractedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(fossil_id), str(sample.id)),
+                    target_ids=(str(fossil_id), str(sample.require())),
                     fossil_id=str(fossil_id),
-                    sample_id=str(sample.id),
+                    sample_id=str(sample.require()),
                     species_name=identification.species_name,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1703,7 +1723,7 @@ class PrepareCloneHandler:
             return rejected("target is not an ancient sample")
 
         sample = sample_entity.get_component(AncientSampleComponent)
-        egg = _spawn_egg(
+        operations, egg = _spawn_egg_operations(
             ctx.world,
             sample.species_name,
             ctx.epoch,
@@ -1711,28 +1731,30 @@ class PrepareCloneHandler:
             parent_ids=(sample.source_fossil_id,),
             source="clone",
         )
-        egg.add_component(
-            CloneCandidateComponent(
+        operations.extend((
+            SetComponent(egg, CloneCandidateComponent(
                 species_name=sample.species_name,
                 source_sample_id=str(sample_id),
                 viability=sample.viability,
                 prepared_at_epoch=ctx.epoch,
-            )
-        )
-        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), egg.id)
-        _remove_from_container(ctx.world, sample_id)
-        return ok(
-            ClonePreparedEvent(
+            )),
+            AddEdge(character_id, egg, Contains(mode=ContainmentMode.INVENTORY)),
+        ))
+        sample_parent_id = container_of(sample_entity)
+        if sample_parent_id is not None:
+            operations.append(RemoveEdge(sample_parent_id, sample_id, Contains))
+        return planned(MutationPlan(tuple(operations)),
+            lambda: ClonePreparedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(sample_id), str(egg.id)),
+                    target_ids=(str(sample_id), str(egg.require())),
                     sample_id=str(sample_id),
-                    egg_id=str(egg.id),
+                    egg_id=str(egg.require()),
                     species_name=sample.species_name,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1766,24 +1788,26 @@ class LayEggHandler:
             species_name = procreation.egg_species_name or _species_name(parent)
         else:
             species_name = _species_name(parent)
-        egg = _spawn_egg(ctx.world, species_name, ctx.epoch, parent_ids=(str(parent_id),))
+        operations, egg = _spawn_egg_operations(
+            ctx.world, species_name, ctx.epoch, parent_ids=(str(parent_id),)
+        )
         room_id = container_of(parent) or container_of(ctx.entity(character_id))
         if room_id is not None and ctx.world.has_entity(room_id):
-            ctx.entity(room_id).add_relationship(
-                Contains(mode=ContainmentMode.ROOM_CONTENT), egg.id
+            operations.append(
+                AddEdge(room_id, egg, Contains(mode=ContainmentMode.ROOM_CONTENT))
             )
-        return ok(
-            EggLaidEvent(
+        return planned(MutationPlan(tuple(operations)),
+            lambda: EggLaidEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
                     room_id=str(room_id) if room_id is not None else None,
-                    target_ids=(str(parent_id), str(egg.id)),
+                    target_ids=(str(parent_id), str(egg.require())),
                     parent_id=str(parent_id),
-                    egg_id=str(egg.id),
+                    egg_id=str(egg.require()),
                     species_name=species_name,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1813,15 +1837,17 @@ class FertilizeEggHandler:
         ):
             return rejected("parent is not fertile")
 
+        operations: list[MutationOperation] = []
         if not egg_entity.has_relationship(DescendsFromParent, parent_id):
-            egg_entity.add_relationship(
+            operations.append(AddEdge(
+                egg_id,
+                parent_id,
                 DescendsFromParent(
                     order=len(egg_entity.get_relationships(DescendsFromParent))
                 ),
-                parent_id,
-            )
-        replace_component(egg_entity, replace(egg, fertilized=True))
-        return ok(
+            ))
+        operations.append(SetComponent(egg_id, replace(egg, fertilized=True)))
+        return planned(MutationPlan(tuple(operations)),
             EggFertilizedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1832,7 +1858,7 @@ class FertilizeEggHandler:
                     parent_id=str(parent_id),
                     species_name=egg.species_name,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1860,15 +1886,14 @@ class IncubateEggHandler:
             or DEFAULT_INCUBATION_SECONDS
         )
         required_seconds = max(60, required_seconds)
-        replace_component(
-            egg_entity,
+        return planned(MutationPlan((SetComponent(
+            egg_id,
             IncubationComponent(
                 started_at_epoch=ctx.epoch,
                 required_seconds=required_seconds,
                 last_updated_epoch=ctx.epoch,
             ),
-        )
-        return ok(
+        ),)),
             EggIncubatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1878,7 +1903,7 @@ class IncubateEggHandler:
                     egg_id=str(egg_id),
                     ready_at_epoch=ctx.epoch + required_seconds,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1905,39 +1930,43 @@ class HatchEggHandler:
         if not incubation.ready:
             return rejected("egg is not ready to hatch")
 
-        hatchling = spawn_entity(
-            ctx.world,
-            [
+        hatchling = EntityReference()
+        operations: list[MutationOperation] = [
+            AddEntity((
                 IdentityComponent(name=f"{egg.species_name} hatchling", kind="character"),
                 CharacterComponent(species=egg.species_name, public=True),
                 DinosaurComponent(species_name=egg.species_name),
                 HatchlingComponent(hatched_at_epoch=ctx.epoch, egg_id=str(egg_id)),
                 AgeComponent(born_at_epoch=ctx.epoch),
                 LifeStageComponent(stage="child"),
-            ],
-        )
+            ), reference=hatchling)
+        ]
         room_id = _hatch_room_id(ctx.world, actor, egg_entity)
-        _remove_from_container(ctx.world, egg_id)
-        egg_entity.remove_component(EggComponent)
-        egg_entity.remove_component(IncubationComponent)
+        egg_parent_id = container_of(egg_entity)
+        if egg_parent_id is not None:
+            operations.append(RemoveEdge(egg_parent_id, egg_id, Contains))
+        operations.extend((
+            RemoveComponent(egg_id, EggComponent),
+            RemoveComponent(egg_id, IncubationComponent),
+        ))
         if egg_entity.has_component(CloneCandidateComponent):
-            egg_entity.remove_component(CloneCandidateComponent)
+            operations.append(RemoveComponent(egg_id, CloneCandidateComponent))
         if room_id is not None and ctx.world.has_entity(room_id):
-            ctx.entity(room_id).add_relationship(
-                Contains(mode=ContainmentMode.ROOM_CONTENT), hatchling.id
+            operations.append(
+                AddEdge(room_id, hatchling, Contains(mode=ContainmentMode.ROOM_CONTENT))
             )
-        return ok(
-            EggHatchedEvent(
+        return planned(MutationPlan(tuple(operations)),
+            lambda: EggHatchedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
                     room_id=str(room_id) if room_id is not None else None,
-                    target_ids=(str(egg_id), str(hatchling.id)),
+                    target_ids=(str(egg_id), str(hatchling.require())),
                     egg_id=str(egg_id),
-                    hatchling_id=str(hatchling.id),
+                    hatchling_id=str(hatchling.require()),
                     species_name=egg.species_name,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1957,11 +1986,10 @@ class SurveyFossilHandler:
             if fossil.has_component(FossilSurveyComponent)
             else FossilSurveyComponent()
         )
-        replace_component(
-            fossil,
+        return planned(MutationPlan((SetComponent(
+            fossil.id,
             replace(survey, surveyed_by=tuple(sorted((*survey.surveyed_by, str(character_id))))),
-        )
-        return ok(
+        ),)),
             FossilSurveyedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1970,7 +1998,7 @@ class SurveyFossilHandler:
                     target_ids=(str(fossil_id),),
                     fossil_id=str(fossil_id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -1993,8 +2021,9 @@ class ExcavateFossilHandler:
         progress = min(
             1.0, survey.excavation_progress + float(command.payload.get("progress", 0.5))
         )
-        replace_component(fossil, replace(survey, excavation_progress=progress))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(fossil.id, replace(survey, excavation_progress=progress)),
+        )),
             FossilExcavatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2004,7 +2033,7 @@ class ExcavateFossilHandler:
                     fossil_id=str(fossil_id),
                     progress=progress,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2020,8 +2049,7 @@ class CleanFossilHandler:
         if fossil is None or not fossil.has_component(FossilFragmentComponent):
             return rejected("fossil is not reachable")
         fragment = fossil.get_component(FossilFragmentComponent)
-        replace_component(fossil, replace(fragment, cleaned=True))
-        return ok(
+        return planned(MutationPlan((SetComponent(fossil.id, replace(fragment, cleaned=True)),)),
             FossilCleanedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2030,7 +2058,7 @@ class CleanFossilHandler:
                     target_ids=(str(fossil_id),),
                     fossil_id=str(fossil_id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2050,8 +2078,7 @@ class StabilizeFossilHandler:
             if fossil.has_component(FossilSurveyComponent)
             else FossilSurveyComponent()
         )
-        replace_component(fossil, replace(survey, stabilized=True))
-        return ok(
+        return planned(MutationPlan((SetComponent(fossil.id, replace(survey, stabilized=True)),)),
             FossilStabilizedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2060,7 +2087,7 @@ class StabilizeFossilHandler:
                     target_ids=(str(fossil_id),),
                     fossil_id=str(fossil_id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2074,9 +2101,11 @@ class LabIncubateEggHandler:
         lab_id = str(command.payload.get("lab_id", "")).strip()
         if character_id is None or egg_id is None or not result.ok:
             return result
-        egg = ctx.entity(egg_id)
-        replace_component(egg, LabIncubationComponent(lab_id=lab_id, active=True))
-        return ok(
+        assert result.plan is not None
+        return planned(MutationPlan((
+            *result.plan.operations,
+            SetComponent(egg_id, LabIncubationComponent(lab_id=lab_id, active=True)),
+        )),
             *result.events,
             LabIncubationStartedEvent(
                 **ctx.event_base(
@@ -2088,6 +2117,7 @@ class LabIncubateEggHandler:
                     lab_id=lab_id,
                 )
             ),
+            ctx=ctx,
         )
 
 
@@ -2113,15 +2143,14 @@ class InspectEggHandler:
         if egg is None or not egg.has_component(EggComponent):
             return rejected("egg is not reachable")
         viability = float(command.payload.get("viability", 1.0))
-        replace_component(
-            egg,
+        return planned(MutationPlan((SetComponent(
+            egg.id,
             EggInspectionComponent(
                 inspected_by=str(character_id),
                 viability=viability,
                 inspected_at_epoch=ctx.epoch,
             ),
-        )
-        return ok(
+        ),)),
             EggInspectedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2131,7 +2160,7 @@ class InspectEggHandler:
                     egg_id=str(egg_id),
                     viability=viability,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2147,8 +2176,9 @@ class ImprintCreatureHandler:
         if creature is None or not _is_creature(creature):
             return rejected("creature is not reachable")
         bond = float(command.payload.get("bond", 1.0))
-        replace_component(creature, ImprintComponent(imprinted_by=str(character_id), bond=bond))
-        return ok(
+        return planned(MutationPlan((SetComponent(
+            creature.id, ImprintComponent(imprinted_by=str(character_id), bond=bond)
+        ),)),
             CreatureImprintedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2158,7 +2188,7 @@ class ImprintCreatureHandler:
                     creature_id=str(creature_id),
                     bond=bond,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2179,10 +2209,9 @@ class CareForJuvenileHandler:
             else JuvenileCareComponent(cared_by=str(character_id))
         )
         care_level = current.care_level + float(command.payload.get("care", 1.0))
-        replace_component(
-            creature, replace(current, cared_by=str(character_id), care_level=care_level)
-        )
-        return ok(
+        return planned(MutationPlan((SetComponent(
+            creature.id, replace(current, cared_by=str(character_id), care_level=care_level)
+        ),)),
             JuvenileCareGivenEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2192,7 +2221,7 @@ class CareForJuvenileHandler:
                     creature_id=str(creature_id),
                     care_level=care_level,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2213,11 +2242,10 @@ class StudyWaterCreatureHandler:
             if creature.has_component(WaterStudyComponent)
             else WaterStudyComponent()
         )
-        replace_component(
-            creature,
+        return planned(MutationPlan((SetComponent(
+            creature.id,
             replace(study, studied_by=tuple(sorted((*study.studied_by, str(character_id))))),
-        )
-        return ok(
+        ),)),
             WaterCreatureStudiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2227,7 +2255,7 @@ class StudyWaterCreatureHandler:
                     creature_id=str(creature_id),
                     species_name=water.species_name,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2243,11 +2271,15 @@ class BroodEggHandler:
         if egg is None or not egg.has_component(EggComponent):
             return rejected("egg is not reachable")
         warmth = float(command.payload.get("warmth", 1.0))
-        replace_component(egg, BroodingComponent(brooder_id=str(character_id), warmth=warmth))
+        operations: list[MutationOperation] = [
+            SetComponent(egg.id, BroodingComponent(brooder_id=str(character_id), warmth=warmth))
+        ]
         if egg.has_component(IncubationComponent):
             incubation = egg.get_component(IncubationComponent)
-            replace_component(egg, replace(incubation, brooded_by=str(character_id)))
-        return ok(
+            operations.append(
+                SetComponent(egg.id, replace(incubation, brooded_by=str(character_id)))
+            )
+        return planned(MutationPlan(tuple(operations)),
             BroodingStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2257,7 +2289,7 @@ class BroodEggHandler:
                     egg_id=str(egg_id),
                     warmth=warmth,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2274,8 +2306,9 @@ class SetIncubationTemperatureHandler:
             return rejected("egg is not incubating")
         temperature = float(command.payload.get("temperature", 30.0))
         incubation = egg.get_component(IncubationComponent)
-        replace_component(egg, replace(incubation, temperature=temperature))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(egg.id, replace(incubation, temperature=temperature)),
+        )),
             IncubationTemperatureSetEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2285,7 +2318,7 @@ class SetIncubationTemperatureHandler:
                     egg_id=str(egg_id),
                     temperature=temperature,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2301,8 +2334,9 @@ class TriggerContainmentPanicHandler:
         if enclosure is None or not enclosure.has_component(EnclosureComponent):
             return rejected("enclosure is not reachable")
         severity = int(command.payload.get("severity", 1))
-        replace_component(enclosure, ContainmentPanicComponent(severity=severity, active=True))
-        return ok(
+        return planned(MutationPlan((SetComponent(
+            enclosure.id, ContainmentPanicComponent(severity=severity, active=True)
+        ),)),
             ContainmentPanicStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2312,7 +2346,7 @@ class TriggerContainmentPanicHandler:
                     enclosure_id=str(enclosure_id),
                     severity=severity,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2322,7 +2356,7 @@ def _progress_taming(
     creature: Entity,
     *,
     base_progress: float,
-) -> tuple[TamingComponent, TrustComponent, FearComponent]:
+) -> tuple[TamingComponent, TrustComponent, FearComponent, list[MutationOperation]]:
     character = ctx.entity(character_id)
     bait_bonus = _matching_bait_bonus(ctx.world, creature, character)
     sedation_bonus = _sedation_bonus(creature, ctx.epoch)
@@ -2353,10 +2387,11 @@ def _progress_taming(
     )
     updated_trust = replace(trust, amount=trust.amount + trust_delta)
     updated_fear = replace(fear, amount=max(0.0, fear.amount - fear_delta))
-    replace_component(creature, updated_taming)
-    replace_component(creature, updated_trust)
-    replace_component(creature, updated_fear)
-    return updated_taming, updated_trust, updated_fear
+    return updated_taming, updated_trust, updated_fear, [
+        SetComponent(creature.id, updated_taming),
+        SetComponent(creature.id, updated_trust),
+        SetComponent(creature.id, updated_fear),
+    ]
 
 
 class TrackCreatureHandler:
@@ -2370,11 +2405,10 @@ class TrackCreatureHandler:
         if creature is None:
             return rejected(error if error else "creature is required")
         room_id = _entity_room_id(creature) or _room_id(ctx.world, character_id) or ""
-        replace_component(
-            creature,
+        return planned(MutationPlan((SetComponent(
+            creature.id,
             TrackComponent(room_id=room_id, freshness=1.0, last_tracked_epoch=ctx.epoch),
-        )
-        return ok(
+        ),)),
             CreatureTrackedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2385,7 +2419,7 @@ class TrackCreatureHandler:
                     tracked_room_id=room_id,
                     species_name=_species_name(creature),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2405,11 +2439,10 @@ class MarkTerritoryHandler:
         component = territory.get_component(TerritoryComponent)
         if component.marked_by == str(character_id):
             return rejected("territory is already marked by you")
-        replace_component(
-            territory,
+        return planned(MutationPlan((SetComponent(
+            territory.id,
             replace(component, marked_by=str(character_id), marked_at_epoch=ctx.epoch),
-        )
-        return ok(
+        ),)),
             TerritoryMarkedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2419,7 +2452,7 @@ class MarkTerritoryHandler:
                     territory_id=str(territory.id),
                     species_name=component.species_name,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2437,8 +2470,9 @@ class TrackHerdHandler:
         if not herd.has_component(HerdComponent):
             return rejected("target is not a herd")
         component = herd.get_component(HerdComponent)
-        replace_component(herd, replace(component, last_tracked_epoch=ctx.epoch))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(herd.id, replace(component, last_tracked_epoch=ctx.epoch)),
+        )),
             HerdTrackedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2449,7 +2483,7 @@ class TrackHerdHandler:
                     species_name=component.species_name,
                     size=component.size,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2469,16 +2503,15 @@ class PrepareNestHandler:
         component = nest.get_component(NestComponent)
         if component.prepared:
             return rejected("nest is already prepared")
-        replace_component(
-            nest,
+        return planned(MutationPlan((SetComponent(
+            nest.id,
             replace(
                 component,
                 prepared=True,
                 prepared_by=str(character_id),
                 prepared_at_epoch=ctx.epoch,
             ),
-        )
-        return ok(
+        ),)),
             NestPreparedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2488,7 +2521,7 @@ class PrepareNestHandler:
                     nest_id=str(nest.id),
                     species_name=component.species_name,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2510,8 +2543,7 @@ class SetBaitHandler:
             set_by_id=str(character_id),
             set_at_epoch=ctx.epoch,
         )
-        replace_component(bait_item, bait)
-        return ok(
+        return planned(MutationPlan((SetComponent(bait_item.id, bait),)),
             BaitSetEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2522,7 +2554,7 @@ class SetBaitHandler:
                     target_species=target_species,
                     potency=bait.potency,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2547,19 +2579,14 @@ class TranquilizeCreatureHandler:
 
         duration = int(command.payload.get("duration_seconds") or 60 * 60)
         sedated_until = ctx.epoch + max(60, duration)
-        replace_component(
-            item,
-            replace(tranquilizer, uses=tranquilizer.uses - 1),
-        )
-        replace_component(
-            creature,
-            TranquilizerComponent(
+        return planned(MutationPlan((
+            SetComponent(item.id, replace(tranquilizer, uses=tranquilizer.uses - 1)),
+            SetComponent(creature.id, TranquilizerComponent(
                 potency=tranquilizer.potency,
                 uses=0,
                 sedated_until_epoch=sedated_until,
-            ),
-        )
-        return ok(
+            )),
+        )),
             CreatureTranquilizedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2570,7 +2597,7 @@ class TranquilizeCreatureHandler:
                     tranquilizer_id=str(item.id),
                     sedated_until_epoch=sedated_until,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2584,8 +2611,10 @@ class ApproachCreatureHandler:
         creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
-        taming, trust, fear = _progress_taming(ctx, character_id, creature, base_progress=0.5)
-        return ok(
+        taming, trust, fear, operations = _progress_taming(
+            ctx, character_id, creature, base_progress=0.5
+        )
+        return planned(MutationPlan(tuple(operations)),
             TamingProgressedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2598,7 +2627,7 @@ class ApproachCreatureHandler:
                     trust=trust.amount,
                     fear=fear.amount,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2614,7 +2643,9 @@ class TameCreatureHandler:
             return rejected(error if error else "creature is required")
         if _companion_for_actor(creature, character_id) is not None:
             return rejected("creature is already your companion")
-        taming, trust, fear = _progress_taming(ctx, character_id, creature, base_progress=1.0)
+        taming, trust, fear, operations = _progress_taming(
+            ctx, character_id, creature, base_progress=1.0
+        )
         events: list[DomainEvent] = [
             TamingProgressedEvent(
                 **ctx.event_base(
@@ -2632,8 +2663,12 @@ class TameCreatureHandler:
         ]
         if taming.progress >= taming.required:
             role = str(command.payload.get("role") or "companion")
-            replace_component(creature, replace(taming, tamed=True))
-            replace_component(creature, CompanionComponent(owner_id=str(character_id), role=role))
+            operations.extend((
+                SetComponent(creature.id, replace(taming, tamed=True)),
+                SetComponent(
+                    creature.id, CompanionComponent(owner_id=str(character_id), role=role)
+                ),
+            ))
             events.append(
                 CreatureTamedEvent(
                     **ctx.event_base(
@@ -2647,7 +2682,7 @@ class TameCreatureHandler:
                     )
                 )
             )
-        return ok(*events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class TrainCommandHandler:
@@ -2678,13 +2713,12 @@ class TrainCommandHandler:
         learned = training.learned_commands
         if progress[command_name] >= training.required and command_name not in learned:
             learned = (*learned, command_name)
-        replace_component(
-            creature,
-            replace(training, learned_commands=learned, progress=progress),
+        operation = SetComponent(
+            creature.id, replace(training, learned_commands=learned, progress=progress)
         )
         if command_name not in learned:
-            return ok()
-        return ok(
+            return planned(MutationPlan((operation,)), ctx=ctx)
+        return planned(MutationPlan((operation,)),
             CommandTrainedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2694,7 +2728,7 @@ class TrainCommandHandler:
                     creature_id=str(creature.id),
                     command_name=command_name,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2710,8 +2744,9 @@ class MountCreatureHandler:
             return rejected(error if error else "creature is required")
         if _companion_for_actor(creature, character_id) is None:
             return rejected("creature is not your companion")
-        replace_component(creature, MountComponent(rider_id=str(character_id), mounted=True))
-        return ok(
+        return planned(MutationPlan((SetComponent(
+            creature.id, MountComponent(rider_id=str(character_id), mounted=True)
+        ),)),
             CreatureMountedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2721,7 +2756,7 @@ class MountCreatureHandler:
                     creature_id=str(creature.id),
                     rider_id=str(character_id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2757,29 +2792,28 @@ class CommandCompanionHandler:
             return rejected("command has not been trained")
 
         target_id = str(command.payload.get("command_target_id") or "")
-        replace_component(
-            creature,
+        operations: list[MutationOperation] = [SetComponent(
+            creature.id,
             CommandComponent(
                 command_name=command_name,
                 commanded_by_id=str(character_id),
                 target_id=target_id,
                 issued_at_epoch=ctx.epoch,
             ),
-        )
+        )]
         if command_name == "guard":
-            replace_component(
-                creature,
+            operations.append(SetComponent(
+                creature.id,
                 GuardBehaviorComponent(
                     location_id=target_id or (_room_id(ctx.world, character_id) or ""),
                     active=True,
                 ),
-            )
+            ))
         if command_name == "hunt":
-            replace_component(
-                creature,
-                HuntBehaviorComponent(target_species=target_id, active=True),
-            )
-        return ok(
+            operations.append(SetComponent(
+                creature.id, HuntBehaviorComponent(target_species=target_id, active=True)
+            ))
+        return planned(MutationPlan(tuple(operations)),
             CompanionCommandedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2790,7 +2824,7 @@ class CommandCompanionHandler:
                     command_name=command_name,
                     target_id=target_id,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2814,12 +2848,12 @@ class RecallCreatureHandler:
         room_id = container_of(ctx.entity(character_id))
         if room_id is None or not ctx.world.has_entity(room_id):
             return rejected("character is not in a room")
-        _move_to_room(ctx.world, creature, room_id)
-        replace_component(
-            creature,
+        operations = _move_to_room_operations(ctx.world, creature, room_id)
+        operations.append(SetComponent(
+            creature.id,
             RecallComponent(home_room_id=str(room_id), last_recalled_epoch=ctx.epoch),
-        )
-        return ok(
+        ))
+        return planned(MutationPlan(tuple(operations)),
             CreatureRecalledEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2829,7 +2863,7 @@ class RecallCreatureHandler:
                     creature_id=str(creature.id),
                     room_id=str(room_id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2858,22 +2892,21 @@ class BuildEnclosureHandler:
             return rejected("room is already an enclosure")
         name = str(command.payload.get("name") or _entity_name(room))
         capacity = int(command.payload.get("capacity") or 4)
-        replace_component(
-            room,
-            EnclosureComponent(
+        operations: list[MutationOperation] = [
+            SetComponent(room.id, EnclosureComponent(
                 name=name,
                 capacity=max(1, capacity),
                 built_by_id=str(character_id),
                 built_at_epoch=ctx.epoch,
-            ),
-        )
-        replace_component(room, FenceComponent())
-        replace_component(room, GateComponent(open=False, locked=True))
+            )),
+            SetComponent(room.id, FenceComponent()),
+            SetComponent(room.id, GateComponent(open=False, locked=True)),
+        ]
         if command.payload.get("feeding_pen"):
-            replace_component(room, FeedingPenComponent())
+            operations.append(SetComponent(room.id, FeedingPenComponent()))
         if command.payload.get("quarantine"):
-            replace_component(room, QuarantinePenComponent())
-        return ok(
+            operations.append(SetComponent(room.id, QuarantinePenComponent()))
+        return planned(MutationPlan(tuple(operations)),
             EnclosureBuiltEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2883,7 +2916,7 @@ class BuildEnclosureHandler:
                     enclosure_id=str(room.id),
                     name=name,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2904,8 +2937,7 @@ class RepairFenceHandler:
         )
         amount = float(command.payload.get("amount") or 2.0)
         updated = replace(fence, integrity=min(fence.maximum, fence.integrity + max(0.0, amount)))
-        replace_component(enclosure, updated)
-        return ok(
+        return planned(MutationPlan((SetComponent(enclosure.id, updated),)),
             FenceRepairedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2915,7 +2947,7 @@ class RepairFenceHandler:
                     enclosure_id=str(enclosure.id),
                     integrity=updated.integrity,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2938,8 +2970,7 @@ class ReinforceGateHandler:
         )
         amount = float(command.payload.get("amount") or 1.0)
         updated = replace(current, amount=current.amount + max(0.0, amount))
-        replace_component(enclosure, updated)
-        return ok(
+        return planned(MutationPlan((SetComponent(enclosure.id, updated),)),
             GateReinforcedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2949,7 +2980,7 @@ class ReinforceGateHandler:
                     enclosure_id=str(enclosure.id),
                     reinforcement=updated.amount,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2968,8 +2999,9 @@ class LockPenHandler:
             if enclosure.has_component(GateComponent)
             else GateComponent()
         )
-        replace_component(enclosure, replace(gate, open=False, locked=True))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(enclosure.id, replace(gate, open=False, locked=True)),
+        )),
             PenLockedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2978,7 +3010,7 @@ class LockPenHandler:
                     target_ids=(str(enclosure.id),),
                     enclosure_id=str(enclosure.id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -2997,8 +3029,9 @@ class OpenPenHandler:
             if enclosure.has_component(GateComponent)
             else GateComponent()
         )
-        replace_component(enclosure, replace(gate, open=True, locked=False))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(enclosure.id, replace(gate, open=True, locked=False)),
+        )),
             PenOpenedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3007,7 +3040,7 @@ class OpenPenHandler:
                     target_ids=(str(enclosure.id),),
                     enclosure_id=str(enclosure.id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3021,18 +3054,21 @@ class TriggerContainmentHandler:
         enclosure, error = _enclosure_entity(ctx, character_id, command.payload.get("enclosure_id"))
         if enclosure is None:
             return rejected(error if error else "enclosure is required")
-        replace_component(
-            enclosure,
-            ContainmentProtocolComponent(active=True, triggered_at_epoch=ctx.epoch),
-        )
         gate = (
             enclosure.get_component(GateComponent)
             if enclosure.has_component(GateComponent)
             else GateComponent()
         )
-        replace_component(enclosure, replace(gate, open=False, locked=True))
-        replace_component(enclosure, EscapeRiskComponent(risk=0.0, last_updated_epoch=ctx.epoch))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(
+                enclosure.id,
+                ContainmentProtocolComponent(active=True, triggered_at_epoch=ctx.epoch),
+            ),
+            SetComponent(enclosure.id, replace(gate, open=False, locked=True)),
+            SetComponent(
+                enclosure.id, EscapeRiskComponent(risk=0.0, last_updated_epoch=ctx.epoch)
+            ),
+        )),
             ContainmentTriggeredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3041,7 +3077,7 @@ class TriggerContainmentHandler:
                     target_ids=(str(enclosure.id),),
                     enclosure_id=str(enclosure.id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3058,17 +3094,21 @@ class RecaptureCreatureHandler:
         enclosure, error = _enclosure_entity(ctx, character_id, command.payload.get("enclosure_id"))
         if enclosure is None:
             return rejected(error if error else "enclosure is required")
-        _move_to_room(ctx.world, creature, enclosure.id)
+        operations = _move_to_room_operations(ctx.world, creature, enclosure.id)
         gate = (
             enclosure.get_component(GateComponent)
             if enclosure.has_component(GateComponent)
             else GateComponent()
         )
-        replace_component(enclosure, replace(gate, open=False, locked=True))
-        replace_component(enclosure, EscapeRiskComponent(risk=0.0, last_updated_epoch=ctx.epoch))
+        operations.extend((
+            SetComponent(enclosure.id, replace(gate, open=False, locked=True)),
+            SetComponent(
+                enclosure.id, EscapeRiskComponent(risk=0.0, last_updated_epoch=ctx.epoch)
+            ),
+        ))
         if creature.has_component(EscapeRiskComponent):
-            replace_component(creature, EscapeRiskComponent())
-        return ok(
+            operations.append(SetComponent(creature.id, EscapeRiskComponent()))
+        return planned(MutationPlan(tuple(operations)),
             CreatureRecapturedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3078,7 +3118,7 @@ class RecaptureCreatureHandler:
                     creature_id=str(creature.id),
                     enclosure_id=str(enclosure.id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3097,8 +3137,9 @@ class HideFromCreatureHandler:
             if creature.has_component(FearComponent)
             else FearComponent()
         )
-        replace_component(creature, replace(fear, amount=max(0.0, fear.amount - 1.0)))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(creature.id, replace(fear, amount=max(0.0, fear.amount - 1.0))),
+        )),
             HiddenFromCreatureEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3108,7 +3149,7 @@ class HideFromCreatureHandler:
                     creature_id=str(creature.id),
                     character_id=str(character_id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3122,9 +3163,10 @@ class DodgeCreatureHandler:
         creature, error = _reachable_creature(ctx, character_id, command.payload.get("creature_id"))
         if creature is None:
             return rejected(error if error else "creature is required")
+        operations: list[MutationOperation] = []
         if creature.has_component(ChargeComponent):
             charge = creature.get_component(ChargeComponent)
-            replace_component(creature, replace(charge, prepared=False))
+            operations.append(SetComponent(creature.id, replace(charge, prepared=False)))
             damage = charge.damage
         else:
             damage = _creature_attack_damage(creature)[0]
@@ -3133,8 +3175,8 @@ class DodgeCreatureHandler:
             if creature.has_component(FearComponent)
             else FearComponent()
         )
-        replace_component(creature, replace(fear, amount=fear.amount + 0.5))
-        return ok(
+        operations.append(SetComponent(creature.id, replace(fear, amount=fear.amount + 0.5)))
+        return planned(MutationPlan(tuple(operations)),
             CreatureChargedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3146,7 +3188,7 @@ class DodgeCreatureHandler:
                     damage=damage,
                     dodged=True,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3166,14 +3208,16 @@ class FightCreatureHandler:
             if creature.has_component(FearComponent)
             else FearComponent()
         )
-        replace_component(creature, replace(fear, amount=fear.amount + damage))
+        operations: list[MutationOperation] = [
+            SetComponent(creature.id, replace(fear, amount=fear.amount + damage))
+        ]
         if creature.has_component(GrappleComponent):
             grapple = creature.get_component(GrappleComponent)
             if not grapple.target_id or grapple.target_id == str(character_id):
-                replace_component(
-                    creature,
+                operations.append(SetComponent(
+                    creature.id,
                     replace(grapple, target_id=str(character_id), active=False),
-                )
+                ))
 
         attack_damage, attack_type = _creature_attack_damage(creature)
         events: list[DomainEvent] = [
@@ -3247,7 +3291,7 @@ class FightCreatureHandler:
                     )
                 )
             )
-        return ok(*events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class TargetWeakPointHandler:
@@ -3267,16 +3311,18 @@ class TargetWeakPointHandler:
             return rejected("weak point is not exposed")
         base_damage = max(0.0, float(command.payload.get("damage") or 1.0))
         damage = base_damage * max(1.0, weak_point.damage_multiplier)
-        replace_component(creature, replace(weak_point, exposed=False))
+        operations: list[MutationOperation] = [
+            SetComponent(creature.id, replace(weak_point, exposed=False))
+        ]
         if creature.has_component(ApexPredatorComponent):
             apex = creature.get_component(ApexPredatorComponent)
             threat = max(0, apex.threat_level - int(damage))
-            replace_component(creature, replace(apex, threat_level=threat))
+            operations.append(SetComponent(creature.id, replace(apex, threat_level=threat)))
         if creature.has_component(KaijuComponent):
             kaiju = creature.get_component(KaijuComponent)
             threat = max(0, kaiju.threat_level - int(damage))
-            replace_component(creature, replace(kaiju, threat_level=threat))
-        return ok(
+            operations.append(SetComponent(creature.id, replace(kaiju, threat_level=threat)))
+        return planned(MutationPlan(tuple(operations)),
             WeakPointHitEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3287,7 +3333,7 @@ class TargetWeakPointHandler:
                     label=weak_point.label,
                     damage=damage,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3306,18 +3352,19 @@ class DriveOffPredatorHandler:
             return rejected("creature is not in a room")
         from_room = ctx.entity(from_room_id)
         to_room_id = _first_exit_target(from_room)
+        operations: list[MutationOperation] = []
         if to_room_id is not None and ctx.world.has_entity(to_room_id):
-            _move_to_room(ctx.world, creature, to_room_id)
+            operations.extend(_move_to_room_operations(ctx.world, creature, to_room_id))
         fear = (
             creature.get_component(FearComponent)
             if creature.has_component(FearComponent)
             else FearComponent()
         )
-        replace_component(creature, replace(fear, amount=fear.amount + 2.0))
+        operations.append(SetComponent(creature.id, replace(fear, amount=fear.amount + 2.0)))
         if creature.has_component(ApexPredatorComponent):
             apex = creature.get_component(ApexPredatorComponent)
-            replace_component(creature, replace(apex, threat_level=0))
-        return ok(
+            operations.append(SetComponent(creature.id, replace(apex, threat_level=0)))
+        return planned(MutationPlan(tuple(operations)),
             PredatorDrivenOffEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3328,7 +3375,7 @@ class DriveOffPredatorHandler:
                     from_room_id=str(from_room_id),
                     to_room_id=str(to_room_id) if to_room_id is not None else "",
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3343,15 +3390,14 @@ class CallForHelpHandler:
         if room is None:
             return rejected(error if error else "room is required")
         strength = max(0.0, float(command.payload.get("strength") or 1.0))
-        replace_component(
-            room,
+        return planned(MutationPlan((SetComponent(
+            room.id,
             ArmyResponseComponent(
                 called=True,
                 strength=strength,
                 called_at_epoch=ctx.epoch,
             ),
-        )
-        return ok(
+        ),)),
             ArmyCalledEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3361,7 +3407,7 @@ class CallForHelpHandler:
                     room_id_called=str(room.id),
                     strength=strength,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3376,14 +3422,14 @@ class SignalArmyHandler:
         if room is None:
             return rejected(error if error else "room is required")
         strength = max(1.0, float(command.payload.get("strength") or 5.0))
-        replace_component(
-            room,
+        operations: list[MutationOperation] = [SetComponent(
+            room.id,
             ArmyResponseComponent(
                 called=True,
                 strength=strength,
                 called_at_epoch=ctx.epoch,
             ),
-        )
+        )]
         events: list[DomainEvent] = [
             ArmyCalledEvent(
                 **ctx.event_base(
@@ -3402,16 +3448,16 @@ class SignalArmyHandler:
             if creature is not None and _is_creature(creature):
                 if creature.has_component(KaijuComponent):
                     kaiju = creature.get_component(KaijuComponent)
-                    replace_component(
-                        creature,
+                    operations.append(SetComponent(
+                        creature.id,
                         replace(kaiju, threat_level=max(0, kaiju.threat_level - int(strength))),
-                    )
+                    ))
                 if creature.has_component(ApexPredatorComponent):
                     apex = creature.get_component(ApexPredatorComponent)
-                    replace_component(
-                        creature,
+                    operations.append(SetComponent(
+                        creature.id,
                         replace(apex, threat_level=max(0, apex.threat_level - int(strength))),
-                    )
+                    ))
                 events.append(
                     PredatorDrivenOffEvent(
                         **ctx.event_base(
@@ -3425,7 +3471,7 @@ class SignalArmyHandler:
                         )
                     )
                 )
-        return ok(*events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class RepairDamageHandler:
@@ -3449,8 +3495,7 @@ class RepairDamageHandler:
         amount = max(1, int(command.payload.get("amount") or 1))
         severity = max(0, current.severity - amount)
         updated = replace(current, severity=severity, repaired=severity == 0)
-        replace_component(target, updated)
-        return ok(
+        return planned(MutationPlan((SetComponent(target.id, updated),)),
             SettlementDamageRepairedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3461,7 +3506,7 @@ class RepairDamageHandler:
                     severity=updated.severity,
                     repaired=updated.repaired,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3539,11 +3584,14 @@ class FeedCreatureHandler:
         if feed_store.feed < FEED_COST:
             return rejected("feed store is empty")
 
-        replace_component(store, replace(feed_store, feed=feed_store.feed - FEED_COST))
         need = creature.get_component(CreatureNeedComponent)
         hunger = max(0.0, need.hunger - FEED_HUNGER_RELIEF)
-        replace_component(creature, replace(need, hunger=hunger, last_updated_epoch=ctx.epoch))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(store.id, replace(feed_store, feed=feed_store.feed - FEED_COST)),
+            SetComponent(
+                creature.id, replace(need, hunger=hunger, last_updated_epoch=ctx.epoch)
+            ),
+        )),
             CreatureFedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3553,7 +3601,7 @@ class FeedCreatureHandler:
                     creature_id=str(creature_id),
                     hunger=hunger,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3574,8 +3622,11 @@ class CalmCreatureHandler:
             return rejected("target is not a creature with needs")
         need = creature.get_component(CreatureNeedComponent)
         stress = max(0.0, need.stress - CALM_STRESS_RELIEF)
-        replace_component(creature, replace(need, stress=stress, last_updated_epoch=ctx.epoch))
-        return ok(
+        return planned(MutationPlan((
+            SetComponent(
+                creature.id, replace(need, stress=stress, last_updated_epoch=ctx.epoch)
+            ),
+        )),
             CreatureCalmedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3585,7 +3636,7 @@ class CalmCreatureHandler:
                     creature_id=str(creature_id),
                     stress=stress,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3605,7 +3656,7 @@ class ObserveCreatureHandler:
         if not creature.has_component(CreatureNeedComponent):
             return rejected("target is not a creature with needs")
         need = creature.get_component(CreatureNeedComponent)
-        return ok(
+        return planned(MutationPlan(),
             CreatureObservedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -3616,13 +3667,13 @@ class ObserveCreatureHandler:
                     hunger=need.hunger,
                     stress=need.stress,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
-def _consume_inventory_resource(
+def _consume_inventory_resource_operation(
     character: Entity, world: World, resource_type: str, quantity: int
-) -> bool:
+) -> MutationOperation | None:
     for edge, item_id in character.get_relationships(Contains):
         if edge.mode != ContainmentMode.INVENTORY or not world.has_entity(item_id):
             continue
@@ -3632,9 +3683,8 @@ def _consume_inventory_resource(
         stack = item.get_component(ResourceStackComponent)
         if stack.resource_type != resource_type or stack.quantity < quantity:
             continue
-        replace_component(item, replace(stack, quantity=stack.quantity - quantity))
-        return True
-    return False
+        return SetComponent(item.id, replace(stack, quantity=stack.quantity - quantity))
+    return None
 
 
 class StockFeedHandler:
@@ -3660,16 +3710,20 @@ class StockFeedHandler:
         amount = max(0.0, float(command.payload.get("amount") or 1.0))
         resource_type = str(command.payload.get("resource_type") or "").strip()
         resource_spent = int(amount)
-        if resource_type and not _consume_inventory_resource(
-            ctx.entity(character_id), ctx.world, resource_type, resource_spent
-        ):
-            return rejected("not enough feed resource")
+        operations: list[MutationOperation] = []
+        if resource_type:
+            resource_operation = _consume_inventory_resource_operation(
+                ctx.entity(character_id), ctx.world, resource_type, resource_spent
+            )
+            if resource_operation is None:
+                return rejected("not enough feed resource")
+            operations.append(resource_operation)
         updated = replace(
             feed_store,
             feed=min(feed_store.capacity, feed_store.feed + amount),
         )
-        replace_component(store, updated)
-        return ok(
+        operations.append(SetComponent(store.id, updated))
+        return planned(MutationPlan(tuple(operations)),
             FeedStockedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3682,7 +3736,7 @@ class StockFeedHandler:
                     resource_type=resource_type,
                     resource_spent=resource_spent if resource_type else 0,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3706,19 +3760,21 @@ class CollectEggHandler:
             key=lambda relationship: relationship[0].order,
         )
         source_creature_id = str(parents[0][1]) if parents else ""
-        character = ctx.entity(character_id)
-        _remove_from_container(ctx.world, egg_id)
-        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), egg_id)
-        replace_component(
-            egg_entity,
-            CreatureProductComponent(
+        operations: list[MutationOperation] = []
+        parent_id = container_of(egg_entity)
+        if parent_id is None:
+            return rejected("egg is not contained")
+        operations.append(RemoveEdge(parent_id, egg_id, Contains))
+        operations.extend((
+            AddEdge(character_id, egg_id, Contains(mode=ContainmentMode.INVENTORY)),
+            SetComponent(egg_entity.id, CreatureProductComponent(
                 product_type="egg",
                 quantity=1.0,
                 source_creature_id=source_creature_id,
                 collected_at_epoch=ctx.epoch,
-            ),
-        )
-        return ok(
+            )),
+        ))
+        return planned(MutationPlan(tuple(operations)),
             CreatureProductCollectedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3730,7 +3786,7 @@ class CollectEggHandler:
                     product_type="egg",
                     quantity=1.0,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3765,6 +3821,7 @@ class HarvestProductHandler:
         product_type = str(command.payload.get("product_type") or "").strip().lower()
         quantity = max(1.0, float(command.payload.get("quantity") or 1.0))
         product_quantity = quantity
+        operations: list[MutationOperation] = []
 
         if not product_type:
             if creature.has_component(CreatureMilkComponent):
@@ -3787,7 +3844,9 @@ class HarvestProductHandler:
             if milk.volume <= 0.0:
                 return rejected("creature has no milk available")
             product_quantity = min(quantity, milk.volume)
-            replace_component(creature, replace(milk, volume=milk.volume - product_quantity))
+            operations.append(
+                SetComponent(creature.id, replace(milk, volume=milk.volume - product_quantity))
+            )
         elif product_type == "toxin":
             if not creature.has_component(ToxinComponent):
                 return rejected("creature has no toxin")
@@ -3795,7 +3854,9 @@ class HarvestProductHandler:
             if toxin.quantity <= 0.0:
                 return rejected("creature has no toxin available")
             product_quantity = min(quantity, toxin.quantity)
-            replace_component(creature, replace(toxin, quantity=toxin.quantity - product_quantity))
+            operations.append(SetComponent(
+                creature.id, replace(toxin, quantity=toxin.quantity - product_quantity)
+            ))
         elif product_type == "hide":
             if not creature.has_component(HideComponent):
                 return rejected("creature has no hide")
@@ -3803,7 +3864,7 @@ class HarvestProductHandler:
             if hide.harvested:
                 return rejected("hide has already been harvested")
             product_quantity = hide.quality
-            replace_component(creature, replace(hide, harvested=True))
+            operations.append(SetComponent(creature.id, replace(hide, harvested=True)))
         elif product_type == "bone":
             if not creature.has_component(BoneComponent):
                 return rejected("creature has no bone")
@@ -3811,7 +3872,7 @@ class HarvestProductHandler:
             if bone.harvested:
                 return rejected("bone has already been harvested")
             product_quantity = bone.quality
-            replace_component(creature, replace(bone, harvested=True))
+            operations.append(SetComponent(creature.id, replace(bone, harvested=True)))
         elif creature.has_component(CreatureProductComponent):
             product = creature.get_component(CreatureProductComponent)
             if product.product_type != product_type:
@@ -3820,32 +3881,31 @@ class HarvestProductHandler:
                 return rejected("creature product is depleted")
             product_quantity = min(quantity, product.quantity)
             remaining = product.quantity - product_quantity if product.renewable else 0.0
-            replace_component(creature, replace(product, quantity=remaining))
+            operations.append(SetComponent(creature.id, replace(product, quantity=remaining)))
         else:
             return rejected("creature has no matching product")
 
-        character = ctx.entity(character_id)
-        product = _spawn_creature_product(
-            ctx.world,
-            character,
+        product_operations, product = _spawn_creature_product_operations(
+            character_id,
             product_type=product_type,
             quantity=product_quantity,
             source_creature_id=str(creature.id),
             epoch=ctx.epoch,
         )
-        return ok(
-            CreatureProductCollectedEvent(
+        operations.extend(product_operations)
+        return planned(MutationPlan(tuple(operations)),
+            lambda: CreatureProductCollectedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(creature.id), str(product.id)),
+                    target_ids=(str(creature.id), str(product.require())),
                     creature_id=str(creature.id),
-                    product_id=str(product.id),
+                    product_id=str(product.require()),
                     product_type=product_type,
                     quantity=product_quantity,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3863,16 +3923,15 @@ class AssignRanchWorkHandler:
         if not work_type:
             return rejected("work type is required")
         target_id = str(command.payload.get("target_id") or "")
-        replace_component(
-            creature,
+        return planned(MutationPlan((SetComponent(
+            creature.id,
             RanchLaborComponent(
                 work_type=work_type,
                 target_id=target_id,
                 assigned_by_id=str(character_id),
                 active=True,
             ),
-        )
-        return ok(
+        ),)),
             RanchWorkAssignedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3883,7 +3942,7 @@ class AssignRanchWorkHandler:
                     work_type=work_type,
                     target_id=target_id,
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3902,19 +3961,16 @@ class AssignGuardHandler:
             location_id = container_of(ctx.entity(character_id))
         if location_id is None or not ctx.world.has_entity(location_id):
             return rejected("guard location does not exist")
-        replace_component(
-            creature,
-            GuardAnimalComponent(
+        return planned(MutationPlan((
+            SetComponent(creature.id, GuardAnimalComponent(
                 location_id=str(location_id),
                 assigned_by_id=str(character_id),
                 active=True,
+            )),
+            SetComponent(
+                creature.id, GuardBehaviorComponent(location_id=str(location_id), active=True)
             ),
-        )
-        replace_component(
-            creature,
-            GuardBehaviorComponent(location_id=str(location_id), active=True),
-        )
-        return ok(
+        )),
             GuardAssignedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3924,7 +3980,7 @@ class AssignGuardHandler:
                     creature_id=str(creature.id),
                     location_id=str(location_id),
                 )
-            )
+            ), ctx=ctx,
         )
 
 
@@ -3945,15 +4001,16 @@ class EvacuateRoomHandler:
         if not destination.has_component(RoomComponent):
             return rejected("destination is not a room")
         moved: list[str] = []
+        operations: list[MutationOperation] = []
         # Relics cascades inbound Contains edge removal, so a Contains relationship can
         # never point at a removed entity; no has_entity dangling-edge guard is needed.
         for _edge, entity_id in tuple(room.get_relationships(Contains)):
             entity = ctx.entity(entity_id)
             if not entity.has_component(CharacterComponent) or _is_creature(entity):
                 continue
-            _move_to_room(ctx.world, entity, destination_id)
+            operations.extend(_move_to_room_operations(ctx.world, entity, destination_id))
             moved.append(str(entity.id))
-        return ok(
+        return planned(MutationPlan(tuple(operations)),
             RoomEvacuatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -3964,7 +4021,7 @@ class EvacuateRoomHandler:
                     destination_id=str(destination_id),
                     character_ids=tuple(moved),
                 )
-            )
+            ), ctx=ctx,
         )
 
 

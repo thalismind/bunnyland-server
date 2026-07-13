@@ -12,8 +12,10 @@ from bunnyland.core import (
     Contains,
     IdentityComponent,
     Lane,
+    MutationPlan,
     build_submitted_command,
     container_of,
+    execute_mutation_plan,
     parse_entity_id,
     replace_component,
     spawn_entity,
@@ -217,16 +219,17 @@ from bunnyland.simpacks.dinosim.mechanics import (
     WaterStudyComponent,
     WeakPointComponent,
     WeakPointHitEvent,
-    _consume_inventory_resource,
+    _consume_inventory_resource_operation,
     _entity_name,
     _entity_room_id,
     _hatch_room_id,
     _move_to_room,
+    _move_to_room_operations,
     _payload_entity_id,
     _reachable_creature,
     _region_for_room,
     _region_rooms,
-    _spawn_egg,
+    _spawn_egg_operations,
     _species_name,
     dinosim_fragments,
     generate_kaiju_spawn_specs,
@@ -3357,7 +3360,7 @@ def _inventory_resource(scenario, resource_type, quantity):
     return item.id
 
 
-def test_dinosim_consume_inventory_resource_helper_covers_edge_cases():
+def test_dinosim_consume_inventory_resource_plan_covers_edge_cases():
     scenario = build_scenario()
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
@@ -3374,10 +3377,12 @@ def test_dinosim_consume_inventory_resource_helper_covers_edge_cases():
     character.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), held.id)
     hay = _inventory_resource(scenario, "hay", 4)
 
-    assert _consume_inventory_resource(character, world, "berries", 1) is False
-    assert _consume_inventory_resource(character, world, "hay", 5) is False
+    assert _consume_inventory_resource_operation(character, world, "berries", 1) is None
+    assert _consume_inventory_resource_operation(character, world, "hay", 5) is None
     assert world.get_entity(hay).get_component(ResourceStackComponent).quantity == 4
-    assert _consume_inventory_resource(character, world, "hay", 2) is True
+    operation = _consume_inventory_resource_operation(character, world, "hay", 2)
+    assert operation is not None
+    execute_mutation_plan(world, MutationPlan((operation,)))
     assert world.get_entity(hay).get_component(ResourceStackComponent).quantity == 2
 
 
@@ -4261,6 +4266,43 @@ def test_move_to_room_handles_entity_without_a_container():
     assert container_of(loose) == scenario.room_a
     room = world.get_entity(scenario.room_a)
     assert loose.id in {target for _edge, target in room.get_relationships(Contains)}
+    other = spawn_entity(world, [IdentityComponent(name="other drifter", kind="creature")])
+    operations = _move_to_room_operations(world, other, scenario.room_a)
+    execute_mutation_plan(world, MutationPlan(tuple(operations)))
+    assert container_of(other) == scenario.room_a
+
+
+def test_plan_handlers_cover_uncontained_reachable_source_edges():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    source = world.get_entity(scenario.room_a)
+    ctx = HandlerContext(world, scenario.actor.epoch)
+
+    source.add_component(
+        AncientSampleComponent(
+            species_name="raptor", viability=1.0, source_fossil_id=str(scenario.room_a)
+        )
+    )
+    assert PrepareCloneHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "prepare-clone", sample_id=str(scenario.room_a)),
+    ).ok
+
+    source.add_component(EggComponent(species_name="raptor", laid_at_epoch=0, fertilized=True))
+    source.add_component(IncubationComponent(started_at_epoch=0, ready=True))
+    assert HatchEggHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "hatch-egg", egg_id=str(scenario.room_a)),
+    ).ok
+
+    source.add_component(EggComponent(species_name="raptor", laid_at_epoch=0))
+    result = CollectEggHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "collect-egg", egg_id=str(scenario.room_a)),
+    )
+    assert not result.ok
+    assert result.reason == "egg is not contained"
 
 
 def _roomless_character(scenario):
@@ -4367,11 +4409,12 @@ def test_drive_off_predator_rejects_creature_without_a_room():
 def test_spawn_egg_ignores_missing_parent_reference():
     scenario = build_scenario()
 
-    egg = _spawn_egg(
+    operations, egg = _spawn_egg_operations(
         scenario.actor.world,
         "raptor",
         0,
         parent_ids=("entity_999",),
     )
 
-    assert egg.get_relationships(DescendsFromParent) == []
+    execute_mutation_plan(scenario.actor.world, MutationPlan(tuple(operations)))
+    assert scenario.actor.world.get_entity(egg.require()).get_relationships(DescendsFromParent) == []

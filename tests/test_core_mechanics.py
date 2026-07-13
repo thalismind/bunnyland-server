@@ -46,6 +46,7 @@ from bunnyland.core import (
     WeightComponent,
     WorldActor,
     build_submitted_command,
+    container_of,
     parse_entity_id,
     remove_from_container,
     spawn_entity,
@@ -180,6 +181,12 @@ def test_normalize_claim_timeout_allows_unspecified_timeout():
 def test_remove_from_container_ignores_missing_entity():
     scenario = build_scenario()
     remove_from_container(scenario.actor.world, parse_entity_id("entity_999999"))
+
+
+def test_remove_from_container_detaches_contained_entity():
+    scenario = build_scenario()
+    remove_from_container(scenario.actor.world, scenario.character)
+    assert container_of(scenario.actor.world.get_entity(scenario.character)) is None
 
 
 def test_generated_entity_event_exposes_generation_intent_fields():
