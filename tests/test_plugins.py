@@ -19,13 +19,14 @@ from bunnyland.core import (
     HandlerResult,
     Lane,
     MemoryProfileComponent,
+    MutationPlan,
     SubmittedCommand,
     WorldActor,
     build_submitted_command,
     spawn_entity,
 )
 from bunnyland.core.events import NoteTakenEvent
-from bunnyland.core.handlers import ok
+from bunnyland.core.handlers import planned
 from bunnyland.discord.plugin import bunnyland_plugins as discord_plugins
 from bunnyland.foundation.checkpoints.mechanics import SaveCheckpointComponent
 from bunnyland.foundation.checkpoints.plugin import plugin as checkpoints_plugin
@@ -349,7 +350,7 @@ class _WaveHandler:
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         del ctx, command
-        return ok()
+        return planned(MutationPlan())
 
 
 def test_plugin_action_definitions_register_with_actor_and_tool_schema():

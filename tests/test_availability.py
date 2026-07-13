@@ -18,6 +18,7 @@ from bunnyland.core import (
     DeadComponent,
     DownedComponent,
     Lane,
+    MutationPlan,
     OnInsufficientPoints,
     SayHandler,
     SleepingComponent,
@@ -32,7 +33,7 @@ from bunnyland.core.availability import (
     target_group_for_argument,
 )
 from bunnyland.core.events import CommandRejectedEvent
-from bunnyland.core.handlers import HandlerResult, ok
+from bunnyland.core.handlers import HandlerResult, planned
 from bunnyland.plugins import PluginRegistry, bunnyland_plugins
 from bunnyland.simpacks.lifesim.mechanics import SkillSetComponent
 
@@ -358,7 +359,7 @@ def test_submit_rejects_unmet_capability_requirement():
         command_type = "pick-lock"
 
         def execute(self, ctx, command) -> HandlerResult:  # pragma: no cover - not run
-            return ok()
+            return planned(MutationPlan())
 
     scenario.actor.register_handler(_PickLockHandler())
     scenario.actor.register_action_definition(_action_definition("pick-lock"))

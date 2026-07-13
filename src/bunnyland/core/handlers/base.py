@@ -34,10 +34,6 @@ def rejected(reason: str) -> HandlerResult:
     return HandlerResult(ok=False, reason=reason)
 
 
-def ok(*events: DomainEvent) -> HandlerResult:
-    return HandlerResult(ok=True, events=tuple(events))
-
-
 def planned(
     plan: MutationPlan,
     *events: DomainEvent | Callable[[], DomainEvent],
@@ -140,7 +136,6 @@ __all__ = [
     "CommandHandler",
     "HandlerContext",
     "HandlerResult",
-    "ok",
     "planned",
     "rejected",
     "require_character",

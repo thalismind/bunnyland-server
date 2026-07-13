@@ -15,7 +15,7 @@ from relics import World
 
 from ..core.commands import CommandCost, Lane, SubmittedCommand, build_submitted_command
 from ..core.components import CharacterComponent, MemoryProfileComponent
-from ..core.ecs import entity_name, parse_entity_id, replace_component
+from ..core.ecs import entity_name, parse_entity_id
 from ..core.events import (
     ConversationLineEvent,
     DomainEvent,
@@ -24,7 +24,8 @@ from ..core.events import (
     NoteTakenEvent,
     ReflectionCreatedEvent,
 )
-from ..core.handlers.base import HandlerContext, HandlerResult, ok, rejected
+from ..core.handlers.base import HandlerContext, HandlerResult, planned, rejected
+from ..core.mutations import MutationPlan, SetComponent
 from .store import MemoryStore, normalize_tags
 
 DEFAULT_REFLECTION_INTERVAL_SECONDS = 24 * 3600
@@ -82,7 +83,8 @@ class TakeNoteHandler:
         entry = self.store.add(
             collection, text=text, tags=tags, created_at_epoch=ctx.epoch, source="manual"
         )
-        return ok(
+        return planned(
+            MutationPlan(),
             NoteTakenEvent(
                 **ctx.event_base(
                     visibility="private",
@@ -92,7 +94,8 @@ class TakeNoteHandler:
                     scope=scope,
                     collection=collection,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -118,7 +121,8 @@ class RememberHandler:
         mode = str(payload.get("mode", "recent"))
         limit = int(payload.get("limit", 5))
         results = self.store.search(collection, query=query, mode=mode, limit=limit)
-        return ok(
+        return planned(
+            MutationPlan(),
             NotesSearchedEvent(
                 **ctx.event_base(
                     visibility="private",
@@ -130,7 +134,8 @@ class RememberHandler:
                     scope=scope,
                     collection=collection,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -156,7 +161,8 @@ class ForgetHandler:
             return rejected(str(exc))
         if not self.store.delete(collection, note_id):
             return rejected("note not found")
-        return ok(
+        return planned(
+            MutationPlan(),
             NoteForgottenEvent(
                 **ctx.event_base(
                     visibility="private",
@@ -165,7 +171,8 @@ class ForgetHandler:
                     scope=scope,
                     collection=collection,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -215,16 +222,21 @@ class ReflectHandler:
             created_at_epoch=ctx.epoch,
             source="reflection",
         )
-        replace_component(
-            character,
-            MemoryProfileComponent(
-                vector_collection=profile.vector_collection,
-                shared_collections=profile.shared_collections,
-                last_event_seen_id=profile.last_event_seen_id,
-                last_reflection_epoch=ctx.epoch,
-            ),
+        plan = MutationPlan(
+            (
+                SetComponent(
+                    character_id,
+                    MemoryProfileComponent(
+                        vector_collection=profile.vector_collection,
+                        shared_collections=profile.shared_collections,
+                        last_event_seen_id=profile.last_event_seen_id,
+                        last_reflection_epoch=ctx.epoch,
+                    ),
+                ),
+            )
         )
-        return ok(
+        return planned(
+            plan,
             ReflectionCreatedEvent(
                 **ctx.event_base(
                     visibility="private",
@@ -233,7 +245,8 @@ class ReflectHandler:
                     text=text,
                     source_note_ids=tuple(entry.id for entry in entries),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 

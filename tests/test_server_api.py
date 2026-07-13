@@ -42,6 +42,7 @@ from bunnyland.core import (
     LockableComponent,
     MCPControllerComponent,
     MemoryProfileComponent,
+    MutationPlan,
     PerceptionComponent,
     PortableComponent,
     PutHandler,
@@ -85,7 +86,7 @@ from bunnyland.core.events import (
     WorldGenerationFailedEvent,
     WorldGenerationStartedEvent,
 )
-from bunnyland.core.handlers import ok
+from bunnyland.core.handlers import planned
 from bunnyland.discord.components import DiscordRoomFeedComponent
 from bunnyland.engine import GameLoop
 from bunnyland.foundation.meters.mechanics import Meter
@@ -736,7 +737,7 @@ def test_character_projection_action_availability_reflects_requirements(scenario
         command_type = "pick-lock"
 
         def execute(self, ctx, command):  # pragma: no cover - not executed here
-            return ok()
+            return planned(MutationPlan())
 
     scenario.actor.register_handler(_PickLockHandler())
 
