@@ -1690,6 +1690,7 @@ def test_tend_self_without_medicine_and_orphan_medicine_use_edges():
     assert not scenario.actor.world.has_entity(medicine.id)
 
 
+
 async def test_work_priority_zero_removes_priority():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -1810,6 +1811,62 @@ def test_consume_resource_stack_returns_false_for_missing_or_short_stacks():
 
     assert colonysim._consume_resource_stack(character, scenario.actor.world, "stone", 1) is False
     assert colonysim._consume_resource_stack(character, scenario.actor.world, "wood", 2) is False
+
+
+def test_resource_and_recipe_mutation_helpers_cover_success_paths():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+
+    created_id = parse_entity_id(
+        colonysim._add_resource_stack(character, world, "wood", 3)
+    )
+    assert created_id is not None
+    assert colonysim._add_resource_stack(character, world, "wood", 2) == str(created_id)
+    assert colonysim._consume_resource_stack(character, world, "wood", 2) is True
+    assert world.get_entity(created_id).get_component(ResourceStackComponent).quantity == 3
+    assert colonysim._consume_resource_stack(character, world, "wood", 3) is True
+    assert not character.has_relationship(Contains, created_id)
+
+    recipe = RecipeComponent(
+        recipe_id="helper-output",
+        inputs={},
+        outputs={"meal": 1, "stone": 2},
+        output_entities={
+            "meal": {
+                "display_name": "stew",
+                "entity_kind": "food",
+                "portable": False,
+                "nutrition": 2.0,
+                "satiety": 3.0,
+                "hydration": 1.0,
+                "uses": 1,
+            }
+        },
+    )
+    output_ids = colonysim._create_recipe_outputs(character, world, recipe)
+    assert len(output_ids) == 2
+    assert all(parse_entity_id(item_id) is not None for item_id in output_ids)
+
+
+def test_medicine_and_move_helpers_cover_remaining_and_contained_paths():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    room = world.get_entity(scenario.room_a)
+    target = spawn_entity(world, [IdentityComponent(name="target", kind="container")])
+    medicine = spawn_entity(world, [MedicineComponent(uses=2)])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), medicine.id)
+
+    colonysim._consume_medicine_use(ctx, medicine.id)
+    assert medicine.get_component(MedicineComponent).uses == 1
+    colonysim._consume_medicine_use(ctx, medicine.id)
+    assert not world.has_entity(medicine.id)
+
+    item = spawn_entity(world, [IdentityComponent(name="item", kind="item")])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), item.id)
+    colonysim._move_entity(world, item.id, target.id)
+    assert container_of(item) == target.id
 
 
 async def test_assign_and_complete_job_updates_assignment_state():
@@ -2793,6 +2850,7 @@ def test_faction_relation_reuses_existing_record_on_trade():
     )
 
     assert result.ok is True
+    assert colonysim._faction_relation(world, "traders").id == existing.id
     # Goodwill accumulated on the pre-existing relation, no duplicate was spawned.
     assert existing.get_component(FactionRelationComponent).goodwill == 5.0
     # No new traders relation was spawned (only raiders + the reused traders record).
@@ -2854,6 +2912,37 @@ def test_body_part_entity_matches_existing_part_during_surgery():
     repaired = existing_part.get_component(BodyPartHealthComponent)
     assert repaired.health == 1.0
     assert repaired.missing is False
+
+
+def test_surgery_installs_an_uncontained_prosthetic():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    prosthetic = spawn_entity(world, [ProstheticComponent(part="left paw")])
+    surgery = spawn_entity(
+        world,
+        [
+            SurgeryBillComponent(
+                part="left paw",
+                operation="install-prosthetic",
+                prosthetic_item_id=str(prosthetic.id),
+            )
+        ],
+    )
+
+    result = PerformSurgeryHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "perform-surgery",
+            patient_id=str(scenario.character),
+            surgery_id=str(surgery.id),
+        ),
+    )
+
+    assert result.ok is True
+    assert container_of(prosthetic) == scenario.character
 
 
 def test_rescue_to_bed_handles_unroomed_and_already_sleeping_patient():
