@@ -10,8 +10,10 @@ from bunnyland.core import (
     Contains,
     IdentityComponent,
     Lane,
+    MutationPlan,
     build_submitted_command,
     container_of,
+    execute_mutation_plan,
     parse_entity_id,
     replace_component,
     spawn_entity,
@@ -190,7 +192,7 @@ from bunnyland.simpacks.voidsim.mechanics import (
     WorksShift,
     XenobiologySampleComponent,
     XenobiologyStudiedEvent,
-    _spend_inventory_resources,
+    _spend_inventory_resource_operations,
     install_voidsim,
     voidsim_fragments,
 )
@@ -2666,7 +2668,7 @@ def _unlock_tech(scenario, tech_id):
     return _spawn_in_room_a(scenario, [TechUnlockComponent(tech_id=tech_id, unlocked_at_epoch=0)])
 
 
-def test_voidsim_inventory_resource_spending_helper_covers_edge_cases():
+def test_voidsim_inventory_resource_spending_plan_covers_edge_cases():
     scenario = build_scenario()
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
@@ -2674,11 +2676,13 @@ def test_voidsim_inventory_resource_spending_helper_covers_edge_cases():
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), rock.id)
     scrap = _inventory_resource(scenario, "scrap", 3)
 
-    assert _spend_inventory_resources(character, world, (("crystal", 1),)) is False
-    assert _spend_inventory_resources(character, world, (("scrap", 4),)) is False
-    assert _spend_inventory_resources(character, world, (("scrap", 0),)) is True
+    assert _spend_inventory_resource_operations(character, world, (("crystal", 1),)) is None
+    assert _spend_inventory_resource_operations(character, world, (("scrap", 4),)) is None
+    assert _spend_inventory_resource_operations(character, world, (("scrap", 0),)) == []
     assert world.get_entity(scrap).get_component(ResourceStackComponent).quantity == 3
-    assert _spend_inventory_resources(character, world, (("scrap", 2),)) is True
+    operations = _spend_inventory_resource_operations(character, world, (("scrap", 2),))
+    assert operations is not None
+    execute_mutation_plan(world, MutationPlan(tuple(operations)))
     assert world.get_entity(scrap).get_component(ResourceStackComponent).quantity == 1
 
 
@@ -2888,7 +2892,7 @@ async def test_claim_salvage_requires_accepted_rights_and_marks_claim():
             IdentityComponent(name="derelict hulk rights", kind="salvage"),
             SalvageClaimComponent(
                 site_id=str(scenario.room_b),
-                resource_outputs=(("scrap", 4), ("fuel", 1)),
+                resource_outputs=(("scrap", 4), ("fuel", 1), ("empty", 0)),
             ),
         ],
     )
@@ -2932,6 +2936,19 @@ async def test_claim_salvage_requires_accepted_rights_and_marks_claim():
         container_of(scenario.actor.world.get_entity(output_id)) == scenario.character
         for output_id in output_ids
         if output_id is not None
+    )
+
+
+def test_command_drone_can_handle_only_drone_targets():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    drone = _spawn_in_room_a(scenario, [DroneComponent()])
+
+    assert CommandDroneHandler().can_handle(
+        ctx, _handler_cmd(scenario, "command", target_id=str(drone))
+    )
+    assert not CommandDroneHandler().can_handle(
+        ctx, _handler_cmd(scenario, "command", target_id="not-an-id")
     )
 
 
