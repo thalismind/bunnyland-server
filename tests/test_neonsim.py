@@ -15,10 +15,12 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     LockableComponent,
+    MutationPlan,
     PortableComponent,
     RegionComponent,
     build_submitted_command,
     container_of,
+    execute_mutation_plan,
     parse_entity_id,
     replace_component,
     spawn_entity,
@@ -1704,6 +1706,12 @@ async def test_run_exploit_fails_and_raises_alarm():
     _install(scenario.actor)
     zone_site = _room_entity(
         scenario, "vault site", "site", [CyberpunkSiteComponent(), SecurityZoneComponent()]
+    )
+    _room_entity(
+        scenario,
+        "alert site",
+        "site",
+        [CyberpunkSiteComponent(), SecurityZoneComponent(alarm_raised=True)],
     )
     term = _hackable(scenario, "hard server", security=5)
     _give_exploit(scenario, 1)
@@ -3788,13 +3796,13 @@ def test_district_name_empty_when_room_has_no_region():
     assert _neon._district_name(scenario.actor.world, scenario.character) == ""
 
 
-def test_spend_scrip_no_op_for_non_positive_amount():
+def test_spend_scrip_plan_no_op_for_non_positive_amount():
     scenario = build_scenario()
     character = scenario.actor.world.get_entity(scenario.character)
-    assert _neon._spend_scrip(character, scenario.actor.world, 0) is True
+    assert _neon._spend_scrip_operations(character, scenario.actor.world, 0) == []
 
 
-def test_spend_scrip_partial_leaves_unparented_stack_in_place():
+def test_spend_scrip_plan_partial_updates_stack():
     scenario = build_scenario()
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
@@ -3806,9 +3814,9 @@ def test_spend_scrip_partial_leaves_unparented_stack_in_place():
         ],
     )
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), scrip.id)
-    # Spend less than the stack: it is decremented and kept, container_of path runs
-    # but the full-drain removal branch is not taken.
-    assert _neon._spend_scrip(character, world, 4) is True
+    operations = _neon._spend_scrip_operations(character, world, 4)
+    assert operations is not None
+    execute_mutation_plan(world, MutationPlan(tuple(operations)))
     stack = world.get_entity(scrip.id).get_component(ResourceStackComponent)
     assert stack.quantity == 6
 
@@ -3875,21 +3883,12 @@ def test_scrip_stack_skips_non_inventory_and_non_scrip_items():
     assert _neon._scrip_stack(character, world) is None
 
 
-def test_add_scrip_no_op_for_non_positive_amount():
+def test_add_scrip_plan_no_op_for_non_positive_amount():
     scenario = build_scenario()
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
-    _neon._add_scrip(character, world, 0)
+    assert _neon._add_scrip_operations(character, world, 0) == []
     assert _neon._scrip_stack(character, world) is None
-
-
-def test_remove_item_handles_unparented_entity():
-    scenario = build_scenario()
-    world = scenario.actor.world
-    orphan = spawn_entity(world, [IdentityComponent(name="loose", kind="item")])
-    # No container relationship: the remove path skips the parent-detach branch.
-    _neon._remove_item(world, orphan.id)
-    assert not world.has_entity(orphan.id)
 
 
 def test_installed_implants_skips_relationships_without_implant_component():
@@ -3975,11 +3974,6 @@ async def test_wipe_evidence_for_unparented_record():
         "evidence",
         [RecordedEvidenceComponent(subject_id="x", device_id="cam")],
     )
-    # Keep it reachable for the handler by leaving it in the room; the parent
-    # branch runs. Instead exercise the no-parent path via the helper directly.
-    orphan = spawn_entity(world, [RecordedEvidenceComponent(subject_id="y", device_id="cam2")])
-    _neon._remove_item(world, orphan.id)
-    assert not world.has_entity(orphan.id)
     assert world.has_entity(parse_entity_id(str(record)))
 
 
@@ -4065,9 +4059,9 @@ def test_pay_debt_rejects_when_spend_scrip_underdrains(monkeypatch):
     character.add_component(DebtComponent(amount=50, defaulted_at_epoch=0))
     _give_scrip(scenario, 30)
     ctx = HandlerContext(world, scenario.actor.epoch)
-    # Force the defensive double-check: _spend_scrip reports failure even though
+    # Force the defensive double-check: the spend plan reports failure even though
     # _scrip_stack reported available funds.
-    monkeypatch.setattr(_neon, "_spend_scrip", lambda *a, **k: False)
+    monkeypatch.setattr(_neon, "_spend_scrip_operations", lambda *a, **k: None)
     result = PayDebtHandler().execute(ctx, _cmd(scenario, "pay-debt"))
     assert result.ok is False
     assert result.reason == "not enough scrip to pay the debt"
