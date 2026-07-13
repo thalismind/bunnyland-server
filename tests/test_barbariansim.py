@@ -2178,6 +2178,24 @@ def test_attack_defaults_to_body_when_body_plan_has_no_parts():
     assert injuries and injuries[0].body_part == "body"
 
 
+def test_attack_defaults_to_first_body_plan_part():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    target = _target(scenario, health=20.0)
+    scenario.actor.world.get_entity(target).add_component(BodyPlanComponent(parts=("head", "body")))
+    _weapon(scenario, damage=6.0)
+
+    result = AttackHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "attack", target_id=str(target)),
+    )
+
+    assert result.ok, result.reason
+    injuries = [e for e in result.events if e.__class__.__name__ == "InjuryAddedEvent"]
+    assert injuries and injuries[0].body_part == "head"
+
+
 def test_place_trap_rejects_when_character_has_no_room():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -2204,6 +2222,20 @@ def test_defend_rejects_when_stamina_is_insufficient():
     result = DefendHandler().execute(ctx, _handler_cmd(scenario, "defend"))
     assert not result.ok
     assert "stamina" in (result.reason or "")
+
+
+def test_defend_plans_and_spends_available_stamina():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(StaminaComponent(current=5.0, maximum=10.0))
+
+    result = DefendHandler().execute(ctx, _handler_cmd(scenario, "defend"))
+
+    assert result.ok, result.reason
+    assert character.get_component(StaminaComponent).current == 3.0
+    assert any(isinstance(event, StaminaChangedEvent) for event in result.events)
 
 
 def test_recruit_follower_rejects_nonexistent_target():

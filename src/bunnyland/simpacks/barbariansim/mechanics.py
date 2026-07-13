@@ -51,7 +51,17 @@ from ...core.events import (
     InjuryAddedEvent,
     RaidStartedEvent,
 )
-from ...core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
+from ...core.mutations import (
+    AddComponent,
+    AddEdge,
+    AddEntity,
+    EntityReference,
+    MutationPlan,
+    RemoveComponent,
+    RemoveEdge,
+    SetComponent,
+)
 from ...prompts import ComponentPromptContext
 
 UNARMED_DAMAGE = 5.0
@@ -736,15 +746,14 @@ def _spend_stamina(
     amount: float,
     *,
     reason: str,
-) -> tuple[bool, str | None, StaminaChangedEvent | None]:
+) -> tuple[bool, str | None, StaminaChangedEvent | None, SetComponent | None]:
     entity = ctx.entity(entity_id)
     if amount <= 0 or not entity.has_component(StaminaComponent):
-        return True, None, None
+        return True, None, None, None
     stamina = entity.get_component(StaminaComponent)
     if stamina.current < amount:
-        return False, "insufficient stamina", None
+        return False, "insufficient stamina", None, None
     updated = replace(stamina, current=stamina.current - amount)
-    replace_component(entity, updated)
     return (
         True,
         None,
@@ -757,24 +766,25 @@ def _spend_stamina(
                 reason=reason,
             )
         ),
+        SetComponent(entity_id, updated),
     )
 
 
-def _damage_item(
+def _damage_item_plan(
     ctx: HandlerContext,
     item_id: EntityId | None,
     *,
     amount: float,
     actor_id: EntityId,
-) -> list[DomainEvent]:
+) -> tuple[SetComponent | None, list[DomainEvent]]:
     if item_id is None or amount <= 0:
-        return []
+        return None, []
     item = ctx.entity(item_id)
     if not item.has_component(DurabilityComponent):
-        return []
+        return None, []
     durability = item.get_component(DurabilityComponent)
     if durability.broken:
-        return []
+        return None, []
     current = max(0.0, durability.current - amount)
     broken = current <= 0
     updated = DurabilityComponent(
@@ -782,7 +792,6 @@ def _damage_item(
         maximum=durability.maximum,
         broken=broken,
     )
-    replace_component(item, updated)
     events: list[DomainEvent] = [
         ItemDamagedEvent(
             **ctx.event_base(
@@ -806,6 +815,19 @@ def _damage_item(
                 )
             )
         )
+    return SetComponent(item_id, updated), events
+
+
+def _damage_item(
+    ctx: HandlerContext,
+    item_id: EntityId | None,
+    *,
+    amount: float,
+    actor_id: EntityId,
+) -> list[DomainEvent]:
+    operation, events = _damage_item_plan(ctx, item_id, amount=amount, actor_id=actor_id)
+    if operation is not None:
+        replace_component(ctx.entity(item_id), operation.component)
     return events
 
 
@@ -1003,7 +1025,7 @@ def _resolve_attack(
             SPAR_STAMINA_COST if sparring else ATTACK_STAMINA_COST,
         )
     )
-    allowed, reason, stamina_event = _spend_stamina(
+    allowed, reason, stamina_event, stamina_operation = _spend_stamina(
         ctx,
         actor_id,
         stamina_cost,
@@ -1027,9 +1049,12 @@ def _resolve_attack(
     next_health = health.current - damage
     if not lethal:
         next_health = max(1.0, next_health)
-    replace_component(target, replace(health, current=next_health))
+    operations = []
+    if stamina_operation is not None:
+        operations.append(stamina_operation)
+    operations.append(SetComponent(target_id, replace(health, current=next_health)))
     if target.has_component(DefendingComponent):
-        target.remove_component(DefendingComponent)
+        operations.append(RemoveComponent(target_id, DefendingComponent))
 
     events: list[DomainEvent] = []
     if stamina_event is not None:
@@ -1051,43 +1076,56 @@ def _resolve_attack(
     )
     if damage > 0:
         body_part = _body_part(target, command.payload.get("body_part"))
-        injury = spawn_entity(
-            ctx.world,
-            [
-                InjuryComponent(
-                    body_part=body_part,
-                    severity=damage,
-                    pain=damage,
-                    bleeding_rate=damage * 0.1,
-                    applied_at_epoch=ctx.epoch,
-                )
-            ],
+        injury = EntityReference()
+        operations.extend(
+            (
+                AddEntity(
+                    (
+                        InjuryComponent(
+                            body_part=body_part,
+                            severity=damage,
+                            pain=damage,
+                            bleeding_rate=damage * 0.1,
+                            applied_at_epoch=ctx.epoch,
+                        ),
+                    ),
+                    reference=injury,
+                ),
+                AddEdge(target_id, injury, HasInjury()),
+            )
         )
-        target.add_relationship(HasInjury(), injury.id)
-        events.append(
-            InjuryAddedEvent(
+
+        def injury_event() -> DomainEvent:
+            injury_id = str(injury.require())
+            return InjuryAddedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(actor_id),
                     room_id=str(container_of(actor)) if container_of(actor) else None,
-                    target_ids=(str(target_id), str(injury.id)),
-                    injury_id=str(injury.id),
+                    target_ids=(str(target_id), injury_id),
+                    injury_id=injury_id,
                     body_part=body_part,
                     severity=damage,
                     bleeding_rate=damage * 0.1,
                 )
             )
-        )
-    events.extend(
-        _damage_item(
-            ctx,
-            weapon_id,
-            amount=float(command.payload.get("durability_cost", 1.0)),
-            actor_id=actor_id,
-        )
-    )
 
-    return ok(*events)
+        events.append(injury_event)
+    item_operation, item_events = _damage_item_plan(
+        ctx,
+        weapon_id,
+        amount=float(command.payload.get("durability_cost", 1.0)),
+        actor_id=actor_id,
+    )
+    if item_operation is not None:
+        operations.append(item_operation)
+    events.extend(item_events)
+
+    return planned(
+        MutationPlan(tuple(operations)),
+        *(event if callable(event) else (lambda event=event: event) for event in events),
+        ctx=ctx,
+    )
 
 
 class DefendHandler:
@@ -1098,19 +1136,20 @@ class DefendHandler:
         if actor_id is None:
             return rejected("invalid character id")
         stamina_cost = float(command.payload.get("stamina_cost", DEFEND_STAMINA_COST))
-        allowed, reason, stamina_event = _spend_stamina(
+        allowed, reason, stamina_event, stamina_operation = _spend_stamina(
             ctx, actor_id, stamina_cost, reason="defend"
         )
         if not allowed:
             return rejected(reason or "insufficient stamina")
         character = ctx.entity(actor_id)
-        replace_component(
-            character,
-            DefendingComponent(
-                started_at_epoch=ctx.epoch,
-                reduction=float(command.payload.get("reduction", DEFEND_REDUCTION)),
-            ),
+        defending = DefendingComponent(
+            started_at_epoch=ctx.epoch,
+            reduction=float(command.payload.get("reduction", DEFEND_REDUCTION)),
         )
+        operations = []
+        if stamina_operation is not None:
+            operations.append(stamina_operation)
+        operations.append(SetComponent(actor_id, defending))
         events: list[DomainEvent] = []
         if stamina_event is not None:
             events.append(stamina_event)
@@ -1120,11 +1159,11 @@ class DefendHandler:
                     visibility=EventVisibility.ROOM,
                     actor_id=str(actor_id),
                     room_id=str(container_of(character)) if container_of(character) else None,
-                    reduction=character.get_component(DefendingComponent).reduction,
+                    reduction=defending.reduction,
                 )
             )
         )
-        return ok(*events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class ChallengeHandler:
@@ -1140,7 +1179,8 @@ class ChallengeHandler:
             return rejected("target does not exist")
         if not _same_room(ctx.world, actor_id, target_id):
             return rejected("target is not present")
-        return ok(
+        return planned(
+            MutationPlan(),
             CombatChallengeEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1150,7 +1190,8 @@ class ChallengeHandler:
                     target_id=str(target_id),
                     terms=terms,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1183,8 +1224,8 @@ class FortifyHandler:
             rating=current.rating + strength,
             durability=current.durability + strength * 5.0,
         )
-        replace_component(target, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(target_id, updated),)),
             FortificationBuiltEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1195,7 +1236,8 @@ class FortifyHandler:
                     durability=updated.durability,
                     rating=updated.rating,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1218,14 +1260,19 @@ class ClaimBaseHandler:
         if base.has_component(BaseClaimComponent):
             return rejected("base is already claimed")
         clan = str(command.payload.get("clan", "")).strip()
-        base.add_component(
-            BaseClaimComponent(
-                claimed_by=str(actor_id),
-                clan=clan,
-                claimed_at_epoch=ctx.epoch,
-            )
-        )
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    AddComponent(
+                        target_id,
+                        BaseClaimComponent(
+                            claimed_by=str(actor_id),
+                            clan=clan,
+                            claimed_at_epoch=ctx.epoch,
+                        ),
+                    ),
+                )
+            ),
             BaseClaimedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1235,7 +1282,8 @@ class ClaimBaseHandler:
                     base_id=str(target_id),
                     clan=clan,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1252,25 +1300,36 @@ class PlaceTrapHandler:
         damage = float(command.payload.get("damage", 5.0))
         if damage <= 0:
             return rejected("trap damage must be positive")
-        trap = spawn_entity(
-            ctx.world,
-            [
-                IdentityComponent(name="armed trap", kind="trap"),
-                TrapComponent(damage=damage, armed=True, placed_by=str(actor_id)),
-            ],
-        )
-        ctx.entity(room_id).add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), trap.id)
-        return ok(
-            TrapPlacedEvent(
+        trap = EntityReference()
+
+        def trap_event() -> DomainEvent:
+            trap_id = str(trap.require())
+            return TrapPlacedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(actor_id),
                     room_id=str(room_id),
-                    target_ids=(str(trap.id),),
-                    trap_id=str(trap.id),
+                    target_ids=(trap_id,),
+                    trap_id=trap_id,
                     damage=damage,
                 )
             )
+
+        return planned(
+            MutationPlan(
+                (
+                    AddEntity(
+                        (
+                            IdentityComponent(name="armed trap", kind="trap"),
+                            TrapComponent(damage=damage, armed=True, placed_by=str(actor_id)),
+                        ),
+                        reference=trap,
+                    ),
+                    AddEdge(room_id, trap, Contains(mode=ContainmentMode.ROOM_CONTENT)),
+                )
+            ),
+            trap_event,
+            ctx=ctx,
         )
 
 
@@ -1293,8 +1352,8 @@ class DisarmTrapHandler:
         component = trap.get_component(TrapComponent)
         if not component.armed:
             return rejected("trap is already disarmed")
-        replace_component(trap, replace(component, armed=False))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(trap_id, replace(component, armed=False)),)),
             TrapDisarmedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1303,7 +1362,8 @@ class DisarmTrapHandler:
                     target_ids=(str(trap_id),),
                     trap_id=str(trap_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1331,12 +1391,19 @@ class RaidHandler:
             else FortificationComponent(rating=0.0, durability=0.0)
         )
         damage = max(0.0, intensity - fortification.rating)
+        operations = ()
         if fortification.durability > 0:
-            replace_component(
-                target,
-                replace(fortification, durability=max(0.0, fortification.durability - damage)),
+            operations = (
+                SetComponent(
+                    target_id,
+                    replace(
+                        fortification,
+                        durability=max(0.0, fortification.durability - damage),
+                    ),
+                ),
             )
-        return ok(
+        return planned(
+            MutationPlan(operations),
             RaidStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1347,7 +1414,8 @@ class RaidHandler:
                     intensity=intensity,
                     damage=damage,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1370,8 +1438,8 @@ class BridgeSurvivalGapHandler:
         gap = gap_entity.get_component(SurvivalGapComponent)
         if gap.bridged_by is not None:
             return rejected("survival gap is already bridged")
-        replace_component(gap_entity, replace(gap, bridged_by=str(actor_id)))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(gap_id, replace(gap, bridged_by=str(actor_id))),)),
             SurvivalGapBridgedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1381,7 +1449,8 @@ class BridgeSurvivalGapHandler:
                     gap_id=str(gap_id),
                     gap_type=gap.gap_type,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1408,8 +1477,8 @@ class DecayBuildingHandler:
         if amount <= 0:
             return rejected("decay amount must be positive")
         updated = replace(building, integrity=max(0.0, building.integrity - amount))
-        replace_component(building_entity, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(building_id, updated),)),
             BuildingDecayedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1420,7 +1489,8 @@ class DecayBuildingHandler:
                     integrity=updated.integrity,
                     maximum_integrity=updated.maximum_integrity,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1453,8 +1523,8 @@ class UpgradeBuildingHandler:
             maximum_integrity=maximum,
             integrity=maximum,
         )
-        replace_component(building_entity, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(building_id, updated),)),
             BuildingUpgradedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1465,7 +1535,8 @@ class UpgradeBuildingHandler:
                     level=updated.level,
                     integrity=updated.integrity,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1488,8 +1559,15 @@ class DemolishBuildingHandler:
         building = building_entity.get_component(BuildingComponent)
         if building.demolished:
             return rejected("building is already demolished")
-        replace_component(building_entity, replace(building, integrity=0.0, demolished=True))
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        building_id,
+                        replace(building, integrity=0.0, demolished=True),
+                    ),
+                )
+            ),
             BuildingDemolishedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1498,7 +1576,8 @@ class DemolishBuildingHandler:
                     target_ids=(str(building_id),),
                     building_id=str(building_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1532,8 +1611,8 @@ class PrepareSiegeHandler:
             prepared_by=str(actor_id),
             prepared_at_epoch=ctx.epoch,
         )
-        replace_component(base, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(base_id, updated),)),
             SiegePreparedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1543,7 +1622,8 @@ class PrepareSiegeHandler:
                     base_id=str(base_id),
                     score=updated.score,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1578,8 +1658,8 @@ class StartPurgeWaveHandler:
             active=True,
             started_at_epoch=ctx.epoch,
         )
-        replace_component(base, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(base_id, updated),)),
             PurgeWaveStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1590,7 +1670,8 @@ class StartPurgeWaveHandler:
                     wave=updated.wave,
                     intensity=updated.intensity,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1619,22 +1700,29 @@ class PerformRitualHandler:
         if str(actor_id) in ritual.performed_by:
             return rejected("ritual already performed")
 
-        replace_component(
-            ritual_entity,
-            replace(ritual, performed_by=tuple(sorted((*ritual.performed_by, str(actor_id))))),
-        )
+        operations = [
+            SetComponent(
+                ritual_id,
+                replace(
+                    ritual,
+                    performed_by=tuple(sorted((*ritual.performed_by, str(actor_id)))),
+                ),
+            )
+        ]
         if ritual.corruption_cost > 0:
             current = (
                 character.get_component(CorruptionComponent)
                 if character.has_component(CorruptionComponent)
                 else CorruptionComponent()
             )
-            replace_component(
-                character,
-                replace(
-                    current,
-                    amount=current.amount + ritual.corruption_cost,
-                    last_updated_epoch=ctx.epoch,
+            operations.append(
+                SetComponent(
+                    actor_id,
+                    replace(
+                        current,
+                        amount=current.amount + ritual.corruption_cost,
+                        last_updated_epoch=ctx.epoch,
+                    ),
                 ),
             )
         events: list[DomainEvent] = [
@@ -1651,8 +1739,11 @@ class PerformRitualHandler:
             )
         ]
         if ritual.blessing:
-            character.add_component(
-                BlessingComponent(name=ritual.blessing, source_id=str(ritual_id))
+            operations.append(
+                AddComponent(
+                    actor_id,
+                    BlessingComponent(name=ritual.blessing, source_id=str(ritual_id)),
+                )
             )
             events.append(
                 BlessingReceivedEvent(
@@ -1666,7 +1757,12 @@ class PerformRitualHandler:
                 )
             )
         if ritual.curse:
-            character.add_component(CurseComponent(name=ritual.curse, source_id=str(ritual_id)))
+            operations.append(
+                AddComponent(
+                    actor_id,
+                    CurseComponent(name=ritual.curse, source_id=str(ritual_id)),
+                )
+            )
             events.append(
                 CurseReceivedEvent(
                     **ctx.event_base(
@@ -1678,7 +1774,7 @@ class PerformRitualHandler:
                     )
                 )
             )
-        return ok(*events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class ExploreDangerZoneHandler:
@@ -1698,12 +1794,19 @@ class ExploreDangerZoneHandler:
         if not zone_entity.has_component(DangerZoneComponent):
             return rejected("target is not a danger zone")
         zone = zone_entity.get_component(DangerZoneComponent)
+        operations = ()
         if str(actor_id) not in zone.explored_by:
-            replace_component(
-                zone_entity,
-                replace(zone, explored_by=tuple(sorted((*zone.explored_by, str(actor_id))))),
+            operations = (
+                SetComponent(
+                    zone_id,
+                    replace(
+                        zone,
+                        explored_by=tuple(sorted((*zone.explored_by, str(actor_id)))),
+                    ),
+                ),
             )
-        return ok(
+        return planned(
+            MutationPlan(operations),
             DangerZoneExploredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1714,7 +1817,8 @@ class ExploreDangerZoneHandler:
                     zone_type=zone.zone_type,
                     danger_rating=zone.danger_rating,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1738,8 +1842,8 @@ class DefeatBossHandler:
         if boss.defeated:
             return rejected("boss is already defeated")
         updated = replace(boss, defeated=True, defeated_by=str(actor_id))
-        replace_component(boss_entity, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(boss_id, updated),)),
             BossDefeatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1749,7 +1853,8 @@ class DefeatBossHandler:
                     boss_id=str(boss_id),
                     boss_name=updated.name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1787,8 +1892,8 @@ class UnlockTreasureHandler:
             ):
                 return rejected("wrong key")
         updated = replace(treasure, locked=False)
-        replace_component(treasure_entity, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(treasure_id, updated),)),
             TreasureUnlockedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1798,7 +1903,8 @@ class UnlockTreasureHandler:
                     treasure_id=str(treasure_id),
                     key_name=treasure.key_name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1824,8 +1930,8 @@ class ClaimTreasureHandler:
         if treasure.claimed_by is not None:
             return rejected("treasure is already claimed")
         updated = replace(treasure, claimed_by=str(actor_id))
-        replace_component(treasure_entity, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(treasure_id, updated),)),
             TreasureClaimedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1835,7 +1941,8 @@ class ClaimTreasureHandler:
                     treasure_id=str(treasure_id),
                     treasure_type=treasure.treasure_type,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1863,8 +1970,8 @@ class ClimbHandler:
         )
         if level < gate.required_level:
             return rejected("climbing skill is too low")
-        replace_component(gate_entity, replace(gate, opened_by=str(actor_id)))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(gate_id, replace(gate, opened_by=str(actor_id))),)),
             ClimbingGatePassedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1874,7 +1981,8 @@ class ClimbHandler:
                     gate_id=str(gate_id),
                     required_level=gate.required_level,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1904,8 +2012,8 @@ class RepairItemHandler:
             maximum=durability.maximum,
             broken=current <= 0,
         )
-        replace_component(item, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(item_id, updated),)),
             ItemRepairedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1915,7 +2023,8 @@ class RepairItemHandler:
                     durability=current,
                     maximum=durability.maximum,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1934,16 +2043,19 @@ class PoisonCharacterHandler:
         severity = float(command.payload.get("severity", 1.0))
         if severity <= 0:
             return rejected("poison severity must be positive")
-        target = ctx.entity(target_id)
-        replace_component(
-            target,
-            PoisonComponent(
-                severity=severity,
-                damage_per_hour=float(command.payload.get("damage_per_hour", 1.0)),
-                last_updated_epoch=ctx.epoch,
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        target_id,
+                        PoisonComponent(
+                            severity=severity,
+                            damage_per_hour=float(command.payload.get("damage_per_hour", 1.0)),
+                            last_updated_epoch=ctx.epoch,
+                        ),
+                    ),
+                )
             ),
-        )
-        return ok(
             CharacterPoisonedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.DIRECTED,
@@ -1952,7 +2064,8 @@ class PoisonCharacterHandler:
                     character_id=str(target_id),
                     severity=severity,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1971,8 +2084,8 @@ class TreatPoisonHandler:
         target = ctx.entity(target_id)
         if not target.has_component(PoisonComponent):
             return rejected("target is not poisoned")
-        target.remove_component(PoisonComponent)
-        return ok(
+        return planned(
+            MutationPlan((RemoveComponent(target_id, PoisonComponent),)),
             PoisonTreatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.DIRECTED,
@@ -1980,7 +2093,8 @@ class TreatPoisonHandler:
                     target_ids=(str(target_id),),
                     character_id=str(target_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2004,8 +2118,8 @@ class GainCorruptionHandler:
             amount=current.amount + amount,
             last_updated_epoch=ctx.epoch,
         )
-        replace_component(actor, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(actor_id, updated),)),
             CorruptionGainedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2013,7 +2127,8 @@ class GainCorruptionHandler:
                     character_id=str(actor_id),
                     amount=updated.amount,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2027,15 +2142,16 @@ class CleanseCorruptionHandler:
         actor = ctx.entity(actor_id)
         if not actor.has_component(CorruptionComponent):
             return rejected("character is not corrupted")
-        actor.remove_component(CorruptionComponent)
-        return ok(
+        return planned(
+            MutationPlan((RemoveComponent(actor_id, CorruptionComponent),)),
             CorruptionCleansedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(actor_id),
                     character_id=str(actor_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2066,9 +2182,13 @@ class PickpocketHandler:
         ):
             return rejected("item cannot be taken")
 
-        target.remove_relationship(Contains, item_id)
-        actor.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    RemoveEdge(target_id, item_id, Contains),
+                    AddEdge(actor_id, item_id, Contains(mode=ContainmentMode.INVENTORY)),
+                )
+            ),
             CharacterPickpocketedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2078,7 +2198,8 @@ class PickpocketHandler:
                     target_id=str(target_id),
                     item_id=str(item_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2116,10 +2237,19 @@ class SubdueHandler:
             return rejected("target is not present")
 
         task = str(command.payload.get("task", "labor")).strip() or "labor"
-        target.add_component(
-            ThrallComponent(master_id=str(actor_id), task=task, bound_at_epoch=ctx.epoch)
-        )
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    AddComponent(
+                        target_id,
+                        ThrallComponent(
+                            master_id=str(actor_id),
+                            task=task,
+                            bound_at_epoch=ctx.epoch,
+                        ),
+                    ),
+                )
+            ),
             ThrallTakenEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2130,7 +2260,8 @@ class SubdueHandler:
                     thrall_id=str(target_id),
                     task=task,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2156,8 +2287,15 @@ class RecruitFollowerHandler:
         if not _same_room(ctx.world, actor_id, target_id):
             return rejected("target is not present")
 
-        target.add_component(FollowerComponent(master_id=str(actor_id), since_epoch=ctx.epoch))
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    AddComponent(
+                        target_id,
+                        FollowerComponent(master_id=str(actor_id), since_epoch=ctx.epoch),
+                    ),
+                )
+            ),
             FollowerRecruitedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2167,7 +2305,8 @@ class RecruitFollowerHandler:
                     master_id=str(actor_id),
                     follower_id=str(target_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2197,12 +2336,14 @@ class CommandFollowerHandler:
             return rejected("you do not command this character")
 
         if target.has_component(FollowerComponent):
-            replace_component(
-                target, replace(target.get_component(FollowerComponent), orders=orders)
+            updated = replace(
+                target.get_component(FollowerComponent),
+                orders=orders,
             )
         else:
-            replace_component(target, replace(target.get_component(ThrallComponent), task=orders))
-        return ok(
+            updated = replace(target.get_component(ThrallComponent), task=orders)
+        return planned(
+            MutationPlan((SetComponent(target_id, updated),)),
             FollowerOrderChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2212,7 +2353,8 @@ class CommandFollowerHandler:
                     subordinate_id=str(target_id),
                     orders=orders,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2230,11 +2372,11 @@ class ReleaseThrallHandler:
         if _master_of(target) != str(actor_id):
             return rejected("you do not command this character")
 
-        if target.has_component(ThrallComponent):
-            target.remove_component(ThrallComponent)
-        else:
-            target.remove_component(FollowerComponent)
-        return ok(
+        component_type = (
+            ThrallComponent if target.has_component(ThrallComponent) else FollowerComponent
+        )
+        return planned(
+            MutationPlan((RemoveComponent(target_id, component_type),)),
             ThrallReleasedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2243,7 +2385,8 @@ class ReleaseThrallHandler:
                     master_id=str(actor_id),
                     subordinate_id=str(target_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
