@@ -19,7 +19,11 @@ from bunnyland.foundation.consumables.components import (
     FoodComponent,
 )
 from bunnyland.foundation.environment.mechanics import CalendarComponent
-from bunnyland.simpacks.colonysim.mechanics import ResourceStackComponent, _consume_resource_stack
+from bunnyland.simpacks.colonysim.mechanics import (
+    ResourceStackComponent,
+    _consume_resource_operations,
+    _stack_in_inventory,
+)
 
 from ...core.commands import SubmittedCommand
 from ...core.components import IdentityComponent, PortableComponent
@@ -39,14 +43,22 @@ from ...core.ecs import (
     reachable_entity as _reachable_entity,
 )
 from ...core.ecs import (
-    remove_from_container as _remove_from_container,
-)
-from ...core.ecs import (
     room_id_for as _room_id,
 )
 from ...core.edges import ContainmentMode, Contains
 from ...core.events import DomainEvent, EventVisibility, event_base
-from ...core.handlers import HandlerContext, HandlerResult, ok, rejected
+from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
+from ...core.mutations import (
+    AddComponent,
+    AddEdge,
+    AddEntity,
+    DeleteEntity,
+    EntityReference,
+    MutationPlan,
+    RemoveComponent,
+    RemoveEdge,
+    SetComponent,
+)
 from ...prompts import ComponentPromptContext
 
 SECONDS_PER_DAY = 24 * 60 * 60
@@ -710,46 +722,13 @@ class DailyFarmResetEvent(DomainEvent):
 _event_base = partial(event_base, default_visibility=EventVisibility.ROOM)
 
 
-def _spawn_harvest_item(
-    world: World,
-    character: Entity,
-    crop_type: str,
-    item_name: str,
-    quantity: int,
-    *,
-    edible_nutrition: float = 0.0,
-    edible_satiety: float = 0.0,
-) -> str:
-    label = f"{item_name} x{quantity}" if quantity != 1 else item_name
-    components: list[Component] = [
-        IdentityComponent(name=label, kind="crop", tags=(crop_type,)),
-        PortableComponent(can_pick_up=True),
-        ResourceStackComponent(resource_type=item_name, quantity=quantity),
-    ]
-    if edible_satiety > 0 or edible_nutrition > 0:
-        components.extend(
-            [
-                FoodComponent(nutrition=edible_nutrition, satiety=edible_satiety),
-                ConsumableComponent(current_uses=quantity, max_uses=quantity),
-            ]
-        )
-    item = spawn_entity(
-        world,
-        components,
-    )
-    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
-    return str(item.id)
-
-
-def _spawn_product_item(
-    world: World,
-    character: Entity,
+def _product_components(
     resource_type: str,
     quantity: int,
     *,
     kind: str = "resource",
     metadata: dict[str, object] | None = None,
-) -> str:
+) -> tuple[Component, ...]:
     metadata = metadata or {}
     name = str(metadata.get("display_name") or _resource_name(resource_type, quantity))
     components: list[Component] = [
@@ -776,9 +755,7 @@ def _spawn_product_item(
     uses = int(metadata.get("uses", quantity if len(components) > 3 else 0))
     if uses > 0:
         components.append(ConsumableComponent(current_uses=uses, max_uses=uses))
-    item = spawn_entity(world, components)
-    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
-    return str(item.id)
+    return tuple(components)
 
 
 def _resource_name(resource_type: str, quantity: int) -> str:
@@ -795,22 +772,6 @@ def _find_processing_recipe(
     return None
 
 
-def _spawn_sap_item(
-    world: World, character: Entity, tree_type: str, item_name: str, quantity: int
-) -> str:
-    label = f"{item_name} x{quantity}" if quantity != 1 else item_name
-    item = spawn_entity(
-        world,
-        [
-            IdentityComponent(name=label, kind="resource", tags=(tree_type,)),
-            PortableComponent(can_pick_up=True),
-            ResourceStackComponent(resource_type=item_name, quantity=quantity),
-        ],
-    )
-    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
-    return str(item.id)
-
-
 def _current_season(world: World) -> str | None:
     clocks = list(world.query().with_all([CalendarComponent]).execute_entities())
     if not clocks:
@@ -819,18 +780,24 @@ def _current_season(world: World) -> str | None:
 
 
 def _record_collection(world: World, character: Entity, entry: str) -> bool:
+    updated = _collection_component(character, entry)
+    if updated is None:
+        return False
+    replace_component(character, updated)
+    return True
+
+
+def _collection_component(character: Entity, entry: str) -> CollectionComponent | None:
     existing = (
         character.get_component(CollectionComponent)
         if character.has_component(CollectionComponent)
         else CollectionComponent()
     )
     if entry in existing.entries:
-        return False
-    replace_component(
-        character,
-        CollectionComponent(entries=tuple(sorted({*existing.entries, entry}))),
+        return None
+    return CollectionComponent(
+        entries=tuple(sorted({*existing.entries, entry})),
     )
-    return True
 
 
 class CropGrowthConsequence:
@@ -1157,8 +1124,8 @@ class TillHandler:
         if soil.has_component(TilledComponent):
             return rejected("soil is already tilled")
 
-        soil.add_component(TilledComponent(tilled_at_epoch=ctx.epoch))
-        return ok(
+        return planned(
+            MutationPlan((AddComponent(soil_id, TilledComponent(tilled_at_epoch=ctx.epoch)),)),
             SoilTilledEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1167,7 +1134,8 @@ class TillHandler:
                     target_ids=(str(soil_id),),
                     soil_id=str(soil_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1203,32 +1171,41 @@ class PlantHandler:
             and not soil.has_component(GreenhouseComponent)
         ):
             return rejected("seed cannot grow in this season")
-        soil.add_component(
-            CropComponent(
-                crop_type=seed.crop_type,
-                planted_at_epoch=ctx.epoch,
-                seasons=seed.seasons,
-            )
-        )
-        soil.add_component(
-            CropGrowthComponent(
-                progress_days=0.0,
-                required_days=seed.growth_days,
-                last_updated_epoch=ctx.epoch,
-                stage_count=seed.stage_count,
-            )
-        )
-        soil.add_component(
-            HarvestableComponent(
-                yield_item=seed.yield_item,
-                quantity=seed.yield_quantity,
-                ready=False,
-                edible_nutrition=seed.edible_nutrition,
-                edible_satiety=seed.edible_satiety,
-            )
-        )
-        _remove_from_container(ctx.world, seed_id)
-        return ok(
+        seed_container = container_of(seed_entity)
+        assert seed_container is not None
+        return planned(
+            MutationPlan(
+                (
+                    AddComponent(
+                        soil_id,
+                        CropComponent(
+                            crop_type=seed.crop_type,
+                            planted_at_epoch=ctx.epoch,
+                            seasons=seed.seasons,
+                        ),
+                    ),
+                    AddComponent(
+                        soil_id,
+                        CropGrowthComponent(
+                            progress_days=0.0,
+                            required_days=seed.growth_days,
+                            last_updated_epoch=ctx.epoch,
+                            stage_count=seed.stage_count,
+                        ),
+                    ),
+                    AddComponent(
+                        soil_id,
+                        HarvestableComponent(
+                            yield_item=seed.yield_item,
+                            quantity=seed.yield_quantity,
+                            ready=False,
+                            edible_nutrition=seed.edible_nutrition,
+                            edible_satiety=seed.edible_satiety,
+                        ),
+                    ),
+                    RemoveEdge(seed_container, seed_id, Contains),
+                )
+            ),
             SeedPlantedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1239,7 +1216,8 @@ class PlantHandler:
                     seed_id=str(seed_id),
                     crop_type=seed.crop_type,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1260,14 +1238,17 @@ class WaterCropHandler:
             return rejected("target is not soil")
 
         expires_at = ctx.epoch + SECONDS_PER_DAY
-        replace_component(
-            soil,
-            WateredComponent(watered_at_epoch=ctx.epoch, expires_at_epoch=expires_at),
-        )
+        operations = [
+            SetComponent(
+                soil_id,
+                WateredComponent(watered_at_epoch=ctx.epoch, expires_at_epoch=expires_at),
+            )
+        ]
         if soil.has_component(CropGrowthComponent):
             growth = soil.get_component(CropGrowthComponent)
-            replace_component(soil, replace(growth, last_updated_epoch=ctx.epoch))
-        return ok(
+            operations.append(SetComponent(soil_id, replace(growth, last_updated_epoch=ctx.epoch)))
+        return planned(
+            MutationPlan(tuple(operations)),
             CropWateredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1277,7 +1258,8 @@ class WaterCropHandler:
                     soil_id=str(soil_id),
                     expires_at_epoch=expires_at,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1302,9 +1284,15 @@ class FertilizeHandler:
             return rejected("target fertilizer is not usable")
 
         fertilizer = fertilizer_entity.get_component(FertilizerComponent)
-        replace_component(soil, fertilizer)
-        _remove_from_container(ctx.world, fertilizer_id)
-        return ok(
+        fertilizer_container = container_of(fertilizer_entity)
+        assert fertilizer_container is not None
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(soil_id, fertilizer),
+                    RemoveEdge(fertilizer_container, fertilizer_id, Contains),
+                )
+            ),
             FertilizerAppliedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1315,7 +1303,8 @@ class FertilizeHandler:
                     fertilizer_id=str(fertilizer_id),
                     kind=fertilizer.kind,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1350,8 +1339,15 @@ class InspectCropHandler:
             notes += ", pests present"
         if soil.has_component(WeedComponent):
             notes += ", weeds present"
-        replace_component(soil, CropInspectionComponent(inspected_at_epoch=ctx.epoch, notes=notes))
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        soil_id,
+                        CropInspectionComponent(inspected_at_epoch=ctx.epoch, notes=notes),
+                    ),
+                )
+            ),
             CropInspectedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1360,7 +1356,8 @@ class InspectCropHandler:
                     soil_id=str(soil_id),
                     notes=notes,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1379,11 +1376,17 @@ class WeedCropHandler:
             return rejected("soil is not reachable")
         if not soil.has_component(WeedComponent):
             return rejected("soil has no weeds")
-        soil.remove_component(WeedComponent)
+        operations = [RemoveComponent(soil_id, WeedComponent)]
         if soil.has_component(CropQualityComponent):
             quality = soil.get_component(CropQualityComponent)
-            replace_component(soil, replace(quality, quality=min(2.0, quality.quality + 0.1)))
-        return ok(
+            operations.append(
+                SetComponent(
+                    soil_id,
+                    replace(quality, quality=min(2.0, quality.quality + 0.1)),
+                )
+            )
+        return planned(
+            MutationPlan(tuple(operations)),
             CropWeededEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1392,7 +1395,8 @@ class WeedCropHandler:
                     target_ids=(str(soil_id),),
                     soil_id=str(soil_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1411,11 +1415,17 @@ class TreatPestsHandler:
             return rejected("soil is not reachable")
         if not soil.has_component(PestComponent):
             return rejected("soil has no pests")
-        soil.remove_component(PestComponent)
+        operations = [RemoveComponent(soil_id, PestComponent)]
         if soil.has_component(CropQualityComponent):
             quality = soil.get_component(CropQualityComponent)
-            replace_component(soil, replace(quality, quality=min(2.0, quality.quality + 0.15)))
-        return ok(
+            operations.append(
+                SetComponent(
+                    soil_id,
+                    replace(quality, quality=min(2.0, quality.quality + 0.15)),
+                )
+            )
+        return planned(
+            MutationPlan(tuple(operations)),
             CropPestsTreatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1424,7 +1434,8 @@ class TreatPestsHandler:
                     target_ids=(str(soil_id),),
                     soil_id=str(soil_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1448,7 +1459,6 @@ class HarvestCropHandler:
             return rejected("invalid character or soil id")
         if not ctx.world.has_entity(soil_id):
             return rejected("soil does not exist")
-        character = ctx.entity(character_id)
         soil = _reachable_entity(ctx.world, character_id, soil_id)
         if soil is None:
             return rejected("soil is not reachable")
@@ -1468,40 +1478,69 @@ class HarvestCropHandler:
             else 1.0
         )
         quantity = max(1, int(round(harvestable.quantity * quality)))
-        item_id = _spawn_harvest_item(
-            ctx.world,
-            character,
-            crop.crop_type,
-            harvestable.yield_item,
-            quantity,
-            edible_nutrition=harvestable.edible_nutrition,
-            edible_satiety=harvestable.edible_satiety,
-        )
+        item = EntityReference()
+        label = f"{harvestable.yield_item} x{quantity}" if quantity != 1 else harvestable.yield_item
+        item_components = [
+            IdentityComponent(name=label, kind="crop", tags=(crop.crop_type,)),
+            PortableComponent(can_pick_up=True),
+            ResourceStackComponent(resource_type=harvestable.yield_item, quantity=quantity),
+        ]
+        if harvestable.edible_satiety > 0 or harvestable.edible_nutrition > 0:
+            item_components.extend(
+                (
+                    FoodComponent(
+                        nutrition=harvestable.edible_nutrition,
+                        satiety=harvestable.edible_satiety,
+                    ),
+                    ConsumableComponent(current_uses=quantity, max_uses=quantity),
+                )
+            )
+        operations = [
+            AddEntity(tuple(item_components), reference=item),
+            AddEdge(
+                character_id,
+                item,
+                Contains(mode=ContainmentMode.INVENTORY),
+            ),
+        ]
         if soil.has_component(RegrowableComponent):
             regrow = soil.get_component(RegrowableComponent)
-            replace_component(
-                soil,
-                replace(crop, ready=False, stage=0, planted_at_epoch=ctx.epoch),
+            operations.extend(
+                (
+                    SetComponent(
+                        soil_id,
+                        replace(crop, ready=False, stage=0, planted_at_epoch=ctx.epoch),
+                    ),
+                    SetComponent(
+                        soil_id,
+                        CropGrowthComponent(
+                            progress_days=0.0,
+                            required_days=regrow.regrow_days,
+                            last_updated_epoch=ctx.epoch,
+                            stage_count=3,
+                        ),
+                    ),
+                    SetComponent(soil_id, replace(harvestable, ready=False)),
+                    SetComponent(
+                        soil_id,
+                        replace(regrow, regrowth_count=regrow.regrowth_count + 1),
+                    ),
+                )
             )
-            replace_component(
-                soil,
-                CropGrowthComponent(
-                    progress_days=0.0,
-                    required_days=regrow.regrow_days,
-                    last_updated_epoch=ctx.epoch,
-                    stage_count=3,
-                ),
-            )
-            replace_component(soil, replace(harvestable, ready=False))
-            replace_component(soil, replace(regrow, regrowth_count=regrow.regrowth_count + 1))
         else:
-            soil.remove_component(CropComponent)
-            soil.remove_component(CropGrowthComponent)
-            soil.remove_component(HarvestableComponent)
+            operations.extend(
+                (
+                    RemoveComponent(soil_id, CropComponent),
+                    RemoveComponent(soil_id, CropGrowthComponent),
+                    RemoveComponent(soil_id, HarvestableComponent),
+                )
+            )
         if soil.has_component(WateredComponent):
-            soil.remove_component(WateredComponent)
-        return ok(
-            CropHarvestedEvent(
+            operations.append(RemoveComponent(soil_id, WateredComponent))
+
+        def harvested_event() -> DomainEvent:
+            item_id = str(item.require())
+            return CropHarvestedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
@@ -1513,7 +1552,8 @@ class HarvestCropHandler:
                     quantity=quantity,
                 )
             )
-        )
+
+        return planned(MutationPlan(tuple(operations)), harvested_event, ctx=ctx)
 
 
 class ClearDeadCropHandler:
@@ -1535,14 +1575,15 @@ class ClearDeadCropHandler:
         if not crop.dead:
             return rejected("crop is not dead")
 
-        soil.remove_component(CropComponent)
+        operations = [RemoveComponent(soil_id, CropComponent)]
         if soil.has_component(CropGrowthComponent):
-            soil.remove_component(CropGrowthComponent)
+            operations.append(RemoveComponent(soil_id, CropGrowthComponent))
         if soil.has_component(HarvestableComponent):
-            soil.remove_component(HarvestableComponent)
+            operations.append(RemoveComponent(soil_id, HarvestableComponent))
         if soil.has_component(WateredComponent):
-            soil.remove_component(WateredComponent)
-        return ok(
+            operations.append(RemoveComponent(soil_id, WateredComponent))
+        return planned(
+            MutationPlan(tuple(operations)),
             DeadCropClearedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1552,7 +1593,8 @@ class ClearDeadCropHandler:
                     soil_id=str(soil_id),
                     crop_type=crop.crop_type,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1579,11 +1621,22 @@ class TapTreeHandler:
         if tree.has_component(TreeTapComponent):
             return rejected("tree is already tapped")
 
-        tree.add_component(
-            TreeTapComponent(tapped_at_epoch=ctx.epoch, last_collected_epoch=ctx.epoch)
-        )
-        tree.add_component(HarvestableComponent(yield_item="maple sap", quantity=4))
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    AddComponent(
+                        tree_id,
+                        TreeTapComponent(
+                            tapped_at_epoch=ctx.epoch,
+                            last_collected_epoch=ctx.epoch,
+                        ),
+                    ),
+                    AddComponent(
+                        tree_id,
+                        HarvestableComponent(yield_item="maple sap", quantity=4),
+                    ),
+                )
+            ),
             TreeTappedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1593,7 +1646,8 @@ class TapTreeHandler:
                     tree_id=str(tree_id),
                     tree_type=component.tree_type,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1617,7 +1671,6 @@ class HarvestSapHandler:
             return rejected("invalid character or tree id")
         if not ctx.world.has_entity(tree_id):
             return rejected("tree does not exist")
-        character = ctx.entity(character_id)
         tree = _reachable_entity(ctx.world, character_id, tree_id)
         if tree is None:
             return rejected("tree is not reachable")
@@ -1634,18 +1687,33 @@ class HarvestSapHandler:
         if not harvestable.ready:
             return rejected("sap is not ready")
 
-        item_id = _spawn_sap_item(
-            ctx.world,
-            character,
-            component.tree_type,
-            harvestable.yield_item,
-            harvestable.quantity,
+        item = EntityReference()
+        label = (
+            f"{harvestable.yield_item} x{harvestable.quantity}"
+            if harvestable.quantity != 1
+            else harvestable.yield_item
         )
         tap = tree.get_component(TreeTapComponent)
-        replace_component(tree, replace(tap, last_collected_epoch=ctx.epoch))
-        replace_component(tree, replace(harvestable, ready=False))
-        return ok(
-            SapHarvestedEvent(
+        operations = (
+            AddEntity(
+                (
+                    IdentityComponent(name=label, kind="resource", tags=(component.tree_type,)),
+                    PortableComponent(can_pick_up=True),
+                    ResourceStackComponent(
+                        resource_type=harvestable.yield_item,
+                        quantity=harvestable.quantity,
+                    ),
+                ),
+                reference=item,
+            ),
+            AddEdge(character_id, item, Contains(mode=ContainmentMode.INVENTORY)),
+            SetComponent(tree_id, replace(tap, last_collected_epoch=ctx.epoch)),
+            SetComponent(tree_id, replace(harvestable, ready=False)),
+        )
+
+        def sap_event() -> DomainEvent:
+            item_id = str(item.require())
+            return SapHarvestedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
@@ -1657,7 +1725,8 @@ class HarvestSapHandler:
                     quantity=harvestable.quantity,
                 )
             )
-        )
+
+        return planned(MutationPlan(operations), sap_event, ctx=ctx)
 
 
 class StartMachineHandler:
@@ -1700,18 +1769,27 @@ class StartMachineHandler:
                     break
             if not found:
                 return rejected("missing processing inputs")
+        operations = []
         for resource_type, quantity in recipe.inputs.items():
-            _consume_resource_stack(character, ctx.world, resource_type, quantity)
+            operations.extend(
+                _consume_resource_operations(character, ctx.world, resource_type, quantity)
+            )
         ready_at = ctx.epoch + recipe.duration_seconds
-        replace_component(machine, replace(machine_component, busy=True))
-        machine.add_component(
-            ProcessingTaskComponent(
-                recipe_id=recipe.recipe_id,
-                started_at_epoch=ctx.epoch,
-                ready_at_epoch=ready_at,
+        operations.extend(
+            (
+                SetComponent(machine_id, replace(machine_component, busy=True)),
+                AddComponent(
+                    machine_id,
+                    ProcessingTaskComponent(
+                        recipe_id=recipe.recipe_id,
+                        started_at_epoch=ctx.epoch,
+                        ready_at_epoch=ready_at,
+                    ),
+                ),
             )
         )
-        return ok(
+        return planned(
+            MutationPlan(tuple(operations)),
             MachineProcessingStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1722,7 +1800,8 @@ class StartMachineHandler:
                     recipe_id=recipe.recipe_id,
                     ready_at_epoch=ready_at,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1736,7 +1815,6 @@ class CollectMachineOutputHandler:
             return rejected("invalid character or machine id")
         if not ctx.world.has_entity(machine_id):
             return rejected("machine does not exist")
-        character = ctx.entity(character_id)
         machine = _reachable_entity(ctx.world, character_id, machine_id)
         if machine is None:
             return rejected("machine is not reachable")
@@ -1751,20 +1829,38 @@ class CollectMachineOutputHandler:
         recipe = _find_processing_recipe(ctx.world, task.recipe_id, machine_component.machine_type)
         if recipe is None:
             return rejected("processing recipe does not exist")
-        output_ids = tuple(
-            _spawn_product_item(
-                ctx.world,
-                character,
-                resource_type,
-                quantity,
-                metadata=recipe.output_entities.get(resource_type),
+        outputs = []
+        operations = []
+        for resource_type, quantity in recipe.outputs.items():
+            output = EntityReference()
+            outputs.append(output)
+            operations.extend(
+                (
+                    AddEntity(
+                        _product_components(
+                            resource_type,
+                            quantity,
+                            metadata=recipe.output_entities.get(resource_type),
+                        ),
+                        reference=output,
+                    ),
+                    AddEdge(
+                        character_id,
+                        output,
+                        Contains(mode=ContainmentMode.INVENTORY),
+                    ),
+                )
             )
-            for resource_type, quantity in recipe.outputs.items()
+        operations.extend(
+            (
+                RemoveComponent(machine_id, ProcessingTaskComponent),
+                SetComponent(machine_id, replace(machine_component, busy=False)),
+            )
         )
-        machine.remove_component(ProcessingTaskComponent)
-        replace_component(machine, replace(machine_component, busy=False))
-        return ok(
-            MachineOutputCollectedEvent(
+
+        def output_event() -> DomainEvent:
+            output_ids = tuple(str(output.require()) for output in outputs)
+            return MachineOutputCollectedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
@@ -1775,7 +1871,8 @@ class CollectMachineOutputHandler:
                     output_ids=output_ids,
                 )
             )
-        )
+
+        return planned(MutationPlan(tuple(operations)), output_event, ctx=ctx)
 
 
 class CancelMachineHandler:
@@ -1797,9 +1894,13 @@ class CancelMachineHandler:
             return rejected("machine has no task")
         task = machine.get_component(ProcessingTaskComponent)
         machine_component = machine.get_component(MachineComponent)
-        machine.remove_component(ProcessingTaskComponent)
-        replace_component(machine, replace(machine_component, busy=False))
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    RemoveComponent(machine_id, ProcessingTaskComponent),
+                    SetComponent(machine_id, replace(machine_component, busy=False)),
+                )
+            ),
             MachineProcessingCancelledEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1809,7 +1910,8 @@ class CancelMachineHandler:
                     machine_id=str(machine_id),
                     recipe_id=task.recipe_id,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1829,13 +1931,16 @@ class RepairMachineHandler:
         if not machine.has_component(MachineComponent):
             return rejected("target is not a machine")
         machine_component = machine.get_component(MachineComponent)
-        replace_component(
-            machine,
-            replace(machine_component, quality=max(0.8, machine_component.quality)),
-        )
+        operations = [
+            SetComponent(
+                machine_id,
+                replace(machine_component, quality=max(0.8, machine_component.quality)),
+            )
+        ]
         if machine.has_component(MachineBreakdownComponent):
-            machine.remove_component(MachineBreakdownComponent)
-        return ok(
+            operations.append(RemoveComponent(machine_id, MachineBreakdownComponent))
+        return planned(
+            MutationPlan(tuple(operations)),
             MachineRepairedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1844,7 +1949,8 @@ class RepairMachineHandler:
                     target_ids=(str(machine_id),),
                     machine_id=str(machine_id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1865,18 +1971,23 @@ class FeedAnimalHandler:
             return rejected("animal is not reachable")
         if not animal.has_component(FarmAnimalComponent):
             return rejected("target is not a farm animal")
-        if not _consume_resource_stack(character, ctx.world, feed_type, 1):
+        feed = _stack_in_inventory(character, ctx.world, feed_type)
+        if feed is None or feed.get_component(ResourceStackComponent).quantity < 1:
             return rejected("missing animal feed")
         component = animal.get_component(FarmAnimalComponent)
-        replace_component(
-            animal,
-            replace(
-                component,
-                fed_until_epoch=ctx.epoch + SECONDS_PER_DAY,
-                mood=min(100.0, component.mood + 15.0),
+        operations = [
+            *_consume_resource_operations(character, ctx.world, feed_type, 1),
+            SetComponent(
+                animal_id,
+                replace(
+                    component,
+                    fed_until_epoch=ctx.epoch + SECONDS_PER_DAY,
+                    mood=min(100.0, component.mood + 15.0),
+                ),
             ),
-        )
-        return ok(
+        ]
+        return planned(
+            MutationPlan(tuple(operations)),
             AnimalFedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1886,7 +1997,8 @@ class FeedAnimalHandler:
                     animal_id=str(animal_id),
                     feed_type=feed_type,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1912,16 +2024,20 @@ class PetAnimalHandler:
         ):
             return rejected("animal already petted today")
         friendship = min(100.0, component.friendship + 5.0)
-        replace_component(
-            animal,
-            replace(
-                component,
-                friendship=friendship,
-                mood=min(100.0, component.mood + 5.0),
-                last_petted_epoch=ctx.epoch,
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        animal_id,
+                        replace(
+                            component,
+                            friendship=friendship,
+                            mood=min(100.0, component.mood + 5.0),
+                            last_petted_epoch=ctx.epoch,
+                        ),
+                    ),
+                )
             ),
-        )
-        return ok(
             AnimalPettedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1931,7 +2047,8 @@ class PetAnimalHandler:
                     animal_id=str(animal_id),
                     friendship=friendship,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1960,15 +2077,19 @@ class BreedAnimalHandler:
         if mate.get_component(FarmAnimalComponent).species != species:
             return rejected("animals are different species")
         due_epoch = ctx.epoch + int(command.payload.get("gestation_seconds", SECONDS_PER_DAY))
-        replace_component(
-            animal,
-            AnimalBreedingComponent(
-                mate_id=str(mate_id),
-                due_epoch=due_epoch,
-                offspring_species=species,
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        animal_id,
+                        AnimalBreedingComponent(
+                            mate_id=str(mate_id),
+                            due_epoch=due_epoch,
+                            offspring_species=species,
+                        ),
+                    ),
+                )
             ),
-        )
-        return ok(
             AnimalBredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1979,7 +2100,8 @@ class BreedAnimalHandler:
                     mate_id=str(mate_id),
                     due_epoch=due_epoch,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1993,7 +2115,6 @@ class CollectAnimalProductHandler:
             return rejected("invalid character or animal id")
         if not ctx.world.has_entity(animal_id):
             return rejected("animal does not exist")
-        character = ctx.entity(character_id)
         animal = _reachable_entity(ctx.world, character_id, animal_id)
         if animal is None:
             return rejected("animal is not reachable")
@@ -2002,19 +2123,11 @@ class CollectAnimalProductHandler:
         product = animal.get_component(AnimalProductComponent)
         if not product.ready:
             return rejected("animal product is not ready")
-        item_id = _spawn_product_item(
-            ctx.world,
-            character,
-            product.product_type,
-            product.quantity,
-            kind="animal_product",
-        )
-        replace_component(
-            animal,
-            replace(product, ready=False, last_produced_epoch=ctx.epoch),
-        )
-        return ok(
-            AnimalProductCollectedEvent(
+        item = EntityReference()
+
+        def product_event() -> DomainEvent:
+            item_id = str(item.require())
+            return AnimalProductCollectedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
@@ -2026,6 +2139,27 @@ class CollectAnimalProductHandler:
                     quantity=product.quantity,
                 )
             )
+
+        return planned(
+            MutationPlan(
+                (
+                    AddEntity(
+                        _product_components(
+                            product.product_type,
+                            product.quantity,
+                            kind="animal_product",
+                        ),
+                        reference=item,
+                    ),
+                    AddEdge(character_id, item, Contains(mode=ContainmentMode.INVENTORY)),
+                    SetComponent(
+                        animal_id,
+                        replace(product, ready=False, last_produced_epoch=ctx.epoch),
+                    ),
+                )
+            ),
+            product_event,
+            ctx=ctx,
         )
 
 
@@ -2049,15 +2183,32 @@ class FishHandler:
         season = _current_season(ctx.world)
         if fishing.season is not None and season != fishing.season:
             return rejected("fish is not available this season")
-        if fishing.required_bait and not _consume_resource_stack(
-            character, ctx.world, fishing.required_bait, 1
-        ):
-            return rejected("missing bait")
-        item_id = _spawn_product_item(
-            ctx.world, character, fishing.fish_type, fishing.quantity, kind="fish"
+        operations = []
+        if fishing.required_bait:
+            bait = _stack_in_inventory(character, ctx.world, fishing.required_bait)
+            if bait is None or bait.get_component(ResourceStackComponent).quantity < 1:
+                return rejected("missing bait")
+            operations.extend(
+                _consume_resource_operations(character, ctx.world, fishing.required_bait, 1)
+            )
+        item = EntityReference()
+        operations.extend(
+            (
+                AddEntity(
+                    _product_components(
+                        fishing.fish_type,
+                        fishing.quantity,
+                        kind="fish",
+                    ),
+                    reference=item,
+                ),
+                AddEdge(character_id, item, Contains(mode=ContainmentMode.INVENTORY)),
+            )
         )
-        return ok(
-            FishCaughtEvent(
+
+        def fish_event() -> DomainEvent:
+            item_id = str(item.require())
+            return FishCaughtEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
@@ -2069,7 +2220,8 @@ class FishHandler:
                     quantity=fishing.quantity,
                 )
             )
-        )
+
+        return planned(MutationPlan(tuple(operations)), fish_event, ctx=ctx)
 
 
 class MineHandler:
@@ -2082,18 +2234,17 @@ class MineHandler:
             return rejected("invalid character or mining node id")
         if not ctx.world.has_entity(node_id):
             return rejected("mining node does not exist")
-        character = ctx.entity(character_id)
         node = _reachable_entity(ctx.world, character_id, node_id)
         if node is None:
             return rejected("mining node is not reachable")
         if not node.has_component(MiningNodeComponent):
             return rejected("target is not a mining node")
         mining = node.get_component(MiningNodeComponent)
-        item_id = _spawn_product_item(ctx.world, character, mining.resource_type, mining.quantity)
-        _remove_from_container(ctx.world, node_id)
-        ctx.world.remove(node_id)
-        return ok(
-            MiningNodeMinedEvent(
+        item = EntityReference()
+
+        def mined_event() -> DomainEvent:
+            item_id = str(item.require())
+            return MiningNodeMinedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
@@ -2105,6 +2256,20 @@ class MineHandler:
                     quantity=mining.quantity,
                 )
             )
+
+        return planned(
+            MutationPlan(
+                (
+                    AddEntity(
+                        _product_components(mining.resource_type, mining.quantity),
+                        reference=item,
+                    ),
+                    AddEdge(character_id, item, Contains(mode=ContainmentMode.INVENTORY)),
+                    DeleteEntity(node_id),
+                )
+            ),
+            mined_event,
+            ctx=ctx,
         )
 
 
@@ -2124,8 +2289,8 @@ class DiscoverLadderHandler:
         if not ladder_entity.has_component(LadderComponent):
             return rejected("target is not a ladder")
         ladder = ladder_entity.get_component(LadderComponent)
-        replace_component(ladder_entity, replace(ladder, discovered=True))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(ladder_id, replace(ladder, discovered=True)),)),
             LadderDiscoveredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2135,7 +2300,8 @@ class DiscoverLadderHandler:
                     ladder_id=str(ladder_id),
                     target_room_id=ladder.target_room_id,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2156,17 +2322,11 @@ class OpenGeodeHandler:
         if not geode.has_component(GeodeComponent):
             return rejected("target is not a geode")
         component = geode.get_component(GeodeComponent)
-        item_id = _spawn_product_item(
-            ctx.world,
-            character,
-            component.resource_type,
-            component.quantity,
-            kind="mineral",
-        )
-        _remove_from_container(ctx.world, geode_id)
-        ctx.world.remove(geode_id)
-        return ok(
-            GeodeOpenedEvent(
+        item = EntityReference()
+
+        def geode_event() -> DomainEvent:
+            item_id = str(item.require())
+            return GeodeOpenedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
@@ -2177,6 +2337,24 @@ class OpenGeodeHandler:
                     quantity=component.quantity,
                 )
             )
+
+        return planned(
+            MutationPlan(
+                (
+                    AddEntity(
+                        _product_components(
+                            component.resource_type,
+                            component.quantity,
+                            kind="mineral",
+                        ),
+                        reference=item,
+                    ),
+                    AddEdge(character_id, item, Contains(mode=ContainmentMode.INVENTORY)),
+                    DeleteEntity(geode_id),
+                )
+            ),
+            geode_event,
+            ctx=ctx,
         )
 
 
@@ -2190,7 +2368,6 @@ class ForageHandler:
             return rejected("invalid character or forage id")
         if not ctx.world.has_entity(forage_id):
             return rejected("forage does not exist")
-        character = ctx.entity(character_id)
         forage = _reachable_entity(ctx.world, character_id, forage_id)
         if forage is None:
             return rejected("forage is not reachable")
@@ -2200,13 +2377,11 @@ class ForageHandler:
         season = _current_season(ctx.world)
         if season is not None and component.seasons and season not in component.seasons:
             return rejected("forage is not available this season")
-        item_id = _spawn_product_item(
-            ctx.world, character, component.resource_type, component.quantity
-        )
-        _remove_from_container(ctx.world, forage_id)
-        ctx.world.remove(forage_id)
-        return ok(
-            ForageCollectedEvent(
+        item = EntityReference()
+
+        def forage_event() -> DomainEvent:
+            item_id = str(item.require())
+            return ForageCollectedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
@@ -2218,6 +2393,20 @@ class ForageHandler:
                     quantity=component.quantity,
                 )
             )
+
+        return planned(
+            MutationPlan(
+                (
+                    AddEntity(
+                        _product_components(component.resource_type, component.quantity),
+                        reference=item,
+                    ),
+                    AddEdge(character_id, item, Contains(mode=ContainmentMode.INVENTORY)),
+                    DeleteEntity(forage_id),
+                )
+            ),
+            forage_event,
+            ctx=ctx,
         )
 
 
@@ -2259,10 +2448,14 @@ class GiveGiftHandler:
             else FriendshipComponent()
         )
         updated = FriendshipComponent(points=max(-100.0, min(100.0, friendship.points + delta)))
-        replace_component(target, updated)
-        character.remove_relationship(Contains, item_id)
-        target.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item_id)
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(target_id, updated),
+                    RemoveEdge(character_id, item_id, Contains),
+                    AddEdge(target_id, item_id, Contains(mode=ContainmentMode.INVENTORY)),
+                )
+            ),
             GiftGivenEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2273,7 +2466,8 @@ class GiveGiftHandler:
                     item_id=str(item_id),
                     friendship=updated.points,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2297,9 +2491,13 @@ class JoinFestivalHandler:
         if season is not None and component.season != season:
             return rejected("festival is not active this season")
         character = ctx.entity(character_id)
-        if not character.has_relationship(MemberOfFestival, festival_id):
-            character.add_relationship(MemberOfFestival(), festival_id)
-        return ok(
+        operations = (
+            ()
+            if character.has_relationship(MemberOfFestival, festival_id)
+            else (AddEdge(character_id, festival_id, MemberOfFestival()),)
+        )
+        return planned(
+            MutationPlan(operations),
             FestivalJoinedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2309,7 +2507,8 @@ class JoinFestivalHandler:
                     festival_id=str(festival_id),
                     name=component.name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2342,15 +2541,23 @@ class ContributeBundleHandler:
         already = component.contributed.get(resource_type, 0)
         if required <= 0 or already + quantity > required:
             return rejected("bundle does not need that contribution")
-        if not _consume_resource_stack(character, ctx.world, resource_type, quantity):
+        stack = _stack_in_inventory(character, ctx.world, resource_type)
+        if stack is None or stack.get_component(ResourceStackComponent).quantity < quantity:
             return rejected("missing bundle resource")
         contributed = dict(component.contributed)
         contributed[resource_type] = already + quantity
         completed = all(
             contributed.get(kind, 0) >= amount for kind, amount in component.requirements.items()
         )
-        replace_component(bundle, replace(component, contributed=contributed, completed=completed))
-        return ok(
+        operations = [
+            *_consume_resource_operations(character, ctx.world, resource_type, quantity),
+            SetComponent(
+                bundle_id,
+                replace(component, contributed=contributed, completed=completed),
+            ),
+        ]
+        return planned(
+            MutationPlan(tuple(operations)),
             BundleContributedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2362,7 +2569,8 @@ class ContributeBundleHandler:
                     quantity=quantity,
                     completed=completed,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2376,7 +2584,6 @@ class ClaimMailHandler:
             return rejected("invalid character or mail id")
         if not ctx.world.has_entity(mail_id):
             return rejected("mail does not exist")
-        character = ctx.entity(character_id)
         mail = _reachable_entity(ctx.world, character_id, mail_id)
         if mail is None:
             return rejected("mail is not reachable")
@@ -2385,15 +2592,28 @@ class ClaimMailHandler:
         component = mail.get_component(MailComponent)
         if component.claimed:
             return rejected("mail already claimed")
+        operations = []
         if component.reward_resource and component.reward_quantity > 0:
-            _spawn_product_item(
-                ctx.world,
-                character,
-                component.reward_resource,
-                component.reward_quantity,
+            reward = EntityReference()
+            operations.extend(
+                (
+                    AddEntity(
+                        _product_components(
+                            component.reward_resource,
+                            component.reward_quantity,
+                        ),
+                        reference=reward,
+                    ),
+                    AddEdge(
+                        character_id,
+                        reward,
+                        Contains(mode=ContainmentMode.INVENTORY),
+                    ),
+                )
             )
-        replace_component(mail, replace(component, claimed=True))
-        return ok(
+        operations.append(SetComponent(mail_id, replace(component, claimed=True)))
+        return planned(
+            MutationPlan(tuple(operations)),
             MailClaimedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2402,7 +2622,8 @@ class ClaimMailHandler:
                     mail_id=str(mail_id),
                     subject=component.subject,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2438,19 +2659,35 @@ class CompleteFarmQuestHandler:
             )
             if stack is None or stack.get_component(ResourceStackComponent).quantity < quantity:
                 return rejected("missing quest items")
+        operations = []
         for resource_type, quantity in component.requested.items():
-            _consume_resource_stack(character, ctx.world, resource_type, quantity)
-        reward_item_id = None
-        if component.reward_resource and component.reward_quantity > 0:
-            reward_item_id = _spawn_product_item(
-                ctx.world,
-                character,
-                component.reward_resource,
-                component.reward_quantity,
+            operations.extend(
+                _consume_resource_operations(character, ctx.world, resource_type, quantity)
             )
-        replace_component(quest, replace(component, completed=True))
-        return ok(
-            FarmQuestCompletedEvent(
+        reward_item = None
+        if component.reward_resource and component.reward_quantity > 0:
+            reward_item = EntityReference()
+            operations.extend(
+                (
+                    AddEntity(
+                        _product_components(
+                            component.reward_resource,
+                            component.reward_quantity,
+                        ),
+                        reference=reward_item,
+                    ),
+                    AddEdge(
+                        character_id,
+                        reward_item,
+                        Contains(mode=ContainmentMode.INVENTORY),
+                    ),
+                )
+            )
+        operations.append(SetComponent(quest_id, replace(component, completed=True)))
+
+        def quest_event() -> DomainEvent:
+            reward_item_id = str(reward_item.require()) if reward_item is not None else None
+            return FarmQuestCompletedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
@@ -2460,7 +2697,8 @@ class CompleteFarmQuestHandler:
                     reward_item_id=reward_item_id,
                 )
             )
-        )
+
+        return planned(MutationPlan(tuple(operations)), quest_event, ctx=ctx)
 
 
 class ShipItemsHandler:
@@ -2486,16 +2724,23 @@ class ShipItemsHandler:
             return rejected("shipping bin is not reachable")
         if not shipping_bin.has_component(ShippingBinComponent):
             return rejected("target is not a shipping bin")
-        if not _consume_resource_stack(character, ctx.world, resource_type, quantity):
+        stack = _stack_in_inventory(character, ctx.world, resource_type)
+        if stack is None or stack.get_component(ResourceStackComponent).quantity < quantity:
             return rejected("missing shipped resource")
         component = shipping_bin.get_component(ShippingBinComponent)
         shipped = dict(component.shipped)
         shipped[resource_type] = shipped.get(resource_type, 0) + quantity
         earnings = quantity * unit_price
-        replace_component(
-            shipping_bin,
-            ShippingBinComponent(shipped=shipped, earnings=component.earnings + earnings),
-        )
+        operations = [
+            *_consume_resource_operations(character, ctx.world, resource_type, quantity),
+            SetComponent(
+                bin_id,
+                ShippingBinComponent(
+                    shipped=shipped,
+                    earnings=component.earnings + earnings,
+                ),
+            ),
+        ]
         events: list[DomainEvent] = [
             ItemsShippedEvent(
                 **ctx.event_base(
@@ -2510,7 +2755,9 @@ class ShipItemsHandler:
                 )
             )
         ]
-        if _record_collection(ctx.world, character, resource_type):
+        collection = _collection_component(character, resource_type)
+        if collection is not None:
+            operations.append(SetComponent(character_id, collection))
             events.append(
                 CollectionUpdatedEvent(
                     **ctx.event_base(
@@ -2520,7 +2767,7 @@ class ShipItemsHandler:
                     )
                 )
             )
-        return ok(*events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class DonateMuseumHandler:
@@ -2545,10 +2792,14 @@ class DonateMuseumHandler:
         component = museum.get_component(MuseumCollectionComponent)
         if resource_type in component.donated:
             return rejected("museum already has that donation")
-        if not _consume_resource_stack(character, ctx.world, resource_type, 1):
+        stack = _stack_in_inventory(character, ctx.world, resource_type)
+        if stack is None or stack.get_component(ResourceStackComponent).quantity < 1:
             return rejected("missing donation resource")
         donated = tuple(sorted({*component.donated, resource_type}))
-        replace_component(museum, MuseumCollectionComponent(donated=donated))
+        operations = [
+            *_consume_resource_operations(character, ctx.world, resource_type, 1),
+            SetComponent(museum_id, MuseumCollectionComponent(donated=donated)),
+        ]
         events: list[DomainEvent] = [
             MuseumDonatedEvent(
                 **ctx.event_base(
@@ -2561,7 +2812,9 @@ class DonateMuseumHandler:
                 )
             )
         ]
-        if _record_collection(ctx.world, character, resource_type):
+        collection = _collection_component(character, resource_type)
+        if collection is not None:
+            operations.append(SetComponent(character_id, collection))
             events.append(
                 CollectionUpdatedEvent(
                     **ctx.event_base(
@@ -2571,7 +2824,7 @@ class DonateMuseumHandler:
                     )
                 )
             )
-        return ok(*events)
+        return planned(MutationPlan(tuple(operations)), *events, ctx=ctx)
 
 
 class ClaimRewardHandler:
@@ -2584,7 +2837,6 @@ class ClaimRewardHandler:
             return rejected("invalid character or reward id")
         if not ctx.world.has_entity(reward_id):
             return rejected("reward does not exist")
-        character = ctx.entity(character_id)
         reward = _reachable_entity(ctx.world, character_id, reward_id)
         if reward is None:
             return rejected("reward is not reachable")
@@ -2593,15 +2845,11 @@ class ClaimRewardHandler:
         component = reward.get_component(RewardComponent)
         if component.claimed:
             return rejected("reward already claimed")
-        item_id = _spawn_product_item(
-            ctx.world,
-            character,
-            component.resource_type,
-            component.quantity,
-        )
-        replace_component(reward, replace(component, claimed=True))
-        return ok(
-            RewardClaimedEvent(
+        item = EntityReference()
+
+        def reward_event() -> DomainEvent:
+            item_id = str(item.require())
+            return RewardClaimedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
@@ -2610,6 +2858,20 @@ class ClaimRewardHandler:
                     item_id=item_id,
                 )
             )
+
+        return planned(
+            MutationPlan(
+                (
+                    AddEntity(
+                        _product_components(component.resource_type, component.quantity),
+                        reference=item,
+                    ),
+                    AddEdge(character_id, item, Contains(mode=ContainmentMode.INVENTORY)),
+                    SetComponent(reward_id, replace(component, claimed=True)),
+                )
+            ),
+            reward_event,
+            ctx=ctx,
         )
 
 

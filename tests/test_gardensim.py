@@ -128,6 +128,7 @@ from bunnyland.simpacks.gardensim.mechanics import (
     WeedComponent,
     WeedCropHandler,
     gardensim_fragments,
+    install_gardensim,
 )
 
 DAY = 24 * 60 * 60
@@ -854,9 +855,7 @@ async def test_fishing_mining_foraging_gifts_festivals_and_bundles():
     assert friend.get_component(FriendshipComponent).points == 10.0
     assert scenario.actor.world.get_entity(scenario.character).get_relationships(
         MemberOfFestival
-    ) == [
-        (MemberOfFestival(), festival.id)
-    ]
+    ) == [(MemberOfFestival(), festival.id)]
     assert bundle.get_component(BundleComponent).completed is True
 
 
@@ -3653,6 +3652,73 @@ def test_record_collection_returns_false_for_existing_entry_directly():
     # A new entry returns True and is recorded.
     assert _record_collection(world, character, "opal") is True
     assert "opal" in character.get_component(CollectionComponent).entries
+
+
+def test_plan_migration_alternate_dispatch_and_optional_operations():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    character = world.get_entity(scenario.character)
+    soil = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="ready bed", kind="soil"),
+            CropComponent(crop_type="turnip", planted_at_epoch=0, ready=True),
+            CropGrowthComponent(progress_days=1.0, required_days=1.0, last_updated_epoch=0),
+            HarvestableComponent(yield_item="turnip", quantity=1, ready=True),
+            WateredComponent(watered_at_epoch=0, expires_at_epoch=DAY),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), soil.id)
+
+    inspect = InspectCropHandler()
+    harvest = HarvestCropHandler()
+    target_command = _handler_cmd(scenario, "inspect", target_id=str(soil.id))
+    assert inspect.can_handle(ctx, target_command) is True
+    assert harvest.can_handle(ctx, target_command) is True
+    invalid_target = _handler_cmd(scenario, "inspect", target_id="not-an-id")
+    assert inspect.can_handle(ctx, invalid_target) is False
+    assert harvest.can_handle(ctx, invalid_target) is False
+    missing_target = _handler_cmd(scenario, "inspect", target_id="entity_999")
+    assert inspect.can_handle(ctx, missing_target) is False
+    assert harvest.can_handle(ctx, missing_target) is False
+    wrong_target = _handler_cmd(scenario, "inspect", target_id=str(scenario.room_a))
+    assert inspect.can_handle(ctx, wrong_target) is False
+    assert harvest.can_handle(ctx, wrong_target) is False
+
+    result = harvest.execute(
+        ctx,
+        _handler_cmd(scenario, "harvest", target_id=str(soil.id)),
+    )
+    assert result.ok is True
+    assert not soil.has_component(WateredComponent)
+
+    bait = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="bait", kind="resource"),
+            ResourceStackComponent(resource_type="bait", quantity=1),
+            PortableComponent(can_pick_up=True),
+        ],
+    )
+    spot = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="bait pond", kind="water"),
+            FishingSpotComponent(fish_type="catfish", required_bait="bait"),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), bait.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), spot.id)
+    result = FishHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "fish", spot_id=str(spot.id)),
+    )
+    assert result.ok is True
+    assert bait.id not in contents(character)
+
+    install_gardensim(scenario.actor)
 
 
 def test_animal_birth_skips_when_not_due_and_handles_uncontained_parent_directly():
