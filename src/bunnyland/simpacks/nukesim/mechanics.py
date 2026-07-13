@@ -30,26 +30,39 @@ from ...core.components import (
     SuspendedComponent,
 )
 from ...core.ecs import (
-    entity_name as _name,
-)
-from ...core.ecs import (
+    container_of,
     parse_entity_id,
     reachable_ids,
     replace_component,
-    spawn_entity,
+)
+from ...core.ecs import (
+    entity_name as _name,
 )
 from ...core.ecs import (
     reachable_component as _reachable_component,
-)
-from ...core.ecs import (
-    remove_from_container as _remove_from_container,
 )
 from ...core.ecs import (
     room_id_for as _room_id,
 )
 from ...core.edges import ContainmentMode, Contains
 from ...core.events import DomainEvent, EventVisibility, event_base
-from ...core.handlers import HandlerContext, HandlerResult, ok, rejected, require_character
+from ...core.handlers import (
+    HandlerContext,
+    HandlerResult,
+    planned,
+    rejected,
+    require_character,
+)
+from ...core.mutations import (
+    AddComponent,
+    AddEdge,
+    AddEntity,
+    EntityReference,
+    MutationOperation,
+    MutationPlan,
+    RemoveEdge,
+    SetComponent,
+)
 from ...prompts import ComponentPromptContext
 
 SECONDS_PER_HOUR = 60 * 60
@@ -559,33 +572,44 @@ def _resource_stack_in_inventory(
     return None
 
 
-def _add_resource_stack(character: Entity, world: World, resource_type: str, quantity: int) -> str:
+def _add_resource_operations(
+    character: Entity,
+    world: World,
+    resource_type: str,
+    quantity: int,
+) -> tuple[list[MutationOperation], EntityId | EntityReference]:
     existing = _resource_stack_in_inventory(character, world, resource_type)
     if existing is not None:
         stack = existing.get_component(ResourceStackComponent)
         updated = replace(stack, quantity=stack.quantity + quantity)
-        replace_component(existing, updated)
-        replace_component(
-            existing,
-            IdentityComponent(name=_stack_name(resource_type, updated.quantity), kind="resource"),
-        )
-        return str(existing.id)
+        return [
+            SetComponent(existing.id, updated),
+            SetComponent(
+                existing.id,
+                IdentityComponent(
+                    name=_stack_name(resource_type, updated.quantity),
+                    kind="resource",
+                ),
+            ),
+        ], existing.id
 
-    item = spawn_entity(
-        world,
-        [
-            IdentityComponent(name=_stack_name(resource_type, quantity), kind="resource"),
-            ResourceStackComponent(resource_type=resource_type, quantity=quantity),
-            PortableComponent(can_pick_up=True),
-        ],
-    )
-    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
-    return str(item.id)
+    item = EntityReference()
+    return [
+        AddEntity(
+            (
+                IdentityComponent(name=_stack_name(resource_type, quantity), kind="resource"),
+                ResourceStackComponent(resource_type=resource_type, quantity=quantity),
+                PortableComponent(can_pick_up=True),
+            ),
+            reference=item,
+        ),
+        AddEdge(character.id, item, Contains(mode=ContainmentMode.INVENTORY)),
+    ], item
 
 
-def _spend_inventory_resource(
+def _spend_inventory_resource_operations(
     character: Entity, world: World, resource_type: str, quantity: int
-) -> bool:
+) -> list[MutationOperation] | None:
     stack_entity = _resource_stack_in_inventory(character, world, resource_type)
     have = (
         stack_entity.get_component(ResourceStackComponent).quantity
@@ -593,18 +617,23 @@ def _spend_inventory_resource(
         else 0
     )
     if have < quantity:
-        return False
+        return None
+    assert stack_entity is not None
     stack = stack_entity.get_component(ResourceStackComponent)
     remaining = stack.quantity - quantity
     if remaining > 0:
-        replace_component(stack_entity, replace(stack, quantity=remaining))
-        replace_component(
-            stack_entity,
-            IdentityComponent(name=_stack_name(resource_type, remaining), kind="resource"),
-        )
-    else:
-        _remove_from_container(world, stack_entity.id)
-    return True
+        return [
+            SetComponent(stack_entity.id, replace(stack, quantity=remaining)),
+            SetComponent(
+                stack_entity.id,
+                IdentityComponent(name=_stack_name(resource_type, remaining), kind="resource"),
+            ),
+        ]
+    return [RemoveEdge(character.id, stack_entity.id, Contains)]
+
+
+def _entity_target_id(target: EntityId | EntityReference) -> str:
+    return str(target.require() if isinstance(target, EntityReference) else target)
 
 
 def _radiation_protection(world: World, character: Entity) -> float:
@@ -637,7 +666,7 @@ def _radiation_pressure(character: Entity) -> RadiationMutationPressureComponent
     return RadiationMutationPressureComponent()
 
 
-def _apply_radiation(
+def _radiation_operations(
     world: World,
     epoch: int,
     character: Entity,
@@ -648,9 +677,9 @@ def _apply_radiation(
     mutation_pressure_per_rad: float,
     sickness_per_rad: float,
     visibility: EventVisibility = EventVisibility.PRIVATE,
-) -> list[DomainEvent]:
+) -> tuple[list[MutationOperation], list[DomainEvent]]:
     if amount <= 0.0:
-        return []
+        return [], []
 
     dose = (
         character.get_component(RadiationDoseComponent)
@@ -658,7 +687,6 @@ def _apply_radiation(
         else RadiationDoseComponent()
     )
     updated_dose = replace(dose, amount=dose.amount + amount, last_updated_epoch=epoch)
-    replace_component(character, updated_dose)
 
     resistance = (
         character.get_component(MutationResistanceComponent)
@@ -674,7 +702,6 @@ def _apply_radiation(
         amount=pressure.amount + pressure_delta,
         last_updated_epoch=epoch,
     )
-    replace_component(character, updated_pressure)
 
     sickness_delta = amount * max(0.0, sickness_per_rad)
     sickness = (
@@ -687,7 +714,11 @@ def _apply_radiation(
         severity=min(100.0, sickness.severity + sickness_delta),
         last_updated_epoch=epoch,
     )
-    replace_component(character, updated_sickness)
+    operations: list[MutationOperation] = [
+        SetComponent(character.id, updated_dose),
+        SetComponent(character.id, updated_pressure),
+        SetComponent(character.id, updated_sickness),
+    ]
 
     base = {
         "visibility": visibility,
@@ -728,39 +759,78 @@ def _apply_radiation(
                 )
             )
         )
+    return operations, events
+
+
+def _apply_radiation(
+    world: World,
+    epoch: int,
+    character: Entity,
+    *,
+    source_id: EntityId,
+    source_type: str,
+    amount: float,
+    mutation_pressure_per_rad: float,
+    sickness_per_rad: float,
+    visibility: EventVisibility = EventVisibility.PRIVATE,
+) -> list[DomainEvent]:
+    operations, events = _radiation_operations(
+        world,
+        epoch,
+        character,
+        source_id=source_id,
+        source_type=source_type,
+        amount=amount,
+        mutation_pressure_per_rad=mutation_pressure_per_rad,
+        sickness_per_rad=sickness_per_rad,
+        visibility=visibility,
+    )
+    for operation in operations:
+        assert isinstance(operation, SetComponent)
+        replace_component(character, operation.component)
     return events
 
 
-def _reduce_radiation_state(
+def _reduce_radiation_operations(
     character: Entity,
     epoch: int,
     *,
     dose_reduction: float,
     sickness_reduction: float,
     mutation_pressure_reduction: float,
-) -> tuple[float, float, float]:
+) -> tuple[list[MutationOperation], float, float, float]:
+    operations: list[MutationOperation] = []
     dose_amount = 0.0
     sickness_amount = 0.0
     pressure_amount = 0.0
     if character.has_component(RadiationDoseComponent):
         dose = character.get_component(RadiationDoseComponent)
         dose_amount = max(0.0, dose.amount - max(0.0, dose_reduction))
-        replace_component(character, replace(dose, amount=dose_amount, last_updated_epoch=epoch))
+        operations.append(
+            SetComponent(
+                character.id,
+                replace(dose, amount=dose_amount, last_updated_epoch=epoch),
+            )
+        )
     if character.has_component(RadiationSicknessComponent):
         sickness = character.get_component(RadiationSicknessComponent)
         sickness_amount = max(0.0, sickness.severity - max(0.0, sickness_reduction))
-        replace_component(
-            character,
-            replace(sickness, severity=sickness_amount, last_updated_epoch=epoch),
+        operations.append(
+            SetComponent(
+                character.id,
+                replace(sickness, severity=sickness_amount, last_updated_epoch=epoch),
+            )
         )
     if character.has_component(RadiationMutationPressureComponent):
         pressure = character.get_component(RadiationMutationPressureComponent)
         pressure_amount = max(0.0, pressure.amount - max(0.0, mutation_pressure_reduction))
-        replace_component(
-            character,
-            replace(pressure, amount=pressure_amount, last_updated_epoch=epoch),
+        operations.append(
+            SetComponent(
+                character.id,
+                replace(pressure, amount=pressure_amount, last_updated_epoch=epoch),
+            )
         )
-    return dose_amount, sickness_amount, pressure_amount
+    return operations, dose_amount, sickness_amount, pressure_amount
 
 
 class RadiationExposureConsequence:
@@ -916,7 +986,8 @@ class ScanRadiationHandler:
         if target is None:
             return rejected(error if error else "target is not radioactive")
         radiation = target.get_component(RadiationSourceComponent)
-        return ok(
+        return planned(
+            MutationPlan(),
             RadiationScannedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -928,7 +999,8 @@ class ScanRadiationHandler:
                     source_type=radiation.source_type,
                     sealed=radiation.sealed,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -947,8 +1019,15 @@ class SealRadiationSourceHandler:
         radiation = source.get_component(RadiationSourceComponent)
         if radiation.sealed:
             return rejected("radiation source is already sealed")
-        replace_component(source, replace(radiation, sealed=True, last_updated_epoch=ctx.epoch))
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        source.id,
+                        replace(radiation, sealed=True, last_updated_epoch=ctx.epoch),
+                    ),
+                )
+            ),
             RadiationSourceSealedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -958,7 +1037,8 @@ class SealRadiationSourceHandler:
                     source_id=str(source.id),
                     source_type=radiation.source_type,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -989,18 +1069,21 @@ class DecontaminateHandler:
         decon = station.get_component(DecontaminationComponent)
         if decon.uses is not None and decon.uses <= 0:
             return rejected("decontamination station is spent")
+        operations: list[MutationOperation] = []
         if decon.uses is not None:
-            replace_component(station, replace(decon, uses=decon.uses - 1))
+            operations.append(SetComponent(station.id, replace(decon, uses=decon.uses - 1)))
 
         target = ctx.entity(target_id)
-        dose, sickness, pressure = _reduce_radiation_state(
+        reduction_operations, dose, sickness, pressure = _reduce_radiation_operations(
             target,
             ctx.epoch,
             dose_reduction=decon.dose_reduction,
             sickness_reduction=decon.sickness_reduction,
             mutation_pressure_reduction=decon.mutation_pressure_reduction,
         )
-        return ok(
+        operations.extend(reduction_operations)
+        return planned(
+            MutationPlan(tuple(operations)),
             DecontaminationAppliedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1012,7 +1095,8 @@ class DecontaminateHandler:
                     sickness=sickness,
                     mutation_pressure=pressure,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1051,7 +1135,7 @@ class UseRadMedicineHandler:
             return rejected("target is not reachable")
         target = ctx.entity(target_id)
 
-        dose, sickness, pressure = _reduce_radiation_state(
+        operations, dose, sickness, pressure = _reduce_radiation_operations(
             target,
             ctx.epoch,
             dose_reduction=med.dose_reduction,
@@ -1059,11 +1143,14 @@ class UseRadMedicineHandler:
             mutation_pressure_reduction=med.mutation_pressure_reduction,
         )
         if med.uses == 1:
-            _remove_from_container(ctx.world, medicine.id)
+            container_id = container_of(medicine)
+            if container_id is not None:
+                operations.append(RemoveEdge(container_id, medicine.id, Contains))
         else:
-            replace_component(medicine, replace(med, uses=med.uses - 1))
+            operations.append(SetComponent(medicine.id, replace(med, uses=med.uses - 1)))
 
-        return ok(
+        return planned(
+            MutationPlan(tuple(operations)),
             RadMedicineUsedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1076,7 +1163,8 @@ class UseRadMedicineHandler:
                     sickness=sickness,
                     mutation_pressure=pressure,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1095,14 +1183,16 @@ class TakeChemHandler:
         chem = chem_entity.get_component(ChemComponent)
         character = ctx.entity(character_id)
 
+        operations: list[MutationOperation] = []
         if chem.dose_relief > 0.0 or chem.sickness_relief > 0.0:
-            _reduce_radiation_state(
+            reduction_operations, _dose, _sickness, _pressure = _reduce_radiation_operations(
                 character,
                 ctx.epoch,
                 dose_reduction=chem.dose_relief,
                 sickness_reduction=chem.sickness_relief,
                 mutation_pressure_reduction=0.0,
             )
+            operations.extend(reduction_operations)
         levels = (
             dict(character.get_component(AddictionComponent).levels)
             if character.has_component(AddictionComponent)
@@ -1110,18 +1200,28 @@ class TakeChemHandler:
         )
         levels[chem.chem_type] = levels.get(chem.chem_type, 0.0) + chem.addiction_per_dose
         if character.has_component(AddictionComponent):
-            replace_component(
-                character,
-                replace(
-                    character.get_component(AddictionComponent),
-                    levels=levels,
-                    last_updated_epoch=ctx.epoch,
+            operations.append(
+                SetComponent(
+                    character_id,
+                    replace(
+                        character.get_component(AddictionComponent),
+                        levels=levels,
+                        last_updated_epoch=ctx.epoch,
+                    ),
                 ),
             )
         else:
-            character.add_component(AddictionComponent(levels=levels, last_updated_epoch=ctx.epoch))
-        _remove_from_container(ctx.world, chem_entity.id)
-        return ok(
+            operations.append(
+                AddComponent(
+                    character_id,
+                    AddictionComponent(levels=levels, last_updated_epoch=ctx.epoch),
+                )
+            )
+        container_id = container_of(chem_entity)
+        if container_id is not None:
+            operations.append(RemoveEdge(container_id, chem_entity.id, Contains))
+        return planned(
+            MutationPlan(tuple(operations)),
             ChemTakenEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1132,7 +1232,8 @@ class TakeChemHandler:
                     chem_type=chem.chem_type,
                     addiction=levels[chem.chem_type],
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1151,8 +1252,8 @@ class PurifyWaterHandler:
         purity = water.get_component(WaterPurityComponent)
         if purity.purified:
             return rejected("water is already purified")
-        replace_component(water, replace(purity, purified=True))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(water.id, replace(purity, purified=True)),)),
             WaterPurifiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1161,7 +1262,8 @@ class PurifyWaterHandler:
                     target_ids=(str(water.id),),
                     item_id=str(water.id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1193,17 +1295,21 @@ class DrinkContaminatedWaterHandler:
         purity = water.get_component(WaterPurityComponent)
         rads = 0.0 if purity.purified else max(0.0, purity.rads_per_drink)
         character = ctx.entity(character_id)
+        operations: tuple[MutationOperation, ...] = ()
         if rads > 0.0:
             current = (
                 character.get_component(RadiationDoseComponent)
                 if character.has_component(RadiationDoseComponent)
                 else RadiationDoseComponent()
             )
-            replace_component(
-                character,
-                replace(current, amount=current.amount + rads, last_updated_epoch=ctx.epoch),
+            operations = (
+                SetComponent(
+                    character_id,
+                    replace(current, amount=current.amount + rads, last_updated_epoch=ctx.epoch),
+                ),
             )
-        return ok(
+        return planned(
+            MutationPlan(operations),
             ContaminatedWaterDrunkEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1214,7 +1320,8 @@ class DrinkContaminatedWaterHandler:
                     item_id=str(water.id),
                     rads=rads,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1237,15 +1344,45 @@ class ScavengeHandler:
             return rejected("scavenge site has no loot")
 
         character = ctx.entity(character_id)
-        outputs: list[str] = []
-        events: list[DomainEvent] = []
+        operations: list[MutationOperation] = []
+        outputs: list[EntityId | EntityReference] = []
+        loot: list[tuple[str, int, EntityId | EntityReference]] = []
         for resource_type, quantity in site.get_component(LootTableComponent).outputs.items():
             if quantity <= 0:
                 continue
-            stack_id = _add_resource_stack(character, ctx.world, resource_type, quantity)
-            outputs.append(stack_id)
-            events.append(
-                LootFoundEvent(
+            stack_operations, stack = _add_resource_operations(
+                character,
+                ctx.world,
+                resource_type,
+                quantity,
+            )
+            operations.extend(stack_operations)
+            outputs.append(stack)
+            loot.append((resource_type, quantity, stack))
+
+        def site_event() -> DomainEvent:
+            output_ids = tuple(_entity_target_id(output) for output in outputs)
+            return SiteScavengedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(site.id), *output_ids),
+                    site_id=str(site.id),
+                    output_ids=output_ids,
+                )
+            )
+
+        event_factories = [site_event]
+        for resource_type, quantity, stack in loot:
+
+            def loot_event(
+                resource_type=resource_type,
+                quantity=quantity,
+                stack=stack,
+            ) -> DomainEvent:
+                stack_id = _entity_target_id(stack)
+                return LootFoundEvent(
                     **ctx.event_base(
                         visibility=EventVisibility.PRIVATE,
                         actor_id=str(character_id),
@@ -1257,34 +1394,24 @@ class ScavengeHandler:
                         stack_id=stack_id,
                     )
                 )
-            )
+
+            event_factories.append(loot_event)
 
         remaining = state.charges - 1
-        replace_component(
-            site,
-            replace(
-                state,
-                charges=remaining,
-                depleted=remaining <= 0,
-                last_scavenged_epoch=ctx.epoch,
-            ),
-        )
-        events.insert(
-            0,
-            SiteScavengedEvent(
-                **ctx.event_base(
-                    visibility=EventVisibility.ROOM,
-                    actor_id=str(character_id),
-                    room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(site.id), *outputs),
-                    site_id=str(site.id),
-                    output_ids=tuple(outputs),
-                )
+        operations.append(
+            SetComponent(
+                site.id,
+                replace(
+                    state,
+                    charges=remaining,
+                    depleted=remaining <= 0,
+                    last_scavenged_epoch=ctx.epoch,
+                ),
             ),
         )
         if state.hazard_rads > 0.0:
-            events.append(
-                HazardTriggeredEvent(
+            event_factories.append(
+                lambda: HazardTriggeredEvent(
                     **ctx.event_base(
                         visibility=EventVisibility.PRIVATE,
                         actor_id=str(character_id),
@@ -1296,19 +1423,23 @@ class ScavengeHandler:
                     )
                 )
             )
-            events.extend(
-                _apply_radiation(
-                    ctx.world,
-                    ctx.epoch,
-                    character,
-                    source_id=site.id,
-                    source_type=f"{state.site_type} hazard",
-                    amount=state.hazard_rads * (1.0 - _radiation_protection(ctx.world, character)),
-                    mutation_pressure_per_rad=1.0,
-                    sickness_per_rad=0.25,
-                )
+            radiation_operations, radiation_events = _radiation_operations(
+                ctx.world,
+                ctx.epoch,
+                character,
+                source_id=site.id,
+                source_type=f"{state.site_type} hazard",
+                amount=state.hazard_rads * (1.0 - _radiation_protection(ctx.world, character)),
+                mutation_pressure_per_rad=1.0,
+                sickness_per_rad=0.25,
             )
-        return ok(*events)
+            operations.extend(radiation_operations)
+            event_factories.extend(lambda event=event: event for event in radiation_events)
+        return planned(
+            MutationPlan(tuple(operations)),
+            *event_factories,
+            ctx=ctx,
+        )
 
 
 class ScrapItemHandler:
@@ -1326,13 +1457,21 @@ class ScrapItemHandler:
 
         character = ctx.entity(character_id)
         junk = item.get_component(JunkComponent)
-        output_ids = tuple(
-            _add_resource_stack(character, ctx.world, resource_type, quantity)
-            for resource_type, quantity in junk.outputs.items()
-            if quantity > 0
-        )
+        operations: list[MutationOperation] = []
+        outputs: list[EntityId | EntityReference] = []
+        for resource_type, quantity in junk.outputs.items():
+            if quantity <= 0:
+                continue
+            stack_operations, stack = _add_resource_operations(
+                character,
+                ctx.world,
+                resource_type,
+                quantity,
+            )
+            operations.extend(stack_operations)
+            outputs.append(stack)
         if junk.contaminated_rads > 0.0:
-            radiation_events = _apply_radiation(
+            radiation_operations, radiation_events = _radiation_operations(
                 ctx.world,
                 ctx.epoch,
                 character,
@@ -1342,11 +1481,16 @@ class ScrapItemHandler:
                 mutation_pressure_per_rad=1.0,
                 sickness_per_rad=0.25,
             )
+            operations.extend(radiation_operations)
         else:
             radiation_events = []
-        _remove_from_container(ctx.world, item.id)
-        return ok(
-            ItemScrappedEvent(
+        container_id = container_of(item)
+        if container_id is not None:
+            operations.append(RemoveEdge(container_id, item.id, Contains))
+
+        def scrapped_event() -> DomainEvent:
+            output_ids = tuple(_entity_target_id(output) for output in outputs)
+            return ItemScrappedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
@@ -1355,8 +1499,13 @@ class ScrapItemHandler:
                     item_id=str(item.id),
                     output_ids=output_ids,
                 )
-            ),
-            *radiation_events,
+            )
+
+        return planned(
+            MutationPlan(tuple(operations)),
+            scrapped_event,
+            *(lambda event=event: event for event in radiation_events),
+            ctx=ctx,
         )
 
 
@@ -1375,8 +1524,8 @@ class StabilizeMutationHandler:
             return rejected("mutation does not match")
         if mutation.stable:
             return rejected("mutation is already stable")
-        replace_component(character, replace(mutation, stable=True))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(character_id, replace(mutation, stable=True)),)),
             MutationStabilizedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1386,7 +1535,8 @@ class StabilizeMutationHandler:
                     character_id=str(character_id),
                     mutation_id=mutation.mutation_id,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1402,35 +1552,42 @@ class MarkHotspotHandler:
         )
         if source is None:
             return rejected(error if error else "target is not a radiation source")
-        from ...core.ecs import spawn_entity
-
         label = str(command.payload.get("label", "hotspot")).strip() or "hotspot"
-        marker = spawn_entity(
-            ctx.world,
-            [
-                IdentityComponent(name=f"{label} marker", kind="hotspot-marker"),
-                PortableComponent(can_pick_up=True),
-                HotspotMarkerComponent(
-                    source_id=str(source.id),
-                    marked_by=str(character_id),
-                    label=label,
-                ),
-            ],
-        )
-        ctx.entity(character_id).add_relationship(
-            Contains(mode=ContainmentMode.INVENTORY), marker.id
-        )
-        return ok(
-            HotspotMarkedEvent(
+        marker = EntityReference()
+
+        def marked_event() -> DomainEvent:
+            marker_id = str(marker.require())
+            return HotspotMarkedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(source.id), str(marker.id)),
+                    target_ids=(str(source.id), marker_id),
                     source_id=str(source.id),
-                    marker_id=str(marker.id),
+                    marker_id=marker_id,
                 )
             )
+
+        return planned(
+            MutationPlan(
+                (
+                    AddEntity(
+                        (
+                            IdentityComponent(name=f"{label} marker", kind="hotspot-marker"),
+                            PortableComponent(can_pick_up=True),
+                            HotspotMarkerComponent(
+                                source_id=str(source.id),
+                                marked_by=str(character_id),
+                                label=label,
+                            ),
+                        ),
+                        reference=marker,
+                    ),
+                    AddEdge(character_id, marker, Contains(mode=ContainmentMode.INVENTORY)),
+                )
+            ),
+            marked_event,
+            ctx=ctx,
         )
 
 
@@ -1450,12 +1607,19 @@ class UseSuppressantHandler:
         suppressant = item.get_component(SuppressantComponent)
         pressure = _radiation_pressure(character)
         updated_pressure = max(0.0, pressure.amount - suppressant.pressure_reduction)
-        replace_component(
-            character,
-            replace(pressure, amount=updated_pressure, last_updated_epoch=ctx.epoch),
-        )
-        replace_component(item, replace(suppressant, uses=max(0, suppressant.uses - 1)))
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        character_id,
+                        replace(pressure, amount=updated_pressure, last_updated_epoch=ctx.epoch),
+                    ),
+                    SetComponent(
+                        item.id,
+                        replace(suppressant, uses=max(0, suppressant.uses - 1)),
+                    ),
+                )
+            ),
             SuppressantUsedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1465,7 +1629,8 @@ class UseSuppressantHandler:
                     item_id=str(item.id),
                     pressure=updated_pressure,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1490,30 +1655,37 @@ class HarvestSampleHandler:
             or command.payload.get("product_type")
             or "irradiated tissue"
         ).strip()
-        from ...core.ecs import spawn_entity
+        sample = EntityReference()
 
-        sample = spawn_entity(
-            ctx.world,
-            [
-                IdentityComponent(name=sample_type, kind="sample"),
-                PortableComponent(can_pick_up=True),
-                SampleComponent(sample_type=sample_type),
-            ],
-        )
-        ctx.entity(character_id).add_relationship(
-            Contains(mode=ContainmentMode.INVENTORY), sample.id
-        )
-        return ok(
-            SampleHarvestedEvent(
+        def sample_event() -> DomainEvent:
+            sample_id = str(sample.require())
+            return SampleHarvestedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(sample.id),),
-                    sample_id=str(sample.id),
+                    target_ids=(sample_id,),
+                    sample_id=sample_id,
                     sample_type=sample_type,
                 )
             )
+
+        return planned(
+            MutationPlan(
+                (
+                    AddEntity(
+                        (
+                            IdentityComponent(name=sample_type, kind="sample"),
+                            PortableComponent(can_pick_up=True),
+                            SampleComponent(sample_type=sample_type),
+                        ),
+                        reference=sample,
+                    ),
+                    AddEdge(character_id, sample, Contains(mode=ContainmentMode.INVENTORY)),
+                )
+            ),
+            sample_event,
+            ctx=ctx,
         )
 
 
@@ -1530,13 +1702,18 @@ class StudySampleHandler:
         if sample is None:
             return rejected(error if error else "target is not a sample")
         component = sample.get_component(SampleComponent)
-        replace_component(
-            sample,
-            replace(
-                component, studied_by=tuple(sorted((*component.studied_by, str(character_id))))
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        sample.id,
+                        replace(
+                            component,
+                            studied_by=tuple(sorted((*component.studied_by, str(character_id)))),
+                        ),
+                    ),
+                )
             ),
-        )
-        return ok(
             SampleStudiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1546,7 +1723,8 @@ class StudySampleHandler:
                     sample_id=str(sample.id),
                     sample_type=component.sample_type,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1578,8 +1756,8 @@ class UnlockCrateHandler:
         component = crate.get_component(LockedCrateComponent)
         if not component.locked:
             return rejected("crate is already unlocked")
-        replace_component(crate, replace(component, locked=False))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(crate.id, replace(component, locked=False)),)),
             CrateUnlockedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1588,7 +1766,8 @@ class UnlockCrateHandler:
                     target_ids=(str(crate.id),),
                     crate_id=str(crate.id),
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1605,8 +1784,8 @@ class StudyWastelandArtifactHandler:
         if artifact is None:
             return rejected(error if error else "target is not a wasteland artifact")
         component = artifact.get_component(WastelandArtifactComponent)
-        replace_component(artifact, replace(component, studied=True))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(artifact.id, replace(component, studied=True)),)),
             WastelandArtifactStudiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1616,7 +1795,8 @@ class StudyWastelandArtifactHandler:
                     artifact_id=str(artifact.id),
                     artifact_type=component.artifact_type,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1635,8 +1815,10 @@ class ClaimFactionSalvageHandler:
         component = salvage.get_component(FactionSalvageComponent)
         if component.claimed_by is not None:
             return rejected("faction salvage already claimed")
-        replace_component(salvage, replace(component, claimed_by=str(character_id)))
-        return ok(
+        return planned(
+            MutationPlan(
+                (SetComponent(salvage.id, replace(component, claimed_by=str(character_id))),)
+            ),
             FactionSalvageClaimedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1646,7 +1828,8 @@ class ClaimFactionSalvageHandler:
                     salvage_id=str(salvage.id),
                     faction_id=component.faction_id,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1661,15 +1844,21 @@ class InstallModHandler:
         character = ctx.entity(character_id)
         if item_id not in reachable_ids(ctx.world, character):
             return rejected("item is not reachable")
-        item = ctx.entity(item_id)
         schematic, error = _reachable_component(
             ctx.world, character_id, command.payload.get("schematic_id"), SchematicComponent
         )
         if schematic is None:
             return rejected(error if error else "target is not a schematic")
         component = schematic.get_component(SchematicComponent)
-        replace_component(item, ItemModComponent(mod_name=component.mod_name, installed=True))
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        item_id,
+                        ItemModComponent(mod_name=component.mod_name, installed=True),
+                    ),
+                )
+            ),
             ModInstalledEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1679,7 +1868,8 @@ class InstallModHandler:
                     item_id=str(item_id),
                     mod_name=component.mod_name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1706,8 +1896,8 @@ class FieldRepairHandler:
             current=min(durability.maximum, durability.current + repair.repair_amount),
             broken=False,
         )
-        replace_component(item, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(item_id, updated),)),
             FieldRepairAppliedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1717,7 +1907,8 @@ class FieldRepairHandler:
                     item_id=str(item_id),
                     durability=updated.current,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1735,31 +1926,52 @@ class BrewChemHandler:
             return rejected(error if error else "target is not a chem recipe")
         component = recipe.get_component(ChemRecipeComponent)
         character = ctx.entity(character_id)
+        requirements: dict[str, int] = {}
         for resource, quantity in component.resource_inputs:
-            if not _spend_inventory_resource(character, ctx.world, resource, quantity):
+            requirements[resource] = requirements.get(resource, 0) + quantity
+        operations: list[MutationOperation] = []
+        for resource, quantity in requirements.items():
+            spend_operations = _spend_inventory_resource_operations(
+                character,
+                ctx.world,
+                resource,
+                quantity,
+            )
+            if spend_operations is None:
                 return rejected("missing chem ingredients")
-        from ...core.ecs import spawn_entity
-
-        chem = spawn_entity(
-            ctx.world,
-            [
-                IdentityComponent(name=component.chem_type, kind="chem"),
-                PortableComponent(can_pick_up=True),
-                ChemComponent(chem_type=component.chem_type),
-            ],
+            operations.extend(spend_operations)
+        chem = EntityReference()
+        operations.extend(
+            (
+                AddEntity(
+                    (
+                        IdentityComponent(name=component.chem_type, kind="chem"),
+                        PortableComponent(can_pick_up=True),
+                        ChemComponent(chem_type=component.chem_type),
+                    ),
+                    reference=chem,
+                ),
+                AddEdge(character_id, chem, Contains(mode=ContainmentMode.INVENTORY)),
+            )
         )
-        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), chem.id)
-        return ok(
-            ChemBrewedEvent(
+
+        def brewed_event() -> DomainEvent:
+            chem_id = str(chem.require())
+            return ChemBrewedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(chem.id),),
-                    chem_id=str(chem.id),
+                    target_ids=(chem_id,),
+                    chem_id=chem_id,
                     chem_type=component.chem_type,
                 )
             )
+
+        return planned(
+            MutationPlan(tuple(operations)),
+            brewed_event,
+            ctx=ctx,
         )
 
 
@@ -1776,8 +1988,8 @@ class ActivateBeaconHandler:
         if beacon is None:
             return rejected(error if error else "target is not a beacon")
         component = beacon.get_component(BeaconComponent)
-        replace_component(beacon, replace(component, active=True))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(beacon.id, replace(component, active=True)),)),
             BeaconActivatedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1787,7 +1999,8 @@ class ActivateBeaconHandler:
                     beacon_id=str(beacon.id),
                     message=component.message,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1804,8 +2017,8 @@ class OpenTraderRouteHandler:
         if route is None:
             return rejected(error if error else "target is not a trader route")
         component = route.get_component(TraderRouteComponent)
-        replace_component(route, replace(component, open=True))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(route.id, replace(component, open=True)),)),
             TraderRouteOpenedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1815,7 +2028,8 @@ class OpenTraderRouteHandler:
                     route_id=str(route.id),
                     destination=component.destination,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1835,8 +2049,8 @@ class IncreaseRaiderPressureHandler:
         )
         amount = int(command.payload.get("amount", 1))
         updated = replace(current, pressure=current.pressure + amount)
-        replace_component(target, updated)
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(target_id, updated),)),
             RaiderPressureChangedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -1846,7 +2060,8 @@ class IncreaseRaiderPressureHandler:
                     target_id=str(target_id),
                     pressure=updated.pressure,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -1863,15 +2078,19 @@ class BootTerminalHandler:
         if terminal is None:
             return rejected(error if error else "target is not a terminal")
         access_level = int(command.payload.get("access_level", 1))
-        replace_component(
-            terminal,
-            replace(
-                terminal.get_component(TerminalComponent),
-                booted=True,
-                access_level=access_level,
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        terminal.id,
+                        replace(
+                            terminal.get_component(TerminalComponent),
+                            booted=True,
+                            access_level=access_level,
+                        ),
+                    ),
+                )
             ),
-        )
-        return ok(
             TerminalBootedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -1881,7 +2100,8 @@ class BootTerminalHandler:
                     terminal_id=str(terminal.id),
                     access_level=access_level,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2024,8 +2244,8 @@ class IdentifyTechHandler:
         tech = item.get_component(OldWorldTechComponent)
         if tech.identified:
             return rejected("tech is already identified")
-        replace_component(item, replace(tech, identified=True))
-        return ok(
+        return planned(
+            MutationPlan((SetComponent(item.id, replace(tech, identified=True)),)),
             OldWorldTechIdentifiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2035,7 +2255,8 @@ class IdentifyTechHandler:
                     item_id=str(item.id),
                     tech_name=tech.tech_name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2067,18 +2288,19 @@ class RestoreTechHandler:
         if have < tech.restore_scrap:
             return rejected("not enough scrap to restore")
 
-        stack = stack_entity.get_component(ResourceStackComponent)
-        remaining = stack.quantity - tech.restore_scrap
-        if remaining > 0:
-            replace_component(stack_entity, replace(stack, quantity=remaining))
-            replace_component(
-                stack_entity,
-                IdentityComponent(name=_stack_name("scrap", remaining), kind="resource"),
-            )
-        else:
-            _remove_from_container(ctx.world, stack_entity.id)
-        replace_component(item, replace(tech, functional=True))
-        return ok(
+        spend_operations = _spend_inventory_resource_operations(
+            character,
+            ctx.world,
+            "scrap",
+            tech.restore_scrap,
+        )
+        assert spend_operations is not None
+        operations = [
+            *spend_operations,
+            SetComponent(item.id, replace(tech, functional=True)),
+        ]
+        return planned(
+            MutationPlan(tuple(operations)),
             OldWorldTechRestoredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2089,7 +2311,8 @@ class RestoreTechHandler:
                     tech_name=tech.tech_name,
                     scrap_spent=tech.restore_scrap,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2116,8 +2339,15 @@ class ClaimSettlementHandler:
         component = settlement.get_component(SettlementComponent)
         if component.claimed_by is not None:
             return rejected("settlement is already claimed")
-        replace_component(settlement, replace(component, claimed_by=str(character_id)))
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        settlement.id,
+                        replace(component, claimed_by=str(character_id)),
+                    ),
+                )
+            ),
             SettlementClaimedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2127,7 +2357,8 @@ class ClaimSettlementHandler:
                     settlement_id=str(settlement.id),
                     name=component.name,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2153,29 +2384,41 @@ class SalvageSettlementHandler:
             return rejected("settlement salvage is depleted")
 
         durability_value: float | None = None
+        operations: list[MutationOperation] = []
         if settlement.has_component(DurabilityComponent):
             durability = settlement.get_component(DurabilityComponent)
             if durability.broken or durability.current <= 0.0:
                 return rejected("settlement is too damaged to salvage")
             durability_value = max(0.0, durability.current - salvage.durability_cost)
-            replace_component(
-                settlement,
-                replace(
-                    durability,
-                    current=durability_value,
-                    broken=durability_value <= 0.0,
+            operations.append(
+                SetComponent(
+                    settlement.id,
+                    replace(
+                        durability,
+                        current=durability_value,
+                        broken=durability_value <= 0.0,
+                    ),
                 ),
             )
 
         character = ctx.entity(character_id)
-        output_ids = tuple(
-            _add_resource_stack(character, ctx.world, resource_type, quantity)
-            for resource_type, quantity in salvage.outputs.items()
-            if quantity > 0
-        )
-        replace_component(settlement, replace(salvage, depleted=True))
-        return ok(
-            SettlementSalvagedEvent(
+        outputs: list[EntityId | EntityReference] = []
+        for resource_type, quantity in salvage.outputs.items():
+            if quantity <= 0:
+                continue
+            output_operations, output = _add_resource_operations(
+                character,
+                ctx.world,
+                resource_type,
+                quantity,
+            )
+            operations.extend(output_operations)
+            outputs.append(output)
+        operations.append(SetComponent(settlement.id, replace(salvage, depleted=True)))
+
+        def salvaged_event() -> DomainEvent:
+            output_ids = tuple(_entity_target_id(output) for output in outputs)
+            return SettlementSalvagedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
@@ -2186,6 +2429,11 @@ class SalvageSettlementHandler:
                     durability=durability_value,
                 )
             )
+
+        return planned(
+            MutationPlan(tuple(operations)),
+            salvaged_event,
+            ctx=ctx,
         )
 
 
@@ -2220,10 +2468,21 @@ class BuildPurifierHandler:
         if purifier.built:
             return rejected("purifier is already built")
         character = ctx.entity(character_id)
-        if not _spend_inventory_resource(character, ctx.world, "scrap", purifier.scrap_cost):
+        spend_operations = _spend_inventory_resource_operations(
+            character,
+            ctx.world,
+            "scrap",
+            purifier.scrap_cost,
+        )
+        if spend_operations is None:
             return rejected("not enough scrap to build purifier")
-        replace_component(settlement, replace(purifier, built=True))
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    *spend_operations,
+                    SetComponent(settlement.id, replace(purifier, built=True)),
+                )
+            ),
             PurifierBuiltEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2233,7 +2492,8 @@ class BuildPurifierHandler:
                     settlement_id=str(settlement.id),
                     scrap_spent=purifier.scrap_cost,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 
@@ -2253,10 +2513,21 @@ class PowerGeneratorHandler:
         if component.powered:
             return rejected("generator is already powered")
         character = ctx.entity(character_id)
-        if not _spend_inventory_resource(character, ctx.world, "fuel", component.fuel_cost):
+        spend_operations = _spend_inventory_resource_operations(
+            character,
+            ctx.world,
+            "fuel",
+            component.fuel_cost,
+        )
+        if spend_operations is None:
             return rejected("not enough fuel to power generator")
-        replace_component(generator, replace(component, powered=True))
-        return ok(
+        return planned(
+            MutationPlan(
+                (
+                    *spend_operations,
+                    SetComponent(generator.id, replace(component, powered=True)),
+                )
+            ),
             GeneratorPoweredEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2266,7 +2537,8 @@ class PowerGeneratorHandler:
                     generator_id=str(generator.id),
                     fuel_spent=component.fuel_cost,
                 )
-            )
+            ),
+            ctx=ctx,
         )
 
 

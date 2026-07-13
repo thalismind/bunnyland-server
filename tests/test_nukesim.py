@@ -1422,20 +1422,14 @@ def test_settlement_utility_handlers_reject_bad_state_directly():
         == "invalid character id"
     )
     assert (
-        claim.execute(
-            ctx, _handler_cmd(scenario, "claim", target_id=str(rock))
-        ).reason
+        claim.execute(ctx, _handler_cmd(scenario, "claim", target_id=str(rock))).reason
         == "target is the wrong kind"
     )
     assert (
-        claim.execute(
-            ctx, _handler_cmd(scenario, "claim", target_id=str(claimed))
-        ).reason
+        claim.execute(ctx, _handler_cmd(scenario, "claim", target_id=str(claimed))).reason
         == "settlement is already claimed"
     )
-    assert claim.execute(
-        ctx, _handler_cmd(scenario, "claim", target_id=str(settlement))
-    ).ok
+    assert claim.execute(ctx, _handler_cmd(scenario, "claim", target_id=str(settlement))).ok
 
     assert (
         salvage.execute(ctx, _handler_cmd(scenario, "salvage-settlement", character_id="x")).reason
@@ -1486,31 +1480,21 @@ def test_settlement_utility_handlers_reject_bad_state_directly():
         == "target is the wrong kind"
     )
     assert (
-        build.execute(
-            ctx, _handler_cmd(scenario, "build", target_id=str(unclaimed_build))
-        ).reason
+        build.execute(ctx, _handler_cmd(scenario, "build", target_id=str(unclaimed_build))).reason
         == "claim the settlement first"
     )
     assert (
-        build.execute(
-            ctx, _handler_cmd(scenario, "build", target_id=str(built))
-        ).reason
+        build.execute(ctx, _handler_cmd(scenario, "build", target_id=str(built))).reason
         == "purifier is already built"
     )
     assert (
-        build.execute(
-            ctx, _handler_cmd(scenario, "build", target_id=str(claimed))
-        ).reason
+        build.execute(ctx, _handler_cmd(scenario, "build", target_id=str(claimed))).reason
         == "not enough scrap to build purifier"
     )
     _scrap(scenario, 2)
-    assert build.execute(
-        ctx, _handler_cmd(scenario, "build", target_id=str(claimed))
-    ).ok
+    assert build.execute(ctx, _handler_cmd(scenario, "build", target_id=str(claimed))).ok
     _scrap(scenario, 2)
-    assert build.execute(
-        ctx, _handler_cmd(scenario, "build", target_id=str(bare_claimed))
-    ).ok
+    assert build.execute(ctx, _handler_cmd(scenario, "build", target_id=str(bare_claimed))).ok
     assert scenario.actor.world.get_entity(bare_claimed).get_component(WaterPurifierComponent).built
 
     assert (
@@ -2153,6 +2137,70 @@ async def test_scrap_item_without_contamination_emits_no_radiation():
 
     character = scenario.actor.world.get_entity(scenario.character)
     assert not character.has_component(RadiationDoseComponent)
+
+
+def test_consumable_and_scrap_handlers_allow_uncontained_self_targets():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+
+    loose = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Wanderer", kind="character"),
+            CharacterComponent(),
+            RadMedicineComponent(uses=1),
+        ],
+    )
+    result = UseRadMedicineHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "use",
+            character_id=str(loose.id),
+            item_id=str(loose.id),
+        ),
+    )
+    assert result.ok
+    loose.remove_component(RadMedicineComponent)
+
+    carried_medicine = _inventory_entity(
+        scenario,
+        "rad-away",
+        "medicine",
+        [RadMedicineComponent(uses=1)],
+    )
+    result = UseRadMedicineHandler().execute(
+        ctx,
+        _handler_cmd(scenario, "use", item_id=str(carried_medicine)),
+    )
+    assert result.ok
+    assert container_of(scenario.actor.world.get_entity(carried_medicine)) is None
+
+    loose.add_component(ChemComponent(chem_type="stimulant"))
+    result = TakeChemHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "take-chem",
+            character_id=str(loose.id),
+            chem_id=str(loose.id),
+        ),
+    )
+    assert result.ok
+    loose.remove_component(ChemComponent)
+
+    loose.add_component(JunkComponent(outputs={"scrap": 0}))
+    result = ScrapItemHandler().execute(
+        ctx,
+        _handler_cmd(
+            scenario,
+            "scrap-item",
+            character_id=str(loose.id),
+            item_id=str(loose.id),
+        ),
+    )
+    assert result.ok
 
 
 def test_harvest_can_handle_branches():
