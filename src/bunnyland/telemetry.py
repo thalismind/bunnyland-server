@@ -22,6 +22,7 @@ import os
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -298,12 +299,12 @@ def _span_to_json(span: Any) -> dict[str, Any]:
         "parent_span_id": _hex_id(parent.span_id, 16) if parent else None,
         "start_time_unix_nano": span.start_time,
         "end_time_unix_nano": span.end_time,
-        "attributes": dict(span.attributes or {}),
+        "attributes": _redacted_attributes(span.attributes or {}),
         "events": [
             {
                 "name": event.name,
                 "timestamp_unix_nano": event.timestamp,
-                "attributes": dict(event.attributes or {}),
+                "attributes": _redacted_attributes(event.attributes or {}),
             }
             for event in span.events
         ],
@@ -365,16 +366,104 @@ def _observe(count_fn: Any) -> Iterator[Any]:
     yield _otel_metrics.Observation(count_fn(_gauges_actor.world))
 
 
-def span(name: str, attributes: dict[str, Any] | None = None) -> Any:
+class _RedactingSpan:
+    """Small proxy that prevents sensitive values from reaching any trace exporter."""
+
+    def __init__(self, span: Any) -> None:
+        self._span = span
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        self._span.set_attribute(key, _redact_attribute(key, value))
+
+    def record_exception(self, exception: BaseException, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        self._span.add_event(
+            "exception",
+            {
+                "exception.type": type(exception).__name__,
+                "exception.message": _redaction_marker(str(exception)),
+            },
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._span, name)
+
+
+@contextmanager
+def span(name: str, attributes: dict[str, Any] | None = None) -> Iterator[Any]:
     """Return a span context manager. A shared singleton no-op when telemetry is disabled."""
     if not _ENABLED:
-        return _NOOP_SPAN_CM
-    return _tracer.start_as_current_span(name, attributes=attributes or {})
+        with _NOOP_SPAN_CM as noop:
+            yield noop
+        return
+    with _tracer.start_as_current_span(
+        name,
+        attributes=_redacted_attributes(attributes or {}),
+        record_exception=False,
+        set_status_on_exception=False,
+    ) as raw_span:
+        safe_span = _RedactingSpan(raw_span)
+        try:
+            yield safe_span
+        except Exception as exc:
+            safe_span.record_exception(exc)
+            mark_span_error(str(exc), safe_span)
+            raise
 
 
 #: Upper bound on a single string span attribute (e.g. a rendered prompt). Keeps individual
 #: spans from ballooning while still capturing enough to debug a decision.
 MAX_ATTRIBUTE_CHARS = 8192
+
+_SENSITIVE_ATTRIBUTE_NAMES = frozenset(
+    {
+        "arguments",
+        "authorization",
+        "content",
+        "input",
+        "message",
+        "password",
+        "prompt",
+        "reply",
+        "secret",
+        "text",
+    }
+)
+
+
+def _redaction_marker(value: Any) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, default=str, sort_keys=True)
+    digest = sha256(text.encode("utf-8")).hexdigest()[:16]
+    return f"[REDACTED sha256:{digest} chars:{len(text)}]"
+
+
+def _attribute_is_sensitive(key: str) -> bool:
+    normalized = key.lower().replace("-", "_")
+    final = normalized.rsplit(".", 1)[-1]
+    return (
+        final in _SENSITIVE_ATTRIBUTE_NAMES
+        or any(final.endswith(f"_{name}") for name in _SENSITIVE_ATTRIBUTE_NAMES)
+        or any(
+            token in normalized
+            for token in (
+                "api_key",
+                "claim_secret",
+                "access_token",
+                "refresh_token",
+                "bearer_token",
+            )
+        )
+    )
+
+
+def _redact_attribute(key: str, value: Any) -> Any:
+    if isinstance(value, (bool, int, float)) or value is None:
+        return value
+    return _redaction_marker(value) if _attribute_is_sensitive(key) else value
+
+
+def _redacted_attributes(attributes: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: _redact_attribute(key, value) for key, value in attributes.items()}
 
 
 def attr_text(value: Any, *, limit: int = MAX_ATTRIBUTE_CHARS) -> str:
@@ -395,7 +484,7 @@ def set_span_attributes(attributes: Mapping[str, Any]) -> None:
         return
     current = _otel_trace.get_current_span()
     for key, value in attributes.items():
-        current.set_attribute(key, value)
+        current.set_attribute(key, _redact_attribute(key, value))
 
 
 def mark_span_ok(span: Any | None = None) -> None:
@@ -411,7 +500,9 @@ def mark_span_error(description: str = "", span: Any | None = None) -> None:
     if not _ENABLED:
         return
     target = span if span is not None else _otel_trace.get_current_span()
-    target.set_status(_OtelStatus(_OtelStatusCode.ERROR, description or None))
+    if description:
+        target.set_attribute("error.description_sha256", sha256(description.encode()).hexdigest())
+    target.set_status(_OtelStatus(_OtelStatusCode.ERROR, "operation failed"))
 
 
 @contextmanager

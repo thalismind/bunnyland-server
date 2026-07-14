@@ -397,7 +397,32 @@ async def test_command_submit_marks_unexpected_exception_error(otel_capture, mon
 
     submit = _spans_by_name(span_exporter)["command.submit"]
     assert _span_status_name(submit) == "ERROR"
-    assert submit.status.description.endswith("validation exploded")
+    assert submit.status.description == "operation failed"
+    assert "error.description_sha256" in submit.attributes
+
+
+@pytestmark_otel
+def test_trace_attributes_and_exceptions_never_export_private_values(otel_capture):
+    span_exporter, _reader = otel_capture
+    private = "claim-secret-memory-text"
+
+    with telemetry.span(
+        "redaction.check",
+        {"chat.input": private, "claim_secret": private, "safe.id": "entity_123"},
+    ) as span:
+        span.set_attribute("decision.arguments", {"text": private})
+        span.record_exception(RuntimeError(private))
+
+    exported = _spans_by_name(span_exporter)["redaction.check"]
+    serialized = str(
+        {
+            "attributes": dict(exported.attributes),
+            "events": [dict(event.attributes) for event in exported.events],
+        }
+    )
+    assert private not in serialized
+    assert exported.attributes["safe.id"] == "entity_123"
+    assert exported.attributes["chat.input"].startswith("[REDACTED sha256:")
 
 
 @pytestmark_otel
@@ -421,8 +446,8 @@ async def test_dispatch_emits_agent_spans_and_decision_metric(otel_capture):
     assert decide.attributes["character.id"] == str(scenario.character)
     # The scenario character is LLM-controlled, so the rendered prompt is captured.
     assert decide.attributes["decision.prompted"] is True
-    assert "decision.prompt" in decide.attributes
-    assert '"direction"' in decide.attributes["decision.arguments"]
+    assert decide.attributes["decision.prompt"].startswith("[REDACTED sha256:")
+    assert decide.attributes["decision.arguments"].startswith("[REDACTED sha256:")
 
     run_once = spans["controller.run_once"]
     assert run_once.attributes["dispatch.actable_count"] == 1
@@ -1030,17 +1055,17 @@ async def test_character_chat_traces_input_reply_and_status(otel_capture):
 
     chat = spans["character.chat"]
     assert chat.attributes["chat.client_id"] == "trace-client"
-    assert chat.attributes["chat.input"] == "what do you hear?"
+    assert chat.attributes["chat.input"].startswith("[REDACTED sha256:")
     assert chat.attributes["chat.input_chars"] == len("what do you hear?")
-    assert chat.attributes["chat.final_reply"] == "I hear the tunnel."
+    assert chat.attributes["chat.final_reply"].startswith("[REDACTED sha256:")
     assert chat.attributes["chat.action.status"] == "none"
     prompt = spans["character.chat.prompt"]
-    assert "Mosslit Burrow" in prompt.attributes["chat.prompt"]
+    assert prompt.attributes["chat.prompt"].startswith("[REDACTED sha256:")
     assert prompt.attributes["chat.prompt_chars"] > 0
     llm = spans["character.chat.llm"]
     assert llm.attributes["chat.phase"] == "initial"
-    assert "what do you hear?" in llm.attributes["llm.input"]
-    assert llm.attributes["chat.reply"] == "I hear the tunnel."
+    assert llm.attributes["llm.input"].startswith("[REDACTED sha256:")
+    assert llm.attributes["chat.reply"].startswith("[REDACTED sha256:")
     assert llm.attributes["chat.tool.called"] is False
 
 
@@ -1076,7 +1101,7 @@ async def test_character_chat_traces_tool_usage_and_command_submit_status(otel_c
     tool = by_name["character.chat.tool"]
     assert _span_status_name(tool) == "OK"
     assert tool.attributes["chat.tool.name"] == "wait"
-    assert tool.attributes["chat.tool.arguments"] == "{}"
+    assert tool.attributes["chat.tool.arguments"].startswith("[REDACTED sha256:")
     assert tool.attributes["chat.action.status"] == "rejected"
     assert tool.attributes["chat.action.reason"] == "no handler for wait"
 
@@ -1084,11 +1109,11 @@ async def test_character_chat_traces_tool_usage_and_command_submit_status(otel_c
     assert _span_status_name(submit) == "ERROR"
     assert submit.attributes["command.type"] == "wait"
     assert submit.attributes["command.accepted"] is False
-    assert submit.attributes["command.reject_reason_text"] == "no handler for wait"
+    assert submit.attributes["command.reject_reason_text"].startswith("[REDACTED sha256:")
     chat = by_name["character.chat"]
     assert chat.attributes["chat.initial.tool_called"] is True
     assert chat.attributes["chat.initial.tool_name"] == "wait"
-    assert chat.attributes["chat.followup.reply"] == "I wait for a moment."
+    assert chat.attributes["chat.followup.reply"].startswith("[REDACTED sha256:")
     assert chat.attributes["chat.action.status"] == "rejected"
 
 
