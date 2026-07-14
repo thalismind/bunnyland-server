@@ -1091,6 +1091,11 @@ async def test_dispatch_submits_a_command_for_an_llm_character():
 
     assert len(decisions) == 1
     assert decisions[0].tool == "move"
+    assert decisions[0].selected_action == "move"
+    assert decisions[0].command_id is not None
+    assert decisions[0].submission_accepted is True
+    assert "move" in decisions[0].candidate_actions
+    assert decisions[0].receipt_status is None
     # The command is submitted (inbox), not yet executed.
     assert not scenario.actor._inbox.empty()
 

@@ -21,6 +21,7 @@ from relics import Entity, EntityId, World
 from relics.errors import EntityNotFoundError
 
 from .. import telemetry
+from ..core.commands import CommitReceipt
 from ..core.components import (
     ActionPointsComponent,
     CharacterComponent,
@@ -241,6 +242,28 @@ class Decision:
     tool: str | None
     summary: str
     persona_issues: tuple[str, ...] = ()
+    input_epoch: int = 0
+    governing_pressure: str = "exploration"
+    memory_ids: tuple[str, ...] = ()
+    candidate_actions: tuple[str, ...] = ()
+    policy_rejections: tuple[str, ...] = ()
+    selected_action: str | None = None
+    command_id: str | None = None
+    submission_accepted: bool | None = None
+    submission_reason: str = ""
+    receipt_status: str | None = None
+    receipt_reason: str = ""
+    result_event_ids: tuple[str, ...] = ()
+
+    def with_receipt(self, receipt: CommitReceipt | None) -> Decision:
+        if receipt is None:
+            return self
+        return replace(
+            self,
+            receipt_status=receipt.status.value,
+            receipt_reason=receipt.reason,
+            result_event_ids=receipt.event_ids,
+        )
 
 
 def _tool_text(call: ToolCall) -> str:
@@ -579,6 +602,7 @@ class ControllerDispatch:
                 schemas,
                 span_attrs,
                 metric_attrs,
+                self.actor.epoch,
             )
         )
         self._inflight[cid] = task
@@ -598,6 +622,7 @@ class ControllerDispatch:
         tools: list[dict],
         span_attrs: dict,
         metric_attrs: dict,
+        input_epoch: int,
     ) -> Decision:
         """Await an async agent's decision under the provider lock, then finalize it.
 
@@ -633,6 +658,21 @@ class ControllerDispatch:
         except Exception:  # noqa: BLE001 - a background task must not crash the game loop
             logger.exception("character %s decision task failed", character_id)
             decision = Decision(cid, None, "error")
+        decision = replace(
+            decision,
+            input_epoch=input_epoch,
+            governing_pressure=_governing_pressure(context),
+            memory_ids=_memory_ids(context),
+            candidate_actions=tuple(
+                sorted(
+                    str(tool.get("function", {}).get("name", ""))
+                    for tool in tools
+                    if tool.get("function", {}).get("name")
+                )
+            ),
+            selected_action=decision.tool,
+            receipt_status=decision.receipt_status or ("wait" if decision.tool is None else None),
+        )
         self._completed.append(decision)
         return decision
 
@@ -697,7 +737,14 @@ class ControllerDispatch:
             message = did_you_mean(call.arguments, unresolved)
             self._feedback[cid] = message
             logger.info("character %s named something unreachable: %s", character_id, message)
-            return Decision(cid, call.name, f"unresolved: {message}", persona_issues)
+            return Decision(
+                cid,
+                call.name,
+                f"unresolved: {message}",
+                persona_issues,
+                policy_rejections=("unresolved_reference",),
+                receipt_status="policy_rejected",
+            )
 
         try:
             command = command_from_tool_call(
@@ -712,11 +759,51 @@ class ControllerDispatch:
             message = str(exc)
             self._feedback[cid] = f"{message}. Choose one of the available tools exactly as named."
             logger.info("character %s chose an unavailable tool: %s", character_id, message)
-            return Decision(cid, call.name, message, persona_issues)
-        await self.actor.submit(command)
+            return Decision(
+                cid,
+                call.name,
+                message,
+                persona_issues,
+                policy_rejections=("unavailable_action",),
+                receipt_status="policy_rejected",
+            )
+        outcome = await self.actor.submit(command)
         summary = f"{call.name} {resolved}".strip()
         logger.info("character %s chose %s", character_id, summary)
-        return Decision(cid, call.name, summary, persona_issues)
+        receipt = outcome.receipt
+        return Decision(
+            cid,
+            call.name,
+            summary,
+            persona_issues,
+            command_id=command.command_id,
+            submission_accepted=outcome.accepted,
+            submission_reason=outcome.reason,
+            receipt_status=receipt.status.value if receipt is not None else None,
+            receipt_reason=receipt.reason if receipt is not None else "",
+            result_event_ids=receipt.event_ids if receipt is not None else (),
+        )
+
+
+def _memory_ids(context) -> tuple[str, ...]:
+    ids = []
+    for line in context.recall:
+        ids.extend(re.findall(r"\[memory:([^\s\]]+)", line))
+    return tuple(dict.fromkeys(ids))
+
+
+def _governing_pressure(context) -> str:
+    if context.warnings:
+        return "rejection_feedback"
+    if any("goal:" in line.lower() for line in context.persona):
+        return "goal"
+    if context.conditions:
+        return "condition"
+    if context.recall:
+        return "memory"
+    if context.social_cues:
+        return "social"
+    return "exploration"
 
 
 __all__ = [

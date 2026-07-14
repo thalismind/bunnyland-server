@@ -27,6 +27,11 @@ from .behavior_tree import (
     register_condition,
     resolve_behavior_tree,
 )
+from .benchmark import (
+    ControllerBenchmarkCase,
+    ControllerBenchmarkResult,
+    run_fixed_snapshot_controller_benchmark,
+)
 from .definition_store import ControllerDefinitionStore
 from .dispatch import (
     ControllerDispatch,
@@ -75,6 +80,8 @@ __all__ = [
     "ChatAgentReply",
     "ControllerDefinitionStore",
     "ControllerDispatch",
+    "ControllerBenchmarkCase",
+    "ControllerBenchmarkResult",
     "Decision",
     "GoalDirectedAgent",
     "OllamaAgent",
@@ -107,6 +114,7 @@ __all__ = [
     "resolve_reference",
     "resolve_reference_args",
     "resolve_script",
+    "run_fixed_snapshot_controller_benchmark",
     "script_names",
     "suggest_names",
     "tool_names",

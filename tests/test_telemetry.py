@@ -465,6 +465,30 @@ async def test_dispatch_emits_agent_spans_and_decision_metric(otel_capture):
 
 
 @pytestmark_otel
+async def test_terminal_command_receipt_is_traced_and_reconciles_decision(otel_capture):
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        ScriptedAgent([ToolCall("move", {"direction": "north"})]),
+    )
+
+    await dispatch.run_once()
+    decision = (await dispatch.await_pending())[0]
+    await scenario.actor.tick(0)
+    receipt = scenario.actor.receipt_for(decision.command_id)
+    resolved = decision.with_receipt(receipt)
+
+    terminal = _spans_by_name(span_exporter)["command.receipt"]
+    assert terminal.attributes["command.id"] == decision.command_id
+    assert terminal.attributes["command.status"] == "committed"
+    assert terminal.attributes["command.result_event_ids"]
+    assert resolved.receipt_status == "committed"
+    assert resolved.result_event_ids == receipt.event_ids
+
+
+@pytestmark_otel
 async def test_behavior_controller_traces_evaluated_tree_nodes(otel_capture):
     span_exporter, _reader = otel_capture
     scenario = build_scenario()

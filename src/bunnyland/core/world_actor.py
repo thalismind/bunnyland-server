@@ -356,6 +356,19 @@ class WorldActor:
             reason=reason,
             event_ids=event_ids,
         )
+        with telemetry.span(
+            "command.receipt",
+            {
+                "command.id": receipt.command_id,
+                "command.type": receipt.command_type,
+                "character.id": receipt.character_id,
+                "command.status": receipt.status.value,
+                "command.result_text": receipt.reason,
+                "command.result_event_ids": receipt.event_ids,
+                "command.committed_epoch": receipt.committed_at_epoch,
+            },
+        ) as receipt_span:
+            telemetry.mark_span_ok(receipt_span)
         self._receipts[command.command_id] = receipt
         self._receipts.move_to_end(command.command_id)
         while len(self._receipts) > self._receipt_cache_size:
