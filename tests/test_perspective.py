@@ -27,6 +27,14 @@ class IntListOutput(RootModel[list[int]]):
     pass
 
 
+class BoundedGroupsOutput(RootModel[dict[str, list[int] | str]]):
+    pass
+
+
+class ScalarOutput(RootModel[int]):
+    pass
+
+
 def _register_v1(actor):
     for definition in V1_PERSPECTIVE_QUERIES:
         actor.perspective_queries.register(definition, owner="bunnyland.core_verbs")
@@ -140,6 +148,37 @@ def test_registry_catalogue_duplicate_limit_and_budget(monkeypatch, scenario):
     monkeypatch.setattr(perspective.time, "perf_counter", lambda: next(moments))
     with pytest.raises(TimeoutError, match="exceeded"):
         registry.execute(scenario.actor, "bounded", {}, actor_id=str(scenario.character))
+
+
+def test_registry_bounds_lists_nested_in_output_mappings(scenario):
+    registry = PerspectiveQueryRegistry()
+    registry.register(
+        PerspectiveQueryDefinition(
+            name="bounded-groups",
+            input_model=AvailableActionsInput,
+            output_model=BoundedGroupsOutput,
+            result_limit=1,
+            execute=lambda actor, request: ({"items": [1, 2], "label": "kept"}, ()),
+        )
+    )
+    registry.register(
+        PerspectiveQueryDefinition(
+            name="scalar",
+            input_model=AvailableActionsInput,
+            output_model=ScalarOutput,
+            execute=lambda actor, request: (1, ()),
+        )
+    )
+
+    bounded = registry.execute(
+        scenario.actor, "bounded-groups", {}, actor_id=str(scenario.character)
+    )
+    scalar = registry.execute(scenario.actor, "scalar", {}, actor_id=str(scenario.character))
+
+    assert bounded.result == {"items": [1], "label": "kept"}
+    assert bounded.truncated is True
+    assert scalar.result == 1
+    assert scalar.truncated is False
 
 
 def test_registry_enforces_visibility_indexes_and_output_schema(scenario):

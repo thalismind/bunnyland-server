@@ -75,9 +75,28 @@ from bunnyland.llm_agents.agent import (
     _tool_call_history,
     normalize_model,
 )
+from bunnyland.llm_agents.dispatch import Decision, _governing_pressure, _memory_ids
 from bunnyland.plugins import PluginRegistry, bunnyland_plugins, collect_persona_fragments
 from bunnyland.plugins.ids import CORE_VERBS
 from bunnyland.prompts.builder import PromptBuilder
+
+
+def test_decision_trace_helpers_keep_safe_memory_ids_and_pressure_precedence():
+    context = types.SimpleNamespace(
+        recall=("[memory:first] remembered", "[memory:first] again [memory:second]"),
+        warnings=(),
+        persona=(),
+        conditions=(),
+        social_cues=(),
+    )
+
+    assert _memory_ids(context) == ("first", "second")
+    assert _governing_pressure(context) == "memory"
+    context.recall = ()
+    context.social_cues = ("a neighbor is nearby",)
+    assert _governing_pressure(context) == "social"
+    decision = Decision(character_id="character-1", tool=None, summary="waiting")
+    assert decision.with_receipt(None) == decision
 
 ALL_ACTION_DEFINITIONS = tuple(
     definition for _owner, definition in PluginRegistry(bunnyland_plugins()).actions.values()

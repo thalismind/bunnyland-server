@@ -856,6 +856,11 @@ async def test_local_backend_hosts_claims_and_submits(monkeypatch, tmp_path):
         assert character_projection["actions"]
         room_projection = await backend.fetch_room_projection(refreshed.room_of(player), player)
         assert room_projection["room"]["id"] == refreshed.room_of(player)
+        hidden_room = next(
+            room["id"] for room in refreshed.rooms() if room["id"] != refreshed.room_of(player)
+        )
+        with pytest.raises(PermissionError, match="not currently visible"):
+            await backend.fetch_room_projection(hidden_room, player)
     finally:
         await backend.close()
 

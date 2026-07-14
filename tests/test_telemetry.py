@@ -402,6 +402,19 @@ async def test_command_submit_marks_unexpected_exception_error(otel_capture, mon
 
 
 @pytestmark_otel
+def test_mark_span_error_without_description_uses_generic_status(otel_capture):
+    span_exporter, _reader = otel_capture
+
+    with telemetry.span("generic.error") as span:
+        telemetry.mark_span_error(span=span)
+
+    exported = _spans_by_name(span_exporter)["generic.error"]
+    assert _span_status_name(exported) == "ERROR"
+    assert exported.status.description == "operation failed"
+    assert "error.description_sha256" not in exported.attributes
+
+
+@pytestmark_otel
 def test_trace_attributes_and_exceptions_never_export_private_values(otel_capture):
     span_exporter, _reader = otel_capture
     private = "claim-secret-memory-text"

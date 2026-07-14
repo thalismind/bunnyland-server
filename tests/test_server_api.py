@@ -1082,6 +1082,7 @@ async def test_event_stream_records_recent_events_and_fans_out_to_subscribers(sc
 
 def test_event_stream_broadcast_drops_oldest_when_queue_is_full(scenario):
     stream = EventStream(scenario.actor)
+    assert stream._room_of("not-an-entity") is None
     subscription = stream.subscribe(max_queue_size=1)
     try:
         stream.broadcast({"type": "first"})
@@ -1568,6 +1569,17 @@ def test_claim_scoped_perspective_query_route_and_stream_metrics(scenario, monke
     assert stats.status_code == 200
     assert stats.json()["connections"] == 0
 
+    def forbidden(*args, **kwargs):
+        raise PermissionError("query is not visible")
+
+    monkeypatch.setattr(scenario.actor.perspective_queries, "execute", forbidden)
+    denied = client.post(
+        path,
+        headers=headers,
+        json={"query": "valid_targets", "arguments": {"action": "move"}},
+    )
+    assert denied.status_code == 403
+
     def timeout(*args, **kwargs):
         raise TimeoutError("query budget exhausted")
 
@@ -1712,7 +1724,7 @@ def test_fastapi_room_projection_and_queue_map_invalid_ids_to_http_errors(scenar
     assert wrong_queue_kind.json()["detail"] == "entity is not a character"
 
 
-def test_fastapi_room_projection_requires_claim_and_current_perception(scenario):
+def test_fastapi_room_projection_requires_claim_and_current_perception(scenario, monkeypatch):
     testclient = pytest.importorskip("fastapi.testclient")
     secrets = ClaimSecretRegistry()
     claim = add_claim(
@@ -1747,6 +1759,17 @@ def test_fastapi_room_projection_requires_claim_and_current_perception(scenario)
     assert hidden_room.status_code == 403
     assert hidden_room.json()["detail"] == "room is not currently visible to character"
     assert visible_room.status_code == 200
+
+    def invalid_projection(*args, **kwargs):
+        raise ValueError("entity is not a room")
+
+    monkeypatch.setattr("bunnyland.server.app.serialize_room_projection", invalid_projection)
+    invalid = client.get(
+        f"/world/room/{scenario.room_a}",
+        params=params,
+        headers={"X-Bunnyland-Claim-Secret": secret},
+    )
+    assert invalid.status_code == 400
 
 
 def test_fastapi_openapi_exposes_projection_contract_route(scenario):

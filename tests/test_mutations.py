@@ -28,6 +28,7 @@ from bunnyland.core import (
     execute_mutation_plan,
     spawn_entity,
     validate_core_invariants,
+    world_transaction,
 )
 from bunnyland.core.handlers.base import planned
 
@@ -45,6 +46,27 @@ def test_plan_preflights_every_operation_before_mutating(scenario):
     with pytest.raises(MutationError, match="does not have component str"):
         execute_mutation_plan(scenario.actor.world, plan)
     assert character.get_component(IdentityComponent).name == identity.name
+
+
+def test_world_transaction_rejects_a_new_invariant_failure_in_an_invalid_world(scenario):
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    points = character.get_component(ActionPointsComponent)
+    character.remove_component(ActionPointsComponent)
+    character.add_component(replace(points, current=-1))
+
+    with pytest.raises(MutationError, match="more than one physical location"):
+        with world_transaction(world):
+            world.get_entity(scenario.room_b).add_relationship(
+                Contains(mode=ContainmentMode.ROOM_CONTENT), scenario.character
+            )
+
+    assert not world.get_entity(scenario.room_b).has_relationship(Contains, scenario.character)
+
+
+def test_remove_edge_apply_rejects_an_unresolved_reference(scenario):
+    with pytest.raises(MutationError, match="target reference has not been created"):
+        RemoveEdge(scenario.room_a, EntityReference(), Contains).apply(scenario.actor.world)
 
 
 def test_failed_invariant_rolls_back_components_and_edges(scenario):
