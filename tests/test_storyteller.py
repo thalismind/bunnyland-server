@@ -13,6 +13,7 @@ from bunnyland.core import (
     DeadComponent,
     IdentityComponent,
     Lane,
+    ReadableComponent,
     RoomComponent,
     SuspendedComponent,
     build_submitted_command,
@@ -417,6 +418,39 @@ def test_storyteller_auto_resolution_predicates_cover_cross_pack_states(scenario
     assert story._spawned_requirement_done(world, incident, "damage", unrepaired.id, rules) is False
     assert story._spawned_requirement_done(world, incident, "damage", repaired.id, rules) is True
     assert story._spawned_requirement_done(world, incident, "damage", no_damage.id, rules) is True
+
+
+def test_storyteller_returned_and_reported_resolution_rules(scenario):
+    world = scenario.actor.world
+    incident = spawn_entity(
+        world,
+        [IncidentComponent(kind="missing_parcel", budget_spent=0, started_at_epoch=0)],
+    )
+    parcel = spawn_entity(world, [IdentityComponent(name="parcel", kind="parcel")])
+    report = spawn_entity(world, [IdentityComponent(name="log", kind="paper")])
+
+    assert story._returned_to_incident_room(world, incident, parcel) is False
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), incident.id
+    )
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), parcel.id
+    )
+    assert story._returned_to_incident_room(world, incident, parcel) is False
+    world.get_entity(scenario.room_b).remove_relationship(Contains, parcel.id)
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), parcel.id
+    )
+    assert story._returned_to_incident_room(world, incident, parcel) is True
+
+    assert story._incident_reported(world, incident, report) is False
+    report.add_component(ReadableComponent(text="OPEN missing parcel"))
+    assert story._incident_reported(world, incident, report) is False
+    report.remove_component(ReadableComponent)
+    report.add_component(
+        ReadableComponent(text="Parcel-01 resolved after the missing parcel witness report.")
+    )
+    assert story._incident_reported(world, incident, report) is True
 
 
 def test_incident_ready_and_resolve_handler_cover_error_paths_directly(scenario):

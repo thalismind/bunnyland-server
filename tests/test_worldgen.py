@@ -518,6 +518,121 @@ async def test_clover_city_story_state_survives_checkpoint_restore(tmp_path):
     assert len(list(loaded.world.query().with_all([ObligationComponent]).execute_entities())) == 3
 
 
+async def test_clover_city_missing_parcel_resolves_through_world_actions_and_survives_reload(
+    tmp_path,
+):
+    from bunnyland.core.components import ActionPointsComponent
+    from bunnyland.core.controllers import WebControllerComponent
+    from bunnyland.foundation.social.mechanics import ObligationComponent, SocialBond
+    from bunnyland.foundation.storyteller.mechanics import IncidentComponent, IncidentSpawned
+    from bunnyland.llm_agents import ToolCall, command_from_tool_call
+
+    plugins = bunnyland_plugins()
+    actor = WorldActor()
+    apply_plugins(plugins, actor)
+    world = await CLOVER_CITY_DEMO.generate(actor, "clover-parcel-story", GenOptions())
+    pip_id = world.characters["pip"]
+    ada_id = world.characters["ada"]
+    pip = actor.world.get_entity(pip_id)
+    pip.remove_component(SuspendedComponent)
+    points = pip.get_component(ActionPointsComponent)
+    replace_component(pip, replace(points, current=20, maximum=20))
+    controller = spawn_entity(actor.world, [WebControllerComponent(client_id="parcel-test")])
+    generation = actor.assign_controller(pip_id, controller.id)
+    parcel = next(
+        entity
+        for entity in actor.world.query().with_all([PortableComponent]).execute_entities()
+        if entity.has_component(IdentityComponent)
+        and entity.get_component(IdentityComponent).name == "misrouted parcel"
+    )
+    obligation_entity = next(
+        entity
+        for entity in actor.world.query().with_all([ObligationComponent]).execute_entities()
+        if entity.get_component(ObligationComponent).source_event_id == "clover-story-0"
+    )
+    incident_entity = next(
+        entity
+        for entity in actor.world.query().with_all([IncidentComponent]).execute_entities()
+        if entity.get_component(IncidentComponent).kind == "missing_parcel"
+    )
+    assert {edge.kind for edge, _target in incident_entity.get_relationships(IncidentSpawned)} == {
+        "reported",
+        "returned",
+    }
+
+    receipts = []
+
+    async def act(name: str, **arguments) -> None:
+        command = command_from_tool_call(
+            ToolCall(name, arguments),
+            character_id=str(pip_id),
+            controller_id=str(controller.id),
+            controller_generation=generation,
+            submitted_at_epoch=actor.epoch,
+            definitions=actor.action_definitions(),
+        )
+        outcome = await actor.submit(command)
+        assert outcome.accepted is True
+        await actor.tick(0)
+        receipt = actor.receipt_for(command.command_id)
+        assert receipt is not None
+        assert receipt.status.value == "committed"
+        assert receipt.event_ids
+        receipts.append(receipt)
+
+    for direction in ("west", "south", "west"):
+        await act("move", direction=direction)
+    await act("take", item_id=str(parcel.id))
+    for direction in ("east", "north", "east"):
+        await act("move", direction=direction)
+    await act("drop", item_id=str(parcel.id))
+    await act(
+        "resolve_obligation",
+        obligation_id=str(obligation_entity.id),
+        status="fulfilled",
+        note="Parcel returned to the mailroom.",
+    )
+    for direction in ("west", "southeast"):
+        await act("move", direction=direction)
+    await act(
+        "write",
+        target_id=str(world.objects["log"]),
+        text="Resolved missing parcel after Pip returned it and Ada confirmed the witness report.",
+    )
+
+    assert len(receipts) == 12
+    assert container_of(parcel) == world.rooms["mailroom"]
+    assert obligation_entity.get_component(ObligationComponent).status == "fulfilled"
+    assert incident_entity.get_component(IncidentComponent).resolved_at_epoch is not None
+    bond = next(
+        edge
+        for edge, target_id in actor.world.get_entity(ada_id).get_relationships(SocialBond)
+        if target_id == pip_id
+    )
+    assert bond.trust == pytest.approx(0.1)
+    assert bond.affinity == pytest.approx(0.05)
+    log = actor.world.get_entity(world.objects["log"]).get_component(ReadableComponent)
+    assert "Resolved missing parcel" in log.text
+
+    path = tmp_path / "clover-parcel-resolved.json"
+    save_world(actor, path, meta=WorldMeta(seed="clover-parcel-story"))
+    loaded, _meta = load_world(path, registry=PluginRegistry(plugins))
+
+    assert container_of(loaded.world.get_entity(parcel.id)) == world.rooms["mailroom"]
+    assert loaded.world.get_entity(obligation_entity.id).get_component(
+        ObligationComponent
+    ).status == "fulfilled"
+    assert loaded.world.get_entity(incident_entity.id).get_component(
+        IncidentComponent
+    ).resolved_at_epoch is not None
+    loaded_bond = next(
+        edge
+        for edge, target_id in loaded.world.get_entity(ada_id).get_relationships(SocialBond)
+        if target_id == pip_id
+    )
+    assert loaded_bond.trust == pytest.approx(0.1)
+
+
 def test_validate_rejects_dangling_references():
     proposal = WorldProposal(
         seed="x",

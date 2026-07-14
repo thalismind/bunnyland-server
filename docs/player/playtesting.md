@@ -179,8 +179,9 @@ world conditions, not scripted outcomes; intervene with ordinary actions and rec
 actually happens.
 
 - **Missing parcel:** find the misrouted parcel outside the mailroom, question or inform a
-  witness, return or keep it, then write the result in the incident log. Check Pip's open
-  obligation and relationship consequence before and after restart.
+  witness, return or keep it, then write the result in the incident log. A completed report
+  must identify the missing parcel as resolved. Fulfill Pip's open obligation and check its
+  relationship consequence before and after restart.
 - **Rooftop water shortage:** inspect the rationed rain barrel and limited community
   pantry, respond to the need pressure through sharing, replenishment, or theft, and check
   the Wick/Saffron obligation and persistent resource state after restart.

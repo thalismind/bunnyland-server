@@ -407,7 +407,7 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
     from bunnyland.core.edges import ContainmentMode, Contains
     from bunnyland.foundation.consumables.components import ConsumableComponent
     from bunnyland.foundation.social.mechanics import SocialBond, create_obligation
-    from bunnyland.foundation.storyteller.mechanics import IncidentComponent
+    from bunnyland.foundation.storyteller.mechanics import IncidentComponent, IncidentSpawned
     from bunnyland.simpacks.lifesim.mechanics import CareerComponent, HasRoutine, RoutineComponent
 
     room_specs = [
@@ -563,7 +563,7 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
                 "pip",
                 "ada",
                 "Find the misrouted parcel, return it to the mailroom, and record "
-                "the witness report.",
+                "a witness report marking the missing parcel resolved.",
             ),
             (
                 "rooftop_water_shortage",
@@ -611,6 +611,11 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
             actor.world.get_entity(debtor).add_relationship(
                 SocialBond(familiarity=0.4, trust=0.2), creditor
             )
+            if kind == "missing_parcel":
+                incident.add_relationship(IncidentSpawned(kind="returned"), parcel.id)
+                incident.add_relationship(
+                    IncidentSpawned(kind="reported"), world.objects["log"]
+                )
         for index, character_id in enumerate(world.characters.values()):
             character = actor.world.get_entity(character_id)
             _augment(actor, character_id, CareerComponent(title="resident", hourly_pay=0))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
@@ -18,6 +19,7 @@ from ...core.components import (
     HealthComponent,
     IdentityComponent,
     PortableComponent,
+    ReadableComponent,
     RoomComponent,
     SuspendedComponent,
 )
@@ -316,9 +318,36 @@ def _monster_neutralized(world: World, incident: Entity, entity: Entity) -> bool
     return entity.has_component(DeadComponent) or entity.has_component(SuspendedComponent)
 
 
+def _returned_to_incident_room(world: World, incident: Entity, entity: Entity) -> bool:
+    del world
+    incident_room_id = container_of(incident)
+    return incident_room_id is not None and container_of(entity) == incident_room_id
+
+
+def _incident_reported(world: World, incident: Entity, entity: Entity) -> bool:
+    del world
+    if not entity.has_component(ReadableComponent):
+        return False
+    kind_words = set(incident.get_component(IncidentComponent).kind.lower().split("_"))
+    report_words = set(
+        re.findall(r"[a-z0-9]+", entity.get_component(ReadableComponent).text.lower())
+    )
+    return {"resolved", *kind_words} <= report_words
+
+
 DEFAULT_RESOLUTION_RULES = (
     IncidentResolutionRule(id="loot-claimed", kind="loot", resolved=_loot_claimed),
     IncidentResolutionRule(id="monster-neutralized", kind="monster", resolved=_monster_neutralized),
+    IncidentResolutionRule(
+        id="returned-to-incident-room",
+        kind="returned",
+        resolved=_returned_to_incident_room,
+    ),
+    IncidentResolutionRule(
+        id="incident-reported",
+        kind="reported",
+        resolved=_incident_reported,
+    ),
 )
 
 
