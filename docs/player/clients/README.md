@@ -19,9 +19,10 @@ shortcut around reachability, permissions, points, or command validation.
 
 Remote clients share a claim-authenticated live update stream. Chat, character sheets, Toon,
 Web TUI, Web REPL, and their terminal counterparts refresh the selected character after
-perceivable events. During a disconnect they reconnect automatically and fall back to the
-character's recent activity feed; manual refresh remains available when you want an
-immediate resync.
+perceivable events. The live stream is best-effort: after a sequence gap, queue overflow,
+or reconnect, clients replace their local state with a fresh character projection rather
+than replaying queued frames. The recent activity feed is bounded and reports when it
+cannot cover the requested interval; manual refresh remains available at any time.
 
 Action menus are built from the server's installed action registry and current target
 groups. If that metadata is temporarily unavailable, clients show an empty or disabled

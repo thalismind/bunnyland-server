@@ -48,6 +48,9 @@ async def test_forty_clients_fanout_overflow_reconnect_and_gap_recovery(scenario
             str(scenario.character),
         )
         assert update["type"] == "resync"
+        assert update["data"]["reason"] == "queue_overflow"
+        assert update["data"]["resume_supported"] is False
+        assert subscription.queue.empty()
         frame = subscription.frame(scenario.actor, update)
         assert frame["protocol_version"] == 1
         assert frame["projection_version"] == 1

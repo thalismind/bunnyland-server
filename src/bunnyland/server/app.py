@@ -267,7 +267,7 @@ async def next_player_update(
 ) -> dict:
     """Return the next safe frame, a resync after overflow, or an idle heartbeat."""
     if subscription.consume_dropped():
-        return {"type": "resync", "data": {"world_epoch": actor.epoch}}
+        return _overflow_resync(actor)
     deadline = asyncio.get_running_loop().time() + WEBSOCKET_HEARTBEAT_SECONDS
     while True:
         timeout = max(0, deadline - asyncio.get_running_loop().time())
@@ -276,10 +276,22 @@ async def next_player_update(
         except TimeoutError:
             return {"type": "heartbeat", "data": {"world_epoch": actor.epoch}}
         if subscription.consume_dropped():
-            return {"type": "resync", "data": {"world_epoch": actor.epoch}}
+            return _overflow_resync(actor)
         update = player_update_for_message(actor, character_id, message)
         if update is not None:
             return update
+
+
+def _overflow_resync(actor: WorldActor) -> dict:
+    return {
+        "type": "resync",
+        "data": {
+            "world_epoch": actor.epoch,
+            "reason": "queue_overflow",
+            "resume_supported": False,
+            "required_action": "fetch_character_projection",
+        },
+    }
 
 
 def create_app(

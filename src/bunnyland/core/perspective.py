@@ -166,11 +166,7 @@ def _why_not(actor: Any, request: WhyNotInput):
         target_valid = any(candidate.get("id") == request.target for candidate in candidates)
     return {
         "available": action.available and target_valid is not False,
-        "reason": (
-            "target is not valid"
-            if target_valid is False
-            else action.unavailable_reason
-        ),
+        "reason": ("target is not valid" if target_valid is False else action.unavailable_reason),
         "availability": availability,
         "target_valid": target_valid,
     }, provenance
@@ -179,31 +175,21 @@ def _why_not(actor: Any, request: WhyNotInput):
 def _what_changed_since(actor: Any, request: WhatChangedSinceInput):
     stream = getattr(actor, "event_stream", None)
     if stream is None:
-        return [], ("event_stream:unavailable",)
-    from .ecs import container_of, parse_entity_id
-    from .events import serialized_event_visible_to
-
-    def room_of(character_id: str) -> str | None:
-        entity_id = parse_entity_id(character_id)
-        if entity_id is None or not actor.world.has_entity(entity_id):
-            return None
-        room_id = container_of(actor.world.get_entity(entity_id))
-        return str(room_id) if room_id is not None else None
-
-    updates = []
-    for message in stream.recent_messages():
-        event = message.get("data", {}).get("event", {})
-        if serialized_event_visible_to(
-            event,
-            character_id=request.actor_id,
-            room_of=room_of,
-        ):
-            updates.append(message)
-    return [
-        update
-        for update in updates
-        if int(update.get("data", {}).get("event", {}).get("world_epoch", 0)) > request.epoch
-    ], ("event_stream.recent",)
+        return {
+            "events": [],
+            "complete": False,
+            "resync_required": True,
+            "requested_epoch": request.epoch,
+            "available_after_epoch": actor.epoch,
+        }, ("event_stream:unavailable",)
+    updates, complete, available_after_epoch = stream.changes_since(request.actor_id, request.epoch)
+    return {
+        "events": updates,
+        "complete": complete,
+        "resync_required": not complete,
+        "requested_epoch": request.epoch,
+        "available_after_epoch": available_after_epoch,
+    }, ("event_stream.occurrence_time_visibility",)
 
 
 V1_PERSPECTIVE_QUERIES = (

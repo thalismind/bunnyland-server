@@ -105,10 +105,15 @@ than silently rewriting history.
 
 External frames carry `world_id`, `protocol_version`, `projection_version`, `world_epoch`,
 connection-local `stream_sequence`, optional `event_id`, and optional
-`causal_command_id`. Delivery is at least once. Clients deduplicate event IDs, detect gaps
-in stream sequence, and request a fresh character projection after `resync`. They must not
-infer exactly-once delivery. Claim validity is checked before every character frame and
-subscriber queues stay bounded.
+`causal_command_id`. Live delivery is ordered and best-effort, not at-least-once or
+exactly-once. `stream_sequence` counts frames on one connection; it is not a durable event
+cursor and resets after reconnect. Clients deduplicate frames that have event IDs. A
+sequence gap means the current projection cannot be trusted, while an explicit `resync`
+means the server detected bounded-queue loss; either requires a fresh character projection.
+Overflow resync is non-resumable and discards queued stale frames. `what_changed_since`
+uses occurrence-time visibility and explicitly reports when its bounded history is
+incomplete. Claim validity is checked before every character frame and subscriber queues
+stay bounded.
 
 ## Preview scope
 

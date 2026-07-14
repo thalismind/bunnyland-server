@@ -1,10 +1,17 @@
 """Perspective query catalogue behavior and isolation."""
 
-from types import SimpleNamespace
-
 import pytest
 
-from bunnyland.core import CommandCost, Lane, build_submitted_command
+from bunnyland.core import (
+    CommandCost,
+    ContainmentMode,
+    Contains,
+    DomainEvent,
+    EventVisibility,
+    Lane,
+    build_submitted_command,
+    event_base,
+)
 from bunnyland.core.perspective import (
     V1_PERSPECTIVE_QUERIES,
     AvailableActionsInput,
@@ -82,8 +89,10 @@ async def test_what_changed_since_filters_by_epoch_and_character_visibility(scen
         actor_id=str(scenario.character),
     )
     assert any(
-        update["data"]["event_type"] == "ActorMovedEvent" for update in changed.result
+        update["data"]["event_type"] == "ActorMovedEvent" for update in changed.result["events"]
     )
+    assert changed.result["complete"] is True
+    assert changed.result["resync_required"] is False
 
 
 def test_registry_rejects_unknown_query_and_spoofed_actor_argument(scenario):
@@ -114,9 +123,7 @@ def test_registry_catalogue_duplicate_limit_and_budget(monkeypatch, scenario):
     assert [item.name for item in registry.definitions()] == ["bounded"]
     with pytest.raises(ValueError, match="duplicate perspective query"):
         registry.register(definition)
-    result = registry.execute(
-        scenario.actor, "bounded", {}, actor_id=str(scenario.character)
-    )
+    result = registry.execute(scenario.actor, "bounded", {}, actor_id=str(scenario.character))
     assert result.result == [1]
     assert result.truncated is True
 
@@ -151,23 +158,21 @@ def test_query_rejections_optional_target_and_unavailable_event_stream(scenario)
         {"epoch": 0},
         actor_id=str(scenario.character),
     )
-    assert changed.result == []
+    assert changed.result["events"] == []
+    assert changed.result["complete"] is False
+    assert changed.result["resync_required"] is True
     assert "event_stream:unavailable" in changed.provenance
 
-    scenario.actor.event_stream = SimpleNamespace(
-        recent_messages=lambda: [
-            {
-                "type": "event",
-                "data": {
-                    "event": {
-                        "event_id": "room-event",
-                        "world_epoch": 1,
-                        "visibility": "room",
-                        "room_id": str(scenario.room_a),
-                    }
-                },
-            }
-        ]
+    scenario.actor.event_stream = EventStream(scenario.actor)
+    scenario.actor.event_stream.record(
+        DomainEvent(
+            **event_base(
+                1,
+                event_id="room-event",
+                visibility=EventVisibility.ROOM,
+                room_id=str(scenario.room_a),
+            )
+        )
     )
     ghost = scenario.actor.perspective_queries.execute(
         scenario.actor,
@@ -175,7 +180,7 @@ def test_query_rejections_optional_target_and_unavailable_event_stream(scenario)
         {"epoch": 0},
         actor_id="entity_999999",
     )
-    assert ghost.result == []
+    assert ghost.result["events"] == []
 
     visible = scenario.actor.perspective_queries.execute(
         scenario.actor,
@@ -183,7 +188,7 @@ def test_query_rejections_optional_target_and_unavailable_event_stream(scenario)
         {"epoch": 0},
         actor_id=str(scenario.character),
     )
-    assert visible.result[0]["data"]["event"]["event_id"] == "room-event"
+    assert visible.result["events"][0]["data"]["event"]["event_id"] == "room-event"
 
     from bunnyland.core import CharacterComponent, spawn_entity
 
@@ -194,4 +199,75 @@ def test_query_rejections_optional_target_and_unavailable_event_stream(scenario)
         {"epoch": 0},
         actor_id=str(unplaced.id),
     )
-    assert unplaced_result.result == []
+    assert unplaced_result.result["events"] == []
+
+
+def test_what_changed_since_preserves_occurrence_visibility_and_reports_history_gap(scenario):
+    _register_v1(scenario.actor)
+    stream = EventStream(scenario.actor, recent_limit=2)
+    scenario.actor.event_stream = stream
+    stream.record(
+        DomainEvent(
+            **event_base(
+                1,
+                event_id="seen-in-a",
+                visibility=EventVisibility.ROOM,
+                room_id=str(scenario.room_a),
+            )
+        )
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(Contains, character.id)
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        character.id,
+    )
+    stream.record(
+        DomainEvent(
+            **event_base(
+                2,
+                event_id="seen-in-b",
+                visibility=EventVisibility.ROOM,
+                room_id=str(scenario.room_b),
+            )
+        )
+    )
+
+    changed = scenario.actor.perspective_queries.execute(
+        scenario.actor,
+        "what_changed_since",
+        {"epoch": 0},
+        actor_id=str(scenario.character),
+    )
+
+    assert [message["data"]["event"]["event_id"] for message in changed.result["events"]] == [
+        "seen-in-a",
+        "seen-in-b",
+    ]
+    assert changed.result["complete"] is True
+
+    stream.record(
+        DomainEvent(
+            **event_base(
+                3,
+                event_id="newest-in-b",
+                visibility=EventVisibility.ROOM,
+                room_id=str(scenario.room_b),
+            )
+        )
+    )
+    changed = scenario.actor.perspective_queries.execute(
+        scenario.actor,
+        "what_changed_since",
+        {"epoch": 0},
+        actor_id=str(scenario.character),
+    )
+
+    assert [message["data"]["event"]["event_id"] for message in changed.result["events"]] == [
+        "seen-in-b",
+        "newest-in-b",
+    ]
+    assert changed.result["complete"] is False
+    assert changed.result["resync_required"] is True
+    assert changed.result["available_after_epoch"] == 1

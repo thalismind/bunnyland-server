@@ -7,7 +7,9 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
-from ..core.events import DomainEvent
+from ..core.components import CharacterComponent
+from ..core.ecs import container_of, parse_entity_id
+from ..core.events import DomainEvent, serialized_event_visible_to
 from ..core.world_actor import WorldActor
 from .serialization import event_message
 
@@ -32,6 +34,8 @@ class EventSubscription:
         self.dropped = False
         if dropped:
             self.stream.resyncs += 1
+            while not self.queue.empty():
+                self.queue.get_nowait()
         return dropped
 
     def frame(self, actor: WorldActor, message: dict[str, Any]) -> dict[str, Any]:
@@ -57,7 +61,12 @@ class EventStream:
     """Records recent domain events and fans out new ones to websocket clients."""
 
     def __init__(self, actor: WorldActor, *, recent_limit: int = 200) -> None:
-        self._recent: deque[dict[str, Any]] = deque(maxlen=recent_limit)
+        self._actor = actor
+        self._recent_limit = recent_limit
+        self._recent: deque[dict[str, Any]] = deque()
+        self._audiences: dict[str, frozenset[str]] = {}
+        self._started_at_epoch = actor.epoch
+        self._discarded_through_epoch = actor.epoch
         self._subscribers: set[EventSubscription] = set()
         self._registry = actor.plugins
         self.connections_total = 0
@@ -72,8 +81,37 @@ class EventStream:
 
     def record(self, event: DomainEvent) -> None:
         message = event_message(event, self._registry)
+        event_data = message.get("data", {}).get("event", {})
+        audience = frozenset(
+            str(character.id)
+            for character in self._actor.world.query()
+            .with_all([CharacterComponent])
+            .execute_entities()
+            if serialized_event_visible_to(
+                event_data,
+                character_id=str(character.id),
+                room_of=self._room_of,
+            )
+        )
+        if len(self._recent) >= self._recent_limit:
+            discarded = self._recent.popleft()
+            discarded_event = discarded.get("data", {}).get("event", {})
+            discarded_id = str(discarded_event.get("event_id", ""))
+            self._audiences.pop(discarded_id, None)
+            self._discarded_through_epoch = max(
+                self._discarded_through_epoch,
+                int(discarded_event.get("world_epoch", 0)),
+            )
         self._recent.append(message)
+        self._audiences[event.event_id] = audience
         self.broadcast(message)
+
+    def _room_of(self, character_id: str) -> str | None:
+        entity_id = parse_entity_id(character_id)
+        if entity_id is None or not self._actor.world.has_entity(entity_id):
+            return None
+        room_id = container_of(self._actor.world.get_entity(entity_id))
+        return str(room_id) if room_id is not None else None
 
     def broadcast(self, message: dict[str, Any]) -> None:
         """Fan out a websocket message without adding it to recent domain history."""
@@ -91,6 +129,23 @@ class EventStream:
 
     def recent_messages(self) -> list[dict[str, Any]]:
         return list(self._recent)
+
+    def changes_since(
+        self, character_id: str, epoch: int
+    ) -> tuple[list[dict[str, Any]], bool, int]:
+        """Return occurrence-time-visible history and whether the bounded answer is complete."""
+
+        available_after_epoch = max(self._started_at_epoch, self._discarded_through_epoch)
+        complete = epoch >= available_after_epoch
+        messages = []
+        for message in self._recent:
+            event = message.get("data", {}).get("event", {})
+            if int(event.get("world_epoch", 0)) <= epoch:
+                continue
+            event_id = str(event.get("event_id", ""))
+            if character_id in self._audiences.get(event_id, frozenset()):
+                messages.append(message)
+        return messages, complete, available_after_epoch
 
     def subscribe(self, *, max_queue_size: int = 100) -> EventSubscription:
         subscription = EventSubscription(self, asyncio.Queue(maxsize=max_queue_size))
