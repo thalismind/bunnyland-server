@@ -408,9 +408,7 @@ def test_event_narrator_renders_inspection_fact_text_without_raw_records():
                 note="",
                 entity_id=PLAYER,
                 name="Pib",
-                facts=[
-                    {"key": "needs.hunger", "text": "You are not hungry.", "detail": 30}
-                ],
+                facts=[{"key": "needs.hunger", "text": "You are not hungry.", "detail": 30}],
             )
         ],
         player_id=PLAYER,
@@ -856,7 +854,7 @@ async def test_local_backend_hosts_claims_and_submits(monkeypatch, tmp_path):
         character_projection = await backend.fetch_character_projection(player)
         assert character_projection["character_id"] == player
         assert character_projection["actions"]
-        room_projection = await backend.fetch_room_projection(refreshed.room_of(player))
+        room_projection = await backend.fetch_room_projection(refreshed.room_of(player), player)
         assert room_projection["room"]["id"] == refreshed.room_of(player)
     finally:
         await backend.close()
@@ -1733,8 +1731,8 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
             self.closed = False
             self.requests: list[tuple[str, str, dict | None]] = []
 
-        async def get(self, url: str):
-            self.requests.append(("GET", url, None))
+        async def get(self, url: str, **kwargs):
+            self.requests.append(("GET", url, kwargs or None))
             return Response(payload={"world_epoch": 7})
 
         async def post(self, url: str, json: dict):
@@ -1762,7 +1760,7 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
     snapshot = await backend.fetch_snapshot()
     character_list = await backend.fetch_character_list()
     character = await backend.fetch_character_projection(PLAYER)
-    room = await backend.fetch_room_projection(PARLOR)
+    room = await backend.fetch_room_projection(PARLOR, PLAYER)
     queued = await backend.fetch_queued_commands(PLAYER)
     submitted = await backend.submit({"command_type": "wait"})
     cancelled = await backend.cancel_command(PLAYER, "cmd-1", "controller:1", 3)
@@ -1780,7 +1778,11 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
         ("GET", "http://server.example/world/snapshot", None),
         ("GET", "http://server.example/world/characters", None),
         ("GET", f"http://server.example/world/character/{PLAYER}", None),
-        ("GET", f"http://server.example/world/room/{PARLOR}", None),
+        (
+            "GET",
+            f"http://server.example/world/room/{PARLOR}",
+            {"params": {"character_id": PLAYER}},
+        ),
         ("GET", f"http://server.example/world/character/{PLAYER}/commands", None),
         ("POST", "http://server.example/world/commands", {"command_type": "wait"}),
         (
@@ -1890,7 +1892,7 @@ async def test_backend_base_defaults_are_empty():
     backend = MinimalBackend()
     assert await backend.fetch_character_list() == []
     assert await backend.fetch_character_projection(PLAYER) is None
-    assert await backend.fetch_room_projection(PARLOR) is None
+    assert await backend.fetch_room_projection(PARLOR, PLAYER) is None
     assert await backend.cancel_command(PLAYER, "cmd-1", "controller:1", 0) is False
     assert await backend.recent_events() == []
 

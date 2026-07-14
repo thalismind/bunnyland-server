@@ -1404,7 +1404,20 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario, 
     testclient = pytest.importorskip("fastapi.testclient")
     meta = WorldMeta(seed="moss", generator="oneshot", plugins=("bunnyland.core_verbs",))
     monkeypatch.setenv("BUNNYLAND_GIT_HASH", "deadbeefcafebabe")
-    app = create_app(scenario.actor, meta=meta, admin_token="secret")
+    secrets = ClaimSecretRegistry()
+    claim = add_claim(
+        scenario.actor.world.get_entity(scenario.controller),
+        client_kind="web",
+        client_id="room-client",
+        character_id=str(scenario.character),
+    )
+    claim_secret = secrets.issue(claim.claim_id)
+    app = create_app(
+        scenario.actor,
+        meta=meta,
+        admin_token="secret",
+        claim_secrets=secrets,
+    )
     client = testclient.TestClient(app)
 
     health = client.get("/health")
@@ -1415,9 +1428,23 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario, 
         "/world/events/recent",
         headers={"X-Bunnyland-Admin-Secret": "secret"},
     )
-    character_view = client.get(f"/world/character/{scenario.character}")
-    room_view = client.get(f"/world/room/{scenario.room_a}")
-    queued = client.get(f"/world/character/{scenario.character}/commands")
+    player_params = {"claim_id": claim.claim_id}
+    player_headers = {"X-Bunnyland-Claim-Secret": claim_secret}
+    character_view = client.get(
+        f"/world/character/{scenario.character}",
+        params=player_params,
+        headers=player_headers,
+    )
+    room_view = client.get(
+        f"/world/room/{scenario.room_a}",
+        params={"character_id": str(scenario.character), "claim_id": claim.claim_id},
+        headers=player_headers,
+    )
+    queued = client.get(
+        f"/world/character/{scenario.character}/commands",
+        params=player_params,
+        headers=player_headers,
+    )
 
     assert health.status_code == 200
     assert health.json() == {
@@ -1655,11 +1682,23 @@ def test_fastapi_character_projection_maps_invalid_ids_to_http_errors(scenario):
 
 def test_fastapi_room_projection_and_queue_map_invalid_ids_to_http_errors(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    app = create_app(scenario.actor)
+    secrets = ClaimSecretRegistry()
+    claim = add_claim(
+        scenario.actor.world.get_entity(scenario.controller),
+        client_kind="web",
+        client_id="room-client",
+        character_id=str(scenario.character),
+    )
+    secret = secrets.issue(claim.claim_id)
+    app = create_app(scenario.actor, claim_secrets=secrets)
     client = testclient.TestClient(app)
+    kwargs = {
+        "params": {"character_id": str(scenario.character), "claim_id": claim.claim_id},
+        "headers": {"X-Bunnyland-Claim-Secret": secret},
+    }
 
-    missing_room = client.get("/world/room/not-an-id")
-    wrong_room_kind = client.get(f"/world/room/{scenario.character}")
+    missing_room = client.get("/world/room/not-an-id", **kwargs)
+    wrong_room_kind = client.get(f"/world/room/{scenario.character}", **kwargs)
     missing_queue = client.get("/world/character/not-an-id/commands")
     wrong_queue_kind = client.get(f"/world/character/{scenario.room_a}/commands")
 
@@ -1671,6 +1710,43 @@ def test_fastapi_room_projection_and_queue_map_invalid_ids_to_http_errors(scenar
     assert missing_queue.json()["detail"] == "character does not exist"
     assert wrong_queue_kind.status_code == 400
     assert wrong_queue_kind.json()["detail"] == "entity is not a character"
+
+
+def test_fastapi_room_projection_requires_claim_and_current_perception(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    secrets = ClaimSecretRegistry()
+    claim = add_claim(
+        scenario.actor.world.get_entity(scenario.controller),
+        client_kind="web",
+        client_id="room-client",
+        character_id=str(scenario.character),
+    )
+    secret = secrets.issue(claim.claim_id)
+    client = testclient.TestClient(create_app(scenario.actor, claim_secrets=secrets))
+    params = {"character_id": str(scenario.character), "claim_id": claim.claim_id}
+
+    missing_secret = client.get(f"/world/room/{scenario.room_a}", params=params)
+    wrong_secret = client.get(
+        f"/world/room/{scenario.room_a}",
+        params=params,
+        headers={"X-Bunnyland-Claim-Secret": "wrong"},
+    )
+    hidden_room = client.get(
+        f"/world/room/{scenario.room_b}",
+        params=params,
+        headers={"X-Bunnyland-Claim-Secret": secret},
+    )
+    visible_room = client.get(
+        f"/world/room/{scenario.room_a}",
+        params=params,
+        headers={"X-Bunnyland-Claim-Secret": secret},
+    )
+
+    assert missing_secret.status_code == 403
+    assert wrong_secret.status_code == 403
+    assert hidden_room.status_code == 403
+    assert hidden_room.json()["detail"] == "room is not currently visible to character"
+    assert visible_room.status_code == 200
 
 
 def test_fastapi_openapi_exposes_projection_contract_route(scenario):
@@ -1689,6 +1765,12 @@ def test_fastapi_openapi_exposes_projection_contract_route(scenario):
         "$ref": "#/components/schemas/CharacterQueuedCommandsResponse"
     }
     room_operation = schema["paths"]["/world/room/{id}"]["get"]
+    assert {parameter["name"] for parameter in room_operation["parameters"]} == {
+        "id",
+        "character_id",
+        "claim_id",
+        "X-Bunnyland-Claim-Secret",
+    }
     assert room_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/RoomProjectionResponse"
     }

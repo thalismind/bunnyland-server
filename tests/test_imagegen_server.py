@@ -10,6 +10,7 @@ import httpx
 import pytest
 from conftest import build_scenario
 
+from bunnyland.claims import ClaimSecretRegistry, add_claim
 from bunnyland.core import CharacterComponent, IdentityComponent, spawn_entity
 from bunnyland.core.events import DomainEvent
 from bunnyland.foundation.history.mechanics import record_world_history
@@ -369,10 +370,32 @@ async def test_character_projection_includes_portrait(tmp_path):
 
 async def test_room_projection_entity_portrait_default_empty(tmp_path):
     scenario = build_scenario()
-    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    secrets = ClaimSecretRegistry()
+    claim = add_claim(
+        scenario.actor.world.get_entity(scenario.controller),
+        client_kind="web",
+        client_id="image-client",
+        character_id=str(scenario.character),
+    )
+    secret = secrets.issue(claim.claim_id)
+    app = create_app(
+        scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        admin_token="secret",
+        claim_secrets=secrets,
+    )
     room = scenario.character_room()
     async with _client(app) as client:
-        body = (await client.get(f"/world/room/{room}")).json()
+        body = (
+            await client.get(
+                f"/world/room/{room}",
+                params={
+                    "character_id": str(scenario.character),
+                    "claim_id": claim.claim_id,
+                },
+                headers={"X-Bunnyland-Claim-Secret": secret},
+            )
+        ).json()
     members = body["room"]["entities"]
     assert members  # the character is in the room
     assert all("portrait" in member for member in members)

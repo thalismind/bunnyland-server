@@ -35,6 +35,7 @@ from ..core import (
     IdentityComponent,
     LLMControllerComponent,
     MemoryProfileComponent,
+    RoomComponent,
     SuspendedComponent,
     SuspendedControllerComponent,
     WebControllerComponent,
@@ -509,10 +510,35 @@ def create_app(
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/world/room/{id}", response_model=RoomProjectionResponse)
-    async def world_room_projection(id: str) -> RoomProjectionResponse:
+    async def world_room_projection(
+        id: str,
+        character_id: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+    ) -> RoomProjectionResponse:
         try:
             with telemetry.span("room.projection", {"room.id": id}):
+                room_id = parse_entity_id(id)
+                if room_id is None or not actor.world.has_entity(room_id):
+                    raise HTTPException(status_code=404, detail="room does not exist")
+                room = actor.world.get_entity(room_id)
+                if not room.has_component(RoomComponent):
+                    raise HTTPException(status_code=400, detail="entity is not a room")
+                claim_context = _require_claim_secret(
+                    character_id,
+                    claim_id=claim_id,
+                    claim_secret=claim_secret,
+                    require_claimed=True,
+                )
+                character = claim_context[0]
+                if container_of(character) != room_id:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="room is not currently visible to character",
+                    )
                 return serialize_room_projection(actor, id)
+        except HTTPException:
+            raise
         except ValueError as exc:
             detail = str(exc)
             status = 400 if detail == "entity is not a room" else 404

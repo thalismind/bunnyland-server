@@ -36,6 +36,7 @@ from ..core import (
     SuspendedControllerComponent,
     WebControllerComponent,
     build_submitted_command,
+    container_of,
     spawn_entity,
 )
 from ..core.claim_timeout import apply_claim_timeout_settings
@@ -231,7 +232,7 @@ class Backend(ABC):
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         return None
 
-    async def fetch_room_projection(self, room_id: str) -> dict | None:
+    async def fetch_room_projection(self, room_id: str, character_id: str) -> dict | None:
         return None
 
     async def fetch_queued_commands(self, character_id: str) -> dict:
@@ -424,7 +425,10 @@ class LocalBackend(Backend):
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         return serialize_character_projection(self.actor, character_id).model_dump(mode="json")
 
-    async def fetch_room_projection(self, room_id: str) -> dict | None:
+    async def fetch_room_projection(self, room_id: str, character_id: str) -> dict | None:
+        character = self.actor.world.get_entity(parse_entity_id(character_id))
+        if container_of(character) != parse_entity_id(room_id):
+            raise PermissionError("room is not currently visible to character")
         return serialize_room_projection(self.actor, room_id).model_dump(mode="json")
 
     async def fetch_queued_commands(self, character_id: str) -> dict:
@@ -701,8 +705,13 @@ class RemoteBackend(Backend):
         res.raise_for_status()
         return res.json()
 
-    async def fetch_room_projection(self, room_id: str) -> dict | None:
-        res = await self._client.get(f"{self.base}/world/room/{room_id}")
+    async def fetch_room_projection(self, room_id: str, character_id: str) -> dict | None:
+        kwargs = self._claim_request_kwargs(character_id, params=True)
+        kwargs["params"] = {
+            **kwargs.get("params", {}),
+            "character_id": character_id,
+        }
+        res = await self._client.get(f"{self.base}/world/room/{room_id}", **kwargs)
         res.raise_for_status()
         return res.json()
 
