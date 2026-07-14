@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from relics import Component, Edge, EntityId, World
+from relics import Component, Edge, Entity, EntityId, World
 
 from .components import ActionPointsComponent, FocusPointsComponent, WorldClockComponent
 from .ecs import parse_entity_id, replace_component, spawn_entity
@@ -135,8 +135,7 @@ class AddComponent:
         entity = _entity(world, self.entity_id)
         if entity.has_component(type(self.component)):
             raise MutationError(
-                f"entity {self.entity_id!s} already has component "
-                f"{type(self.component).__name__}"
+                f"entity {self.entity_id!s} already has component {type(self.component).__name__}"
             )
 
     def apply(self, world: World) -> Callable[[], None]:
@@ -171,9 +170,7 @@ class SetComponent:
         entity = _entity(world, self.entity_id)
         component_type = type(self.component)
         previous = (
-            entity.get_component(component_type)
-            if entity.has_component(component_type)
-            else None
+            entity.get_component(component_type) if entity.has_component(component_type) else None
         )
         replace_component(entity, self.component)
 
@@ -313,12 +310,8 @@ class RemoveEdge:
     edge_type: type[Edge]
 
     def preflight(self, world: World) -> None:
-        if (
-            isinstance(self.source_id, EntityReference)
-            and self.source_id.entity_id is None
-        ) or (
-            isinstance(self.target_id, EntityReference)
-            and self.target_id.entity_id is None
+        if (isinstance(self.source_id, EntityReference) and self.source_id.entity_id is None) or (
+            isinstance(self.target_id, EntityReference) and self.target_id.entity_id is None
         ):
             return
         source = _entity(world, self.source_id)
@@ -347,6 +340,23 @@ class RemoveEdge:
             "target_id": str(self.target_id),
             "edge": self.edge_type.__name__,
         }
+
+
+def replace_single_edge_operations(
+    source: Entity,
+    target_id: EntityTarget | None,
+    edge: Edge,
+) -> tuple[MutationOperation, ...]:
+    """Build operations replacing every outgoing edge of one type with at most one edge."""
+
+    edge_type = type(edge)
+    operations: list[MutationOperation] = [
+        RemoveEdge(source.id, current_id, edge_type)
+        for _current, current_id in source.get_relationships(edge_type)
+    ]
+    if target_id is not None:
+        operations.append(AddEdge(source.id, target_id, edge))
+    return tuple(operations)
 
 
 @dataclass(frozen=True)
@@ -473,6 +483,7 @@ __all__ = [
     "register_world_invariant",
     "RemoveComponent",
     "RemoveEdge",
+    "replace_single_edge_operations",
     "SetComponent",
     "execute_mutation_plan",
     "validate_core_invariants",

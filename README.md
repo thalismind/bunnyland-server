@@ -223,8 +223,7 @@ metric/span reference and the Tempo setup.
 - **[Scripting catalogue](docs/bunnyland_scripting.md)** — external JSON scripts for deterministic
   tests, plugin scenarios, and scripted events.
 
-The full design is in [`bunnyland_specification.md`](docs/bunnyland_specification.md); the build
-plan is in [`PLAN.md`](docs/PLAN.md).
+The full design is in [`bunnyland_specification.md`](docs/bunnyland_specification.md).
 
 ## Simulation packages
 

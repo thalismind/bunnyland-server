@@ -61,7 +61,6 @@ class IncidentComponent(Component):
     kind: str
     budget_spent: float
     started_at_epoch: int
-    room_id: str | None = None
     resolved_at_epoch: int | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
@@ -92,7 +91,7 @@ class IncidentResolutionRule:
 
     id: str
     kind: str
-    resolved: Callable[[World, IncidentComponent, Entity], bool]
+    resolved: Callable[[World, Entity, Entity], bool]
 
 
 class IncidentProposedEvent(DomainEvent):
@@ -241,7 +240,6 @@ def _spawn_incident(
                 kind=kind,
                 budget_spent=spent,
                 started_at_epoch=epoch,
-                room_id=str(room.id) if room is not None else None,
             ),
         ],
     )
@@ -306,13 +304,14 @@ def _is_admin(ctx: HandlerContext, command: SubmittedCommand, actor_id: EntityId
     )
 
 
-def _loot_claimed(world: World, incident: IncidentComponent, entity: Entity) -> bool:
-    if incident.room_id is None:
+def _loot_claimed(world: World, incident: Entity, entity: Entity) -> bool:
+    incident_room_id = container_of(incident)
+    if incident_room_id is None:
         return False
-    return container_of(entity) != parse_entity_id(incident.room_id)
+    return container_of(entity) != incident_room_id
 
 
-def _monster_neutralized(world: World, incident: IncidentComponent, entity: Entity) -> bool:
+def _monster_neutralized(world: World, incident: Entity, entity: Entity) -> bool:
     del world, incident
     return entity.has_component(DeadComponent) or entity.has_component(SuspendedComponent)
 
@@ -325,7 +324,7 @@ DEFAULT_RESOLUTION_RULES = (
 
 def _spawned_requirement_done(
     world: World,
-    incident: IncidentComponent,
+    incident: Entity,
     kind: str,
     target_id,
     rules: tuple[IncidentResolutionRule, ...] = DEFAULT_RESOLUTION_RULES,
@@ -342,12 +341,11 @@ def _incident_ready_to_resolve(
     incident_entity: Entity,
     rules: tuple[IncidentResolutionRule, ...] = DEFAULT_RESOLUTION_RULES,
 ) -> bool:
-    incident = incident_entity.get_component(IncidentComponent)
     spawned = tuple(incident_entity.get_relationships(IncidentSpawned))
     if not spawned:
         return False
     return all(
-        _spawned_requirement_done(world, incident, edge.kind, target_id, rules)
+        _spawned_requirement_done(world, incident_entity, edge.kind, target_id, rules)
         for edge, target_id in spawned
     )
 
@@ -366,12 +364,14 @@ def _incident_resolved_event(
     *,
     actor_id: str,
 ) -> IncidentResolvedEvent:
+    room_id = container_of(incident_entity)
+    raw_room_id = str(room_id) if room_id is not None else None
     return IncidentResolvedEvent(
         **_event_base(
             epoch,
-            visibility=EventVisibility.ROOM if incident.room_id else EventVisibility.SYSTEM,
+            visibility=EventVisibility.ROOM if raw_room_id else EventVisibility.SYSTEM,
             actor_id=actor_id,
-            room_id=incident.room_id,
+            room_id=raw_room_id,
             target_ids=(str(incident_entity.id),),
             incident_id=str(incident_entity.id),
             kind=incident.kind,

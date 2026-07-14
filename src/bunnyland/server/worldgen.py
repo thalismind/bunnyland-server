@@ -402,7 +402,6 @@ def _event_components(
                 kind=event.kind,
                 budget_spent=max(0.0, event.budget_spent),
                 started_at_epoch=epoch,
-                room_id=room_id,
             )
         ),
         _component_spec(

@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 class WorldMigrationError(ValueError):
@@ -200,9 +200,7 @@ def _migrate_v1(snapshot: dict[str, Any]) -> dict[str, Any]:
         decoration_edges = _records(relationships, "HasDecoration3D")
         for source_id, edges in decoration_edges.items():
             if not isinstance(edges, list):
-                raise WorldMigrationError(
-                    f"HasDecoration3D edges for {source_id!r} must be a list"
-                )
+                raise WorldMigrationError(f"HasDecoration3D edges for {source_id!r} must be a list")
             for record in edges:
                 if not isinstance(record, dict) or not isinstance(record.get("edge"), dict):
                     raise WorldMigrationError(
@@ -963,6 +961,7 @@ def _validate_v3(snapshot: dict[str, Any]) -> None:
     components = _table(snapshot, "components")
     relationships = _table(snapshot, "relationships")
     entities = _table(snapshot, "entities")
+
     def read_records(table: dict[str, Any], type_name: str) -> dict[str, Any]:
         value = table.get(type_name, {})
         if not isinstance(value, dict):
@@ -979,8 +978,7 @@ def _validate_v3(snapshot: dict[str, Any]) -> None:
             )
         if "co_parent_ids" in fields:
             raise WorldMigrationError(
-                f"schema-v3 entity {pregnant_id!r} contains legacy "
-                "PregnancyComponent.co_parent_ids"
+                f"schema-v3 entity {pregnant_id!r} contains legacy PregnancyComponent.co_parent_ids"
             )
     for legacy in ("HomeComponent", "RoomClaimComponent"):
         if read_records(components, legacy):
@@ -1056,8 +1054,7 @@ def _validate_v3(snapshot: dict[str, Any]) -> None:
                         )
                     if target_id not in characters:
                         raise WorldMigrationError(
-                            f"schema-v3 PregnancyCoParent target {target_id!r} "
-                            "is not a character"
+                            f"schema-v3 PregnancyCoParent target {target_id!r} is not a character"
                         )
                     if record.get("edge"):
                         raise WorldMigrationError(
@@ -1066,8 +1063,538 @@ def _validate_v3(snapshot: dict[str, Any]) -> None:
                         )
 
 
+def _v3_live_target(
+    entities: dict[str, Any], target_id: Any, *, owner_id: str, component: str, field: str
+) -> str:
+    target = str(target_id or "")
+    if target not in entities:
+        raise WorldMigrationError(
+            f"schema-v3 entity {owner_id!r} component {component}.{field} "
+            f"refers to missing entity {target!r}"
+        )
+    return target
+
+
+def _migrate_live_field(
+    components: dict[str, Any],
+    relationships: dict[str, Any],
+    entities: dict[str, Any],
+    *,
+    component: str,
+    field: str,
+    edge: str,
+    optional: bool = False,
+    many: bool = False,
+) -> None:
+    for owner_id, raw_fields in sorted(_records(components, component).items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(f"{component} fields for {owner_id!r} must be a mapping")
+        if field not in raw_fields:
+            continue
+        raw_targets = raw_fields.pop(field)
+        if many:
+            if not isinstance(raw_targets, (list, tuple)):
+                raise WorldMigrationError(
+                    f"schema-v3 entity {owner_id!r} component {component}.{field} "
+                    "must be a sequence"
+                )
+            targets = raw_targets
+        else:
+            targets = (raw_targets,)
+        for raw_target in targets:
+            if optional and raw_target in (None, ""):
+                continue
+            target_id = _v3_live_target(
+                entities,
+                raw_target,
+                owner_id=owner_id,
+                component=component,
+                field=field,
+            )
+            _add_edge(relationships, edge, owner_id, target_id)
+
+
+def _migrate_v3(snapshot: dict[str, Any]) -> dict[str, Any]:
+    components = _table(snapshot, "components")
+    relationships = _table(snapshot, "relationships")
+    entities = _table(snapshot, "entities")
+
+    incidents = _records(components, "IncidentComponent")
+    contains = _records(relationships, "Contains")
+    rooms = _records(components, "RoomComponent")
+    for incident_id, raw_fields in sorted(incidents.items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(
+                f"IncidentComponent fields for {incident_id!r} must be a mapping"
+            )
+        raw_room_id = raw_fields.pop("room_id", None)
+        if raw_room_id in (None, ""):
+            continue
+        room_id = _v3_live_target(
+            entities,
+            raw_room_id,
+            owner_id=incident_id,
+            component="IncidentComponent",
+            field="room_id",
+        )
+        if room_id not in rooms:
+            raise WorldMigrationError(
+                f"schema-v3 entity {incident_id!r} component IncidentComponent.room_id "
+                f"refers to entity {room_id!r} without RoomComponent"
+            )
+        incoming = []
+        for source_id, records in contains.items():
+            if not isinstance(records, list):
+                raise WorldMigrationError(f"Contains edges for {source_id!r} must be a list")
+            if any(
+                isinstance(record, dict) and record.get("target") == incident_id
+                for record in records
+            ):
+                incoming.append(source_id)
+        if incoming and incoming != [room_id]:
+            raise WorldMigrationError(
+                f"schema-v3 entity {incident_id!r} component IncidentComponent.room_id "
+                f"conflicts with incoming Contains edge from {incoming[0]!r}"
+            )
+        if not incoming:
+            _add_edge(
+                relationships,
+                "Contains",
+                room_id,
+                incident_id,
+                {"mode": "room_content"},
+            )
+
+    mappings = (
+        ("FossilSurveyComponent", "surveyed_by", "SurveyedBy", False, True),
+        ("AncientSampleComponent", "source_fossil_id", "SampledFromFossil", True, False),
+        ("CloneCandidateComponent", "source_sample_id", "ClonedFromSample", False, False),
+        ("IncubationComponent", "brooded_by", "BroodedBy", True, False),
+        ("EggInspectionComponent", "inspected_by", "InspectedBy", False, False),
+        ("ImprintComponent", "imprinted_by", "ImprintedBy", False, False),
+        ("JuvenileCareComponent", "cared_by", "CaredForBy", False, False),
+        ("WaterStudyComponent", "studied_by", "StudiedBy", False, True),
+        ("BroodingComponent", "brooder_id", "BroodedBy", False, False),
+        ("TrackComponent", "room_id", "TrackedAt", False, False),
+        ("TerritoryComponent", "marked_by", "MarkedBy", True, False),
+        ("NestComponent", "prepared_by", "PreparedBy", True, False),
+        ("BaitComponent", "set_by_id", "SetBy", True, False),
+        ("TamingComponent", "tamer_id", "TamedBy", True, False),
+        ("MountComponent", "rider_id", "MountedBy", True, False),
+        ("GuardBehaviorComponent", "location_id", "GuardsLocation", True, False),
+        ("RecallComponent", "home_room_id", "RecallHome", True, False),
+        ("EnclosureComponent", "built_by_id", "BuiltBy", True, False),
+        ("KaijuComponent", "target_room_id", "KaijuTargets", True, False),
+        ("GrappleComponent", "target_id", "Grappling", True, False),
+        (
+            "CreatureProductComponent",
+            "source_creature_id",
+            "ProductFromCreature",
+            True,
+            False,
+        ),
+        ("RanchLaborComponent", "assigned_by_id", "AssignedBy", True, False),
+        ("RanchLaborComponent", "target_id", "RanchWorkTarget", True, False),
+        ("GuardAnimalComponent", "assigned_by_id", "AssignedBy", True, False),
+        ("GuardAnimalComponent", "location_id", "GuardsLocation", True, False),
+        ("RecordedEvidenceComponent", "subject_id", "EvidenceSubject", False, False),
+        ("RecordedEvidenceComponent", "device_id", "RecordedByDevice", False, False),
+        ("OrbitComponent", "body_id", "OrbitsBody", False, False),
+    )
+    for component, field, edge, optional, many in mappings:
+        _migrate_live_field(
+            components,
+            relationships,
+            entities,
+            component=component,
+            field=field,
+            edge=edge,
+            optional=optional,
+            many=many,
+        )
+
+    eggs = _records(components, "EggComponent")
+    dinosaurs = _records(components, "DinosaurComponent")
+    characters = _records(components, "CharacterComponent")
+    identities = _records(components, "IdentityComponent")
+    for hatchling_id, raw_fields in sorted(_records(components, "HatchlingComponent").items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(
+                f"HatchlingComponent fields for {hatchling_id!r} must be a mapping"
+            )
+        if "egg_id" not in raw_fields:
+            continue
+        egg_id = _v3_live_target(
+            entities,
+            raw_fields.pop("egg_id"),
+            owner_id=hatchling_id,
+            component="HatchlingComponent",
+            field="egg_id",
+        )
+        egg_fields = eggs.get(egg_id)
+        if egg_fields is None:
+            dinosaur = dinosaurs.get(hatchling_id, {})
+            character = characters.get(hatchling_id, {})
+            identity = identities.get(hatchling_id, {})
+            species_name = (
+                dinosaur.get("species_name") if isinstance(dinosaur, dict) else None
+            ) or (character.get("species") if isinstance(character, dict) else None)
+            if not species_name and isinstance(identity, dict):
+                species_name = str(identity.get("name") or "unknown").removesuffix(" hatchling")
+            egg_fields = {
+                "species_name": species_name or "unknown",
+                "laid_at_epoch": 0,
+                "fertilized": True,
+                "source": "legacy",
+            }
+            eggs[egg_id] = egg_fields
+        if not isinstance(egg_fields, dict):
+            raise WorldMigrationError(f"EggComponent fields for {egg_id!r} must be a mapping")
+        egg_fields["hatched"] = True
+        _add_edge(relationships, "HatchedFromEgg", hatchling_id, egg_id)
+
+    companions = _records(components, "CompanionComponent")
+    for owner_id, raw_fields in sorted(companions.items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(
+                f"CompanionComponent fields for {owner_id!r} must be a mapping"
+            )
+        target_id = _v3_live_target(
+            entities,
+            raw_fields.pop("owner_id", None),
+            owner_id=owner_id,
+            component="CompanionComponent",
+            field="owner_id",
+        )
+        role = raw_fields.pop("role", "companion")
+        if not isinstance(role, str) or not role:
+            raise WorldMigrationError(
+                f"CompanionComponent.role for {owner_id!r} must be a non-empty string"
+            )
+        _add_edge(relationships, "CompanionOf", owner_id, target_id, {"role": role})
+
+    commands = _records(components, "CommandComponent")
+    for owner_id, raw_fields in sorted(commands.items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(f"CommandComponent fields for {owner_id!r} must be a mapping")
+        commanded_by = raw_fields.pop("commanded_by_id", None)
+        if commanded_by not in (None, ""):
+            target_id = _v3_live_target(
+                entities,
+                commanded_by,
+                owner_id=owner_id,
+                component="CommandComponent",
+                field="commanded_by_id",
+            )
+            _add_edge(relationships, "CommandedBy", owner_id, target_id)
+        raw_target = raw_fields.pop("target_id", "")
+        if raw_target not in (None, ""):
+            target = str(raw_target)
+            if target in entities:
+                _add_edge(relationships, "CommandTarget", owner_id, target)
+            elif raw_fields.get("command_name") == "hunt":
+                raw_fields["target_key"] = target
+            else:
+                _v3_live_target(
+                    entities,
+                    target,
+                    owner_id=owner_id,
+                    component="CommandComponent",
+                    field="target_id",
+                )
+
+    routes = _records(components, "NavigationRouteComponent")
+    for owner_id, raw_fields in sorted(routes.items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(
+                f"NavigationRouteComponent fields for {owner_id!r} must be a mapping"
+            )
+        raw_target = raw_fields.pop("destination_id", "")
+        if raw_target in (None, ""):
+            continue
+        target = str(raw_target)
+        if target in entities:
+            _add_edge(relationships, "NavigatesTo", owner_id, target)
+        elif target.startswith("entity_"):
+            _v3_live_target(
+                entities,
+                target,
+                owner_id=owner_id,
+                component="NavigationRouteComponent",
+                field="destination_id",
+            )
+        else:
+            raw_fields["destination_key"] = target
+
+    _table(snapshot, "bunnyland")["schema_version"] = 4
+    _validate_v4(snapshot)
+    return snapshot
+
+
+def _validate_v4(snapshot: dict[str, Any]) -> None:
+    _validate_v3(snapshot)
+    components = _table(snapshot, "components")
+    relationships = _table(snapshot, "relationships")
+    entities = _table(snapshot, "entities")
+
+    legacy_fields = {
+        "IncidentComponent": ("room_id",),
+        "FossilSurveyComponent": ("surveyed_by",),
+        "AncientSampleComponent": ("source_fossil_id",),
+        "CloneCandidateComponent": ("source_sample_id",),
+        "IncubationComponent": ("brooded_by",),
+        "HatchlingComponent": ("egg_id",),
+        "EggInspectionComponent": ("inspected_by",),
+        "ImprintComponent": ("imprinted_by",),
+        "JuvenileCareComponent": ("cared_by",),
+        "WaterStudyComponent": ("studied_by",),
+        "BroodingComponent": ("brooder_id",),
+        "TrackComponent": ("room_id",),
+        "TerritoryComponent": ("marked_by",),
+        "NestComponent": ("prepared_by",),
+        "BaitComponent": ("set_by_id",),
+        "TamingComponent": ("tamer_id",),
+        "CommandComponent": ("commanded_by_id", "target_id"),
+        "MountComponent": ("rider_id",),
+        "CompanionComponent": ("owner_id", "role"),
+        "GuardBehaviorComponent": ("location_id",),
+        "RecallComponent": ("home_room_id",),
+        "EnclosureComponent": ("built_by_id",),
+        "KaijuComponent": ("target_room_id",),
+        "GrappleComponent": ("target_id",),
+        "CreatureProductComponent": ("source_creature_id",),
+        "RanchLaborComponent": ("target_id", "assigned_by_id"),
+        "GuardAnimalComponent": ("location_id", "assigned_by_id"),
+        "RecordedEvidenceComponent": ("subject_id", "device_id"),
+        "OrbitComponent": ("body_id",),
+        "NavigationRouteComponent": ("destination_id",),
+    }
+    for component, fields in legacy_fields.items():
+        for owner_id, values in _records(components, component).items():
+            if not isinstance(values, dict):
+                raise WorldMigrationError(f"{component} fields for {owner_id!r} must be a mapping")
+            present = next((field for field in fields if field in values), None)
+            if present is not None:
+                raise WorldMigrationError(
+                    f"schema-v4 entity {owner_id!r} contains legacy {component}.{present}"
+                )
+
+    edge_names = (
+        "SurveyedBy",
+        "SampledFromFossil",
+        "ClonedFromSample",
+        "HatchedFromEgg",
+        "InspectedBy",
+        "ImprintedBy",
+        "CaredForBy",
+        "StudiedBy",
+        "BroodedBy",
+        "TrackedAt",
+        "MarkedBy",
+        "PreparedBy",
+        "SetBy",
+        "TamedBy",
+        "CommandedBy",
+        "CommandTarget",
+        "MountedBy",
+        "CompanionOf",
+        "GuardsLocation",
+        "RecallHome",
+        "BuiltBy",
+        "KaijuTargets",
+        "Grappling",
+        "ProductFromCreature",
+        "AssignedBy",
+        "RanchWorkTarget",
+        "EvidenceSubject",
+        "RecordedByDevice",
+        "OrbitsBody",
+        "NavigatesTo",
+    )
+    character_targets = {
+        "SurveyedBy",
+        "InspectedBy",
+        "ImprintedBy",
+        "CaredForBy",
+        "StudiedBy",
+        "BroodedBy",
+        "MarkedBy",
+        "PreparedBy",
+        "SetBy",
+        "TamedBy",
+        "CommandedBy",
+        "MountedBy",
+        "CompanionOf",
+        "BuiltBy",
+        "AssignedBy",
+        "EvidenceSubject",
+        "Grappling",
+    }
+    room_targets = {"TrackedAt", "GuardsLocation", "RecallHome", "KaijuTargets"}
+    characters = _records(components, "CharacterComponent")
+    rooms = _records(components, "RoomComponent")
+    fossils = _records(components, "FossilFragmentComponent")
+    samples = _records(components, "AncientSampleComponent")
+    devices = _records(components, "DeviceComponent")
+    bodies = _records(components, "OrbitalBodyComponent")
+    systems = _records(components, "StarSystemComponent")
+    eggs = _records(components, "EggComponent")
+    creatures = {
+        *(_records(components, "DinosaurComponent")),
+        *(_records(components, "SpeciesComponent")),
+        *(_records(components, "ReptileProcreationComponent")),
+        *(_records(components, "KaijuComponent")),
+    }
+    source_components = {
+        "SurveyedBy": ("FossilSurveyComponent",),
+        "SampledFromFossil": ("AncientSampleComponent",),
+        "ClonedFromSample": ("CloneCandidateComponent",),
+        "HatchedFromEgg": ("HatchlingComponent",),
+        "InspectedBy": ("EggInspectionComponent",),
+        "ImprintedBy": ("ImprintComponent",),
+        "CaredForBy": ("JuvenileCareComponent",),
+        "StudiedBy": ("WaterStudyComponent",),
+        "BroodedBy": ("IncubationComponent", "BroodingComponent"),
+        "TrackedAt": ("TrackComponent",),
+        "MarkedBy": ("TerritoryComponent",),
+        "PreparedBy": ("NestComponent",),
+        "SetBy": ("BaitComponent",),
+        "TamedBy": ("TamingComponent",),
+        "CommandedBy": ("CommandComponent",),
+        "CommandTarget": ("CommandComponent",),
+        "MountedBy": ("MountComponent",),
+        "CompanionOf": ("CompanionComponent",),
+        "GuardsLocation": ("GuardBehaviorComponent", "GuardAnimalComponent"),
+        "RecallHome": ("RecallComponent",),
+        "BuiltBy": ("EnclosureComponent",),
+        "KaijuTargets": ("KaijuComponent",),
+        "Grappling": ("GrappleComponent",),
+        "ProductFromCreature": ("CreatureProductComponent",),
+        "AssignedBy": ("RanchLaborComponent", "GuardAnimalComponent"),
+        "RanchWorkTarget": ("RanchLaborComponent",),
+        "EvidenceSubject": ("RecordedEvidenceComponent",),
+        "RecordedByDevice": ("RecordedEvidenceComponent",),
+        "OrbitsBody": ("OrbitComponent",),
+        "NavigatesTo": ("NavigationRouteComponent",),
+    }
+    component_owners = {
+        name: set(_records(components, name))
+        for names in source_components.values()
+        for name in names
+    }
+    typed_targets = {
+        "SampledFromFossil": fossils,
+        "ClonedFromSample": samples,
+        "HatchedFromEgg": eggs,
+        "RecordedByDevice": devices,
+        "OrbitsBody": bodies,
+        "NavigatesTo": systems,
+    }
+    pairs_by_edge: dict[str, dict[str, list[str]]] = {}
+    for edge_name in edge_names:
+        pairs_by_edge[edge_name] = {}
+        seen: set[tuple[str, str]] = set()
+        for source_id, records in sorted(_records(relationships, edge_name).items()):
+            if source_id not in entities:
+                raise WorldMigrationError(
+                    f"schema-v4 {edge_name} source {source_id!r} does not exist"
+                )
+            required = source_components[edge_name]
+            if not any(source_id in component_owners[name] for name in required):
+                expected = " or ".join(required)
+                raise WorldMigrationError(
+                    f"schema-v4 {edge_name} source {source_id!r} lacks {expected}"
+                )
+            if not isinstance(records, list):
+                raise WorldMigrationError(f"{edge_name} edges for {source_id!r} must be a list")
+            targets: list[str] = []
+            for record in records:
+                if not isinstance(record, dict) or not isinstance(record.get("edge", {}), dict):
+                    raise WorldMigrationError(
+                        f"schema-v4 {edge_name} edge for {source_id!r} must be a mapping"
+                    )
+                target_id = str(record.get("target") or "")
+                if target_id not in entities:
+                    raise WorldMigrationError(
+                        f"schema-v4 {edge_name} edge owned by {source_id!r} "
+                        f"refers to missing target {target_id!r}"
+                    )
+                pair = (source_id, target_id)
+                if pair in seen:
+                    raise WorldMigrationError(
+                        f"schema-v4 contains duplicate {edge_name} edge "
+                        f"{source_id!r} -> {target_id!r}"
+                    )
+                seen.add(pair)
+                targets.append(target_id)
+                if edge_name in character_targets and target_id not in characters:
+                    raise WorldMigrationError(
+                        f"schema-v4 {edge_name} target {target_id!r} is not a character"
+                    )
+                if edge_name in room_targets and target_id not in rooms:
+                    raise WorldMigrationError(
+                        f"schema-v4 {edge_name} target {target_id!r} is not a room"
+                    )
+                if edge_name in typed_targets and target_id not in typed_targets[edge_name]:
+                    raise WorldMigrationError(
+                        f"schema-v4 {edge_name} target {target_id!r} has the wrong type"
+                    )
+                if edge_name == "HatchedFromEgg":
+                    egg_fields = eggs[target_id]
+                    if not isinstance(egg_fields, dict) or not egg_fields.get("hatched"):
+                        raise WorldMigrationError(
+                            f"schema-v4 HatchedFromEgg target {target_id!r} is not hatched"
+                        )
+                if edge_name == "ProductFromCreature" and target_id not in creatures:
+                    raise WorldMigrationError(
+                        f"schema-v4 ProductFromCreature target {target_id!r} is not a creature"
+                    )
+                edge_fields = record.get("edge", {})
+                if edge_name == "CompanionOf":
+                    if set(edge_fields) != {"role"} or not isinstance(edge_fields.get("role"), str):
+                        raise WorldMigrationError(
+                            f"schema-v4 CompanionOf edge for {source_id!r} requires role"
+                        )
+                elif edge_fields:
+                    raise WorldMigrationError(
+                        f"schema-v4 {edge_name} edge for {source_id!r} must not contain properties"
+                    )
+            pairs_by_edge[edge_name][source_id] = targets
+
+    repeatable = {"SurveyedBy", "StudiedBy"}
+    for edge_name, sources in pairs_by_edge.items():
+        if edge_name in repeatable:
+            continue
+        for source_id, targets in sources.items():
+            if len(targets) > 1:
+                raise WorldMigrationError(
+                    f"schema-v4 entity {source_id!r} has multiple {edge_name} targets"
+                )
+    for evidence_id in _records(components, "RecordedEvidenceComponent"):
+        if len(pairs_by_edge["EvidenceSubject"].get(evidence_id, [])) != 1:
+            raise WorldMigrationError(
+                f"schema-v4 recorded evidence {evidence_id!r} requires one EvidenceSubject"
+            )
+        if len(pairs_by_edge["RecordedByDevice"].get(evidence_id, [])) != 1:
+            raise WorldMigrationError(
+                f"schema-v4 recorded evidence {evidence_id!r} requires one RecordedByDevice"
+            )
+    for owner_id in _records(components, "OrbitComponent"):
+        if len(pairs_by_edge["OrbitsBody"].get(owner_id, [])) != 1:
+            raise WorldMigrationError(
+                f"schema-v4 OrbitComponent owner {owner_id!r} requires one OrbitsBody edge"
+            )
+    for owner_id, fields in _records(components, "NavigationRouteComponent").items():
+        destinations = pairs_by_edge["NavigatesTo"].get(owner_id, [])
+        semantic = isinstance(fields, dict) and bool(fields.get("destination_key"))
+        if len(destinations) != (0 if semantic else 1):
+            raise WorldMigrationError(
+                f"schema-v4 NavigationRouteComponent owner {owner_id!r} has invalid destination"
+            )
+
+
 def migrate_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
-    """Return a validated schema-v3 copy of a raw JSON/YAML snapshot."""
+    """Return a validated schema-v4 copy of a raw JSON/YAML snapshot."""
 
     if not isinstance(snapshot, dict):
         raise WorldMigrationError("world snapshot must be a mapping")
@@ -1086,10 +1613,13 @@ def migrate_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         migrated = _migrate_v1(migrated)
         version = 2
     if version == 2:
-        return _migrate_v2(migrated)
+        migrated = _migrate_v2(migrated)
+        version = 3
+    if version == 3:
+        return _migrate_v3(migrated)
     for section in ("entities", "components", "relationships"):
         _table(migrated, section)
-    _validate_v3(migrated)
+    _validate_v4(migrated)
     return migrated
 
 

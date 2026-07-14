@@ -36,9 +36,7 @@ from .mechanics import (
     MoraleComponent,
     MortgageComponent,
     MutinyComponent,
-    NavigationRouteComponent,
     OrbitalBodyComponent,
-    OrbitComponent,
     OxygenComponent,
     PassengerComponent,
     PowerGridComponent,
@@ -87,8 +85,6 @@ CAPABILITIES = (
     "bunnyland.voidsim.morale",
     "bunnyland.voidsim.mortgage",
     "bunnyland.voidsim.mutiny",
-    "bunnyland.voidsim.navigation-route",
-    "bunnyland.voidsim.orbit",
     "bunnyland.voidsim.orbital-body",
     "bunnyland.voidsim.passenger",
     "bunnyland.voidsim.quarantine",
@@ -115,6 +111,7 @@ class VoidGenerationEnricher:
     def enrich(self, request: GenerationRequest) -> GenerationDelta:
         ctx = GenerationContext.from_request(request)
         components = {}
+        edges = []
 
         def add(component):
             components[type(component)] = component
@@ -278,14 +275,11 @@ class VoidGenerationEnricher:
                 add(MortgageComponent())
             if generation_wants(ctx, "bunnyland.voidsim.orbital-body"):
                 add(OrbitalBodyComponent(body_type=generation_orbital_body_type(ctx)))
-            if generation_wants(ctx, "bunnyland.voidsim.orbit"):
-                add(OrbitComponent(body_id=ctx.entity_id))
-            if generation_wants(ctx, "bunnyland.voidsim.navigation-route"):
-                add(NavigationRouteComponent(destination_id=ctx.entity_id))
             if generation_wants(ctx, "bunnyland.voidsim.astrogation"):
                 add(AstrogationComponent())
         return GenerationDelta(
             components=tuple(components.values()),
+            edges=tuple(edges),
             satisfies=tuple(
                 capability for capability in request.capabilities if capability in CAPABILITIES
             ),

@@ -622,9 +622,7 @@ def test_character_projection_includes_curated_character_sheet_data(scenario):
     character.add_component(PreferenceComponent(likes=("tea",), dislikes=("floods",)))
     character.add_component(GoalComponent(active_goals=("keep everyone safe",)))
     character.add_component(WhimComponent(want="check the north door"))
-    character.add_component(
-        PregnancyComponent(started_at_epoch=0, due_at_epoch=500)
-    )
+    character.add_component(PregnancyComponent(started_at_epoch=0, due_at_epoch=500))
     character.add_component(WellRestedComponent(expires_at_epoch=100))
     character.add_component(SuspendedComponent())
     character.add_component(SleepingComponent(started_at_epoch=0))
@@ -1469,9 +1467,7 @@ def test_claim_scoped_perspective_query_route_and_stream_metrics(scenario, monke
 
     testclient = pytest.importorskip("fastapi.testclient")
     for definition in V1_PERSPECTIVE_QUERIES:
-        scenario.actor.perspective_queries.register(
-            definition, owner="bunnyland.core_verbs"
-        )
+        scenario.actor.perspective_queries.register(definition, owner="bunnyland.core_verbs")
     for definition in SOCIAL_PERSPECTIVE_QUERIES:
         scenario.actor.perspective_queries.register(definition, owner="bunnyland.social")
     hazel = spawn_entity(
@@ -4592,9 +4588,7 @@ def test_world_patch_can_reference_client_ids_within_one_request(scenario):
 
 
 def test_world_patch_can_delete_a_new_alias_atomically(scenario):
-    before_ids = {
-        entity.id for entity in scenario.actor.world.query().execute_entities()
-    }
+    before_ids = {entity.id for entity in scenario.actor.world.query().execute_entities()}
 
     response = apply_world_patch(
         scenario.actor,
@@ -4628,9 +4622,7 @@ def test_world_patch_can_delete_a_new_alias_atomically(scenario):
 
     assert len(response.deleted_entities) == 1
     assert response.changed_entities[0]["id"] == str(scenario.room_a)
-    assert {
-        entity.id for entity in scenario.actor.world.query().execute_entities()
-    } == before_ids
+    assert {entity.id for entity in scenario.actor.world.query().execute_entities()} == before_ids
 
 
 @pytest.mark.parametrize(
@@ -5432,7 +5424,6 @@ async def test_worldgen_event_patch_frames_story_event_as_ecs(scenario):
     ]
     assert incidents
     incident = incidents[0].get_component(IncidentComponent)
-    assert incident.room_id == str(scenario.room_a)
     assert incident.kind == "story_event"
     assert any(
         scenario.actor.world.get_entity(target).get_component(IdentityComponent).name

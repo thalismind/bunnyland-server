@@ -100,7 +100,7 @@ Put documentation where its audience will use it:
 - `docs/player/`: player-facing guides, gameplay workflows, and command examples.
 - `docs/admin/`: server operation, setup, deployment, moderation, controller handoff.
 - `docs/developer/`: engine concepts, architecture, persistence, scripting, worldgen.
-- Root docs: project entry points and broad catalogues such as `README.md`, `PLAN.md`,
+- Root docs: project entry points and broad catalogues such as `README.md`,
   `bunnyland_mechanics.md`, and `bunnyland_specification.md`.
 
 When adding or changing player-facing verbs:

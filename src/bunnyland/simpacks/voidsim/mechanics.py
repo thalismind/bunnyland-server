@@ -57,11 +57,14 @@ from ...core.mutations import (
     AddEdge,
     AddEntity,
     EntityReference,
+    MutationError,
     MutationOperation,
     MutationPlan,
     RemoveComponent,
     RemoveEdge,
     SetComponent,
+    register_world_invariant,
+    replace_single_edge_operations,
 )
 from ...prompts import ComponentPromptContext
 
@@ -75,6 +78,11 @@ def _payload_entity_id(command: SubmittedCommand, *keys: str):
 
 SECONDS_PER_HOUR = 60 * 60
 SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR
+
+
+def _single_edge_target(entity: Entity, edge_type: type[Edge]) -> EntityId | None:
+    relationships = entity.get_relationships(edge_type)
+    return relationships[0][1] if relationships else None
 
 
 @dataclass(frozen=True)
@@ -604,13 +612,12 @@ class OrbitalBodyComponent(Component):
 
 @dataclass(frozen=True)
 class OrbitComponent(Component):
-    body_id: str
     altitude: str = "orbit"  # orbit | surface
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         world = ctx._world
-        body_id = parse_entity_id(self.body_id)
-        if world is None or body_id is None or not world.has_entity(body_id):
+        body_id = _single_edge_target(ctx.entity, OrbitsBody)
+        if world is None or body_id is None:
             return ()
         where = "landed on" if self.altitude == "surface" else "in orbit of"
         return (f"{_name(ctx.entity)} is {where} {_name(world.get_entity(body_id))}.",)
@@ -618,7 +625,7 @@ class OrbitComponent(Component):
 
 @dataclass(frozen=True)
 class NavigationRouteComponent(Component):
-    destination_id: str
+    destination_key: str = ""
     fuel_cost: float = 0.0
     hazard: str = "none"
     jump_seconds: float = 0.0
@@ -627,6 +634,16 @@ class NavigationRouteComponent(Component):
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         return (f"{_name(ctx.entity)} course: {self.status} (hazard: {self.hazard}).",)
+
+
+@dataclass(frozen=True)
+class OrbitsBody(Edge):
+    pass
+
+
+@dataclass(frozen=True)
+class NavigatesTo(Edge):
+    pass
 
 
 @dataclass(frozen=True)
@@ -1851,13 +1868,13 @@ class PlotCourseHandler:
                     SetComponent(
                         ship.id,
                         NavigationRouteComponent(
-                            destination_id=str(destination_id),
                             fuel_cost=route.fuel_cost,
                             hazard=route.hazard,
                             jump_seconds=route.jump_seconds,
                             status="plotted",
                         ),
                     ),
+                    *replace_single_edge_operations(ship, destination_id, NavigatesTo()),
                 )
             ),
             CoursePlottedEvent(
@@ -1889,6 +1906,9 @@ class JumpHandler:
         if not ship.has_component(NavigationRouteComponent):
             return rejected("no course plotted")
         route = ship.get_component(NavigationRouteComponent)
+        destination_id = _single_edge_target(ship, NavigatesTo)
+        if destination_id is None:
+            return rejected("course destination no longer exists")
         if route.status == "jumping":
             return rejected("ship is already jumping")
         if (
@@ -1924,7 +1944,7 @@ class JumpHandler:
                     room_id=_room_id(ctx.world, character_id),
                     target_ids=(str(ship.id),),
                     ship_id=str(ship.id),
-                    destination_id=route.destination_id,
+                    destination_id=str(destination_id),
                     arrive_at_epoch=arrive_at,
                 )
             ),
@@ -2087,7 +2107,10 @@ class EnterOrbitHandler:
 
         return planned(
             MutationPlan(
-                (SetComponent(ship.id, OrbitComponent(body_id=str(body.id), altitude="orbit")),)
+                (
+                    SetComponent(ship.id, OrbitComponent(altitude="orbit")),
+                    *replace_single_edge_operations(ship, body.id, OrbitsBody()),
+                )
             ),
             OrbitEnteredEvent(
                 **ctx.event_base(
@@ -2116,7 +2139,11 @@ class LeaveOrbitHandler:
             return rejected(error if error else "target is not a ship")
         if not ship.has_component(OrbitComponent):
             return rejected("ship is not in orbit")
-        return planned(MutationPlan((RemoveComponent(ship.id, OrbitComponent),)))
+        body_id = _single_edge_target(ship, OrbitsBody)
+        operations: list[MutationOperation] = [RemoveComponent(ship.id, OrbitComponent)]
+        if body_id is not None:
+            operations.append(RemoveEdge(ship.id, body_id, OrbitsBody))
+        return planned(MutationPlan(tuple(operations)))
 
 
 class LandHandler:
@@ -2136,8 +2163,8 @@ class LandHandler:
         orbit = ship.get_component(OrbitComponent)
         if orbit.altitude == "surface":
             return rejected("ship is already landed")
-        body_id = parse_entity_id(orbit.body_id)
-        if body_id is None or not ctx.world.has_entity(body_id):
+        body_id = _single_edge_target(ship, OrbitsBody)
+        if body_id is None:
             return rejected("orbital body no longer exists")
         body = ctx.entity(body_id)
         if (
@@ -2191,8 +2218,8 @@ class JumpTravelConsequence:
             route = ship.get_component(NavigationRouteComponent)
             if route.status != "jumping" or epoch < route.arrive_at_epoch:
                 continue
-            destination_id = parse_entity_id(route.destination_id)
-            if destination_id is None or not world.has_entity(destination_id):
+            destination_id = _single_edge_target(ship, NavigatesTo)
+            if destination_id is None:
                 continue
             origin_id = container_of(ship)
             if origin_id is not None and world.has_entity(origin_id):
@@ -2201,6 +2228,7 @@ class JumpTravelConsequence:
                 Contains(mode=ContainmentMode.ROOM_CONTENT), ship.id
             )
             ship.remove_component(NavigationRouteComponent)
+            ship.remove_relationship(NavigatesTo, destination_id)
             events.append(
                 JumpCompletedEvent(
                     **_void_event(
@@ -3469,7 +3497,42 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
     return sorted(lines)
 
 
+def validate_voidsim_relationships(world: World) -> None:
+    for ship in world.query().execute_entities():
+        has_orbit = ship.has_component(OrbitComponent)
+        has_route = ship.has_component(NavigationRouteComponent)
+        orbits = ship.get_relationships(OrbitsBody)
+        routes = ship.get_relationships(NavigatesTo)
+        if not (has_orbit or has_route or orbits or routes):
+            continue
+        if not ship.has_component(ShipComponent):
+            raise MutationError(f"navigation state source {ship.id} is not a ship")
+        if len(orbits) > 1:
+            raise MutationError(f"ship {ship.id} has more than one OrbitsBody edge")
+        if len(routes) > 1:
+            raise MutationError(f"ship {ship.id} has more than one NavigatesTo edge")
+        if has_orbit != bool(orbits):
+            raise MutationError(
+                f"ship {ship.id} must pair OrbitComponent with exactly one OrbitsBody edge"
+            )
+        if has_route:
+            component = ship.get_component(NavigationRouteComponent)
+            valid_destination = not routes if component.destination_key else len(routes) == 1
+        else:
+            valid_destination = not routes
+        if not valid_destination:
+            raise MutationError(
+                f"ship {ship.id} must pair NavigationRouteComponent with exactly one "
+                "NavigatesTo edge or a semantic destination_key"
+            )
+        if orbits and not world.get_entity(orbits[0][1]).has_component(OrbitalBodyComponent):
+            raise MutationError(f"OrbitsBody target {orbits[0][1]} is not an orbital body")
+        if routes and not world.get_entity(routes[0][1]).has_component(StarSystemComponent):
+            raise MutationError(f"NavigatesTo target {routes[0][1]} is not a star system")
+
+
 def install_voidsim(actor) -> None:
+    register_world_invariant(actor.world, validate_voidsim_relationships)
     actor.register_consequence(LifeSupportConsequence())
     actor.register_consequence(JumpTravelConsequence())
     actor.register_consequence(ChaosInfluenceConsequence())
@@ -3575,8 +3638,10 @@ __all__ = [
     "NegotiateAlienHandler",
     "NavigationHazardEncounteredEvent",
     "NavigationRouteComponent",
+    "NavigatesTo",
     "OpenAirlockHandler",
     "OrbitComponent",
+    "OrbitsBody",
     "OrbitEnteredEvent",
     "OrbitalBodyComponent",
     "OxygenComponent",
@@ -3640,4 +3705,5 @@ __all__ = [
     "XenobiologyStudiedEvent",
     "install_voidsim",
     "voidsim_fragments",
+    "validate_voidsim_relationships",
 ]

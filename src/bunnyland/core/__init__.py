@@ -209,6 +209,7 @@ from .mutations import (
     SetComponentFactory,
     execute_mutation_plan,
     register_world_invariant,
+    replace_single_edge_operations,
     validate_core_invariants,
 )
 from .perspective import (
@@ -362,6 +363,7 @@ __all__ = [
     "ReadableComponent",
     "RegionComponent",
     "RemoveHandler",
+    "replace_single_edge_operations",
     "RoomComponent",
     "RoomGeneratedEvent",
     "RoomLookedEvent",

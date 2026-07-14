@@ -1,10 +1,10 @@
 """Transactional mutation-plan contracts."""
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import pytest
 from conftest import build_scenario
-from relics import DuplicateComponentError
+from relics import DuplicateComponentError, Edge
 
 from bunnyland.core import (
     ActionPointsComponent,
@@ -26,10 +26,39 @@ from bunnyland.core import (
     SleepingComponent,
     WorldClockComponent,
     execute_mutation_plan,
+    replace_single_edge_operations,
     spawn_entity,
     validate_core_invariants,
 )
 from bunnyland.core.handlers.base import planned
+
+
+@dataclass(frozen=True)
+class TestLink(Edge):
+    value: int = 0
+
+
+def test_replace_single_edge_operations_adds_replaces_and_removes(scenario):
+    world = scenario.actor.world
+    source = world.get_entity(scenario.character)
+
+    execute_mutation_plan(
+        world,
+        MutationPlan(replace_single_edge_operations(source, scenario.room_a, TestLink(value=1))),
+    )
+    assert source.get_relationships(TestLink) == [(TestLink(value=1), scenario.room_a)]
+
+    execute_mutation_plan(
+        world,
+        MutationPlan(replace_single_edge_operations(source, scenario.room_b, TestLink(value=2))),
+    )
+    assert source.get_relationships(TestLink) == [(TestLink(value=2), scenario.room_b)]
+
+    execute_mutation_plan(
+        world,
+        MutationPlan(replace_single_edge_operations(source, None, TestLink())),
+    )
+    assert source.get_relationships(TestLink) == []
 
 
 def test_plan_preflights_every_operation_before_mutating(scenario):
@@ -136,9 +165,7 @@ def test_rollback_removes_new_components_entities_and_restores_removed_component
 
     set_summary = execute_mutation_plan(
         world,
-        MutationPlan(
-            (SetComponent(scenario.room_a, IdentityComponent(name="room", kind="room")),)
-        ),
+        MutationPlan((SetComponent(scenario.room_a, IdentityComponent(name="room", kind="room")),)),
     )
     remove_summary = execute_mutation_plan(
         world, MutationPlan((RemoveComponent(scenario.room_a, IdentityComponent),))

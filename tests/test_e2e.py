@@ -875,7 +875,9 @@ async def test_scripted_agent_identifies_fossil_clones_and_hatches_dino_e2e():
     assert hatchling.get_component(LifeStageComponent).stage == "child"
     assert hatchling.has_component(DinosaurComponent)
     assert container_of(hatchling) == room_id
-    assert not list(actor.world.query().with_all([EggComponent]).execute_entities())
+    eggs = list(actor.world.query().with_all([EggComponent]).execute_entities())
+    assert len(eggs) == 1
+    assert eggs[0].get_component(EggComponent).hatched is True
 
 
 async def test_scripted_agent_claims_home_and_pays_rent_bill():
