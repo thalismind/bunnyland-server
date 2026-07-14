@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -669,7 +670,13 @@ class EventBus:
     ``DomainEvent``) receives every subclass, enabling audit/logging sinks.
     """
 
-    def __init__(self, *, max_deliveries: int = 256, max_causal_hops: int = 16) -> None:
+    def __init__(
+        self,
+        *,
+        max_deliveries: int = 256,
+        max_causal_hops: int = 16,
+        reaction_transaction: Callable[[], AbstractContextManager[None]] | None = None,
+    ) -> None:
         self._handlers: dict[type[DomainEvent], list[Handler]] = defaultdict(list)
         self._subscriptions: list[_Subscription] = []
         self._events: deque[tuple[DomainEvent, int]] = deque()
@@ -688,6 +695,7 @@ class EventBus:
         self.max_deliveries = max_deliveries
         self.max_causal_hops = max_causal_hops
         self.diagnostics: list[ReactionCascadeLimitedEvent] = []
+        self._reaction_transaction = reaction_transaction or nullcontext
 
     def subscribe(
         self,
@@ -815,13 +823,28 @@ class EventBus:
                 )
                 if delivery_key in self._delivered:
                     continue
+                events_before = deque(self._events)
+                deliveries_before = deque(self._deliveries)
+                external_before = deque(self._external)
+                diagnostics_before = len(self.diagnostics)
                 self._delivered.add(delivery_key)
                 self._remaining_deliveries -= 1
                 self._current_event = event
                 self._current_depth = depth
-                result = subscription.handler(event)
-                if isinstance(result, Awaitable):
-                    await result
+                try:
+                    with self._reaction_transaction():
+                        result = subscription.handler(event)
+                        if isinstance(result, Awaitable):
+                            await result
+                except Exception:
+                    self._events = events_before
+                    self._deliveries = deliveries_before
+                    self._deliveries.appendleft((subscription, event, depth))
+                    self._external = external_before
+                    del self.diagnostics[diagnostics_before:]
+                    self._delivered.discard(delivery_key)
+                    self._remaining_deliveries += 1
+                    raise
         finally:
             self._current_event = None
             self._current_depth = 0

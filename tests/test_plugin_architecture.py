@@ -176,9 +176,7 @@ def test_removed_compatibility_surfaces_cannot_return():
 
 def test_all_440_bundled_handlers_use_the_pure_plan_contract():
     plugins = bunnyland_plugins()
-    handlers = tuple(
-        handler for plugin in plugins for handler in plugin.commands.action_handlers
-    )
+    handlers = tuple(handler for plugin in plugins for handler in plugin.commands.action_handlers)
     assert len(handlers) == 440
 
     root = Path(__file__).parents[1] / "src" / "bunnyland"
@@ -234,9 +232,7 @@ def test_all_440_bundled_handlers_use_the_pure_plan_contract():
                     else ""
                 )
                 if name in forbidden_mutations:
-                    violations.append(
-                        f"{path}:{call.lineno}: {handler.name}.execute calls {name}"
-                    )
+                    violations.append(f"{path}:{call.lineno}: {handler.name}.execute calls {name}")
 
     assert violations == []
 
@@ -714,6 +710,26 @@ async def test_external_sinks_run_after_the_actor_transaction():
     assert seen == ["domain"]
     await bus.end_transaction()
     assert seen == ["domain", "external"]
+
+
+async def test_failed_internal_reaction_rolls_back_world_and_derived_events():
+    actor = WorldActor()
+    actor._clock_entity.add_component(MarkerComponent("original"))
+
+    async def fail(event):
+        del event
+        actor._clock_entity.remove_component(MarkerComponent)
+        actor._clock_entity.add_component(MarkerComponent("partial"))
+        await actor.bus.publish(_event(DerivedEvent, "partial-event"))
+        raise RuntimeError("reaction failed")
+
+    actor.bus.subscribe(SourceEvent, fail, reaction_id="failing")
+
+    with pytest.raises(RuntimeError, match="reaction failed"):
+        await actor.bus.publish(_event(SourceEvent))
+
+    assert actor._clock_entity.get_component(MarkerComponent).value == "original"
+    assert not any(event.event_id == "partial-event" for event, _ in actor.bus._events)
 
 
 async def test_event_bus_registration_unsubscribe_and_reentrant_guard_paths():

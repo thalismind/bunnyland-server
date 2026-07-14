@@ -73,7 +73,7 @@ from .controllers import (
     SuspendedControllerComponent,
     WebControllerComponent,
 )
-from .ecs import container_of, ensure_blank_prefab, parse_entity_id, replace_component, spawn_entity
+from .ecs import container_of, ensure_blank_prefab, parse_entity_id, spawn_entity
 from .edges import ControlledBy, KnowsRoom
 from .events import (
     ActionPointsChangedEvent,
@@ -92,7 +92,16 @@ from .events import (
 )
 from .handlers import CommandHandler, HandlerContext
 from .handlers.lifecycle import WakeHandler
-from .mutations import MutationPlan, SetComponent, execute_mutation_plan
+from .mutations import (
+    AddComponent,
+    AddEdge,
+    MutationPlan,
+    RemoveComponent,
+    RemoveEdge,
+    SetComponent,
+    execute_mutation_plan,
+    world_transaction,
+)
 from .perspective import PerspectiveQueryRegistry
 from .queue import CommandQueues
 from .systems import ActionFocusRegenSystem, WorldClockSystem
@@ -146,7 +155,7 @@ class WorldActor:
     ) -> None:
         self.world = world or World()
         ensure_blank_prefab(self.world)
-        self.bus = EventBus()
+        self.bus = EventBus(reaction_transaction=lambda: world_transaction(self.world))
         self.queues = CommandQueues()
         self._handlers: dict[str, list[CommandHandler]] = {}
         self._action_definitions: dict[str, ActionDefinition] = {}
@@ -490,8 +499,9 @@ class WorldActor:
                         await self._ingest()
                     # Phases 2-4: advance clock, regen Action/Focus, run passive systems.
                     with telemetry.span("tick.systems"):
-                        self.world.tick(game_delta_seconds)
-                        self._reconcile_room_knowledge()
+                        with world_transaction(self.world):
+                            self.world.tick(game_delta_seconds)
+                            self._reconcile_room_knowledge()
                     tick_span.set_attribute("tick.epoch", self.epoch)
                     # Phase 5: process queued commands in initiative order.
                     with telemetry.span("tick.commands"):
@@ -505,15 +515,19 @@ class WorldActor:
                 await self.bus.end_transaction()
 
     async def _run_consequences(self) -> None:
-        for consequence in self._consequences:
-            for event in consequence.process(self.world, self.epoch):
-                await self._publish(event)
+        events: list[DomainEvent] = []
+        with world_transaction(self.world):
+            for consequence in self._consequences:
+                events.extend(consequence.process(self.world, self.epoch))
+        for event in events:
+            await self._publish(event)
 
     async def _run_after_tick(self) -> None:
         for hook in self._after_tick:
-            result = hook(self)
-            if inspect.isawaitable(result):
-                await result
+            with world_transaction(self.world):
+                result = hook(self)
+                if inspect.isawaitable(result):
+                    await result
 
     async def _ingest(self) -> None:
         while not self._inbox.empty():
@@ -815,7 +829,8 @@ class WorldActor:
         telemetry.record_command_accepted(command.command_type)
         for event in result.events:
             await self._publish(event)
-        self._reconcile_room_knowledge(character)
+        with world_transaction(self.world):
+            self._reconcile_room_knowledge(character)
         self._record_receipt(
             command,
             CommitStatus.COMMITTED,
@@ -852,8 +867,6 @@ class WorldActor:
                 None,
             )
             first_seen = previous.first_seen_epoch if previous is not None else self.epoch
-            if previous is not None:
-                candidate.remove_relationship(KnowsRoom, room_id)
             candidate.add_relationship(
                 KnowsRoom(
                     first_seen_epoch=first_seen,
@@ -956,12 +969,18 @@ class WorldActor:
         """
         character = self.world.get_entity(character_id)
         next_generation = 0
+        operations = []
         for edge, target_id in character.get_relationships(ControlledBy):
             next_generation = max(next_generation, edge.generation + 1)
-            character.remove_relationship(ControlledBy, target_id)
-        character.add_relationship(
-            ControlledBy(generation=next_generation, since_epoch=self.epoch), controller_id
+            operations.append(RemoveEdge(character_id, target_id, ControlledBy))
+        operations.append(
+            AddEdge(
+                character_id,
+                controller_id,
+                ControlledBy(generation=next_generation, since_epoch=self.epoch),
+            )
         )
+        execute_mutation_plan(self.world, MutationPlan(tuple(operations)))
         self.queues.flush_character(str(character_id))
         return next_generation
 
@@ -969,14 +988,33 @@ class WorldActor:
         self, character_id: EntityId, controller_id: EntityId, reason: str = "offline"
     ) -> int:
         """Suspend a character: add the marker and assign the no-op controller (spec 7.7)."""
-        generation = self.assign_controller(character_id, controller_id)
         character = self.world.get_entity(character_id)
-        replace_component(
-            character, SuspendedComponent(reason=reason, suspended_at_epoch=self.epoch)
-        )
         controller = self.world.get_entity(controller_id)
+        generation = max(
+            (edge.generation + 1 for edge, _ in character.get_relationships(ControlledBy)),
+            default=0,
+        )
+        operations = [
+            *(
+                RemoveEdge(character_id, target_id, ControlledBy)
+                for _, target_id in character.get_relationships(ControlledBy)
+            ),
+            AddEdge(
+                character_id,
+                controller_id,
+                ControlledBy(generation=generation, since_epoch=self.epoch),
+            ),
+            SetComponent(
+                character_id,
+                SuspendedComponent(reason=reason, suspended_at_epoch=self.epoch),
+            ),
+        ]
         if not controller.has_component(SuspendedControllerComponent):
-            controller.add_component(SuspendedControllerComponent(reason=reason))
+            operations.append(
+                AddComponent(controller_id, SuspendedControllerComponent(reason=reason))
+            )
+        execute_mutation_plan(self.world, MutationPlan(tuple(operations)))
+        self.queues.flush_character(str(character_id))
         return generation
 
     def _controller_kind(self, controller_id: EntityId) -> str:
@@ -1011,10 +1049,26 @@ class WorldActor:
             kind = "suspended"
         else:
             # take-control / release-to-llm / resume -> an active controller.
-            generation = self.assign_controller(character_id, controller_id)
             character = self.world.get_entity(character_id)
+            generation = max(
+                (edge.generation + 1 for edge, _ in character.get_relationships(ControlledBy)),
+                default=0,
+            )
+            operations = [
+                *(
+                    RemoveEdge(character_id, target_id, ControlledBy)
+                    for _, target_id in character.get_relationships(ControlledBy)
+                ),
+                AddEdge(
+                    character_id,
+                    controller_id,
+                    ControlledBy(generation=generation, since_epoch=self.epoch),
+                ),
+            ]
             if character.has_component(SuspendedComponent):
-                character.remove_component(SuspendedComponent)
+                operations.append(RemoveComponent(character_id, SuspendedComponent))
+            execute_mutation_plan(self.world, MutationPlan(tuple(operations)))
+            self.queues.flush_character(str(character_id))
             kind = self._controller_kind(controller_id)
 
         await self._publish(

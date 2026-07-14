@@ -58,6 +58,7 @@ from bunnyland.core.consequences import (
     HearingConsequence,
     InjuryConsequence,
 )
+from bunnyland.core.ecs import replace_component
 from bunnyland.core.edges import ControlledBy
 from bunnyland.core.events import (
     ActionPointsChangedEvent,
@@ -79,10 +80,36 @@ from bunnyland.simpacks.barbariansim.mechanics import AttackHandler
 HOUR = 3600.0
 
 
+class _FailingConsequence:
+    def __init__(self, character_id) -> None:
+        self.character_id = character_id
+
+    def process(self, world, epoch):
+        del epoch
+        character = world.get_entity(self.character_id)
+        identity = character.get_component(IdentityComponent)
+        replace_component(
+            character, IdentityComponent(name="partially changed", kind=identity.kind)
+        )
+        raise RuntimeError("consequence failed")
+
+
 def collect(actor, event_type):
     seen = []
     actor.bus.subscribe(event_type, seen.append)
     return seen
+
+
+async def test_failed_consequence_rolls_back_its_world_phase():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    original = character.get_component(IdentityComponent)
+    scenario.actor._consequences = [_FailingConsequence(scenario.character)]
+
+    with pytest.raises(RuntimeError, match="consequence failed"):
+        await scenario.actor._run_consequences()
+
+    assert character.get_component(IdentityComponent) == original
 
 
 def test_require_reachable_entity_reports_validation_failures():

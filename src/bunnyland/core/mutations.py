@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import copy
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -15,6 +17,53 @@ from .edges import Contains, ControlledBy
 
 class MutationError(RuntimeError):
     pass
+
+
+_TRANSACTIONAL_WORLD_FIELDS = (
+    "_epoch",
+    "_entities",
+    "_prefab_index",
+    "_sequence_generator",
+    "_observer_queue",
+    "_component_types",
+    "_relationships",
+    "_incoming_relationships",
+    "_edge_types",
+    "_component_index",
+    "_indexes",
+)
+
+
+@contextmanager
+def world_transaction(world: World) -> Iterator[None]:
+    """Roll back one legacy world-mutation phase when it fails validation.
+
+    Command handlers use typed ``MutationPlan`` operations. Relics systems, consequence
+    passes, and plugin reactions predate that contract and may perform several direct
+    mutations. This boundary gives those separately ordered phases the same atomic
+    failure behavior without pretending they are part of the initiating command.
+    """
+
+    baseline_error: Exception | None = None
+    try:
+        validate_core_invariants(world)
+    except Exception as exc:
+        baseline_error = exc
+    snapshot = copy.deepcopy({name: getattr(world, name) for name in _TRANSACTIONAL_WORLD_FIELDS})
+    try:
+        yield
+        try:
+            validate_core_invariants(world)
+        except Exception as exc:
+            if baseline_error is None or (type(exc), str(exc)) != (
+                type(baseline_error),
+                str(baseline_error),
+            ):
+                raise
+    except Exception:
+        for name, value in snapshot.items():
+            setattr(world, name, value)
+        raise
 
 
 @dataclass
@@ -135,8 +184,7 @@ class AddComponent:
         entity = _entity(world, self.entity_id)
         if entity.has_component(type(self.component)):
             raise MutationError(
-                f"entity {self.entity_id!s} already has component "
-                f"{type(self.component).__name__}"
+                f"entity {self.entity_id!s} already has component {type(self.component).__name__}"
             )
 
     def apply(self, world: World) -> Callable[[], None]:
@@ -171,9 +219,7 @@ class SetComponent:
         entity = _entity(world, self.entity_id)
         component_type = type(self.component)
         previous = (
-            entity.get_component(component_type)
-            if entity.has_component(component_type)
-            else None
+            entity.get_component(component_type) if entity.has_component(component_type) else None
         )
         replace_component(entity, self.component)
 
@@ -313,12 +359,8 @@ class RemoveEdge:
     edge_type: type[Edge]
 
     def preflight(self, world: World) -> None:
-        if (
-            isinstance(self.source_id, EntityReference)
-            and self.source_id.entity_id is None
-        ) or (
-            isinstance(self.target_id, EntityReference)
-            and self.target_id.entity_id is None
+        if (isinstance(self.source_id, EntityReference) and self.source_id.entity_id is None) or (
+            isinstance(self.target_id, EntityReference) and self.target_id.entity_id is None
         ):
             return
         source = _entity(world, self.source_id)
@@ -476,4 +518,5 @@ __all__ = [
     "SetComponent",
     "execute_mutation_plan",
     "validate_core_invariants",
+    "world_transaction",
 ]

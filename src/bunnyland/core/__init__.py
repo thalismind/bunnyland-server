@@ -210,6 +210,7 @@ from .mutations import (
     execute_mutation_plan,
     register_world_invariant,
     validate_core_invariants,
+    world_transaction,
 )
 from .perspective import (
     PerspectiveQueryDefinition,
@@ -396,6 +397,7 @@ __all__ = [
     "WeightComponent",
     "WorldActor",
     "WorldClockComponent",
+    "world_transaction",
     "WorldLike",
     "WorldPauseStatusChangedEvent",
     "WritableComponent",
