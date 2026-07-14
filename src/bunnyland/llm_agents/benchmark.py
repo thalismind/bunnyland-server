@@ -13,6 +13,7 @@ from relics import Component
 from ..core.commands import CommitStatus
 from ..core.components import CharacterComponent
 from ..core.ecs import parse_entity_id, spawn_entity
+from ..core.world_actor import WorldActor
 from ..persistence import load_world
 from ..plugins import PluginRegistry, collect_persona_fragments
 from ..prompts.builder import PromptBuilder
@@ -31,6 +32,14 @@ class ControllerBenchmarkCase:
 
 
 @dataclass(frozen=True)
+class ControllerBenchmarkProbe:
+    """One named authoritative-world predicate evaluated after a benchmark case."""
+
+    name: str
+    evaluate: Callable[[WorldActor], bool]
+
+
+@dataclass(frozen=True)
 class ControllerBenchmarkResult:
     case: str
     family: str
@@ -44,6 +53,7 @@ class ControllerBenchmarkResult:
     rejected_commands: int
     recovered_rejections: int
     trace_complete: bool
+    outcomes: tuple[tuple[str, bool], ...]
     elapsed_seconds: float
 
     @property
@@ -58,6 +68,12 @@ class ControllerBenchmarkResult:
             return 1.0
         return self.recovered_rejections / self.rejected_commands
 
+    @property
+    def outcome_pass_rate(self) -> float:
+        if not self.outcomes:
+            return 1.0
+        return sum(passed for _name, passed in self.outcomes) / len(self.outcomes)
+
 
 async def run_fixed_snapshot_controller_benchmark(
     snapshot_path: str | Path,
@@ -65,6 +81,7 @@ async def run_fixed_snapshot_controller_benchmark(
     registry: PluginRegistry,
     character_id: str,
     cases: tuple[ControllerBenchmarkCase, ...],
+    probes: tuple[ControllerBenchmarkProbe, ...] = (),
     turns: int = 1,
 ) -> tuple[ControllerBenchmarkResult, ...]:
     """Run every controller from an independent load of one checksummed snapshot."""
@@ -147,6 +164,7 @@ async def run_fixed_snapshot_controller_benchmark(
                 rejected_commands=len(rejected),
                 recovered_rejections=recovered,
                 trace_complete=all(_trace_complete(decision) for decision in decisions),
+                outcomes=tuple((probe.name, bool(probe.evaluate(actor))) for probe in probes),
                 elapsed_seconds=elapsed,
             )
         )
@@ -167,6 +185,7 @@ def _trace_complete(decision: Decision) -> bool:
 
 __all__ = [
     "ControllerBenchmarkCase",
+    "ControllerBenchmarkProbe",
     "ControllerBenchmarkResult",
     "run_fixed_snapshot_controller_benchmark",
 ]

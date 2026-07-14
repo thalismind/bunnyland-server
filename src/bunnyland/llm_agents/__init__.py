@@ -29,6 +29,7 @@ from .behavior_tree import (
 )
 from .benchmark import (
     ControllerBenchmarkCase,
+    ControllerBenchmarkProbe,
     ControllerBenchmarkResult,
     run_fixed_snapshot_controller_benchmark,
 )
@@ -81,6 +82,7 @@ __all__ = [
     "ControllerDefinitionStore",
     "ControllerDispatch",
     "ControllerBenchmarkCase",
+    "ControllerBenchmarkProbe",
     "ControllerBenchmarkResult",
     "Decision",
     "GoalDirectedAgent",
