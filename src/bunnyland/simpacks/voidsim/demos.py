@@ -142,7 +142,6 @@ async def star_opera_example(actor, seed: str, options: GenOptions) -> Instantia
         HabitatModuleComponent,
         JumpDriveComponent,
         LifeSupportComponent,
-        NavigationRouteComponent,
         OxygenComponent,
         PowerGridComponent,
         PressurizedComponent,
@@ -263,7 +262,6 @@ async def star_opera_example(actor, seed: str, options: GenOptions) -> Instantia
             PressurizedComponent(pressure=1.0),
             OxygenComponent(level=91.0),
             LifeSupportComponent(online=True),
-            NavigationRouteComponent(destination_id="Free Lantern", fuel_cost=20.0),
         )
         _add(
             actor,

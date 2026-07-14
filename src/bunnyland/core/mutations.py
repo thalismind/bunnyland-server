@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from relics import Component, Edge, EntityId, World
+from relics import Component, Edge, Entity, EntityId, World
 
 from .components import ActionPointsComponent, FocusPointsComponent, WorldClockComponent
 from .ecs import parse_entity_id, replace_component, spawn_entity
@@ -393,6 +393,23 @@ class RemoveEdge:
         }
 
 
+def replace_single_edge_operations(
+    source: Entity,
+    target_id: EntityTarget | None,
+    edge: Edge,
+) -> tuple[MutationOperation, ...]:
+    """Build operations replacing every outgoing edge of one type with at most one edge."""
+
+    edge_type = type(edge)
+    operations: list[MutationOperation] = [
+        RemoveEdge(source.id, current_id, edge_type)
+        for _current, current_id in source.get_relationships(edge_type)
+    ]
+    if target_id is not None:
+        operations.append(AddEdge(source.id, target_id, edge))
+    return tuple(operations)
+
+
 @dataclass(frozen=True)
 class DeleteEntity:
     """Terminal deletion committed only after all reversible work succeeds."""
@@ -519,6 +536,7 @@ __all__ = [
     "register_world_invariant",
     "RemoveComponent",
     "RemoveEdge",
+    "replace_single_edge_operations",
     "SetComponent",
     "execute_mutation_plan",
     "validate_core_invariants",

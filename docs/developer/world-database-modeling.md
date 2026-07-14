@@ -70,17 +70,29 @@ Trusted scripts may use a graph target selector and receive every selected varia
 typed, claim-scoped plugin registrations such as `social_connections` and
 `open_obligations`, exposed through the shared REST/MCP `query_world` registry.
 
-## Reference-field audit
+## Reference-field audit and migration backlog
 
-These are review candidates, not automatic migrations:
+Schema v4 completed the audited live links for Storyteller incident location, Dinosim
+lineage/care/ownership/behavior/provenance, Neon evidence provenance, and Void
+orbit/navigation. Incident history and domain-event ids remain scalar historical provenance;
+Dinosim lab names, pack keys, and hunt species are semantic keys rather than entity links.
 
-| Area | Current examples | Classification / next question |
-|---|---|---|
-| Storyteller | incident `room_id`, incident history ids, spawned-requirement incident ids | Live room and requirement links are edge candidates; bounded history ids and event payload ids are historical provenance. |
-| Neon | evidence event `evidence_id` and evidence subject/device provenance | Event ids are historical; live subject/device provenance should be audited for explicit evidence edges. |
-| Void | orbit `body_id` and navigation destinations | Live ship/body or traveler/destination state is relational and should be piloted as edges when that package is migrated. |
-| Colony | `FactionRelationComponent.faction_id`, trade-offer faction ids, incident ids | Some faction values are semantic labels generated without faction entities; convert only worlds that establish live faction identity. Incident command/event ids are references at the action boundary. |
-| Dinosim | taming `tamer_id`, companion `owner_id`, behavior/incident links | Live tamers and owners are strong edge candidates; incident event ids are historical, while behavior names may be semantic strategy keys. |
+TODO: migrate the remaining packages one bounded domain at a time, with a schema migration,
+endpoint validation, cleanup rules, and projection/prompt tests for each group:
 
-The audit should proceed package by package with migrations and endpoint validation. A
-mechanical `_id` search is useful for discovery but is not a modeling decision.
+- **Colony factions:** establish canonical live faction entities first, then replace
+  `FactionRelationComponent.faction_id`, trade-offer faction references, and other live
+  faction participants with directed edges. Existing generated faction strings are semantic
+  labels and must not be converted until identity and missing-target behavior are defined.
+- **Neon follow-up:** audit active trace source devices, blackmail subjects, and handler/runner
+  contracts. Preserve completed contract and evidence event ids as historical provenance.
+- **Void follow-up:** audit first-contact participants, artifact/sample researchers,
+  quarantine starters, insurance subjects, salvage claimants and source sites, and any species
+  fields that identify live entities. Keep route labels and species taxonomy as semantic keys
+  where no entity lifecycle exists.
+- **Other packages:** audit Dagger banking/property participants, storyteller-adjacent package
+  incident locations, Garden ladder/plot links, Dragon map/study subjects, and Nuke salvage
+  claimants. Classify command payload ids and immutable event ids as boundary or historical
+  data instead of converting them mechanically.
+
+A mechanical `_id` search is useful for discovery but is not a modeling decision.

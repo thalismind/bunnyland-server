@@ -590,7 +590,6 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
                         kind=kind,
                         budget_spent=0,
                         started_at_epoch=actor.epoch,
-                        room_id=str(world.rooms[room_key]),
                     ),
                 ],
             )

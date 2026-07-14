@@ -3,7 +3,7 @@
 from bunnyland.foundation.storyteller.mechanics import IncidentResolutionRule
 from bunnyland.simpacks.dinosim.mechanics import (
     ApexPredatorComponent,
-    CompanionComponent,
+    CompanionOf,
     EnclosureComponent,
     GateComponent,
     KaijuComponent,
@@ -16,7 +16,7 @@ from ...core.ecs import container_of
 
 def _creature_neutralized(world, incident, entity) -> bool:
     del incident
-    if entity.has_component(CompanionComponent):
+    if entity.get_relationships(CompanionOf):
         return True
     if entity.has_component(TamingComponent) and entity.get_component(TamingComponent).tamed:
         return True

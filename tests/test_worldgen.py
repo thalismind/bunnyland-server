@@ -480,8 +480,7 @@ async def test_clover_city_generator_builds_dense_world_shape():
     }
     assert len(obligations) == 3
     assert all(
-        obligation.get_component(ObligationComponent).status == "open"
-        for obligation in obligations
+        obligation.get_component(ObligationComponent).status == "open" for obligation in obligations
     )
     parcel = next(
         entity
@@ -516,9 +515,7 @@ async def test_clover_city_story_state_survives_checkpoint_restore(tmp_path):
         "rooftop_water_shortage",
         "elevator_noise_dispute",
     }
-    assert len(
-        list(loaded.world.query().with_all([ObligationComponent]).execute_entities())
-    ) == 3
+    assert len(list(loaded.world.query().with_all([ObligationComponent]).execute_entities())) == 3
 
 
 def test_validate_rejects_dangling_references():
@@ -1999,9 +1996,7 @@ async def test_builtin_generation_enrichers_cover_core_sim_pack_wants():
                 key="life_home",
                 title="Generated Apartment",
                 description="a claimed home apartment",
-                wants=(
-                    "bunnyland.gardensim.daily-farm-reset",
-                ),
+                wants=("bunnyland.gardensim.daily-farm-reset",),
             ),
             RoomSpec(
                 key="colony_core",
@@ -2988,9 +2983,7 @@ async def test_builtin_generation_enrichers_cover_sim_pack_expansion_wants():
         MoraleComponent,
         MortgageComponent,
         MutinyComponent,
-        NavigationRouteComponent,
         OrbitalBodyComponent,
-        OrbitComponent,
         PassengerComponent,
         QuarantineComponent,
         ReactorComponent,
@@ -3098,8 +3091,6 @@ async def test_builtin_generation_enrichers_cover_sim_pack_expansion_wants():
                     "bunnyland.voidsim.smuggling-compartment",
                     "bunnyland.voidsim.insurance-policy",
                     "bunnyland.voidsim.mortgage",
-                    "bunnyland.voidsim.orbit",
-                    "bunnyland.voidsim.navigation-route",
                     "bunnyland.voidsim.astrogation",
                 ),
             ),
@@ -3232,8 +3223,6 @@ async def test_builtin_generation_enrichers_cover_sim_pack_expansion_wants():
         SmugglingCompartmentComponent,
         InsurancePolicyComponent,
         MortgageComponent,
-        OrbitComponent,
-        NavigationRouteComponent,
         AstrogationComponent,
     ):
         assert void_cache.has_component(component_type)

@@ -130,7 +130,7 @@ def test_schema_v1_quest_snapshot_migrates_to_canonical_graph_without_mutating_s
     migrated = migrate_snapshot(source)
 
     assert source["bunnyland"]["schema_version"] == 1
-    assert migrated["bunnyland"]["schema_version"] == 3
+    assert migrated["bunnyland"]["schema_version"] == 4
     assert (
         not {
             "GeneratedQuestComponent",
@@ -157,7 +157,7 @@ def test_schema_v1_quest_snapshot_migrates_to_canonical_graph_without_mutating_s
 
 def test_schema_migration_rejects_future_and_ambiguous_worlds():
     with pytest.raises(WorldMigrationError, match="newer than supported"):
-        migrate_snapshot({"bunnyland": {"schema_version": 4}})
+        migrate_snapshot({"bunnyland": {"schema_version": 5}})
 
     snapshot = _schema_v1_generated_quest_snapshot()
     snapshot["components"]["QuestComponent"] = {
@@ -168,9 +168,9 @@ def test_schema_migration_rejects_future_and_ambiguous_worlds():
         migrate_snapshot(snapshot)
 
 
-def test_load_schema_v1_migrates_in_memory_and_next_save_is_v3(tmp_path):
+def test_load_schema_v1_migrates_in_memory_and_next_save_is_v4(tmp_path):
     source = tmp_path / "world-v1.json"
-    dest = tmp_path / "world-v3.json"
+    dest = tmp_path / "world-v4.json"
     snapshot = _schema_v1_generated_quest_snapshot()
     source.write_text(json.dumps(snapshot))
 
@@ -190,12 +190,12 @@ def test_load_schema_v1_migrates_in_memory_and_next_save_is_v3(tmp_path):
     assert quest.has_relationship(QuestAcceptedBy, EntityId.parse("entity_2"))
     assert len(quest.get_relationships(QuestHasObjective)) == 1
     assert len(quest.get_relationships(QuestHasReward)) == 1
-    assert meta.schema_version == 3
+    assert meta.schema_version == 4
     assert json.loads(source.read_text())["bunnyland"]["schema_version"] == 1
 
     save_world(actor, dest, meta=meta)
 
-    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 3
+    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 4
 
 
 def test_schema_v1_regular_quest_collections_become_ordered_edges():
@@ -318,9 +318,7 @@ def _lifesim_v2_snapshot(version: int = 2):
         "components": {
             "CharacterComponent": {"entity_1": {}, "entity_2": {}},
             "RoomComponent": {"entity_3": {"title": "Moss Home"}},
-            "HomeComponent": {
-                "entity_3": {"owner_id": "entity_1", "household_id": "moss"}
-            },
+            "HomeComponent": {"entity_3": {"owner_id": "entity_1", "household_id": "moss"}},
             "RoomClaimComponent": {
                 "entity_3": {"claimed_by_id": "entity_1", "claimed_at_epoch": 7}
             },
@@ -338,13 +336,13 @@ def _lifesim_v2_snapshot(version: int = 2):
 
 
 @pytest.mark.parametrize("version", [1, 2])
-def test_lifesim_v1_and_v2_relationship_fields_migrate_sequentially_to_v3(version):
+def test_lifesim_v1_and_v2_relationship_fields_migrate_sequentially_to_v4(version):
     source = _lifesim_v2_snapshot(version)
 
     migrated = migrate_snapshot(source)
 
     assert source["bunnyland"]["schema_version"] == version
-    assert migrated["bunnyland"]["schema_version"] == 3
+    assert migrated["bunnyland"]["schema_version"] == 4
     assert "HomeComponent" not in migrated["components"]
     assert "RoomClaimComponent" not in migrated["components"]
     assert migrated["components"]["PregnancyComponent"]["entity_1"] == {
@@ -361,6 +359,435 @@ def test_lifesim_v1_and_v2_relationship_fields_migrate_sequentially_to_v3(versio
     assert migrated["relationships"]["PregnancyCoParent"]["entity_1"] == [
         {"target": "entity_2", "edge": {}}
     ]
+
+
+def _world_database_v3_snapshot():
+    entity_ids = [f"entity_{index}" for index in range(1, 13)]
+    return {
+        "bunnyland": {"schema_version": 3},
+        "entities": {entity_id: {"prefab": "entity"} for entity_id in entity_ids},
+        "components": {
+            "CharacterComponent": {"entity_1": {}, "entity_2": {}, "entity_4": {}},
+            "RoomComponent": {"entity_3": {"title": "Den"}},
+            "FossilFragmentComponent": {"entity_5": {}},
+            "AncientSampleComponent": {
+                "entity_6": {"species_name": "raptor", "source_fossil_id": "entity_5"}
+            },
+            "EggComponent": {"entity_7": {"species_name": "raptor", "laid_at_epoch": 0}},
+            "CloneCandidateComponent": {
+                "entity_7": {"species_name": "raptor", "source_sample_id": "entity_6"}
+            },
+            "HatchlingComponent": {"entity_4": {"hatched_at_epoch": 2, "egg_id": "entity_7"}},
+            "FossilSurveyComponent": {"entity_5": {"surveyed_by": ["entity_1"]}},
+            "IncubationComponent": {"entity_7": {"brooded_by": "entity_1"}},
+            "EggInspectionComponent": {"entity_7": {"inspected_by": "entity_1"}},
+            "ImprintComponent": {"entity_4": {"imprinted_by": "entity_1", "bond": 2}},
+            "JuvenileCareComponent": {"entity_4": {"cared_by": "entity_1"}},
+            "WaterStudyComponent": {"entity_4": {"studied_by": ["entity_1", "entity_2"]}},
+            "BroodingComponent": {"entity_7": {"brooder_id": "entity_1"}},
+            "TrackComponent": {"entity_4": {"room_id": "entity_3"}},
+            "TerritoryComponent": {"entity_3": {"marked_by": "entity_1"}},
+            "NestComponent": {"entity_3": {"prepared_by": "entity_1"}},
+            "BaitComponent": {"entity_8": {"set_by_id": "entity_1"}},
+            "TamingComponent": {"entity_4": {"tamer_id": "entity_1", "tamed": True}},
+            "CommandComponent": {
+                "entity_4": {
+                    "command_name": "hunt",
+                    "commanded_by_id": "entity_1",
+                    "target_id": "velociraptor",
+                }
+            },
+            "MountComponent": {"entity_4": {"rider_id": "entity_1", "mounted": True}},
+            "CompanionComponent": {"entity_4": {"owner_id": "entity_1", "role": "guard"}},
+            "GuardBehaviorComponent": {"entity_4": {"location_id": "entity_3"}},
+            "RecallComponent": {"entity_4": {"home_room_id": "entity_3"}},
+            "EnclosureComponent": {"entity_3": {"built_by_id": "entity_1"}},
+            "KaijuComponent": {"entity_4": {"target_room_id": "entity_3"}},
+            "GrappleComponent": {"entity_4": {"target_id": "entity_2"}},
+            "CreatureProductComponent": {
+                "entity_8": {"product_type": "milk", "source_creature_id": "entity_4"}
+            },
+            "RanchLaborComponent": {
+                "entity_4": {"target_id": "entity_3", "assigned_by_id": "entity_1"}
+            },
+            "GuardAnimalComponent": {
+                "entity_4": {"location_id": "entity_3", "assigned_by_id": "entity_1"}
+            },
+            "IncidentComponent": {
+                "entity_9": {
+                    "kind": "raid",
+                    "budget_spent": 2,
+                    "started_at_epoch": 1,
+                    "room_id": "entity_3",
+                }
+            },
+            "IdentityComponent": {
+                "entity_10": {"name": "camera", "kind": "device"},
+                "entity_11": {"name": "moon", "kind": "orbital-body"},
+                "entity_12": {"name": "Vega", "kind": "star-system"},
+            },
+            "DeviceComponent": {"entity_10": {"device_type": "camera"}},
+            "RecordedEvidenceComponent": {
+                "entity_8": {"subject_id": "entity_1", "device_id": "entity_10"}
+            },
+            "ShipComponent": {"entity_4": {"name": "Courier"}},
+            "OrbitalBodyComponent": {"entity_11": {"body_type": "moon"}},
+            "OrbitComponent": {"entity_4": {"body_id": "entity_11", "altitude": "orbit"}},
+            "StarSystemComponent": {"entity_12": {"name": "Vega"}},
+            "NavigationRouteComponent": {
+                "entity_4": {"destination_id": "entity_12", "status": "plotted"}
+            },
+        },
+        "relationships": {},
+    }
+
+
+def test_schema_v3_world_database_fields_migrate_to_v4_edges_without_mutating_source():
+    source = _world_database_v3_snapshot()
+
+    migrated = migrate_snapshot(source)
+
+    assert source["bunnyland"]["schema_version"] == 3
+    assert migrated["bunnyland"]["schema_version"] == 4
+    expected = {
+        "SurveyedBy": ("entity_5", "entity_1"),
+        "SampledFromFossil": ("entity_6", "entity_5"),
+        "ClonedFromSample": ("entity_7", "entity_6"),
+        "HatchedFromEgg": ("entity_4", "entity_7"),
+        "InspectedBy": ("entity_7", "entity_1"),
+        "ImprintedBy": ("entity_4", "entity_1"),
+        "CaredForBy": ("entity_4", "entity_1"),
+        "StudiedBy": ("entity_4", "entity_1"),
+        "BroodedBy": ("entity_7", "entity_1"),
+        "TrackedAt": ("entity_4", "entity_3"),
+        "MarkedBy": ("entity_3", "entity_1"),
+        "PreparedBy": ("entity_3", "entity_1"),
+        "SetBy": ("entity_8", "entity_1"),
+        "TamedBy": ("entity_4", "entity_1"),
+        "CommandedBy": ("entity_4", "entity_1"),
+        "MountedBy": ("entity_4", "entity_1"),
+        "CompanionOf": ("entity_4", "entity_1"),
+        "GuardsLocation": ("entity_4", "entity_3"),
+        "RecallHome": ("entity_4", "entity_3"),
+        "BuiltBy": ("entity_3", "entity_1"),
+        "KaijuTargets": ("entity_4", "entity_3"),
+        "Grappling": ("entity_4", "entity_2"),
+        "ProductFromCreature": ("entity_8", "entity_4"),
+        "AssignedBy": ("entity_4", "entity_1"),
+        "RanchWorkTarget": ("entity_4", "entity_3"),
+        "EvidenceSubject": ("entity_8", "entity_1"),
+        "RecordedByDevice": ("entity_8", "entity_10"),
+        "OrbitsBody": ("entity_4", "entity_11"),
+        "NavigatesTo": ("entity_4", "entity_12"),
+    }
+    for edge_name, (owner_id, target_id) in expected.items():
+        records = migrated["relationships"][edge_name][owner_id]
+        assert any(record["target"] == target_id for record in records), edge_name
+    assert migrated["components"]["CommandComponent"]["entity_4"]["target_key"] == ("velociraptor")
+    assert migrated["relationships"]["CompanionOf"]["entity_4"] == [
+        {"target": "entity_1", "edge": {"role": "guard"}}
+    ]
+    assert migrated["relationships"]["Contains"]["entity_3"][0]["target"] == "entity_9"
+    assert migrated["components"]["EggComponent"]["entity_7"]["hatched"] is True
+
+
+def test_schema_v3_world_database_migration_has_json_yaml_parity():
+    import yaml
+
+    source = _world_database_v3_snapshot()
+    from_json = migrate_snapshot(json.loads(json.dumps(source)))
+    from_yaml = migrate_snapshot(yaml.safe_load(yaml.safe_dump(source)))
+
+    assert from_json == from_yaml
+
+
+def test_schema_v3_hatched_lineage_restores_consumed_legacy_egg_state():
+    source = _world_database_v3_snapshot()
+    source["components"]["EggComponent"].pop("entity_7")
+    source["components"]["DinosaurComponent"] = {"entity_4": {"species_name": "raptor"}}
+
+    migrated = migrate_snapshot(source)
+
+    assert migrated["components"]["EggComponent"]["entity_7"] == {
+        "species_name": "raptor",
+        "laid_at_epoch": 0,
+        "fertilized": True,
+        "source": "legacy",
+        "hatched": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("component", "field"),
+    [
+        ("IncidentComponent", "room_id"),
+        ("TamingComponent", "tamer_id"),
+        ("RecordedEvidenceComponent", "subject_id"),
+        ("OrbitComponent", "body_id"),
+        ("NavigationRouteComponent", "destination_id"),
+    ],
+)
+def test_schema_v3_world_database_migration_rejects_missing_live_targets(component, field):
+    source = _world_database_v3_snapshot()
+    owner_id = next(iter(source["components"][component]))
+    source["components"][component][owner_id][field] = "entity_999"
+
+    with pytest.raises(
+        WorldMigrationError,
+        match=rf"entity {owner_id!r} component {component}\.{field}.*missing entity",
+    ):
+        migrate_snapshot(source)
+
+
+def test_schema_v3_world_database_migration_covers_legacy_shapes_and_semantic_targets():
+    def check_error(mutate, message):
+        source = _world_database_v3_snapshot()
+        mutate(source)
+        with pytest.raises(WorldMigrationError, match=message):
+            migrate_snapshot(source)
+
+    check_error(
+        lambda value: value["components"]["AncientSampleComponent"].update({"entity_6": []}),
+        "AncientSampleComponent fields.*mapping",
+    )
+    check_error(
+        lambda value: value["components"]["FossilSurveyComponent"]["entity_5"].update(
+            {"surveyed_by": "entity_1"}
+        ),
+        "surveyed_by.*sequence",
+    )
+    check_error(
+        lambda value: value["components"]["IncidentComponent"].update({"entity_9": []}),
+        "IncidentComponent fields.*mapping",
+    )
+    check_error(
+        lambda value: value["components"]["IncidentComponent"]["entity_9"].update(
+            {"room_id": "entity_1"}
+        ),
+        "without RoomComponent",
+    )
+    check_error(
+        lambda value: value["relationships"].update({"Contains": {"entity_3": {}}}),
+        "Contains edges.*list",
+    )
+    check_error(
+        lambda value: value["relationships"].update(
+            {"Contains": {"entity_1": [{"target": "entity_9", "edge": {"mode": "room_content"}}]}}
+        ),
+        "conflicts with incoming Contains",
+    )
+    check_error(
+        lambda value: value["components"]["HatchlingComponent"].update({"entity_4": []}),
+        "HatchlingComponent fields.*mapping",
+    )
+    check_error(
+        lambda value: value["components"]["EggComponent"].update({"entity_7": []}),
+        "EggComponent fields.*mapping",
+    )
+    check_error(
+        lambda value: value["components"]["CompanionComponent"].update({"entity_4": []}),
+        "CompanionComponent fields.*mapping",
+    )
+    check_error(
+        lambda value: value["components"]["CompanionComponent"]["entity_4"].update({"role": ""}),
+        "CompanionComponent.role",
+    )
+    check_error(
+        lambda value: value["components"]["CommandComponent"].update({"entity_4": []}),
+        "CommandComponent fields.*mapping",
+    )
+    check_error(
+        lambda value: value["components"]["CommandComponent"]["entity_4"].update(
+            {"command_name": "guard", "target_id": "entity_999"}
+        ),
+        "CommandComponent.target_id.*missing entity",
+    )
+    check_error(
+        lambda value: value["components"]["NavigationRouteComponent"].update({"entity_4": []}),
+        "NavigationRouteComponent fields.*mapping",
+    )
+
+    no_sample_source = _world_database_v3_snapshot()
+    no_sample_source["components"]["AncientSampleComponent"]["entity_6"].pop("source_fossil_id")
+    assert migrate_snapshot(no_sample_source)["bunnyland"]["schema_version"] == 4
+
+    optional_none = _world_database_v3_snapshot()
+    optional_none["components"]["TamingComponent"]["entity_4"]["tamer_id"] = None
+    assert migrate_snapshot(optional_none)["relationships"]["TamedBy"] == {}
+
+    unlocated_incident = _world_database_v3_snapshot()
+    unlocated_incident["components"]["IncidentComponent"]["entity_9"].pop("room_id")
+    assert migrate_snapshot(unlocated_incident)["bunnyland"]["schema_version"] == 4
+
+    existing_containment = _world_database_v3_snapshot()
+    existing_containment["relationships"]["Contains"] = {
+        "entity_3": [
+            {"target": "entity_8", "edge": {"mode": "room_content"}},
+            {"target": "entity_9", "edge": {"mode": "room_content"}},
+        ]
+    }
+    assert (
+        migrate_snapshot(existing_containment)["relationships"]["Contains"]
+        == (existing_containment["relationships"]["Contains"])
+    )
+
+    unrelated_containment = _world_database_v3_snapshot()
+    unrelated_containment["relationships"]["Contains"] = {
+        "entity_3": [{"target": "entity_8", "edge": {"mode": "room_content"}}]
+    }
+    migrated_containment = migrate_snapshot(unrelated_containment)["relationships"]["Contains"]
+    assert migrated_containment["entity_3"][-1]["target"] == "entity_9"
+
+    no_lineage = _world_database_v3_snapshot()
+    no_lineage["components"]["HatchlingComponent"]["entity_4"].pop("egg_id")
+    assert migrate_snapshot(no_lineage)["relationships"]["HatchedFromEgg"] == {}
+
+    identity_species = _world_database_v3_snapshot()
+    identity_species["components"]["EggComponent"].pop("entity_7")
+    identity_species["components"]["IdentityComponent"]["entity_4"] = {
+        "name": "raptor hatchling",
+        "kind": "character",
+    }
+    restored = migrate_snapshot(identity_species)
+    assert restored["components"]["EggComponent"]["entity_7"]["species_name"] == "raptor"
+
+    live_command_target = _world_database_v3_snapshot()
+    live_command_target["components"]["CommandComponent"]["entity_4"]["target_id"] = "entity_3"
+    assert migrate_snapshot(live_command_target)["relationships"]["CommandTarget"]
+
+    blank_command_relationships = _world_database_v3_snapshot()
+    blank_command_relationships["components"]["CommandComponent"]["entity_4"].update(
+        {"commanded_by_id": "", "target_id": ""}
+    )
+    migrated_blank_command = migrate_snapshot(blank_command_relationships)
+    assert migrated_blank_command["relationships"]["CommandedBy"] == {}
+    assert migrated_blank_command["relationships"]["CommandTarget"] == {}
+
+    blank_route = _world_database_v3_snapshot()
+    blank_route["components"]["NavigationRouteComponent"]["entity_4"]["destination_id"] = ""
+    with pytest.raises(WorldMigrationError, match="invalid destination"):
+        migrate_snapshot(blank_route)
+
+    semantic_route = _world_database_v3_snapshot()
+    semantic_route["components"]["NavigationRouteComponent"]["entity_4"]["destination_id"] = (
+        "Outer Rim"
+    )
+    route = migrate_snapshot(semantic_route)["components"]["NavigationRouteComponent"]["entity_4"]
+    assert route["destination_key"] == "Outer Rim"
+
+
+def test_schema_v4_world_database_validation_rejects_malformed_edges_and_endpoints():
+    def check_error(mutate, message):
+        value = migrate_snapshot(_world_database_v3_snapshot())
+        mutate(value)
+        with pytest.raises(WorldMigrationError, match=message):
+            migrate_snapshot(value)
+
+    def missing_source(value):
+        records = value["relationships"]["TamedBy"].pop("entity_4")
+        value["relationships"]["TamedBy"]["entity_999"] = records
+
+    def duplicate_target(value):
+        value["relationships"]["TamedBy"]["entity_4"].append({"target": "entity_1", "edge": {}})
+
+    def second_target(value):
+        value["relationships"]["TamedBy"]["entity_4"].append({"target": "entity_2", "edge": {}})
+
+    cases = (
+        (
+            lambda value: value["components"]["TamingComponent"].update({"entity_4": []}),
+            "TamingComponent fields.*mapping",
+        ),
+        (
+            lambda value: value["components"]["TamingComponent"]["entity_4"].update(
+                {"tamer_id": "entity_1"}
+            ),
+            "legacy TamingComponent.tamer_id",
+        ),
+        (missing_source, "TamedBy source.*does not exist"),
+        (
+            lambda value: value["relationships"]["TamedBy"].update(
+                {"entity_3": [{"target": "entity_1", "edge": {}}]}
+            ),
+            "TamedBy source.*lacks TamingComponent",
+        ),
+        (
+            lambda value: value["relationships"]["TamedBy"].update({"entity_4": {}}),
+            "TamedBy edges.*list",
+        ),
+        (
+            lambda value: value["relationships"]["TamedBy"].update(
+                {"entity_4": [{"target": "entity_1", "edge": []}]}
+            ),
+            "TamedBy edge.*mapping",
+        ),
+        (
+            lambda value: value["relationships"]["TamedBy"]["entity_4"][0].update(
+                {"target": "entity_999"}
+            ),
+            "missing target",
+        ),
+        (duplicate_target, "duplicate TamedBy edge"),
+        (
+            lambda value: value["relationships"]["TamedBy"]["entity_4"][0].update(
+                {"target": "entity_3"}
+            ),
+            "TamedBy target.*not a character",
+        ),
+        (
+            lambda value: value["relationships"]["TrackedAt"]["entity_4"][0].update(
+                {"target": "entity_1"}
+            ),
+            "TrackedAt target.*not a room",
+        ),
+        (
+            lambda value: value["relationships"]["RecordedByDevice"]["entity_8"][0].update(
+                {"target": "entity_1"}
+            ),
+            "RecordedByDevice target.*wrong type",
+        ),
+        (
+            lambda value: value["components"]["EggComponent"]["entity_7"].update(
+                {"hatched": False}
+            ),
+            "HatchedFromEgg target.*not hatched",
+        ),
+        (
+            lambda value: value["relationships"]["ProductFromCreature"]["entity_8"][0].update(
+                {"target": "entity_3"}
+            ),
+            "ProductFromCreature target.*not a creature",
+        ),
+        (
+            lambda value: value["relationships"]["CompanionOf"]["entity_4"][0].update({"edge": {}}),
+            "CompanionOf edge.*requires role",
+        ),
+        (
+            lambda value: value["relationships"]["TamedBy"]["entity_4"][0].update(
+                {"edge": {"unexpected": True}}
+            ),
+            "TamedBy edge.*must not contain properties",
+        ),
+        (second_target, "multiple TamedBy targets"),
+        (
+            lambda value: value["relationships"]["EvidenceSubject"].pop("entity_8"),
+            "requires one EvidenceSubject",
+        ),
+        (
+            lambda value: value["relationships"]["RecordedByDevice"].pop("entity_8"),
+            "requires one RecordedByDevice",
+        ),
+        (
+            lambda value: value["relationships"]["OrbitsBody"].pop("entity_4"),
+            "requires one OrbitsBody",
+        ),
+        (
+            lambda value: value["relationships"]["NavigatesTo"].pop("entity_4"),
+            "invalid destination",
+        ),
+    )
+    for mutate, message in cases:
+        check_error(mutate, message)
 
 
 def test_lifesim_v2_json_and_yaml_migrations_are_identical():
@@ -423,9 +850,7 @@ def test_lifesim_v2_migration_rejects_missing_live_targets(component, field, val
             "RoomClaimComponent.*mapping",
         ),
         (
-            lambda value: value["components"]["RoomClaimComponent"].update(
-                {"entity_3": []}
-            ),
+            lambda value: value["components"]["RoomClaimComponent"].update({"entity_3": []}),
             "RoomClaimComponent fields.*mapping",
         ),
         (
@@ -445,9 +870,7 @@ def test_lifesim_v2_migration_rejects_missing_live_targets(component, field, val
             "claimed_at_epoch.*integer",
         ),
         (
-            lambda value: value["components"]["PregnancyComponent"].update(
-                {"entity_1": []}
-            ),
+            lambda value: value["components"]["PregnancyComponent"].update({"entity_1": []}),
             "PregnancyComponent fields.*mapping",
         ),
         (
@@ -499,9 +922,7 @@ def test_schema_v3_rejects_duplicate_cardinality_and_pregnancy_endpoint_violatio
             "CharacterComponent.*mapping",
         ),
         (
-            lambda value: value["components"]["PregnancyComponent"].update(
-                {"entity_1": []}
-            ),
+            lambda value: value["components"]["PregnancyComponent"].update({"entity_1": []}),
             "PregnancyComponent fields.*mapping",
         ),
         (
@@ -511,15 +932,11 @@ def test_schema_v3_rejects_duplicate_cardinality_and_pregnancy_endpoint_violatio
             "legacy PregnancyComponent.co_parent_ids",
         ),
         (
-            lambda value: value["components"].update(
-                {"HomeComponent": {"entity_3": {}}}
-            ),
+            lambda value: value["components"].update({"HomeComponent": {"entity_3": {}}}),
             "legacy HomeComponent",
         ),
         (
-            lambda value: value["components"].update(
-                {"RoomClaimComponent": {"entity_3": {}}}
-            ),
+            lambda value: value["components"].update({"RoomClaimComponent": {"entity_3": {}}}),
             "legacy RoomClaimComponent",
         ),
         (
@@ -533,9 +950,7 @@ def test_schema_v3_rejects_duplicate_cardinality_and_pregnancy_endpoint_violatio
             "OwnsHome edges.*must be a list",
         ),
         (
-            lambda value: value["relationships"]["OwnsHome"].update(
-                {"entity_1": ["bad"]}
-            ),
+            lambda value: value["relationships"]["OwnsHome"].update({"entity_1": ["bad"]}),
             "OwnsHome edge.*must be a mapping",
         ),
         (
@@ -581,9 +996,9 @@ def test_schema_v3_rejects_duplicate_cardinality_and_pregnancy_endpoint_violatio
             "PregnancyCoParent target 'entity_3'.*not a character",
         ),
         (
-            lambda value: value["relationships"]["PregnancyCoParent"]["entity_1"][0][
-                "edge"
-            ].update({"role": "parent"}),
+            lambda value: value["relationships"]["PregnancyCoParent"]["entity_1"][0]["edge"].update(
+                {"role": "parent"}
+            ),
             "PregnancyCoParent edge.*must not contain properties",
         ),
     ],
@@ -709,7 +1124,7 @@ def test_schema_v1_egg_parents_migrate_to_ordered_edges():
 
 
 @pytest.mark.parametrize("suffix", ["json", "yaml"])
-def test_schema_v1_relationship_fixtures_load_and_resave_as_v3(tmp_path, suffix):
+def test_schema_v1_relationship_fixtures_load_and_resave_as_v4(tmp_path, suffix):
     import yaml
 
     source = Path(__file__).parent / "fixtures" / "migrations" / f"relationships-v1.{suffix}"
@@ -719,7 +1134,7 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v3(tmp_path, suffix)
     migrated = migrate_snapshot(raw)
 
     assert source.read_text() == before
-    assert migrated["bunnyland"]["schema_version"] == 3
+    assert migrated["bunnyland"]["schema_version"] == 4
     expected = {
         "AllowedIn": ("entity_1", "entity_2", {}),
         "MemberOfCaravan": ("entity_1", "entity_3", {}),
@@ -762,7 +1177,7 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v3(tmp_path, suffix)
         assert record == {"target": target_id, "edge": edge}
 
     actor, meta = load_world(source, registry=PluginRegistry(bunnyland_plugins()))
-    destination = tmp_path / f"relationships-v3.{suffix}"
+    destination = tmp_path / f"relationships-v4.{suffix}"
     save_world(actor, destination, meta=meta)
     saved = (
         json.loads(destination.read_text())
@@ -770,7 +1185,7 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v3(tmp_path, suffix)
         else yaml.safe_load(destination.read_text())
     )
     metadata_key = "bunnyland" if suffix == "json" else "__bunnyland__"
-    assert saved[metadata_key]["schema_version"] == 3
+    assert saved[metadata_key]["schema_version"] == 4
 
 
 @pytest.mark.parametrize("suffix", ["json", "yaml"])
@@ -822,9 +1237,7 @@ def test_schema_v1_3d_decoration_roles_preserve_namespaced_values():
         ),
     ],
 )
-def test_schema_v1_3d_decoration_roles_reject_malformed_values(
-    components, relationships, message
-):
+def test_schema_v1_3d_decoration_roles_reject_malformed_values(components, relationships, message):
     source = _schema_v1_generated_quest_snapshot()
     source["components"].update(components)
     source["relationships"].update(relationships)

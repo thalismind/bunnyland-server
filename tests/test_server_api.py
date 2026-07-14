@@ -5529,7 +5529,6 @@ async def test_worldgen_event_patch_frames_story_event_as_ecs(scenario):
     ]
     assert incidents
     incident = incidents[0].get_component(IncidentComponent)
-    assert incident.room_id == str(scenario.room_a)
     assert incident.kind == "story_event"
     assert any(
         scenario.actor.world.get_entity(target).get_component(IdentityComponent).name

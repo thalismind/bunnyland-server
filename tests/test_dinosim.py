@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
@@ -12,6 +13,7 @@ from bunnyland.core import (
     Contains,
     IdentityComponent,
     Lane,
+    MutationError,
     MutationPlan,
     build_submitted_command,
     container_of,
@@ -63,12 +65,16 @@ from bunnyland.simpacks.dinosim.mechanics import (
     ChargeComponent,
     CleanFossilHandler,
     CloneCandidateComponent,
+    ClonedFromSample,
     CollectEggHandler,
     CommandCompanionHandler,
     CommandComponent,
+    CommandedBy,
+    CommandTarget,
     CommandTrainedEvent,
     CompanionCommandedEvent,
     CompanionComponent,
+    CompanionOf,
     ContainmentPanicComponent,
     ContainmentPanicStartedEvent,
     ContainmentProtocolComponent,
@@ -130,11 +136,15 @@ from bunnyland.simpacks.dinosim.mechanics import (
     GateComponent,
     GateReinforcedEvent,
     GrappleComponent,
+    Grappling,
     GuardAnimalComponent,
     GuardAssignedEvent,
     GuardBehaviorComponent,
+    GuardsLocation,
     HarvestProductHandler,
+    HatchedFromEgg,
     HatchEggHandler,
+    HatchlingComponent,
     HerdComponent,
     HerdTrackedEvent,
     HiddenFromCreatureEvent,
@@ -144,6 +154,7 @@ from bunnyland.simpacks.dinosim.mechanics import (
     IdentifyFossilHandler,
     ImprintComponent,
     ImprintCreatureHandler,
+    ImprintedBy,
     IncubateEggHandler,
     IncubationComponent,
     IncubationConsequence,
@@ -159,9 +170,11 @@ from bunnyland.simpacks.dinosim.mechanics import (
     LabIncubationStartedEvent,
     LayEggHandler,
     LockPenHandler,
+    MarkedBy,
     MarkTerritoryHandler,
     MountComponent,
     MountCreatureHandler,
+    MountedBy,
     NestComponent,
     NestPreparedEvent,
     ObserveCreatureHandler,
@@ -172,11 +185,13 @@ from bunnyland.simpacks.dinosim.mechanics import (
     PredatorDrivenOffEvent,
     PrepareCloneHandler,
     PrepareNestHandler,
+    ProductFromCreature,
     QuarantinePenComponent,
     RanchLaborComponent,
     RanchWorkAssignedEvent,
     RecallComponent,
     RecallCreatureHandler,
+    RecallHome,
     RecaptureCreatureHandler,
     ReinforceGateHandler,
     ReinforcementComponent,
@@ -185,6 +200,7 @@ from bunnyland.simpacks.dinosim.mechanics import (
     ReptileProcreationComponent,
     RoarComponent,
     RoomEvacuatedEvent,
+    SampledFromFossil,
     SetBaitHandler,
     SetIncubationTemperatureHandler,
     SettlementDamageComponent,
@@ -195,9 +211,12 @@ from bunnyland.simpacks.dinosim.mechanics import (
     StabilizeFossilHandler,
     StampedeStartedEvent,
     StockFeedHandler,
+    StudiedBy,
     StudyWaterCreatureHandler,
+    SurveyedBy,
     SurveyFossilHandler,
     TameCreatureHandler,
+    TamedBy,
     TamingComponent,
     TamingProgressedEvent,
     TargetWeakPointHandler,
@@ -206,6 +225,7 @@ from bunnyland.simpacks.dinosim.mechanics import (
     ToxinComponent,
     TrackComponent,
     TrackCreatureHandler,
+    TrackedAt,
     TrackHerdHandler,
     TrainCommandHandler,
     TrainingComponent,
@@ -236,6 +256,7 @@ from bunnyland.simpacks.dinosim.mechanics import (
     install_dinosim,
     kaiju_difficulty_for_threat,
     selected_kaiju_rooms,
+    validate_dinosim_relationships,
 )
 from bunnyland.simpacks.lifesim.mechanics import LifeStageComponent
 
@@ -477,15 +498,17 @@ def test_dinosim_parity_handlers_mutate_state_directly():
         assert any(isinstance(event, event_type) for event in result.events)
 
     survey = fossil.get_component(FossilSurveyComponent)
-    assert str(scenario.character) in survey.surveyed_by
+    assert fossil.has_relationship(SurveyedBy, scenario.character)
     assert survey.excavation_progress == 0.6
     assert fossil.get_component(FossilFragmentComponent).cleaned is True
     assert survey.stabilized is True
     assert egg.get_component(LabIncubationComponent).active is True
     assert egg.get_component(EggInspectionComponent).viability == 0.9
+    assert creature.has_relationship(ImprintedBy, scenario.character)
     assert creature.get_component(ImprintComponent).bond == 2
     assert creature.get_component(JuvenileCareComponent).care_level == 2
-    assert str(scenario.character) in creature.get_component(WaterStudyComponent).studied_by
+    assert creature.has_component(WaterStudyComponent)
+    assert creature.has_relationship(StudiedBy, scenario.character)
     assert egg.get_component(BroodingComponent).warmth == 2
     assert egg.get_component(IncubationComponent).temperature == 31
     assert enclosure.get_component(ContainmentPanicComponent).severity == 2
@@ -1032,10 +1055,22 @@ async def test_reptile_egg_can_be_fertilized_incubated_and_hatched_into_lifesim_
     hatchling_id = parse_entity_id(hatched[0].hatchling_id)
     assert hatchling_id is not None
     hatchling = scenario.actor.world.get_entity(hatchling_id)
+    assert egg_entity.get_component(EggComponent).hatched is True
+    assert egg_entity.get_component(IdentityComponent).name == "empty velociraptor eggshell"
+    assert container_of(egg_entity) == scenario.room_a
+    assert hatchling.has_relationship(HatchedFromEgg, egg_entity.id)
     assert hatchling.get_component(CharacterComponent).species == "velociraptor"
     assert hatchling.get_component(LifeStageComponent).stage == "child"
     assert hatchling.has_component(DinosaurComponent)
     assert container_of(hatchling) == scenario.room_a
+
+    second_hatch = execute_handler(
+        HatchEggHandler(),
+        HandlerContext(scenario.actor.world, scenario.actor.epoch),
+        _handler_cmd(scenario, "hatch-egg", egg_id=str(egg_id)),
+    )
+    assert second_hatch.ok is False
+    assert second_hatch.reason == "egg has already hatched"
 
 
 async def test_creature_can_be_tracked_tamed_trained_commanded_mounted_and_recalled():
@@ -1139,13 +1174,19 @@ async def test_creature_can_be_tracked_tamed_trained_commanded_mounted_and_recal
     assert recalled[0].recalled_room_id == str(scenario.room_a)
     assert container_of(raptor) == scenario.room_a
     assert raptor.has_component(TrackComponent)
+    assert raptor.has_relationship(TrackedAt, scenario.room_a)
     assert bait.has_component(BaitComponent)
-    assert raptor.get_component(CompanionComponent).owner_id == str(scenario.character)
+    assert raptor.has_relationship(TamedBy, scenario.character)
+    assert raptor.has_relationship(CompanionOf, scenario.character)
     assert raptor.get_component(TrainingComponent).learned_commands == ("guard",)
     assert raptor.get_component(MountComponent).mounted is True
+    assert raptor.has_relationship(MountedBy, scenario.character)
     assert raptor.get_component(CommandComponent).command_name == "guard"
-    assert raptor.get_component(GuardBehaviorComponent).location_id == str(scenario.room_a)
-    assert raptor.get_component(RecallComponent).home_room_id == str(scenario.room_a)
+    assert raptor.has_relationship(CommandedBy, scenario.character)
+    assert raptor.has_relationship(CommandTarget, scenario.room_a)
+    assert raptor.has_component(RecallComponent)
+    assert raptor.has_relationship(GuardsLocation, scenario.room_a)
+    assert raptor.has_relationship(RecallHome, scenario.room_a)
 
     fragments = dinosim_fragments(
         scenario.actor.world,
@@ -1197,7 +1238,7 @@ async def test_ecology_territory_herd_and_nest_loop():
     await scenario.actor.submit(_cmd(scenario, "prepare-nest", nest_id=str(nest.id)))
     await scenario.actor.tick(HOUR)
 
-    assert territory.get_component(TerritoryComponent).marked_by == str(scenario.character)
+    assert territory.has_relationship(MarkedBy, scenario.character)
     assert herd.get_component(HerdComponent).last_tracked_epoch > 0
     assert nest.get_component(NestComponent).prepared is True
     assert marked and marked[0].species_name == "triceratops"
@@ -1474,7 +1515,7 @@ async def test_dangerous_encounter_army_response_and_damage_repair_loop():
             CreatureAttackComponent(damage=3.0, attack_type="bite"),
             RoarComponent(fear=2.0),
             ChargeComponent(damage=4.0, prepared=True),
-            GrappleComponent(target_id=str(scenario.character)),
+            GrappleComponent(),
             TrampleComponent(damage=5.0),
             ArmorPlateComponent(rating=1.0),
             WeakPointComponent(label="soft flank", damage_multiplier=2.0),
@@ -1483,6 +1524,7 @@ async def test_dangerous_encounter_army_response_and_damage_repair_loop():
             KaijuComponent(threat_level=7),
         ],
     )
+    raptor.add_relationship(Grappling(), scenario.character)
     replace_component(room, SettlementDamageComponent(severity=3))
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), raptor.id)
 
@@ -1682,8 +1724,9 @@ async def test_creature_products_feed_store_ranch_work_and_guard_assignment_loop
     assert raptor.get_component(BoneComponent).harvested is True
     assert raptor.get_component(CreatureProductComponent).quantity == 2.0
     assert raptor.get_component(RanchLaborComponent).work_type == "mount work"
-    assert raptor.get_component(GuardAnimalComponent).location_id == str(scenario.room_a)
-    assert raptor.get_component(GuardBehaviorComponent).location_id == str(scenario.room_a)
+    assert raptor.has_component(GuardAnimalComponent)
+    assert raptor.has_component(GuardBehaviorComponent)
+    assert raptor.has_relationship(GuardsLocation, scenario.room_a)
 
     inventory_products = [
         entity.get_component(CreatureProductComponent).product_type
@@ -2229,7 +2272,7 @@ def test_creature_product_handlers_reject_invalid_and_cover_edge_paths_directly(
     assert execute_handler(
         AssignGuardHandler(), ctx, _handler_cmd(scenario, "assign-guard", creature_id=str(plain.id))
     ).ok
-    assert plain.get_component(GuardAnimalComponent).location_id == str(scenario.room_a)
+    assert plain.has_relationship(GuardsLocation, scenario.room_a)
 
 
 def test_dinosim_fragments_cover_danger_settlement_and_enclosure_branches():
@@ -2285,9 +2328,10 @@ def test_dinosim_component_prompt_fragments_cover_compound_and_target_state():
         world,
         [
             IdentityComponent(name="Blue", kind="character"),
-            CompanionComponent(owner_id=str(character.id), role="companion"),
+            CompanionComponent(),
         ],
     )
+    companion.add_relationship(CompanionOf(role="companion"), character.id)
     pen = spawn_entity(
         world,
         [
@@ -2566,10 +2610,11 @@ def test_companion_lifecycle_and_item_handlers_cover_additional_edge_paths_direc
             IdentityComponent(name="trained raptor", kind="character"),
             CharacterComponent(species="velociraptor"),
             DinosaurComponent(species_name="velociraptor"),
-            CompanionComponent(owner_id=str(scenario.character)),
+            CompanionComponent(),
             TrainingComponent(learned_commands=("hunt",), progress={"guard": 1.0}),
         ],
     )
+    companion.add_relationship(CompanionOf(), scenario.character)
     plain = spawn_entity(
         scenario.actor.world,
         [
@@ -2589,9 +2634,9 @@ def test_companion_lifecycle_and_item_handlers_cover_additional_edge_paths_direc
             EggComponent(species_name="velociraptor", laid_at_epoch=0, fertilized=True),
             CloneCandidateComponent(
                 species_name="velociraptor",
-                source_sample_id="entity_999",
             ),
             IncubationComponent(started_at_epoch=0, ready=True),
+            LabIncubationComponent(lab_id="legacy lab"),
         ],
     )
     for entity in (companion, plain, bait, clone_egg):
@@ -2720,7 +2765,9 @@ def test_companion_lifecycle_and_item_handlers_cover_additional_edge_paths_direc
         HatchEggHandler(), ctx, _handler_cmd(scenario, "hatch-egg", egg_id=str(clone_egg.id))
     )
     assert hatched.ok is True
-    assert not clone_egg.has_component(CloneCandidateComponent)
+    assert clone_egg.has_component(CloneCandidateComponent)
+    assert clone_egg.get_component(EggComponent).hatched is True
+    assert not clone_egg.has_component(LabIncubationComponent)
 
     room.remove_relationship(Contains, scenario.character)
     assert (
@@ -3149,7 +3196,7 @@ def test_companion_handlers_reject_invalid_targets_and_missing_ownership_directl
             IdentityComponent(name="other raptor", kind="character"),
             CharacterComponent(species="velociraptor"),
             DinosaurComponent(species_name="velociraptor"),
-            CompanionComponent(owner_id="entity_999"),
+            CompanionComponent(),
         ],
     )
     bait = spawn_entity(scenario.actor.world, [IdentityComponent(name="bait", kind="food")])
@@ -3646,9 +3693,10 @@ def test_companion_fragment_is_empty_without_owner_target():
         world,
         [
             IdentityComponent(name="Echo", kind="character"),
-            CompanionComponent(owner_id=str(character.id), role="companion"),
+            CompanionComponent(),
         ],
     )
+    companion.add_relationship(CompanionOf(role="companion"), character.id)
     no_target_ctx = ComponentPromptContext.for_entity(world, companion)
     assert companion.get_component(CompanionComponent).prompt_fragments(no_target_ctx) == ()
 
@@ -3694,8 +3742,9 @@ def test_creature_handlers_reject_missing_creature_or_item():
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     creature = _reachable_creature_entity(
         scenario,
-        components=[CompanionComponent(owner_id=str(scenario.character))],
+        components=[CompanionComponent()],
     )
+    creature.add_relationship(CompanionOf(), scenario.character)
 
     # Handlers that require a creature: none supplied -> "invalid creature id".
     creature_handlers = [
@@ -3887,9 +3936,7 @@ def test_fight_creature_grapples_an_unbound_target():
     scenario = build_scenario()
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
-    creature = _reachable_creature_entity(
-        scenario, components=[GrappleComponent(target_id="", active=True)]
-    )
+    creature = _reachable_creature_entity(scenario, components=[GrappleComponent(active=True)])
     result = execute_handler(
         FightCreatureHandler(),
         ctx,
@@ -3897,7 +3944,7 @@ def test_fight_creature_grapples_an_unbound_target():
     )
     assert result.ok, result.reason
     grapple = creature.get_component(GrappleComponent)
-    assert grapple.target_id == str(scenario.character)
+    assert creature.has_relationship(Grappling, scenario.character)
     assert grapple.active is False
 
 
@@ -4136,8 +4183,10 @@ def test_fight_creature_leaves_grapple_bound_to_other_target():
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     creature = _reachable_creature_entity(
         scenario,
-        components=[GrappleComponent(target_id="entity_424242", active=True)],
+        components=[GrappleComponent(active=True)],
     )
+    other = _roomless_character(scenario)
+    creature.add_relationship(Grappling(), other)
     result = execute_handler(
         FightCreatureHandler(),
         ctx,
@@ -4146,7 +4195,7 @@ def test_fight_creature_leaves_grapple_bound_to_other_target():
     assert result.ok, result.reason
     # Grapple already bound to a different target stays untouched.
     grapple = creature.get_component(GrappleComponent)
-    assert grapple.target_id == "entity_424242"
+    assert creature.has_relationship(Grappling, other)
     assert grapple.active is True
 
 
@@ -4291,11 +4340,12 @@ def test_plan_handlers_cover_uncontained_reachable_source_edges():
     source = world.get_entity(scenario.room_a)
     ctx = HandlerContext(world, scenario.actor.epoch)
 
-    source.add_component(
-        AncientSampleComponent(
-            species_name="raptor", viability=1.0, source_fossil_id=str(scenario.room_a)
-        )
+    source.add_component(AncientSampleComponent(species_name="raptor", viability=1.0))
+    fossil = spawn_entity(
+        world,
+        [FossilFragmentComponent(species_name="raptor")],
     )
+    source.add_relationship(SampledFromFossil(), fossil.id)
     assert execute_handler(
         PrepareCloneHandler(),
         ctx,
@@ -4310,14 +4360,223 @@ def test_plan_handlers_cover_uncontained_reachable_source_edges():
         _handler_cmd(scenario, "hatch-egg", egg_id=str(scenario.room_a)),
     ).ok
 
-    source.add_component(EggComponent(species_name="raptor", laid_at_epoch=0))
+    loose_egg = world.get_entity(_roomless_character(scenario))
+    loose_egg.add_component(EggComponent(species_name="raptor", laid_at_epoch=0))
     result = execute_handler(
         CollectEggHandler(),
         ctx,
-        _handler_cmd(scenario, "collect-egg", egg_id=str(scenario.room_a)),
+        _handler_cmd(
+            scenario,
+            "collect-egg",
+            character_id=str(loose_egg.id),
+            egg_id=str(loose_egg.id),
+        ),
     )
     assert not result.ok
     assert result.reason == "egg is not contained"
+
+
+def test_dinosim_relationship_invariant_rejects_wrong_source_component():
+    scenario = build_scenario()
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_relationship(TamedBy(), scenario.character)
+
+    with pytest.raises(MutationError, match="TamedBy source .* lacks TamingComponent"):
+        validate_dinosim_relationships(scenario.actor.world)
+
+
+def test_dinosim_relationship_invariant_rejects_cardinality_and_wrong_endpoints():
+    def check(source_component, edge, target_components, message):
+        scenario = build_scenario()
+        source = spawn_entity(scenario.actor.world, [source_component])
+        target = spawn_entity(scenario.actor.world, target_components)
+        source.add_relationship(edge, target.id)
+        with pytest.raises(MutationError, match=message):
+            validate_dinosim_relationships(scenario.actor.world)
+
+    check(TamingComponent(), TamedBy(), [RoomComponent(title="not a person")], "not a character")
+    check(TrackComponent(), TrackedAt(), [CharacterComponent()], "not a room")
+    check(
+        AncientSampleComponent(species_name="raptor"),
+        SampledFromFossil(),
+        [RoomComponent(title="not a fossil")],
+        "not a fossil",
+    )
+    check(
+        CloneCandidateComponent(species_name="raptor"),
+        ClonedFromSample(),
+        [RoomComponent(title="not a sample")],
+        "not an ancient sample",
+    )
+    check(
+        HatchlingComponent(hatched_at_epoch=1),
+        HatchedFromEgg(),
+        [EggComponent(species_name="raptor", laid_at_epoch=0)],
+        "not a hatched egg",
+    )
+    check(
+        CreatureProductComponent(product_type="milk"),
+        ProductFromCreature(),
+        [RoomComponent(title="not a creature")],
+        "not a creature",
+    )
+
+    scenario = build_scenario()
+    source = spawn_entity(scenario.actor.world, [TamingComponent()])
+    other = spawn_entity(scenario.actor.world, [CharacterComponent()])
+    source.add_relationship(TamedBy(), scenario.character)
+    source.add_relationship(TamedBy(), other.id)
+    with pytest.raises(MutationError, match="more than one outgoing TamedBy"):
+        validate_dinosim_relationships(scenario.actor.world)
+
+
+def test_dinosim_edge_handlers_cover_missing_locations_targets_and_unparented_eggs():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    companion = spawn_entity(
+        scenario.actor.world,
+        [
+            CharacterComponent(),
+            DinosaurComponent(species_name="raptor"),
+            CompanionComponent(),
+            TrainingComponent(learned_commands=("guard",)),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), companion.id)
+    companion.add_relationship(CompanionOf(), scenario.character)
+
+    cases = (
+        (
+            CommandCompanionHandler(),
+            "command",
+            {
+                "target_id": str(companion.id),
+                "instruction": "guard",
+                "command_target_id": "entity_999",
+            },
+            "command target does not exist",
+        ),
+        (
+            CommandCompanionHandler(),
+            "command",
+            {
+                "target_id": str(companion.id),
+                "instruction": "guard",
+                "command_target_id": str(scenario.character),
+            },
+            "guard location is not a room",
+        ),
+        (
+            AssignRanchWorkHandler(),
+            "assign-ranch-work",
+            {
+                "creature_id": str(companion.id),
+                "work_type": "haul",
+                "target_id": "entity_999",
+            },
+            "ranch work target does not exist",
+        ),
+        (
+            AssignGuardHandler(),
+            "assign-guard",
+            {
+                "creature_id": str(companion.id),
+                "location_id": str(scenario.character),
+            },
+            "guard location is not a room",
+        ),
+    )
+    for handler, command_type, payload, reason in cases:
+        result = execute_handler(
+            handler,
+            ctx,
+            _handler_cmd(scenario, command_type, **payload),
+        )
+        assert result.ok is False
+        assert result.reason == reason
+
+    roomless = spawn_entity(
+        scenario.actor.world,
+        [CharacterComponent(), DinosaurComponent(species_name="raptor")],
+    )
+    result = execute_handler(
+        TrackCreatureHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "track-creature",
+            character_id=str(roomless.id),
+            creature_id=str(roomless.id),
+        ),
+    )
+    assert result.ok is False
+    assert result.reason == "creature location does not exist"
+
+    egg = spawn_entity(
+        scenario.actor.world,
+        [EggComponent(species_name="raptor", laid_at_epoch=0)],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), egg.id)
+    result = execute_handler(
+        CollectEggHandler(),
+        ctx,
+        _handler_cmd(scenario, "collect-egg", egg_id=str(egg.id)),
+    )
+    assert result.ok is True
+    assert egg.get_relationships(ProductFromCreature) == []
+
+
+def test_dinosim_private_fragments_require_matching_relationships():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    creature = spawn_entity(
+        scenario.actor.world,
+        [ImprintComponent(), CompanionComponent()],
+    )
+    ctx = ComponentPromptContext.for_entity(
+        scenario.actor.world,
+        creature,
+        target=character,
+    )
+
+    assert creature.get_component(ImprintComponent).prompt_fragments(ctx) == ()
+    assert creature.get_component(CompanionComponent).prompt_fragments(ctx) == ()
+    no_target_ctx = ComponentPromptContext.for_entity(scenario.actor.world, creature)
+    assert creature.get_component(ImprintComponent).prompt_fragments(no_target_ctx) == ()
+
+
+def test_hatched_egg_rejects_active_egg_operations():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    egg = spawn_entity(
+        scenario.actor.world,
+        [EggComponent(species_name="raptor", laid_at_epoch=0, fertilized=True, hatched=True)],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), egg.id
+    )
+    cases = (
+        (
+            FertilizeEggHandler(),
+            "fertilize-egg",
+            {"egg_id": str(egg.id), "parent_id": str(scenario.character)},
+        ),
+        (IncubateEggHandler(), "incubate-egg", {"egg_id": str(egg.id)}),
+        (InspectEggHandler(), "inspect", {"egg_id": str(egg.id)}),
+        (BroodEggHandler(), "brood-egg", {"egg_id": str(egg.id)}),
+        (CollectEggHandler(), "collect-egg", {"egg_id": str(egg.id)}),
+        (HatchEggHandler(), "hatch-egg", {"egg_id": str(egg.id)}),
+    )
+
+    for handler, command_type, payload in cases:
+        result = execute_handler(
+            handler,
+            ctx,
+            _handler_cmd(scenario, command_type, **payload),
+        )
+        assert result.ok is False
+        assert result.reason == "egg has already hatched"
 
 
 def _roomless_character(scenario):

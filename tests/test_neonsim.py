@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
 from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
@@ -15,6 +16,7 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     LockableComponent,
+    MutationError,
     MutationPlan,
     PortableComponent,
     RegionComponent,
@@ -87,6 +89,7 @@ from bunnyland.simpacks.neonsim.mechanics import (
     EvadeTraceHandler,
     EvidencePlantedEvent,
     EvidenceRecordedEvent,
+    EvidenceSubject,
     EvidenceWipedEvent,
     ExfiltrateDataHandler,
     ExploitComponent,
@@ -138,6 +141,7 @@ from bunnyland.simpacks.neonsim.mechanics import (
     PostBountyHandler,
     PrivilegesEscalatedEvent,
     PublicAccessComponent,
+    RecordedByDevice,
     RecordedEvidenceComponent,
     RemoveImplantHandler,
     RestrictedAreaComponent,
@@ -174,8 +178,46 @@ from bunnyland.simpacks.neonsim.mechanics import (
     WipeEvidenceHandler,
     install_neonsim,
     neonsim_fragments,
+    validate_neonsim_relationships,
 )
 from bunnyland.simpacks.voidsim.mechanics import DroneComponent
+
+
+def test_neonsim_relationship_invariant_rejects_evidence_without_provenance():
+    scenario = build_scenario()
+    spawn_entity(scenario.actor.world, [RecordedEvidenceComponent()])
+
+    with pytest.raises(MutationError, match="must have exactly one EvidenceSubject"):
+        validate_neonsim_relationships(scenario.actor.world)
+
+
+def test_neonsim_relationship_invariant_rejects_edge_sources_and_endpoint_types():
+    scenario = build_scenario()
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_relationship(EvidenceSubject(), scenario.character)
+    with pytest.raises(MutationError, match="lacks RecordedEvidenceComponent"):
+        validate_neonsim_relationships(scenario.actor.world)
+
+    scenario = build_scenario()
+    evidence = spawn_entity(scenario.actor.world, [RecordedEvidenceComponent()])
+    evidence.add_relationship(EvidenceSubject(), scenario.character)
+    with pytest.raises(MutationError, match="exactly one RecordedByDevice"):
+        validate_neonsim_relationships(scenario.actor.world)
+
+    scenario = build_scenario()
+    evidence = spawn_entity(scenario.actor.world, [RecordedEvidenceComponent()])
+    device = spawn_entity(scenario.actor.world, [DeviceComponent()])
+    evidence.add_relationship(EvidenceSubject(), scenario.room_a)
+    evidence.add_relationship(RecordedByDevice(), device.id)
+    with pytest.raises(MutationError, match="EvidenceSubject target .* not a character"):
+        validate_neonsim_relationships(scenario.actor.world)
+
+    scenario = build_scenario()
+    evidence = spawn_entity(scenario.actor.world, [RecordedEvidenceComponent()])
+    evidence.add_relationship(EvidenceSubject(), scenario.character)
+    evidence.add_relationship(RecordedByDevice(), scenario.room_a)
+    with pytest.raises(MutationError, match="RecordedByDevice target .* not a device"):
+        validate_neonsim_relationships(scenario.actor.world)
 
 
 def _install(actor):
@@ -1329,8 +1371,8 @@ async def test_camera_records_evidence_of_intruder():
     assert recorded[0].device_id == str(cam)
     evidence = _evidence_in_room(scenario)
     assert len(evidence) == 1
-    subject = evidence[0].get_component(RecordedEvidenceComponent).subject_id
-    assert subject == str(scenario.character)
+    assert evidence[0].has_relationship(EvidenceSubject, scenario.character)
+    assert evidence[0].has_relationship(RecordedByDevice, cam)
 
 
 async def test_camera_does_not_record_authorized_presence():

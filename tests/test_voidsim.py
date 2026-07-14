@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
@@ -10,6 +11,7 @@ from bunnyland.core import (
     Contains,
     IdentityComponent,
     Lane,
+    MutationError,
     MutationPlan,
     build_submitted_command,
     container_of,
@@ -127,6 +129,7 @@ from bunnyland.simpacks.voidsim.mechanics import (
     MortgagePaidEvent,
     MutinyComponent,
     MutinyStartedEvent,
+    NavigatesTo,
     NavigationHazardEncounteredEvent,
     NavigationRouteComponent,
     NegotiateAlienHandler,
@@ -134,6 +137,7 @@ from bunnyland.simpacks.voidsim.mechanics import (
     OrbitalBodyComponent,
     OrbitComponent,
     OrbitEnteredEvent,
+    OrbitsBody,
     OxygenComponent,
     PassengerComponent,
     PassengerDeliveredEvent,
@@ -194,10 +198,118 @@ from bunnyland.simpacks.voidsim.mechanics import (
     XenobiologyStudiedEvent,
     _spend_inventory_resource_operations,
     install_voidsim,
+    validate_voidsim_relationships,
     voidsim_fragments,
 )
 
 HOUR = 60 * 60
+
+
+def test_voidsim_relationship_invariant_rejects_wrong_orbit_target_type():
+    scenario = build_scenario()
+    ship = spawn_entity(
+        scenario.actor.world,
+        [ShipComponent(name="Courier"), OrbitComponent()],
+    )
+    ship.add_relationship(OrbitsBody(), scenario.room_a)
+
+    with pytest.raises(MutationError, match="OrbitsBody target .* is not an orbital body"):
+        validate_voidsim_relationships(scenario.actor.world)
+
+
+def test_voidsim_relationship_invariant_enforces_one_route_destination_shape():
+    scenario = build_scenario()
+    ship = spawn_entity(
+        scenario.actor.world,
+        [ShipComponent(name="Courier"), NavigationRouteComponent(destination_key="Outer Rim")],
+    )
+    validate_voidsim_relationships(scenario.actor.world)
+
+    system = spawn_entity(scenario.actor.world, [StarSystemComponent(name="Vega")])
+    ship.add_relationship(NavigatesTo(), system.id)
+    with pytest.raises(MutationError, match="semantic destination_key"):
+        validate_voidsim_relationships(scenario.actor.world)
+
+
+def test_voidsim_relationship_invariant_rejects_sources_cardinality_and_route_targets():
+    scenario = build_scenario()
+    source = spawn_entity(scenario.actor.world, [OrbitComponent()])
+    body = spawn_entity(scenario.actor.world, [OrbitalBodyComponent(body_type="planet")])
+    source.add_relationship(OrbitsBody(), body.id)
+    with pytest.raises(MutationError, match="navigation state source .* is not a ship"):
+        validate_voidsim_relationships(scenario.actor.world)
+
+    scenario = build_scenario()
+    ship = spawn_entity(
+        scenario.actor.world,
+        [ShipComponent(name="Courier"), OrbitComponent()],
+    )
+    first = spawn_entity(scenario.actor.world, [OrbitalBodyComponent(body_type="planet")])
+    second = spawn_entity(scenario.actor.world, [OrbitalBodyComponent(body_type="moon")])
+    ship.add_relationship(OrbitsBody(), first.id)
+    ship.add_relationship(OrbitsBody(), second.id)
+    with pytest.raises(MutationError, match="more than one OrbitsBody"):
+        validate_voidsim_relationships(scenario.actor.world)
+
+    scenario = build_scenario()
+    ship = spawn_entity(
+        scenario.actor.world,
+        [ShipComponent(name="Courier"), NavigationRouteComponent()],
+    )
+    first = spawn_entity(scenario.actor.world, [StarSystemComponent(name="Vega")])
+    second = spawn_entity(scenario.actor.world, [StarSystemComponent(name="Altair")])
+    ship.add_relationship(NavigatesTo(), first.id)
+    ship.add_relationship(NavigatesTo(), second.id)
+    with pytest.raises(MutationError, match="more than one NavigatesTo"):
+        validate_voidsim_relationships(scenario.actor.world)
+
+    scenario = build_scenario()
+    spawn_entity(
+        scenario.actor.world,
+        [ShipComponent(name="Courier"), OrbitComponent()],
+    )
+    with pytest.raises(MutationError, match="pair OrbitComponent"):
+        validate_voidsim_relationships(scenario.actor.world)
+
+    scenario = build_scenario()
+    ship = spawn_entity(
+        scenario.actor.world,
+        [ShipComponent(name="Courier"), NavigationRouteComponent()],
+    )
+    ship.add_relationship(NavigatesTo(), scenario.room_a)
+    with pytest.raises(MutationError, match="NavigatesTo target .* not a star system"):
+        validate_voidsim_relationships(scenario.actor.world)
+
+
+def test_voidsim_handlers_cover_missing_relational_targets():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    routed = spawn_entity(
+        scenario.actor.world,
+        [ShipComponent(name="Courier"), NavigationRouteComponent()],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), routed.id)
+    result = execute_handler(
+        JumpHandler(),
+        ctx,
+        _handler_cmd(scenario, "jump", ship_id=str(routed.id)),
+    )
+    assert result.ok is False
+    assert result.reason == "course destination no longer exists"
+
+    orbiter = spawn_entity(
+        scenario.actor.world,
+        [ShipComponent(name="Shuttle"), OrbitComponent()],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), orbiter.id)
+    result = execute_handler(
+        LeaveOrbitHandler(),
+        ctx,
+        _handler_cmd(scenario, "leave-orbit", ship_id=str(orbiter.id)),
+    )
+    assert result.ok is True
+    assert not orbiter.has_component(OrbitComponent)
 
 
 def _install(actor):
@@ -1180,23 +1292,25 @@ def test_voidsim_navigation_orbit_and_signal_handlers_reject_bad_state_directly(
         [
             IdentityComponent(name="orbiter", kind="ship"),
             ShipComponent(name="orbiter"),
-            OrbitComponent(body_id=str(body_id), altitude="orbit"),
+            OrbitComponent(altitude="orbit"),
         ],
     )
+    scenario.actor.world.get_entity(orbit_ship_id).add_relationship(OrbitsBody(), body_id)
     landed_ship_id = _spawn_in_room_a(
         scenario,
         [
             IdentityComponent(name="lander", kind="ship"),
             ShipComponent(name="lander"),
-            OrbitComponent(body_id=str(body_id), altitude="surface"),
+            OrbitComponent(altitude="surface"),
         ],
     )
+    scenario.actor.world.get_entity(landed_ship_id).add_relationship(OrbitsBody(), body_id)
     broken_orbit_ship_id = _spawn_in_room_a(
         scenario,
         [
             IdentityComponent(name="lost orbiter", kind="ship"),
             ShipComponent(name="lost orbiter"),
-            OrbitComponent(body_id="entity_999", altitude="orbit"),
+            OrbitComponent(altitude="orbit"),
         ],
     )
 
@@ -1384,12 +1498,12 @@ def test_voidsim_navigation_orbit_and_signal_handlers_reject_bad_state_directly(
             IdentityComponent(name="routed ship", kind="ship"),
             ShipComponent(name="routed ship"),
             NavigationRouteComponent(
-                destination_id=str(destination_id),
                 fuel_cost=5.0,
                 status="jumping",
             ),
         ],
     )
+    scenario.actor.world.get_entity(routed_ship_id).add_relationship(NavigatesTo(), destination_id)
     result = execute_handler(
         JumpHandler(),
         ctx,
@@ -1400,7 +1514,7 @@ def test_voidsim_navigation_orbit_and_signal_handlers_reject_bad_state_directly(
 
     replace_component(
         scenario.actor.world.get_entity(routed_ship_id),
-        NavigationRouteComponent(destination_id=str(destination_id), fuel_cost=5.0),
+        NavigationRouteComponent(fuel_cost=5.0),
     )
     result = execute_handler(
         JumpHandler(),
@@ -2087,35 +2201,35 @@ def test_jump_travel_consequence_skips_pending_invalid_and_originless_routes():
     consequence = JumpTravelConsequence()
     ship.add_component(
         NavigationRouteComponent(
-            destination_id=str(scenario.room_b),
             fuel_cost=1.0,
             arrive_at_epoch=HOUR,
             status="plotted",
         )
     )
+    ship.add_relationship(NavigatesTo(), scenario.room_b)
 
     assert consequence.process(scenario.actor.world, HOUR) == []
 
     replace_component(
         ship,
         NavigationRouteComponent(
-            destination_id="not-an-entity",
             fuel_cost=1.0,
             arrive_at_epoch=HOUR,
             status="jumping",
         ),
     )
+    ship.remove_relationship(NavigatesTo, scenario.room_b)
     assert consequence.process(scenario.actor.world, HOUR) == []
 
     replace_component(
         ship,
         NavigationRouteComponent(
-            destination_id=str(scenario.room_b),
             fuel_cost=1.0,
             arrive_at_epoch=HOUR,
             status="jumping",
         ),
     )
+    ship.add_relationship(NavigatesTo(), scenario.room_b)
     scenario.actor.world.get_entity(scenario.room_a).remove_relationship(Contains, ship.id)
 
     events = consequence.process(scenario.actor.world, HOUR)
@@ -2387,10 +2501,10 @@ def test_voidsim_fragments_describe_navigation_status_and_signals():
     ship_id = _ship_in(scenario, scenario.room_a, fuel=42.0)
     ship = scenario.actor.world.get_entity(ship_id)
     ship.add_relationship(DockedTo(), station.id)
-    ship.add_component(OrbitComponent(body_id=str(body.id), altitude="orbit"))
-    ship.add_component(
-        NavigationRouteComponent(destination_id=str(scenario.room_b), hazard="ion storm")
-    )
+    ship.add_component(OrbitComponent(altitude="orbit"))
+    ship.add_relationship(OrbitsBody(), body.id)
+    ship.add_component(NavigationRouteComponent(hazard="ion storm"))
+    ship.add_relationship(NavigatesTo(), scenario.room_b)
 
     fragments = voidsim_fragments(
         scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
@@ -2438,11 +2552,11 @@ def test_voidsim_fragments_cover_alternate_and_suppressed_states(monkeypatch):
         [
             IdentityComponent(name="stranded shuttle", kind="ship"),
             ShipComponent(name="stranded shuttle"),
-            OrbitComponent(body_id=str(body.id), altitude="surface"),
+            OrbitComponent(altitude="surface"),
         ],
         [
             IdentityComponent(name="bad orbit", kind="ship"),
-            OrbitComponent(body_id="entity_999999", altitude="orbit"),
+            OrbitComponent(altitude="orbit"),
         ],
         [
             IdentityComponent(name="answered mayday", kind="signal"),
@@ -2458,6 +2572,7 @@ def test_voidsim_fragments_cover_alternate_and_suppressed_states(monkeypatch):
         entity = scenario.actor.world.get_entity(entity_id)
         if entity.has_component(ShipComponent):
             entity.add_relationship(DockedTo(), stale_station.id)
+            entity.add_relationship(OrbitsBody(), body.id)
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), body.id)
 
     character = scenario.actor.world.get_entity(scenario.character)

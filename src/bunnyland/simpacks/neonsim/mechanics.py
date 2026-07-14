@@ -56,11 +56,13 @@ from ...core.mutations import (
     AddEntity,
     DeleteEntity,
     EntityReference,
+    MutationError,
     MutationOperation,
     MutationPlan,
     RemoveComponent,
     RemoveEdge,
     SetComponent,
+    register_world_invariant,
 )
 from ...prompts import ComponentPromptContext
 
@@ -764,8 +766,6 @@ class SurveillanceCoverageComponent(Component):
 
 @dataclass(frozen=True)
 class RecordedEvidenceComponent(Component):
-    subject_id: str
-    device_id: str
     device_type: str = "camera"
     wiped: bool = False
 
@@ -778,6 +778,16 @@ class RecordedEvidenceComponent(Component):
 @dataclass(frozen=True)
 class BlindSpotComponent(Component):
     """Marker on a site: cameras cannot record intruders sheltering inside it."""
+
+
+@dataclass(frozen=True)
+class EvidenceSubject(Edge):
+    pass
+
+
+@dataclass(frozen=True)
+class RecordedByDevice(Edge):
+    pass
 
 
 # --- Events (catalogue 10.2) ---------------------------------------------------------
@@ -838,13 +848,13 @@ def _device(entity: Entity) -> DeviceComponent | None:
     return entity.get_component(DeviceComponent) if entity.has_component(DeviceComponent) else None
 
 
-def _evidence_for(world: World, subject_id: str, device_id: str) -> Entity | None:
+def _evidence_for(world: World, subject_id: EntityId, device_id: EntityId) -> Entity | None:
     for record in world.query().with_all([RecordedEvidenceComponent]).execute_entities():
         component = record.get_component(RecordedEvidenceComponent)
         if (
             not component.wiped
-            and component.subject_id == subject_id
-            and component.device_id == device_id
+            and record.has_relationship(EvidenceSubject, subject_id)
+            and record.has_relationship(RecordedByDevice, device_id)
         ):
             return record
     return None
@@ -900,15 +910,13 @@ class SurveillanceConsequence:
                     for site_id in sites
                 ):
                     continue
-                if _evidence_for(world, str(character.id), str(device.id)) is not None:
+                if _evidence_for(world, character.id, device.id) is not None:
                     continue
                 evidence = spawn_entity(
                     world,
                     [
                         IdentityComponent(name=f"footage of {_name(character)}", kind="evidence"),
                         RecordedEvidenceComponent(
-                            subject_id=str(character.id),
-                            device_id=str(device.id),
                             device_type=dev.device_type,
                         ),
                     ],
@@ -916,6 +924,8 @@ class SurveillanceConsequence:
                 world.get_entity(room_id).add_relationship(
                     Contains(mode=ContainmentMode.ROOM_CONTENT), evidence.id
                 )
+                evidence.add_relationship(EvidenceSubject(), character.id)
+                evidence.add_relationship(RecordedByDevice(), device.id)
                 events.append(
                     EvidenceRecordedEvent(
                         **_event_base(
@@ -3555,7 +3565,34 @@ def neonsim_fragments(world: World, character: Entity) -> list[str]:
 # --- Installation --------------------------------------------------------------------
 
 
+def validate_neonsim_relationships(world: World) -> None:
+    for evidence in world.query().execute_entities():
+        subjects = evidence.get_relationships(EvidenceSubject)
+        devices = evidence.get_relationships(RecordedByDevice)
+        if not evidence.has_component(RecordedEvidenceComponent):
+            if subjects or devices:
+                raise MutationError(
+                    f"evidence edge source {evidence.id} lacks RecordedEvidenceComponent"
+                )
+            continue
+        if len(subjects) != 1:
+            raise MutationError(
+                f"recorded evidence {evidence.id} must have exactly one EvidenceSubject"
+            )
+        if len(devices) != 1:
+            raise MutationError(
+                f"recorded evidence {evidence.id} must have exactly one RecordedByDevice"
+            )
+        subject = world.get_entity(subjects[0][1])
+        device = world.get_entity(devices[0][1])
+        if not subject.has_component(CharacterComponent):
+            raise MutationError(f"EvidenceSubject target {subject.id} is not a character")
+        if not device.has_component(DeviceComponent):
+            raise MutationError(f"RecordedByDevice target {device.id} is not a device")
+
+
 def install_neonsim(actor) -> None:
+    register_world_invariant(actor.world, validate_neonsim_relationships)
     # Surveillance runs before trespass detection so a covert intruder is filmed on the
     # same tick they are caught and ejected.
     actor.register_consequence(SurveillanceConsequence())
@@ -3606,6 +3643,7 @@ __all__ = [
     "EscalatePrivilegesHandler",
     "EvadeTraceHandler",
     "EvidenceRecordedEvent",
+    "EvidenceSubject",
     "EvidenceWipedEvent",
     "ExfiltrateDataHandler",
     "ExploitComponent",
@@ -3635,6 +3673,7 @@ __all__ = [
     "PrivilegesEscalatedEvent",
     "PublicAccessComponent",
     "RecordedEvidenceComponent",
+    "RecordedByDevice",
     "RestrictedAreaComponent",
     "RunExploitHandler",
     "SabotageSystemHandler",
@@ -3714,4 +3753,5 @@ __all__ = [
     "TakeFixerJobHandler",
     "install_neonsim",
     "neonsim_fragments",
+    "validate_neonsim_relationships",
 ]

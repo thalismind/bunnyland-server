@@ -1,6 +1,6 @@
 """Declarative dinosim generation contributions."""
 
-from ...core.generation import GenerationDelta, GenerationRequest
+from ...core.generation import GenerationDelta, GenerationEdge, GenerationRequest, GenerationTarget
 from ...worldgen.enrichment import (
     GenerationContext,
     generation_mentions,
@@ -34,6 +34,7 @@ from .mechanics import (
     TerritoryComponent,
     ToxinComponent,
     TrackComponent,
+    TrackedAt,
     TrampleComponent,
     TranquilizerComponent,
     WaterCreatureComponent,
@@ -77,6 +78,7 @@ class DinoGenerationEnricher:
     def enrich(self, request: GenerationRequest) -> GenerationDelta:
         ctx = GenerationContext.from_request(request)
         components = {}
+        edges = []
 
         def add(component):
             components[type(component)] = component
@@ -91,7 +93,8 @@ class DinoGenerationEnricher:
             if generation_wants(ctx, "bunnyland.dinosim.track") or generation_mentions(
                 ctx, "tracks", "footprints"
             ):
-                add(TrackComponent(room_id=ctx.entity_id, last_tracked_epoch=ctx.world_epoch))
+                add(TrackComponent(last_tracked_epoch=ctx.world_epoch))
+                edges.append(GenerationEdge(TrackedAt(), GenerationTarget(ctx.entity_key)))
             if generation_wants(ctx, "bunnyland.dinosim.territory") or generation_mentions(
                 ctx, "territory"
             ):
@@ -159,6 +162,7 @@ class DinoGenerationEnricher:
                 add(EggComponent(species_name=species, laid_at_epoch=ctx.world_epoch))
         return GenerationDelta(
             components=tuple(components.values()),
+            edges=tuple(edges),
             satisfies=tuple(
                 capability for capability in request.capabilities if capability in CAPABILITIES
             ),

@@ -16,6 +16,7 @@ from bunnyland.core import (
     RoomComponent,
     SuspendedComponent,
     build_submitted_command,
+    container_of,
     parse_entity_id,
     spawn_entity,
 )
@@ -48,6 +49,7 @@ from bunnyland.simpacks.dinosim.incidents import KAIJU_ATTACK
 from bunnyland.simpacks.dinosim.mechanics import (
     ApexPredatorComponent,
     CompanionComponent,
+    CompanionOf,
     DinosimPolicyComponent,
     EnclosureComponent,
     GateComponent,
@@ -290,8 +292,12 @@ def test_storyteller_auto_resolution_predicates_cover_cross_pack_states(scenario
     from bunnyland.plugins import PluginRegistry, bunnyland_plugins
 
     world = scenario.actor.world
-    room_id = str(scenario.room_a)
-    incident = IncidentComponent(kind="test", budget_spent=1, started_at_epoch=0, room_id=room_id)
+    incident = spawn_entity(
+        world, [IncidentComponent(kind="test", budget_spent=1, started_at_epoch=0)]
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), incident.id
+    )
     registry = PluginRegistry(bunnyland_plugins())
     rules = (*story.DEFAULT_RESOLUTION_RULES, *registry.incident_resolution_rules.values())
 
@@ -305,7 +311,9 @@ def test_storyteller_auto_resolution_predicates_cover_cross_pack_states(scenario
     assert (
         story._spawned_requirement_done(
             world,
-            IncidentComponent(kind="test", budget_spent=1, started_at_epoch=0),
+            spawn_entity(
+                world, [IncidentComponent(kind="test", budget_spent=1, started_at_epoch=0)]
+            ),
             "loot",
             unclaimed.id,
             rules,
@@ -347,15 +355,16 @@ def test_storyteller_auto_resolution_predicates_cover_cross_pack_states(scenario
         [
             IdentityComponent(name="companion beast", kind="character"),
             CharacterComponent(),
-            CompanionComponent(owner_id=str(scenario.character)),
+            CompanionComponent(),
         ],
     )
+    companion.add_relationship(CompanionOf(), scenario.character)
     tamed = spawn_entity(
         world,
         [
             IdentityComponent(name="tamed beast", kind="character"),
             CharacterComponent(),
-            TamingComponent(tamer_id=str(scenario.character), tamed=True),
+            TamingComponent(tamed=True),
         ],
     )
     for entity in (pacified, prisoner, companion, tamed):
@@ -670,7 +679,7 @@ def test_target_room_skips_character_without_valid_room(scenario):
 def test_spawn_incident_without_room_leaves_room_id_unset(scenario):
     world = scenario.actor.world
     incident = story._spawn_incident(world, 0, None, "resource_drop", 2.0)  # 246->248
-    assert incident.get_component(IncidentComponent).room_id is None
+    assert container_of(incident) is None
 
 
 def test_incident_enrichment_ignores_events_with_missing_entities(scenario):
