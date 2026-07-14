@@ -1,6 +1,10 @@
-# Executive Review Update — July 2026
+# Bunnyland Executive Review — Consolidated Implementation Update
 
-This addendum updates the world-as-a-database review after the implementation work from `804df40` through `ec487c0`. The architectural diagnosis has moved again: Bunnyland now has an executable World Contract, a plan-based mutation boundary across command handlers and non-handler phases, perspective-safe queries, hardened projections and traces, and the first reproducible Clover City systemic story. These are implemented and tested contracts, not proposed infrastructure.
+**Date:** July 14, 2026
+
+**Evidence cutoff:** `79bd2b1`, including implementation through `ec487c0`
+
+This addendum reconciles the consolidated executive review with the server implementation from `804df40` through `ec487c0`. The architectural diagnosis has moved again: Bunnyland now has an executable World Contract, a plan-based mutation boundary across command handlers and non-handler phases, perspective-safe queries, hardened projections and traces, and the first reproducible Clover City systemic story. These are implemented and tested contracts, not proposed infrastructure.
 
 ## What is now implemented
 
@@ -8,7 +12,7 @@ This addendum updates the world-as-a-database review after the implementation wo
 
 **Non-handler transactions and graph modeling.** `0e792bf` closed the major transaction boundary outside command handlers: passive systems and event reactions execute as separately ordered atomic plans rather than implicit extensions of a command. `1322384` added graph-query and semantic relationship foundations, while `ed1a21e` migrated audited persisted world references to ECS edges and added compatibility migrations. This preserves Relics as the authoritative operational graph and snapshots as the canonical durable representation; no PostgreSQL, Redis, or full event-sourcing dependency was introduced.
 
-**Perspective queries, projections, and streaming.** The v1 query surface provides bounded, claim-scoped `available_actions`, `valid_targets`, `why_not`, and `what_changed_since` behavior shared by REST/MCP and controller-facing code. `3c6079f` added declared output types and enforced ownership, visibility, result-limit, and execution-budget policies. `7f80c39` closed room-projection authorization so live projections require a valid controlling claim. `e928c32` corrected the contract language: stream delivery is at least once, event IDs support deduplication, sequence gaps require explicit resynchronization, and `what_changed_since` reports only retained, perspective-safe history rather than implying an unavailable complete replay.
+**Perspective queries, projections, and streaming.** The v1 query surface provides bounded, claim-scoped `available_actions`, `valid_targets`, `why_not`, and `what_changed_since` behavior shared by REST/MCP and controller-facing code. `3c6079f` added declared output types and enforced ownership, visibility, result-limit, and execution-budget policies. `7f80c39` closed room-projection authorization so live projections require a valid controlling claim. `e928c32` corrected the contract language: live delivery is ordered and best-effort—not at-least-once or exactly-once—event IDs support deduplication, sequence gaps require a fresh projection, and `what_changed_since` reports when retained perspective-safe history is incomplete rather than implying an unavailable replay.
 
 **Trace privacy and controller evidence.** `8a7a098` recursively redacts private values and secret-bearing fields from telemetry instead of relying on shallow name filtering. `cf5fb0a` added a fixed-snapshot benchmark that records attempted, valid, rejected, and committed decisions together with command receipts, event IDs, and actual results; `2a3ebb0` and `810fe19` completed failure-path and aggregate-transaction regression coverage.
 
@@ -18,13 +22,49 @@ This addendum updates the world-as-a-database review after the implementation wo
 
 The report should no longer list mutation atomicity, universal handler-plan migration, non-handler transaction boundaries, the four v1 perspective queries, output-policy enforcement, room-projection authorization, honest gap semantics, trace redaction, or a fixed-snapshot receipt benchmark as missing foundations. Likewise, semantic ECS edges are now the persisted representation for the audited repeatable relationships, with compatibility migration rather than pack disablement.
 
-The remaining risk is integration and operational proof, not absence of a backend contract. The next release work should concentrate on:
+The release recommendation remains an invite-only controlled sandbox preview. The remaining risk is integrated and operational proof, not absence of a backend contract. Broad public write access should wait for the active gates below.
 
-1. Completing the shortage/conflict and disruption/repair Clover City stories with the same save/reload and cross-controller evidence as the parcel story.
-2. Expanding fixed-snapshot evaluation metrics and adding the future RL controller without weakening the shared perception/action contract.
-3. Running the 40-client reconnect, overflow, claim-revocation, and gap-recovery load gate plus the multi-day restart/restore soak.
-4. Completing coordinated world/memory restore drills, adversarial memory-isolation and instruction-like-memory tests, and remaining security/moderation runbooks.
-5. Measuring the Apple Crossing completion and comprehension gates with new players.
+## Report-to-code status
+
+| Area | Current status |
+| --- | --- |
+| “The World Is the Database” architecture document | **Implemented.** `world-contract-v1.md` and `world-database-modeling.md` are normative. |
+| Command ordering, expected epoch, runtime idempotency | **Implemented.** |
+| Typed command mutation plans and rollback | **Implemented.** Ordinary command handlers propose pure plans; the executor preflights, applies, checks, and reverses on failure. |
+| All 440 bundled handlers migrated | **Implemented.** Enforced by contract tests. |
+| Admin patches and scripting plans | **Implemented.** They compile through the shared mutation authority. |
+| Passive/reaction/control transaction semantics | **Substantially implemented.** ECS passive and reaction phases run as separately ordered atomic transactions; external-store coordination remains a distinct recovery concern. |
+| Central invariants | **Substantially implemented.** Core executor, operation preflight, plugin invariants, authorization, and projection tests cover the documented v1 set; broader property testing remains ongoing verification. |
+| Crash-safe canonical snapshots | **Implemented.** Temporary write, flush/`fsync`, checksum, atomic rename, three-backup rotation, checksum verification, and compatible JSON/YAML restoration are present. |
+| Journal and memory checkpoint coordination | **Partial.** The bounded journal, memory manifest, watermarks, and quarantine primitive exist; automatic backend checkpoint/quarantine and clean-host world/memory/media drills remain. |
+| Versioned character streaming and claim revalidation | **Implemented.** |
+| At-least-once WebSocket delivery | **Not implemented by design.** Delivery is ordered and best-effort with event-ID deduplication, gap detection, overflow `resync`, and fresh-projection recovery. |
+| Bounded graph query engine | **Implemented.** |
+| Shared typed perspective-query catalogue | **Implemented for v1.** The four core queries and plugin-owned social queries enforce typed outputs, visibility, result limits, and budgets; expand only from demonstrated needs. |
+| Server-owned known maps | **Implemented.** |
+| Private contextual memory and reflection | **Implemented.** |
+| Goals, obligations, and routines | **Implemented.** Unified causal scoring and long-horizon behavioral evidence remain evaluation work. |
+| Controller evaluation benchmark | **Implemented for scripted, behavior-tree, goal-directed, and LLM contracts.** RL remains future work. |
+| Three Clover City systemic outcomes | **One of three demonstrated.** Missing parcel is persistent and cross-controller; shortage/conflict and disruption/repair remain. |
+| Real 40-WebSocket validation and soak | **Partial.** An automated 40-subscriber fan-out/overflow/reconnect harness exists; hosted authenticated load, reconnect storm, and multi-day soak remain. |
+| Security/trace hardening and measured release gates | **Partial.** Trace redaction and room authorization are implemented; adversarial memory/guard tests, governance artifacts, live drills, and fresh-player measurements remain. |
+
+## Updated implementation TODO
+
+Completed review items are removed from the active queue: handler and non-handler transaction migration, trace redaction, room-projection authorization, honest history/gap semantics, perspective-query typing/policy enforcement, audited semantic-edge migration, and the fixed-snapshot receipt benchmark.
+
+The remaining work is ordered by controlled-preview risk:
+
+1. [ ] Complete the shortage/conflict Clover City story with ordinary actions, a recoverable failure, cross-controller outcome probes, visible aftermath, and mid-story save/reload.
+2. [ ] Complete the disruption/repair Clover City story to the same standard.
+3. [ ] Instrument Apple Crossing lightly and run ten fresh-player comprehension sessions; fix recurring action, target, rejection, and persistence confusion.
+4. [ ] Run the real authenticated 40-client stream/reconnect/gap-recovery gate and multi-day restart/restore soak.
+5. [ ] Automate coordinated world/memory/media checkpoint and restore behavior, including future-memory quarantine, namespace/clone checks, and clean-host restoration.
+6. [ ] Red-team cross-character memory isolation, instruction-like memories, claim boundaries, provider/guard failure, rate limits, and secret handling.
+7. [ ] Publish proportionate sandbox rules, privacy notice, security contact, model-safety failure behavior, operator runbooks, compatibility statement, and preview release notes.
+8. [ ] Expand the controller scorecard with rejection recovery, commitment completion, persona consistency, memory relevance, repetition/deadlock, latency/cost, and trace completeness; add RL later through the same contracts.
+9. [ ] Improve player-visible causality—away summaries, relationship/obligation explanations, incident aftermath, and appropriately scoped “why” views—using observed story and onboarding gaps.
+10. [ ] Continue bounded semantic-edge and query-catalogue work only where a shipped mechanic, controller, or client demonstrates a need; defer new sim-pack breadth and speculative infrastructure.
 
 ## Validation state
 
