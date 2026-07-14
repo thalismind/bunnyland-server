@@ -93,6 +93,13 @@ query/index support
 snapshots
 ```
 
+Bunnyland's shared graph-query layer compiles connected conjunctive component and edge
+terms to these Relics primitives. Queries are bounded to eight terms, six variables, 100
+rows, and 10,000 candidate expansions. They reject unknown types, missing fixed entities,
+undefined output variables, disconnected products, and exhausted budgets. Trusted scripts
+may use graph selectors; agents receive only typed claim-scoped questions registered by
+plugins, never raw graph specifications or unrestricted ECS discovery.
+
 Relics is **not** the whole backend. bunnyland wraps Relics with:
 
 ```text
@@ -2445,7 +2452,6 @@ class ReproductiveComponent(Component):
 class PregnancyComponent(Component):
     started_at_epoch: int
     due_at_epoch: int
-    co_parent_ids: tuple[str, ...]
     source_event_id: str | None = None
 
 
@@ -2460,6 +2466,11 @@ Family edges:
 @dataclass(frozen=True)
 class ParentOf(Edge):
     pass
+
+
+@dataclass(frozen=True)
+class PregnancyCoParent(Edge):
+    """Pregnant character -> current co-parent; removed when birth resolves."""
 
 
 @dataclass(frozen=True)

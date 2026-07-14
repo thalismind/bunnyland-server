@@ -50,11 +50,80 @@ from bunnyland.foundation.social.mechanics import (
     obligations_for,
     relationship_fragments,
 )
+from bunnyland.foundation.social.queries import SOCIAL_PERSPECTIVE_QUERIES
 from bunnyland.persistence import WorldMeta, load_world, save_world
 from bunnyland.plugins import PluginRegistry, bunnyland_plugins
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 
 HOUR = 3600.0
+
+
+def test_social_perspective_questions_are_typed_claim_scoped_graph_results():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    world.get_entity(scenario.character).add_relationship(
+        SocialBond(affinity=0.4, trust=0.7, familiarity=0.8), hazel
+    )
+    obligation = create_obligation(
+        world,
+        kind="promise",
+        text="Bring the lantern",
+        debtor_id=scenario.character,
+        creditor_id=hazel,
+        due_epoch=42,
+    )
+    for definition in SOCIAL_PERSPECTIVE_QUERIES:
+        scenario.actor.perspective_queries.register(definition, owner="bunnyland.social")
+
+    connections = scenario.actor.perspective_queries.execute(
+        scenario.actor,
+        "social_connections",
+        {},
+        actor_id=str(scenario.character),
+    )
+    obligations = scenario.actor.perspective_queries.execute(
+        scenario.actor,
+        "open_obligations",
+        {},
+        actor_id=str(scenario.character),
+    )
+
+    assert connections.owner == "bunnyland.social"
+    assert connections.visibility == "claim"
+    assert connections.result == [
+        {
+            "character": {"id": str(hazel), "name": "Hazel", "kind": "character"},
+            "bond": {
+                "affinity": 0.4,
+                "trust": 0.7,
+                "fear": 0.0,
+                "resentment": 0.0,
+                "familiarity": 0.8,
+            },
+        }
+    ]
+    assert obligations.result == [
+        {
+            "obligation": {
+                "id": str(obligation.id),
+                "name": "Promise from Juniper to Hazel",
+                "kind": "obligation",
+            },
+            "role": "debtor",
+            "counterparty": {"id": str(hazel), "name": "Hazel", "kind": "character"},
+            "debtor": {
+                "id": str(scenario.character),
+                "name": "Juniper",
+                "kind": "character",
+            },
+            "creditor": {"id": str(hazel), "name": "Hazel", "kind": "character"},
+            "text": "Bring the lantern",
+            "kind": "promise",
+            "due_epoch": 42,
+        }
+    ]
+    assert "components" not in str(connections.result)
+    assert "relationships" not in str(obligations.result)
 
 
 def _scenario_with_listener():

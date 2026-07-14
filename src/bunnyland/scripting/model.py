@@ -13,6 +13,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..core.commands import Lane, OnInsufficientPoints
+from ..core.graph_query import GraphQuerySpec
 
 
 class ExecutionPolicy(StrEnum):
@@ -52,6 +53,26 @@ class TargetSelector(BaseModel):
     query: EntityQuery
     mode: FanoutMode = FanoutMode.ONE
     bind: str = "actor"
+
+
+class GraphTargetSelector(BaseModel):
+    """Select action targets from one variable of a bounded graph query."""
+
+    model_config = ConfigDict(frozen=True)
+
+    graph: GraphQuerySpec
+    target_variable: str
+    mode: FanoutMode = FanoutMode.ONE
+    bind: str = "actor"
+
+    @model_validator(mode="after")
+    def _target_is_selected(self) -> GraphTargetSelector:
+        if self.target_variable not in self.graph.select:
+            raise ValueError("graph target_variable must be a selected variable")
+        return self
+
+
+TargetSelectorSpec = TargetSelector | GraphTargetSelector
 
 
 class Trigger(BaseModel):
@@ -96,7 +117,7 @@ class SubmitCommandAction(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     kind: Literal["submit_command"] = "submit_command"
-    target: TargetSelector
+    target: TargetSelectorSpec
     command_type: str
     payload: dict[str, Any] = Field(default_factory=dict)
     cost: CommandCostSpec = Field(default_factory=CommandCostSpec)
@@ -126,7 +147,7 @@ class AddComponentPatch(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     op: Literal["add_component"] = "add_component"
-    target: TargetSelector
+    target: TargetSelectorSpec
     component: ComponentSpec
 
 
@@ -134,7 +155,7 @@ class SetComponentFieldsPatch(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     op: Literal["set_component_fields"] = "set_component_fields"
-    target: TargetSelector
+    target: TargetSelectorSpec
     component_type: str
     fields: dict[str, Any]
 
@@ -196,6 +217,7 @@ __all__ = [
     "EntityQuery",
     "ExecutionPolicy",
     "FanoutMode",
+    "GraphTargetSelector",
     "PatchOperation",
     "PatchWorldAction",
     "ScriptAction",
@@ -206,5 +228,6 @@ __all__ = [
     "SetComponentFieldsPatch",
     "SubmitCommandAction",
     "TargetSelector",
+    "TargetSelectorSpec",
     "Trigger",
 ]

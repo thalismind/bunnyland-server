@@ -79,14 +79,16 @@ reuses another world's live collection implicitly.
 
 ## Perspective and cognitive integrity
 
-Callers do not receive unrestricted Relics access. The plugin-owned perspective catalogue
+Callers do not receive unrestricted Relics access. The plugin-owned perspective registry
 defines typed input, owner, visibility, result limit, execution budget, required indexes,
-and provenance. Preview v1 contains only:
+and provenance. Core registers action, target, explanation, and change questions. Social
+registers `social_connections` and `open_obligations`; both are claim-scoped typed views.
+The registered list is derived from enabled plugins rather than a hard-coded MCP catalogue.
 
-- `available_actions(actor)`
-- `valid_targets(actor, action)`
-- `why_not(actor, action, target?)`
-- `what_changed_since(actor, epoch)`
+Trusted server code and scripts may use connected `GraphQuerySpec` conjunctions over
+plugin-registered component and edge names. The executor caps terms, variables, results,
+and candidate expansions and rejects disconnected products. Raw graph specs, components,
+relationship maps, unrestricted discovery, and administrator visibility are not agent APIs.
 
 REST exposes one claim-required character query route and MCP exposes `query_world` using
 the same registry. Autonomous controllers must use this surface when asking the same

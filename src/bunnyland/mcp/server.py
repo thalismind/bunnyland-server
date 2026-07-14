@@ -1063,9 +1063,9 @@ def create_bunnyland_mcp_app(
     ) -> dict[str, Any]:
         """Run one bounded perspective query as the client's controlled character.
 
-        The v1 catalogue is ``available_actions``, ``valid_targets``, ``why_not``, and
-        ``what_changed_since``. Results use the same claim-scoped projections as REST and
-        never expose unrestricted Relics state.
+        The available names come from the enabled plugins' perspective-query registry.
+        Results use the same claim-scoped projections as REST and never expose unrestricted
+        Relics state.
         """
 
         try:

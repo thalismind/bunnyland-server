@@ -77,9 +77,9 @@ different Chroma directory. The `in-memory` backend is still non-persistent. Plu
 `--plugin` selection, every discovered `default_enabled` plugin is applied; with an explicit
 selection, include every plugin id required by the save.
 
-## Schema v2 and schema-v1 migration
+## Schema v3 and sequential migration
 
-Schema v2 stores repeatable live relationships as typed edges. The holder is the edge source,
+Schema v2 introduced repeatable live relationships as typed edges. The holder is the edge source,
 the referenced entity is the target, and per-target values live on the edge. Examples include
 `MemberOfFaction`, `MemberOfInstitution`, `MemberOfCaravan`, `MemberOfFestival`,
 `MemberOfAwayTeam`, `StoredIn`, `HasAccessToService`, `AllowedIn`, `WantedByFaction`, the
@@ -87,19 +87,22 @@ standing edges, rumor source/subject/listener edges, `DescendsFromParent`, and
 `DependsOnIngredient`. Components remain for singleton state; immutable history/event
 snapshots and external identifiers may remain scalar values.
 
-Schema v2 is prerelease and is finalized in place. Schema-v1 input is copied and migrated
-before type deserialization; the source file is never modified. Migration covers moved quest
+Schema v3 moves Lifesim's remaining live ownership and pregnancy references to `OwnsHome`,
+`ClaimsRoom`, and `PregnancyCoParent` edges. `PregnancyComponent` retains only timing and
+source-event provenance. Saves migrate sequentially from v1 to v2 to v3, or directly from
+v2 to v3, before type deserialization; the source file is never modified. Migration covers moved quest
 records, `StealthComponent` to `SneakingComponent`, legacy relationship fields/maps, and
-legacy 3D decoration roles. Missing live targets or malformed records fail with the owning
+legacy 3D decoration roles. Every migrated Lifesim target is checked for existence and
+endpoint type. Missing targets, duplicate cardinality, or malformed records fail with the owning
 entity, persisted type, and field in the error rather than guessing.
 
 Use the explicit converter when you want a separate migrated file:
 
 ```bash
-uv run bunnyland migrate-world worlds/marsh-v1.json worlds/marsh-v2.json
+uv run bunnyland migrate-world worlds/marsh-v1.json worlds/marsh-v3.json
 ```
 
-Loading v1 yields an in-memory v2 world; the next normal save writes v2. JSON and YAML
+Loading v1 or v2 yields an in-memory v3 world; the next normal save writes v3. JSON and YAML
 migration fixtures cover the same conversion contract.
 
 World history is normal ECS state (`WorldHistoryRecordComponent`, `HistoryActor`, and

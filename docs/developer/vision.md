@@ -38,6 +38,11 @@ repeat, it belongs on edges or on separate linked entities. A character can have
 thoughts, injuries, debts, relationships, or jealousies only by linking to thought/injury
 entities or relationship edges, not by stacking several same-type components.
 
+Relational mechanics share one bounded graph-query executor over Relics. Trusted scripts can
+compose connected component and edge terms; agents receive only typed, claim-scoped questions
+registered by plugins. This keeps “ask an interesting question” extensible without turning
+the ECS database into an omniscient or unrestricted agent tool.
+
 ### The DM proposes, the engine disposes
 
 LLMs do not mutate the world directly. A DM/world-generator LLM proposes structured data.

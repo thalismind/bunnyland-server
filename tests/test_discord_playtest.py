@@ -141,10 +141,10 @@ from bunnyland.simpacks.lifesim import mechanics as life
 from bunnyland.simpacks.lifesim.mechanics import (
     BusinessSaleEvent,
     ClaimRoomHandler,
+    ClaimsRoom,
     CustomerComponent,
     HouseholdFundsComponent,
     OpenBusinessHandler,
-    RoomClaimComponent,
     SellItemHandler,
 )
 from bunnyland.simpacks.nukesim import mechanics as nuke
@@ -1409,12 +1409,11 @@ async def test_discord_playtest_character_claims_current_room(scenario):
 
     result = await run_discord_playtest(_loop(scenario.actor), spec)
 
-    room = scenario.actor.world.get_entity(scenario.room_a)
-    claim = room.get_component(RoomClaimComponent)
+    character = scenario.actor.world.get_entity(scenario.character)
+    claim = character.get_relationships(ClaimsRoom)[0][0]
     assert result.ticks == 2
     assert result.inputs[1].reactions
     assert "Room claimed: Mosslit Burrow" in result.inputs[1].messages[0]
-    assert claim.claimed_by_id == str(scenario.character)
     assert claim.claimed_at_epoch == scenario.actor.epoch
 
 
@@ -1864,8 +1863,8 @@ async def test_discord_playtest_lifesim_core_loop(scenario):
     assert character.get_component(life.AspirationComponent).completed == ("meet a friend",)
     assert character.get_component(life.SkillSetComponent).levels["cooking"] == 1
     assert character.get_component(life.CareerComponent).level == 2
-    assert scenario.actor.world.get_entity(scenario.room_a).has_component(life.HomeComponent)
-    assert scenario.actor.world.get_entity(scenario.room_b).has_component(life.RoomClaimComponent)
+    assert character.has_relationship(life.OwnsHome, scenario.room_a)
+    assert character.has_relationship(life.ClaimsRoom, scenario.room_b)
     assert character.has_relationship(life.PartnerOf, partner_id)
     assert partner.has_relationship(life.PartnerOf, scenario.character)
     assert character.has_relationship(life.ParentOf, child_id)

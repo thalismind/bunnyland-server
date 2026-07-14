@@ -374,6 +374,14 @@ class DeleteEntity:
 Invariant = Callable[[World], None]
 
 
+def register_world_invariant(world: World, invariant: Invariant) -> None:
+    """Register one plugin-owned invariant for every transactional mutation."""
+
+    registered = tuple(getattr(world, "_bunnyland_invariants", ()))
+    if invariant not in registered:
+        world._bunnyland_invariants = (*registered, invariant)
+
+
 @dataclass(frozen=True)
 class MutationPlan:
     operations: tuple[MutationOperation, ...] = ()
@@ -399,6 +407,8 @@ def validate_core_invariants(world: World) -> None:
                     raise MutationError(
                         f"entity {entity.id} has out-of-bounds {component_type.__name__}"
                     )
+    for invariant in getattr(world, "_bunnyland_invariants", ()):
+        invariant(world)
 
 
 def execute_mutation_plan(
@@ -460,6 +470,7 @@ __all__ = [
     "EntityReference",
     "MutationError",
     "MutationPlan",
+    "register_world_invariant",
     "RemoveComponent",
     "RemoveEdge",
     "SetComponent",

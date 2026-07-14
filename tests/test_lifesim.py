@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
 from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     ActionPointsComponent,
+    AddEdge,
     CharacterComponent,
     CommandCost,
     ContainmentMode,
@@ -17,12 +19,15 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     LLMControllerComponent,
+    MutationError,
+    MutationPlan,
     SleepHandler,
     SleepingComponent,
     SuspendedComponent,
     WakeHandler,
     WorldClockComponent,
     build_submitted_command,
+    execute_mutation_plan,
     parse_entity_id,
     replace_component,
     spawn_entity,
@@ -69,6 +74,7 @@ from bunnyland.simpacks.lifesim.mechanics import (
     ChooseAspirationHandler,
     ClaimHomeHandler,
     ClaimRoomHandler,
+    ClaimsRoom,
     CompleteMilestoneHandler,
     CompleteWhimHandler,
     ConfigureAgingHandler,
@@ -80,7 +86,6 @@ from bunnyland.simpacks.lifesim.mechanics import (
     HasBill,
     HasRoutine,
     HasWhim,
-    HomeComponent,
     HomeObjectComponent,
     HomeObjectMaintainedEvent,
     HomeObjectUsedEvent,
@@ -105,12 +110,14 @@ from bunnyland.simpacks.lifesim.mechanics import (
     MilestoneCompletedEvent,
     OpenBusinessHandler,
     OwnsBusiness,
+    OwnsHome,
     ParentOf,
     PartnerOf,
     PayBillHandler,
     PayWageHandler,
     PracticeSkillHandler,
     PregnancyComponent,
+    PregnancyCoParent,
     ProfileUpdatedEvent,
     PromoteBusinessHandler,
     PromotionEarnedEvent,
@@ -120,7 +127,6 @@ from bunnyland.simpacks.lifesim.mechanics import (
     ReputationComponent,
     ResolveBirthHandler,
     RestfulSleepConsequence,
-    RoomClaimComponent,
     RoutineComponent,
     RoutineDueConsequence,
     RoutineDueEvent,
@@ -164,6 +170,7 @@ from bunnyland.simpacks.lifesim.mechanics import (
     kinship_label,
     lifesim_fragments,
     project_inheritance_for_death,
+    validate_lifesim_relationships,
 )
 
 HOUR = 3600.0
@@ -1246,7 +1253,6 @@ def test_lifesim_family_and_relationship_handlers_reject_bad_state_directly():
         PregnancyComponent(
             started_at_epoch=scenario.actor.epoch,
             due_at_epoch=scenario.actor.epoch + HOUR,
-            co_parent_ids=(str(partner_id),),
         )
     )
     result = execute_handler(
@@ -1357,12 +1363,8 @@ async def test_death_projects_inheritance_to_child_with_assets_and_persistence(t
     decedent.add_relationship(Contains(mode=ContainmentMode.INVENTORY), keepsake.id)
     business = spawn_entity(world, [BusinessOwnerComponent(name="Jam Stand")])
     decedent.add_relationship(OwnsBusiness(), business.id)
-    world.get_entity(scenario.room_a).add_component(
-        HomeComponent(owner_id=str(decedent.id), household_id="moss")
-    )
-    world.get_entity(scenario.room_b).add_component(
-        RoomClaimComponent(claimed_by_id=str(decedent.id), claimed_at_epoch=1)
-    )
+    decedent.add_relationship(OwnsHome(household_id="moss"), scenario.room_a)
+    decedent.add_relationship(ClaimsRoom(claimed_at_epoch=1), scenario.room_b)
     deed = spawn_entity(
         world,
         [
@@ -1404,10 +1406,10 @@ async def test_death_projects_inheritance_to_child_with_assets_and_persistence(t
     assert heir.has_relationship(Owns, workbench.id)
     assert heir.get_component(HouseholdFundsComponent).balance == 22
     assert decedent.get_component(HouseholdFundsComponent).balance == 0
-    assert world.get_entity(scenario.room_a).get_component(HomeComponent).owner_id == str(heir.id)
-    assert world.get_entity(scenario.room_b).get_component(RoomClaimComponent).claimed_by_id == str(
-        heir.id
-    )
+    assert heir.has_relationship(OwnsHome, scenario.room_a)
+    assert heir.has_relationship(ClaimsRoom, scenario.room_b)
+    assert not decedent.has_relationship(OwnsHome, scenario.room_a)
+    assert not decedent.has_relationship(ClaimsRoom, scenario.room_b)
     assert world.get_entity(deed.id).get_component(PropertyDeedComponent).owner_id == str(heir.id)
     inherited_edge = heir.get_relationships(InheritedFrom)[0][0]
     assert inherited_edge.source_event_id == event.event_id
@@ -1424,6 +1426,8 @@ async def test_death_projects_inheritance_to_child_with_assets_and_persistence(t
     assert loaded_record.get_component(InheritanceRecordComponent).inherited_funds == 17
     loaded_heir = loaded.world.get_entity(heir.id)
     assert loaded_heir.has_relationship(InheritedFrom, decedent.id)
+    assert loaded_heir.has_relationship(OwnsHome, scenario.room_a)
+    assert loaded_heir.has_relationship(ClaimsRoom, scenario.room_b)
     assert any(
         "inherited child legacy from Juniper" in line
         for line in lifesim_fragments(loaded.world, loaded_heir)
@@ -1496,10 +1500,9 @@ def test_inheritance_covers_partner_existing_links_and_prompt_fallback():
     business = spawn_entity(world, [BusinessOwnerComponent(name="Soup Cart")])
     decedent.add_relationship(OwnsBusiness(), business.id)
     partner.add_relationship(OwnsBusiness(), business.id)
-    world.get_entity(scenario.room_a).add_component(HomeComponent(owner_id="someone-else"))
-    world.get_entity(scenario.room_b).add_component(
-        RoomClaimComponent(claimed_by_id="someone-else", claimed_at_epoch=3)
-    )
+    stranger = spawn_entity(world, [CharacterComponent()])
+    stranger.add_relationship(OwnsHome(), scenario.room_a)
+    stranger.add_relationship(ClaimsRoom(claimed_at_epoch=3), scenario.room_b)
 
     undecorated_property = spawn_entity(
         world, [IdentityComponent(name="paper deed", kind="property")]
@@ -1756,7 +1759,6 @@ def test_resolve_birth_handles_unplaced_parent_and_invalid_co_parent_id():
         PregnancyComponent(
             started_at_epoch=0,
             due_at_epoch=0,
-            co_parent_ids=("not-an-entity",),
         )
     )
     actor.add_component(BirthDueComponent(due_since_epoch=0))
@@ -1856,6 +1858,7 @@ def test_lifesim_aging_policy_is_world_level_and_persists(tmp_path):
 def test_install_lifesim_can_enable_natural_aging_server_wide():
     scenario = build_scenario()
 
+    install_lifesim(scenario.actor, natural_aging=True)
     install_lifesim(scenario.actor, natural_aging=True)
 
     policies = list(
@@ -2259,15 +2262,142 @@ async def test_household_home_and_room_claims_update_world_state():
     await scenario.actor.tick(HOUR)
 
     character = scenario.actor.world.get_entity(scenario.character)
-    home = scenario.actor.world.get_entity(scenario.room_a).get_component(HomeComponent)
-    claim = scenario.actor.world.get_entity(scenario.room_b).get_component(RoomClaimComponent)
+    home = character.get_relationships(OwnsHome)[0][0]
+    claim = character.get_relationships(ClaimsRoom)[0][0]
     household = character.get_component(HouseholdComponent)
     assert household.household_id == "burrow-1"
     assert household.name == "Moss Burrow"
-    assert home.owner_id == str(scenario.character)
     assert home.household_id == "burrow-1"
-    assert claim.claimed_by_id == str(scenario.character)
+    assert claim.claimed_at_epoch > 0
+    assert character.has_relationship(OwnsHome, scenario.room_a)
+    assert character.has_relationship(ClaimsRoom, scenario.room_b)
     assert joined[0].household_name == "Moss Burrow"
+
+
+def test_home_and_claim_edges_enforce_room_cardinality_but_allow_multiple_homes():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    other_id = _co_parent(scenario)
+
+    first_home = execute_handler(
+        ClaimHomeHandler(),
+        ctx,
+        _handler_cmd(scenario, "claim-home", room_id=str(scenario.room_a)),
+    )
+    second_home = execute_handler(
+        ClaimHomeHandler(),
+        ctx,
+        _handler_cmd(scenario, "claim-home", room_id=str(scenario.room_b)),
+    )
+    competing_home = execute_handler(
+        ClaimHomeHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "claim-home",
+            character_id=str(other_id),
+            room_id=str(scenario.room_a),
+        ),
+    )
+    first_claim = execute_handler(
+        ClaimRoomHandler(),
+        ctx,
+        _handler_cmd(scenario, "claim-room", room_id=str(scenario.room_a)),
+    )
+    competing_claim = execute_handler(
+        ClaimRoomHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "claim-room",
+            character_id=str(other_id),
+            room_id=str(scenario.room_a),
+        ),
+    )
+    non_room_home = execute_handler(
+        ClaimHomeHandler(),
+        ctx,
+        _handler_cmd(scenario, "claim-home", room_id=str(other_id)),
+    )
+    non_room_claim = execute_handler(
+        ClaimRoomHandler(),
+        ctx,
+        _handler_cmd(scenario, "claim-room", room_id=str(other_id)),
+    )
+
+    assert first_home.ok and second_home.ok and first_claim.ok
+    assert {target for _edge, target in character.get_relationships(OwnsHome)} == {
+        scenario.room_a,
+        scenario.room_b,
+    }
+    assert competing_home.reason == "room already has an owner"
+    assert competing_claim.reason == "room already has an active claimant"
+    assert non_room_home.reason == "target is not a room"
+    assert non_room_claim.reason == "target is not a room"
+
+
+def test_lifesim_relationship_validator_rejects_every_endpoint_and_cardinality_violation():
+    duplicate_owner = build_scenario()
+    owner = duplicate_owner.actor.world.get_entity(duplicate_owner.character)
+    other_owner = spawn_entity(duplicate_owner.actor.world, [CharacterComponent()])
+    owner.add_relationship(OwnsHome(), duplicate_owner.room_a)
+    other_owner.add_relationship(OwnsHome(), duplicate_owner.room_a)
+    with pytest.raises(MutationError, match="more than one owner"):
+        validate_lifesim_relationships(duplicate_owner.actor.world)
+
+    duplicate_claim = build_scenario()
+    claimant = duplicate_claim.actor.world.get_entity(duplicate_claim.character)
+    other_claimant = spawn_entity(duplicate_claim.actor.world, [CharacterComponent()])
+    claimant.add_relationship(ClaimsRoom(claimed_at_epoch=1), duplicate_claim.room_a)
+    other_claimant.add_relationship(ClaimsRoom(claimed_at_epoch=2), duplicate_claim.room_a)
+    with pytest.raises(MutationError, match="more than one active claimant"):
+        validate_lifesim_relationships(duplicate_claim.actor.world)
+
+    non_room_target = build_scenario()
+    source = non_room_target.actor.world.get_entity(non_room_target.character)
+    target = spawn_entity(non_room_target.actor.world, [CharacterComponent()])
+    source.add_relationship(OwnsHome(), target.id)
+    with pytest.raises(MutationError, match="target .* is not a room"):
+        validate_lifesim_relationships(non_room_target.actor.world)
+
+    non_character_source = build_scenario()
+    source = spawn_entity(non_character_source.actor.world)
+    source.add_relationship(ClaimsRoom(claimed_at_epoch=1), non_character_source.room_a)
+    with pytest.raises(MutationError, match="source .* is not a character"):
+        validate_lifesim_relationships(non_character_source.actor.world)
+
+    invalid_co_parent = build_scenario()
+    pregnant = invalid_co_parent.actor.world.get_entity(invalid_co_parent.character)
+    pregnant.add_component(PregnancyComponent(started_at_epoch=0, due_at_epoch=10))
+    pregnant.add_relationship(PregnancyCoParent(), invalid_co_parent.room_a)
+    with pytest.raises(MutationError, match="target .* is not a character"):
+        validate_lifesim_relationships(invalid_co_parent.actor.world)
+
+
+def test_registered_lifesim_invariant_rolls_back_invalid_pregnancy_edge():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    co_parent_id = _co_parent(scenario)
+
+    with pytest.raises(MutationError, match="lacks PregnancyComponent"):
+        execute_mutation_plan(
+            scenario.actor.world,
+            MutationPlan(
+                (
+                    AddEdge(
+                        scenario.character,
+                        co_parent_id,
+                        PregnancyCoParent(),
+                    ),
+                )
+            ),
+        )
+
+    assert not scenario.actor.world.get_entity(scenario.character).has_relationship(
+        PregnancyCoParent, co_parent_id
+    )
 
 
 async def test_routine_due_consequence_advances_next_due_without_auto_commanding():
@@ -2591,6 +2721,7 @@ async def test_pregnancy_becomes_due_while_suspended_but_birth_waits_for_resume(
     )
     await scenario.actor.tick(0.0)
     assert character.has_component(PregnancyComponent)
+    assert character.has_relationship(PregnancyCoParent, target)
 
     suspended_controller = spawn_entity(scenario.actor.world)
     scenario.actor.suspend(scenario.character, suspended_controller.id)
@@ -2599,6 +2730,7 @@ async def test_pregnancy_becomes_due_while_suspended_but_birth_waits_for_resume(
     assert character.has_component(SuspendedComponent)
     assert character.has_component(BirthDueComponent)
     assert len(due) == 1
+    assert due[0].target_ids == (str(target),)
     children = [target_id for _edge, target_id in character.get_relationships(ParentOf)]
     assert children == []
 
@@ -2620,12 +2752,14 @@ async def test_relationship_pregnancy_and_birth_create_llm_controlled_child():
         _cmd(scenario, "start-pregnancy", co_parent_id=str(target), due_in_seconds=HOUR)
     )
     await scenario.actor.tick(0.0)
+    assert character.has_relationship(PregnancyCoParent, target)
     await scenario.actor.tick(HOUR * 2)
     await scenario.actor.submit(_cmd(scenario, "resolve-birth", child_name="Clover"))
     await scenario.actor.tick(HOUR)
 
     assert not character.has_component(PregnancyComponent)
     assert not character.has_component(BirthDueComponent)
+    assert character.get_relationships(PregnancyCoParent) == []
     child_id = resolved[0].child_id
     child = scenario.actor.world.get_entity(
         next(target_id for _edge, target_id in character.get_relationships(ParentOf))
@@ -2678,7 +2812,7 @@ def test_lifesim_fragments_describe_partner_and_pregnancy():
     character.add_relationship(PartnerOf(since_epoch=0), partner)
     character.add_relationship(ParentOf(), child)
     character.add_component(
-        PregnancyComponent(started_at_epoch=0, due_at_epoch=10, co_parent_ids=(str(partner),))
+        PregnancyComponent(started_at_epoch=0, due_at_epoch=10)
     )
 
     fragments = lifesim_fragments(scenario.actor.world, character)
@@ -2694,7 +2828,7 @@ def test_lifesim_component_prompt_fragments_respect_visibility_and_targets():
     character = world.get_entity(scenario.character)
     viewer = spawn_entity(world, [CharacterComponent()])
     room = world.get_entity(scenario.room_a)
-    room.add_component(HomeComponent(owner_id=str(character.id)))
+    character.add_relationship(OwnsHome(), room.id)
     self_ctx = ComponentPromptContext.for_entity(world, character)
     external_ctx = ComponentPromptContext.for_entity(
         world,
@@ -2718,10 +2852,7 @@ def test_lifesim_component_prompt_fragments_respect_visibility_and_targets():
         "Your life stage is adult.",
     )
     assert LifeStageComponent(stage="adult").prompt_fragments(external_ctx) == ()
-    assert room.get_component(HomeComponent).prompt_fragments(home_ctx) == (
-        "Your home is Mosslit Burrow.",
-    )
-    assert room.get_component(HomeComponent).prompt_fragments(external_home_ctx) == ()
+    assert "Your home is Mosslit Burrow." in lifesim_fragments(world, character)
     assert WhimComponent(want="garden").prompt_fragments(home_ctx) == ("Current whim: garden.",)
     assert WhimComponent(want="garden").prompt_fragments(external_home_ctx) == ()
     assert BillComponent(amount=12, reason="rent").prompt_fragments(home_ctx) == ("rent (12)",)
@@ -2810,7 +2941,7 @@ def test_lifesim_fragments_cover_fallbacks_and_skipped_relationships():
     character.add_component(ReputationComponent(score=1.0, known_for=("kindness", "craft")))
     character.add_component(SkillSetComponent(levels={"cooking": 2, "logic": 1}, xp={"logic": 3.5}))
     character.add_component(
-        PregnancyComponent(started_at_epoch=0, due_at_epoch=10, co_parent_ids=())
+        PregnancyComponent(started_at_epoch=0, due_at_epoch=10)
     )
     character.add_component(BirthDueComponent(due_since_epoch=10))
 
@@ -2841,12 +2972,11 @@ def test_lifesim_fragments_cover_fallbacks_and_skipped_relationships():
     character.add_relationship(OwnsBusiness(), business.id)
     character.add_relationship(OwnsBusiness(), not_a_business.id)
 
-    room_a = scenario.actor.world.get_entity(scenario.room_a)
-    room_b = scenario.actor.world.get_entity(scenario.room_b)
-    room_a.add_component(HomeComponent(owner_id=str(character.id)))
-    room_a.add_component(RoomClaimComponent(claimed_by_id=str(character.id), claimed_at_epoch=1))
-    room_b.add_component(HomeComponent(owner_id="someone-else"))
-    room_b.add_component(RoomClaimComponent(claimed_by_id="someone-else", claimed_at_epoch=1))
+    character.add_relationship(OwnsHome(), scenario.room_a)
+    character.add_relationship(ClaimsRoom(claimed_at_epoch=1), scenario.room_a)
+    other_owner = spawn_entity(scenario.actor.world, [CharacterComponent()])
+    other_owner.add_relationship(OwnsHome(), scenario.room_b)
+    other_owner.add_relationship(ClaimsRoom(claimed_at_epoch=1), scenario.room_b)
 
     routine = spawn_entity(
         scenario.actor.world,
@@ -3357,7 +3487,7 @@ def test_lifesim_component_prompt_fragments_external_viewer_returns_nothing():
     assert WellRestedComponent(expires_at_epoch=99).prompt_fragments(external) == ()
     assert SkillSetComponent(levels={"cooking": 1}).prompt_fragments(external) == ()
     assert CharacterProfileComponent(traits=("tidy",)).prompt_fragments(external) == ()
-    pregnancy = PregnancyComponent(started_at_epoch=0, due_at_epoch=5, co_parent_ids=())
+    pregnancy = PregnancyComponent(started_at_epoch=0, due_at_epoch=5)
     assert pregnancy.prompt_fragments(external) == ()
 
     # First-person profile with empty fields exercises the skip arcs (305->307 etc.).
@@ -3370,36 +3500,8 @@ def test_lifesim_component_prompt_fragments_external_viewer_returns_nothing():
         "Your preferred routine is tea.",
     )
 
-    # `can_view_private_state`-gated room components return () with no target.
-    room = world.get_entity(scenario.room_a)
-    room.add_component(HomeComponent(owner_id=str(character.id)))
-    room.add_component(RoomClaimComponent(claimed_by_id=str(character.id), claimed_at_epoch=1))
-    no_target = ComponentPromptContext.for_entity(world, room)
-    assert room.get_component(HomeComponent).prompt_fragments(no_target) == ()
-    assert room.get_component(RoomClaimComponent).prompt_fragments(no_target) == ()
-
-    # An external viewer with no matching target fails the private-state gate (lines 204, 220).
-    external_room = ComponentPromptContext.for_entity(
-        world, room, perspective=PromptPerspective(viewer=viewer)
-    )
-    assert room.get_component(HomeComponent).prompt_fragments(external_room) == ()
-    assert room.get_component(RoomClaimComponent).prompt_fragments(external_room) == ()
-
-
-def test_home_and_room_claim_fragments_require_room_component_on_entity():
-    """Home/claim fragments bail when the target entity is not a room (lines 208, 224)."""
-    scenario = build_scenario()
-    world = scenario.actor.world
-    character = world.get_entity(scenario.character)
-    self_ctx = ComponentPromptContext.for_entity(world, character)
-    # A non-room entity carrying the components, viewed by the owner.
-    bare = spawn_entity(world, [])
-    home_ctx = ComponentPromptContext.for_entity(
-        world, bare, perspective=self_ctx.perspective, target=character
-    )
-    assert HomeComponent(owner_id=str(character.id)).prompt_fragments(home_ctx) == ()
-    claim = RoomClaimComponent(claimed_by_id=str(character.id), claimed_at_epoch=1)
-    assert claim.prompt_fragments(home_ctx) == ()
+    character.add_relationship(OwnsHome(), scenario.room_a)
+    assert "Your home is Mosslit Burrow." in lifesim_fragments(world, character)
 
 
 def test_partner_and_relationship_edge_fragments_cover_negative_branches():

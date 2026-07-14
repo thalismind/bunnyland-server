@@ -1979,13 +1979,13 @@ async def test_builtin_generation_enrichers_cover_core_sim_pack_wants():
         BillComponent,
         BusinessOwnerComponent,
         CareerComponent,
+        ClaimsRoom,
         CustomerComponent,
-        HomeComponent,
         HouseholdComponent,
         JobScheduleComponent,
+        OwnsHome,
         ReproductiveComponent,
         ReputationComponent,
-        RoomClaimComponent,
         RoutineComponent,
         SkillSetComponent,
     )
@@ -2000,8 +2000,6 @@ async def test_builtin_generation_enrichers_cover_core_sim_pack_wants():
                 title="Generated Apartment",
                 description="a claimed home apartment",
                 wants=(
-                    "bunnyland.lifesim.home",
-                    "bunnyland.lifesim.room-claim",
                     "bunnyland.gardensim.daily-farm-reset",
                 ),
             ),
@@ -2108,6 +2106,8 @@ async def test_builtin_generation_enrichers_cover_core_sim_pack_wants():
                     "bunnyland.lifesim.reputation",
                     "bunnyland.lifesim.skill-set",
                     "bunnyland.lifesim.reproductive",
+                    "bunnyland.lifesim.home",
+                    "bunnyland.lifesim.room-claim",
                     "bunnyland.gardensim.gift-preference",
                     "bunnyland.gardensim.friendship",
                     "bunnyland.gardensim.collection",
@@ -2125,11 +2125,11 @@ async def test_builtin_generation_enrichers_cover_core_sim_pack_wants():
     result = await instantiate(actor, proposal)
 
     life_home = actor.world.get_entity(result.rooms["life_home"])
-    assert life_home.has_component(HomeComponent)
-    assert life_home.has_component(RoomClaimComponent)
     assert life_home.has_component(DailyFarmResetComponent)
 
     resident = actor.world.get_entity(result.characters["resident"])
+    assert resident.has_relationship(OwnsHome, life_home.id)
+    assert resident.has_relationship(ClaimsRoom, life_home.id)
     for component_type in (
         AspirationComponent,
         CareerComponent,

@@ -12,9 +12,12 @@ from pydantic import ValidationError
 from bunnyland.core import (
     CharacterComponent,
     CommandCost,
+    ComponentTerm,
     ContainmentMode,
     Contains,
     ControlledBy,
+    EdgeTerm,
+    GraphQuerySpec,
     Lane,
     RoomComponent,
     build_submitted_command,
@@ -44,6 +47,7 @@ from bunnyland.scripting import (
     EntityQuery,
     ExecutionPolicy,
     FanoutMode,
+    GraphTargetSelector,
     PatchWorldAction,
     ScriptBlock,
     ScriptBlockState,
@@ -414,6 +418,135 @@ def test_script_runtime_selector_modes_and_query_filters():
             ),
             runtime.bindings,
         )
+
+
+def test_graph_selectors_support_one_first_each_and_selected_bindings():
+    scenario = build_scenario()
+    runtime = ScriptRuntime(bindings={"room": str(scenario.room_a)})
+    other = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(Contains(), other.id)
+    graph = GraphQuerySpec(
+        terms=(
+            EdgeTerm(source="room", edge="Contains", target="person"),
+            ComponentTerm(variable="person", component="CharacterComponent"),
+        ),
+        bindings={"room": "$room"},
+        select=("room", "person"),
+    )
+
+    one_bindings = dict(runtime.bindings)
+    one = runtime._select(
+        scenario.actor,
+        GraphTargetSelector(
+            graph=graph.model_copy(update={"bindings": {"person": str(other.id)}}),
+            target_variable="person",
+        ),
+        one_bindings,
+    )
+    first_bindings = dict(runtime.bindings)
+    first = runtime._select(
+        scenario.actor,
+        GraphTargetSelector(
+            graph=graph,
+            target_variable="person",
+            mode=FanoutMode.FIRST,
+            bind="target",
+        ),
+        first_bindings,
+    )
+    each = runtime._select(
+        scenario.actor,
+        GraphTargetSelector(graph=graph, target_variable="person", mode=FanoutMode.EACH),
+        dict(runtime.bindings),
+    )
+
+    assert one == [other]
+    assert one_bindings["person"] == str(other.id)
+    assert one_bindings["room"] == str(scenario.room_a)
+    assert first == [scenario.actor.world.get_entity(scenario.character)]
+    assert first_bindings["target"] == str(scenario.character)
+    assert {entity.id for entity in each} == {scenario.character, other.id}
+
+
+def test_graph_selector_patch_uses_all_row_bindings_and_is_atomic_on_rejection():
+    scenario = build_scenario()
+    runtime = ScriptRuntime(bindings={"room": str(scenario.room_a)})
+    actor = scenario.actor.world.get_entity(scenario.character)
+    actor.add_component(RoomComponent(title="unchanged"))
+    invalid = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Invalid", kind="item")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(Contains(), invalid.id)
+    selector = GraphTargetSelector(
+        graph=GraphQuerySpec(
+            terms=(EdgeTerm(source="room", edge="Contains", target="target"),),
+            bindings={"room": "$room"},
+            select=("room", "target"),
+        ),
+        target_variable="target",
+        mode=FanoutMode.EACH,
+    )
+
+    with pytest.raises(ScriptRuntimeError, match=f"entity {invalid.id} lacks RoomComponent"):
+        runtime._patch_world(
+            scenario.actor,
+            PatchWorldAction(
+                operations=(
+                    SetComponentFieldsPatch(
+                        target=selector,
+                        component_type="RoomComponent",
+                        fields={"title": "$room"},
+                    ),
+                )
+            ),
+            dict(runtime.bindings),
+        )
+
+    assert actor.get_component(RoomComponent).title == "unchanged"
+
+
+def test_legacy_selector_json_shape_is_unchanged_and_graph_target_must_be_selected():
+    legacy = TargetSelector(query=EntityQuery(components=("CharacterComponent",)))
+    assert legacy.model_dump(mode="json") == {
+        "query": {
+            "id": None,
+            "components": ["CharacterComponent"],
+            "without_components": [],
+            "identity_name": None,
+            "identity_kind": None,
+            "tags": [],
+            "room_title": None,
+            "in_room": None,
+            "controller_kind": None,
+        },
+        "mode": "one",
+        "bind": "actor",
+    }
+    graph = GraphQuerySpec(
+        terms=(EdgeTerm(source="room", edge="Contains", target="person"),),
+        select=("room",),
+    )
+    with pytest.raises(ValidationError, match="target_variable must be a selected variable"):
+        GraphTargetSelector(graph=graph, target_variable="person")
+
+
+def test_graph_selector_reports_executor_rejections_as_script_errors():
+    scenario = build_scenario()
+    runtime = ScriptRuntime()
+    selector = GraphTargetSelector(
+        graph=GraphQuerySpec(
+            terms=(ComponentTerm(variable="target", component="MissingComponent"),),
+            select=("target",),
+        ),
+        target_variable="target",
+    )
+
+    with pytest.raises(ScriptRuntimeError, match="unknown component type"):
+        runtime._select(scenario.actor, selector, {})
 
 
 def test_script_runtime_controller_kind_query_filter_paths():

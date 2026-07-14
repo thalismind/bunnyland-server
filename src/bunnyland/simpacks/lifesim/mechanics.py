@@ -63,6 +63,7 @@ from ...core.mutations import (
     RemoveEdge,
     SetComponent,
     SetComponentFactory,
+    register_world_invariant,
 )
 from ...prompts import ComponentPromptContext
 
@@ -207,34 +208,16 @@ class HouseholdComponent(Component):
 
 
 @dataclass(frozen=True)
-class HomeComponent(Component):
-    owner_id: str
+class OwnsHome(Edge):
+    """character -> room ownership; a character may own multiple rooms."""
+
     household_id: str | None = None
 
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if not ctx.can_view_private_state:
-            return ()
-        if ctx.target is None or self.owner_id != str(ctx.target.id):
-            return ()
-        if not ctx.entity.has_component(RoomComponent):
-            return ()
-        title = ctx.entity.get_component(RoomComponent).title
-        return (f"Your home is {title}.",)
-
-
 @dataclass(frozen=True)
-class RoomClaimComponent(Component):
-    claimed_by_id: str
-    claimed_at_epoch: int
+class ClaimsRoom(Edge):
+    """character -> room active claim."""
 
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if not ctx.can_view_private_state:
-            return ()
-        if ctx.target is None or self.claimed_by_id != str(ctx.target.id):
-            return ()
-        if not ctx.entity.has_component(RoomComponent):
-            return ()
-        return (ctx.entity.get_component(RoomComponent).title,)
+    claimed_at_epoch: int
 
 
 @dataclass(frozen=True)
@@ -366,7 +349,6 @@ class ReproductiveComponent(Component):
 class PregnancyComponent(Component):
     started_at_epoch: int
     due_at_epoch: int
-    co_parent_ids: tuple[str, ...]
     source_event_id: str | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
@@ -407,6 +389,11 @@ class InheritanceRecordComponent(Component):
 @dataclass(frozen=True)
 class ParentOf(Edge):
     pass
+
+
+@dataclass(frozen=True)
+class PregnancyCoParent(Edge):
+    """pregnant character -> co-parent for the current pregnancy."""
 
 
 @dataclass(frozen=True)
@@ -806,13 +793,54 @@ def _same_room(world: World, left_id: EntityId, right_id: EntityId) -> bool:
 
 def _owns_or_claims_room(character_id: EntityId, room: Entity) -> bool:
     """True if ``room`` is the character's claimed home or a room they claim."""
-    cid = str(character_id)
-    if room.has_component(HomeComponent) and room.get_component(HomeComponent).owner_id == cid:
-        return True
-    return (
-        room.has_component(RoomClaimComponent)
-        and room.get_component(RoomClaimComponent).claimed_by_id == cid
+    return any(
+        source_id == character_id
+        for source_id, _edge in (
+            *room.get_incoming_relationships(OwnsHome),
+            *room.get_incoming_relationships(ClaimsRoom),
+        )
     )
+
+
+def pregnancy_co_parents(entity: Entity) -> tuple[EntityId, ...]:
+    """Return the current pregnancy's co-parents in stable entity-id order."""
+
+    return tuple(
+        sorted(
+            (target_id for _edge, target_id in entity.get_relationships(PregnancyCoParent)),
+            key=str,
+        )
+    )
+
+
+def validate_lifesim_relationships(world: World) -> None:
+    """Assert the cardinality and endpoint contracts of Lifesim's pilot edges."""
+
+    from ...core.mutations import MutationError
+
+    for entity in world.query().execute_entities():
+        owners = entity.get_incoming_relationships(OwnsHome)
+        if len(owners) > 1:
+            raise MutationError(f"room {entity.id} has more than one owner")
+        claimants = entity.get_incoming_relationships(ClaimsRoom)
+        if len(claimants) > 1:
+            raise MutationError(f"room {entity.id} has more than one active claimant")
+        if (owners or claimants) and not entity.has_component(RoomComponent):
+            raise MutationError(f"home relationship target {entity.id} is not a room")
+        for source_id, _edge in (*owners, *claimants):
+            source = world.get_entity(source_id)
+            if not source.has_component(CharacterComponent):
+                raise MutationError(f"home relationship source {source_id} is not a character")
+        for _edge, co_parent_id in entity.get_relationships(PregnancyCoParent):
+            if not entity.has_component(PregnancyComponent):
+                raise MutationError(
+                    f"PregnancyCoParent source {entity.id} lacks PregnancyComponent"
+                )
+            co_parent = world.get_entity(co_parent_id)
+            if not co_parent.has_component(CharacterComponent):
+                raise MutationError(
+                    f"PregnancyCoParent target {co_parent_id} is not a character"
+                )
 
 
 def _active_character(entity: Entity) -> bool:
@@ -1102,32 +1130,24 @@ def _transfer_businesses(decedent: Entity, heir: Entity) -> tuple[str, ...]:
 
 
 def _transfer_homes(world: World, decedent: Entity, heir: Entity) -> tuple[str, ...]:
+    del world
     inherited = []
-    for room in world.query().with_all([HomeComponent]).execute_entities():
-        home = room.get_component(HomeComponent)
-        if home.owner_id != str(decedent.id):
-            continue
-        replace_component(room, replace(home, owner_id=str(heir.id)))
-        inherited.append(str(room.id))
+    for edge, room_id in list(decedent.get_relationships(OwnsHome)):
+        decedent.remove_relationship(OwnsHome, room_id)
+        heir.add_relationship(edge, room_id)
+        inherited.append(str(room_id))
     return tuple(sorted(inherited))
 
 
 def _transfer_room_claims(
     world: World, decedent: Entity, heir: Entity, inherited_at_epoch: int
 ) -> tuple[str, ...]:
+    del world
     inherited = []
-    for room in world.query().with_all([RoomClaimComponent]).execute_entities():
-        claim = room.get_component(RoomClaimComponent)
-        if claim.claimed_by_id != str(decedent.id):
-            continue
-        replace_component(
-            room,
-            RoomClaimComponent(
-                claimed_by_id=str(heir.id),
-                claimed_at_epoch=inherited_at_epoch,
-            ),
-        )
-        inherited.append(str(room.id))
+    for _edge, room_id in list(decedent.get_relationships(ClaimsRoom)):
+        decedent.remove_relationship(ClaimsRoom, room_id)
+        heir.add_relationship(ClaimsRoom(claimed_at_epoch=inherited_at_epoch), room_id)
+        inherited.append(str(room_id))
     return tuple(sorted(inherited))
 
 
@@ -2275,13 +2295,22 @@ class ClaimHomeHandler:
         if room_id is None or not ctx.world.has_entity(room_id):
             return rejected("room does not exist")
         actor = ctx.entity(actor_id)
+        room = ctx.entity(room_id)
+        if not room.has_component(RoomComponent):
+            return rejected("target is not a room")
+        owners = room.get_incoming_relationships(OwnsHome)
+        if owners and owners[0][0] != actor_id:
+            return rejected("room already has an owner")
         household_id = (
             actor.get_component(HouseholdComponent).household_id
             if actor.has_component(HouseholdComponent)
             else None
         )
         return planned(
-            MutationPlan((SetComponent(room_id, HomeComponent(str(actor_id), household_id)),)),
+            MutationPlan(
+                (AddEdge(actor_id, room_id, OwnsHome(household_id=household_id)),),
+                invariants=(validate_lifesim_relationships,),
+            ),
             HomeClaimedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2305,14 +2334,16 @@ class ClaimRoomHandler:
             room_id = container_of(ctx.entity(actor_id))
         if room_id is None or not ctx.world.has_entity(room_id):
             return rejected("room does not exist")
+        room = ctx.entity(room_id)
+        if not room.has_component(RoomComponent):
+            return rejected("target is not a room")
+        claimants = room.get_incoming_relationships(ClaimsRoom)
+        if claimants and claimants[0][0] != actor_id:
+            return rejected("room already has an active claimant")
         return planned(
             MutationPlan(
-                (
-                    SetComponent(
-                        room_id,
-                        RoomClaimComponent(claimed_by_id=str(actor_id), claimed_at_epoch=ctx.epoch),
-                    ),
-                )
+                (AddEdge(actor_id, room_id, ClaimsRoom(claimed_at_epoch=ctx.epoch)),),
+                invariants=(validate_lifesim_relationships,),
             ),
             RoomClaimedEvent(
                 **ctx.event_base(
@@ -2628,11 +2659,16 @@ class StartPregnancyHandler:
         pregnancy = PregnancyComponent(
             started_at_epoch=ctx.epoch,
             due_at_epoch=ctx.epoch + due_in,
-            co_parent_ids=(str(co_parent_id),),
             source_event_id=command.command_id,
         )
         return planned(
-            MutationPlan((SetComponent(actor_id, pregnancy),)),
+            MutationPlan(
+                (
+                    SetComponent(actor_id, pregnancy),
+                    AddEdge(actor_id, co_parent_id, PregnancyCoParent()),
+                ),
+                invariants=(validate_lifesim_relationships,),
+            ),
             PregnancyStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.DIRECTED,
@@ -2687,12 +2723,11 @@ class ResolveBirthHandler:
         if room_id is not None:
             operations.append(AddEdge(room_id, child, Contains(mode=ContainmentMode.ROOM_CONTENT)))
 
-        pregnancy = actor.get_component(PregnancyComponent)
+        co_parent_ids = pregnancy_co_parents(actor)
         operations.append(AddEdge(actor_id, child, ParentOf()))
-        for raw_id in pregnancy.co_parent_ids:
-            co_parent_id = parse_entity_id(raw_id)
-            if co_parent_id is not None and ctx.world.has_entity(co_parent_id):
-                operations.append(AddEdge(co_parent_id, child, ParentOf()))
+        for co_parent_id in co_parent_ids:
+            operations.append(AddEdge(co_parent_id, child, ParentOf()))
+            operations.append(RemoveEdge(actor_id, co_parent_id, PregnancyCoParent))
 
         operations.extend(
             (
@@ -2708,13 +2743,16 @@ class ResolveBirthHandler:
                     visibility=EventVisibility.ROOM,
                     actor_id=str(actor_id),
                     room_id=str(room_id) if room_id is not None else None,
-                    target_ids=(child_id, *pregnancy.co_parent_ids),
+                    target_ids=(child_id, *(str(value) for value in co_parent_ids)),
                     child_id=child_id,
-                    parent_ids=(str(actor_id), *pregnancy.co_parent_ids),
+                    parent_ids=(str(actor_id), *(str(value) for value in co_parent_ids)),
                 )
             )
 
-        return planned(MutationPlan(tuple(operations)), birth_event)
+        return planned(
+            MutationPlan(tuple(operations), invariants=(validate_lifesim_relationships,)),
+            birth_event,
+        )
 
 
 class AdoptChildHandler:
@@ -2778,7 +2816,7 @@ class PregnancyDueConsequence:
                         epoch,
                         visibility=EventVisibility.PRIVATE,
                         actor_id=str(entity.id),
-                        target_ids=pregnancy.co_parent_ids,
+                        target_ids=tuple(str(value) for value in pregnancy_co_parents(entity)),
                         pregnant_id=str(entity.id),
                         due_since_epoch=epoch,
                     )
@@ -2980,17 +3018,13 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
             lines.extend(
                 business_entity.get_component(BusinessOwnerComponent).prompt_fragments(business_ctx)
             )
-    for room in world.query().with_all([HomeComponent, RoomComponent]).execute_entities():
-        home_ctx = ComponentPromptContext.for_entity(
-            world, room, perspective=ctx.perspective, target=character
-        )
-        lines.extend(room.get_component(HomeComponent).prompt_fragments(home_ctx))
-    claimed_rooms = []
-    for room in world.query().with_all([RoomClaimComponent, RoomComponent]).execute_entities():
-        claim_ctx = ComponentPromptContext.for_entity(
-            world, room, perspective=ctx.perspective, target=character
-        )
-        claimed_rooms.extend(room.get_component(RoomClaimComponent).prompt_fragments(claim_ctx))
+    for _edge, room_id in character.get_relationships(OwnsHome):
+        room = world.get_entity(room_id)
+        lines.append(f"Your home is {room.get_component(RoomComponent).title}.")
+    claimed_rooms = [
+        world.get_entity(room_id).get_component(RoomComponent).title
+        for _edge, room_id in character.get_relationships(ClaimsRoom)
+    ]
     if claimed_rooms:
         lines.append("Rooms you claim: " + ", ".join(sorted(claimed_rooms)) + ".")
     for _edge, whim_id in character.get_relationships(HasWhim):
@@ -3084,6 +3118,7 @@ def lifesim_fragments(world: World, character: Entity) -> list[str]:
 
 
 def install_lifesim(actor, *, natural_aging: bool | None = None) -> None:
+    register_world_invariant(actor.world, validate_lifesim_relationships)
     configure_lifesim_aging(actor, natural_aging=natural_aging)
     LifeInheritanceReactor(actor.world).subscribe(actor.bus)
     actor.register_consequence(AgingConsequence())
@@ -3128,7 +3163,7 @@ __all__ = [
     "HasRoutine",
     "HasWhim",
     "HomeClaimedEvent",
-    "HomeComponent",
+    "ClaimsRoom",
     "HomeObjectComponent",
     "HomeObjectMaintainedEvent",
     "HomeObjectUsedEvent",
@@ -3156,12 +3191,14 @@ __all__ = [
     "MilestoneComponent",
     "OpenBusinessHandler",
     "OwnsBusiness",
+    "OwnsHome",
     "ParentOf",
     "PartnerOf",
     "PayBillHandler",
     "PayWageHandler",
     "PracticeSkillHandler",
     "PregnancyComponent",
+    "PregnancyCoParent",
     "PregnancyDueConsequence",
     "PromotionEarnedEvent",
     "PromoteBusinessHandler",
@@ -3171,7 +3208,6 @@ __all__ = [
     "RentChargedEvent",
     "ResolveBirthHandler",
     "RestfulSleepConsequence",
-    "RoomClaimComponent",
     "RoomClaimedEvent",
     "RoutineComponent",
     "RoutineDueConsequence",
@@ -3208,6 +3244,8 @@ __all__ = [
     "install_lifesim",
     "kinship_label",
     "lifesim_fragments",
+    "pregnancy_co_parents",
+    "validate_lifesim_relationships",
     "parents_of",
     "partners_of",
     "project_inheritance_for_death",

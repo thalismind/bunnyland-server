@@ -22,6 +22,7 @@ from ..core.controllers import (
 from ..core.ecs import container_of, parse_entity_id
 from ..core.edges import ContainmentMode, Contains, ControlledBy
 from ..core.events import DomainEvent
+from ..core.graph_query import GraphQueryError, GraphQueryExecutor
 from ..core.mutations import (
     AddEdge,
     AddEntity,
@@ -39,6 +40,7 @@ from .model import (
     EntityQuery,
     ExecutionPolicy,
     FanoutMode,
+    GraphTargetSelector,
     PatchWorldAction,
     ScriptBlock,
     ScriptBlockState,
@@ -46,7 +48,7 @@ from .model import (
     ScriptState,
     SetComponentFieldsPatch,
     SubmitCommandAction,
-    TargetSelector,
+    TargetSelectorSpec,
     Trigger,
 )
 
@@ -82,6 +84,7 @@ class ScriptRuntime:
         self.errors: list[str] = []
         self._events: list[DomainEvent] = []
         self._component_registry = type_registries(registry)[0]
+        self._graph_queries = GraphQueryExecutor(registry)
 
     def install(self, actor: WorldActor) -> ScriptRuntime:
         actor.bus.subscribe(DomainEvent, self._capture_event)
@@ -191,12 +194,15 @@ class ScriptRuntime:
     async def _submit_command(
         self, actor: WorldActor, action: SubmitCommandAction, bindings: dict[str, str]
     ) -> None:
-        targets = self._select(actor, action.target, bindings)
-        for target in targets:
-            bindings[action.target.bind] = str(target.id)
+        selections = self._selection_rows(actor, action.target, bindings)
+        prepared = []
+        for target, selected_bindings in selections:
             controller_id, generation = self._current_controller(target)
             if controller_id is None or generation is None:
                 raise ScriptRuntimeError(f"character {target.id} has no controller")
+            prepared.append((target, selected_bindings, controller_id, generation))
+        for target, selected_bindings, controller_id, generation in prepared:
+            bindings.update(selected_bindings)
             expires_at = (
                 actor.epoch + action.expires_after_seconds
                 if action.expires_after_seconds is not None
@@ -225,10 +231,10 @@ class ScriptRuntime:
             if isinstance(operation, AddEntityPatch):
                 self._add_entity(actor, operation, bindings)
             elif isinstance(operation, AddComponentPatch):
-                targets = self._select(actor, operation.target, bindings)
+                selections = self._selection_rows(actor, operation.target, bindings)
                 mutations = []
-                for target in targets:
-                    bindings[operation.target.bind] = str(target.id)
+                for target, selected_bindings in selections:
+                    bindings.update(selected_bindings)
                     mutations.append(
                         SetComponent(
                             target.id,
@@ -238,10 +244,10 @@ class ScriptRuntime:
                 execute_mutation_plan(actor.world, MutationPlan(tuple(mutations)))
             elif isinstance(operation, SetComponentFieldsPatch):
                 component_type = self._component_type(operation.component_type)
-                targets = self._select(actor, operation.target, bindings)
+                selections = self._selection_rows(actor, operation.target, bindings)
                 mutations = []
-                for target in targets:
-                    bindings[operation.target.bind] = str(target.id)
+                for target, selected_bindings in selections:
+                    bindings.update(selected_bindings)
                     if not target.has_component(component_type):
                         raise ScriptRuntimeError(
                             f"entity {target.id} lacks {operation.component_type}"
@@ -297,23 +303,47 @@ class ScriptRuntime:
         return component_type
 
     def _select(
-        self, actor: WorldActor, selector: TargetSelector, bindings: dict[str, str]
+        self, actor: WorldActor, selector: TargetSelectorSpec, bindings: dict[str, str]
     ) -> list[Entity]:
-        matches = self._resolve_query(actor, selector.query, bindings)
-        if selector.mode is FanoutMode.ONE:
-            if len(matches) != 1:
-                raise ScriptRuntimeError(
-                    f"selector {selector.bind!r} expected one match, found {len(matches)}"
+        return [entity for entity, _row in self._selection_rows(actor, selector, bindings)]
+
+    def _selection_rows(
+        self, actor: WorldActor, selector: TargetSelectorSpec, bindings: dict[str, str]
+    ) -> list[tuple[Entity, dict[str, str]]]:
+        if isinstance(selector, GraphTargetSelector):
+            resolved_bindings = {
+                name: str(self._resolve_value(value, bindings))
+                for name, value in selector.graph.bindings.items()
+            }
+            spec = selector.graph.model_copy(update={"bindings": resolved_bindings})
+            try:
+                graph_rows = self._graph_queries.execute(actor.world, spec)
+            except GraphQueryError as exc:
+                raise ScriptRuntimeError(str(exc)) from exc
+            rows = [
+                (
+                    actor.world.get_entity(parse_entity_id(row[selector.target_variable])),
+                    {**row, selector.bind: row[selector.target_variable]},
                 )
-            bindings[selector.bind] = str(matches[0].id)
-            return matches
+                for row in graph_rows
+            ]
+        else:
+            matches = self._resolve_query(actor, selector.query, bindings)
+            rows = [(entity, {selector.bind: str(entity.id)}) for entity in matches]
+        if selector.mode is FanoutMode.ONE:
+            if len(rows) != 1:
+                raise ScriptRuntimeError(
+                    f"selector {selector.bind!r} expected one match, found {len(rows)}"
+                )
+            bindings.update(rows[0][1])
+            return rows
         if selector.mode is FanoutMode.FIRST:
-            if not matches:
+            if not rows:
                 raise ScriptRuntimeError(f"selector {selector.bind!r} found no matches")
-            bindings[selector.bind] = str(matches[0].id)
-            return [matches[0]]
+            bindings.update(rows[0][1])
+            return [rows[0]]
         if selector.mode is FanoutMode.EACH:
-            return matches
+            return rows
         raise ScriptRuntimeError(f"unknown fanout mode {selector.mode}")
 
     def _resolve_query(

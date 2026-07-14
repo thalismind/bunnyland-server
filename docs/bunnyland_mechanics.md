@@ -1141,8 +1141,8 @@ InheritedFrom
 Death events can project inheritance through lifesim family and household state. The
 first living child inherits, then a living partner, then a living household member. The
 projection moves existing explicit ownership state rather than duplicating it: inventory
-`Contains` links, `HouseholdFundsComponent` balance, `HomeComponent` ownership,
-`RoomClaimComponent` claims, `OwnsBusiness`, colony `Owns`, and dagger-sim
+`Contains` links, `HouseholdFundsComponent` balance, `OwnsHome` ownership,
+`ClaimsRoom` claims, `OwnsBusiness`, colony `Owns`, and dagger-sim
 `OwnsProperty`/`PropertyDeedComponent` when those packs are present. An
 `InheritanceRecordComponent` entity and `InheritedFrom` edge preserve the lineage/audit
 trail for prompts and persistence.
@@ -1345,7 +1345,8 @@ Rooms affect comfort, mood, privacy, safety, social interactions, and available 
 ### Components
 
 ```python
-HomeComponent
+OwnsHome
+ClaimsRoom
 RoomRoleComponent
 RoomQualityComponent
 DecorComponent

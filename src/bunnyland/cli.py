@@ -892,7 +892,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
 
     migrate_world = sub.add_parser(
-        "migrate-world", help="convert a schema-v1 JSON or YAML world to schema v2"
+        "migrate-world", help="convert a schema-v1/v2 JSON or YAML world to schema v3"
     )
     migrate_world.add_argument("source", help="source world; never modified")
     migrate_world.add_argument("dest", help="destination JSON or YAML world")
@@ -1192,7 +1192,7 @@ def main(argv: list[str] | None = None) -> int:
             driver.save_snapshot(migrated, dest)
         else:
             dest.write_text(json.dumps(migrated, indent=2) + "\n")
-        print(f"Migrated {source} -> {dest} (schema v2).")
+        print(f"Migrated {source} -> {dest} (schema v3).")
         return 0
 
     if args.command == "chat":

@@ -97,7 +97,8 @@ from bunnyland.foundation.persona.mechanics import (
     PreferenceComponent,
     TraitSetComponent,
 )
-from bunnyland.foundation.social.mechanics import SocialBond
+from bunnyland.foundation.social.mechanics import SocialBond, create_obligation
+from bunnyland.foundation.social.queries import SOCIAL_PERSPECTIVE_QUERIES
 from bunnyland.foundation.storyteller.mechanics import IncidentComponent
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.llm_agents.specs import BehaviorNodeSpec, BehaviorTreeSpec, ScriptSpec, ToolCallSpec
@@ -622,7 +623,7 @@ def test_character_projection_includes_curated_character_sheet_data(scenario):
     character.add_component(GoalComponent(active_goals=("keep everyone safe",)))
     character.add_component(WhimComponent(want="check the north door"))
     character.add_component(
-        PregnancyComponent(started_at_epoch=0, due_at_epoch=500, co_parent_ids=())
+        PregnancyComponent(started_at_epoch=0, due_at_epoch=500)
     )
     character.add_component(WellRestedComponent(expires_at_epoch=100))
     character.add_component(SuspendedComponent())
@@ -1471,6 +1472,23 @@ def test_claim_scoped_perspective_query_route_and_stream_metrics(scenario, monke
         scenario.actor.perspective_queries.register(
             definition, owner="bunnyland.core_verbs"
         )
+    for definition in SOCIAL_PERSPECTIVE_QUERIES:
+        scenario.actor.perspective_queries.register(definition, owner="bunnyland.social")
+    hazel = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        SocialBond(trust=0.5), hazel.id
+    )
+    create_obligation(
+        scenario.actor.world,
+        kind="request",
+        text="Share the map",
+        debtor_id=hazel.id,
+        creditor_id=scenario.character,
+        due_epoch=99,
+    )
     secrets = ClaimSecretRegistry()
     controller = scenario.actor.world.get_entity(scenario.controller)
     claim = add_claim(
@@ -1499,6 +1517,13 @@ def test_claim_scoped_perspective_query_route_and_stream_metrics(scenario, monke
         headers=headers,
         json={"query": "raw_relics"},
     )
+    connections = client.post(path, headers=headers, json={"query": "social_connections"})
+    obligations = client.post(path, headers=headers, json={"query": "open_obligations"})
+    wrong_claim = client.post(
+        f"/world/character/{hazel.id}/query?claim_id={claim.claim_id}",
+        headers=headers,
+        json={"query": "social_connections"},
+    )
     stats = client.get(
         "/admin/stream",
         headers={"X-Bunnyland-Admin-Secret": "admin-secret"},
@@ -1507,6 +1532,16 @@ def test_claim_scoped_perspective_query_route_and_stream_metrics(scenario, monke
     assert valid.status_code == 200
     assert valid.json()["result"]["exit_id"][0]["id"] == str(scenario.room_b)
     assert unknown.status_code == 400
+    assert connections.status_code == 200
+    assert connections.json()["result"][0]["character"] == {
+        "id": str(hazel.id),
+        "name": "Hazel",
+        "kind": "character",
+    }
+    assert obligations.status_code == 200
+    assert obligations.json()["result"][0]["role"] == "creditor"
+    assert obligations.json()["result"][0]["due_epoch"] == 99
+    assert wrong_claim.status_code == 403
     assert stats.status_code == 200
     assert stats.json()["connections"] == 0
 

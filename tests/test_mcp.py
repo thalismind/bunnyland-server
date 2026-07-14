@@ -1999,11 +1999,30 @@ def test_runtime_status_reports_tick_cadence(monkeypatch, scenario):
 
 def test_query_world_uses_claimed_perspective_registry(monkeypatch, scenario):
     from bunnyland.core.perspective import V1_PERSPECTIVE_QUERIES
+    from bunnyland.foundation.social.mechanics import SocialBond, create_obligation
+    from bunnyland.foundation.social.queries import SOCIAL_PERSPECTIVE_QUERIES
 
     for definition in V1_PERSPECTIVE_QUERIES:
         scenario.actor.perspective_queries.register(
             definition, owner="bunnyland.core_verbs"
         )
+    for definition in SOCIAL_PERSPECTIVE_QUERIES:
+        scenario.actor.perspective_queries.register(definition, owner="bunnyland.social")
+    hazel = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.character).add_relationship(
+        SocialBond(familiarity=0.6), hazel.id
+    )
+    create_obligation(
+        scenario.actor.world,
+        kind="promise",
+        text="Return the key",
+        debtor_id=scenario.character,
+        creditor_id=hazel.id,
+        due_epoch=77,
+    )
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
     claimed = asyncio.run(
         tools["claim_character"](client_id="query-client", character_name="Juniper")
@@ -2020,6 +2039,21 @@ def test_query_world_uses_claimed_perspective_registry(monkeypatch, scenario):
     assert result["owner"] == "bunnyland.core_verbs"
     assert result["actor_id"] == str(scenario.character)
     assert result["result"]["exit_id"][0]["id"] == str(scenario.room_b)
+    connections = tools["query_world"](
+        client_id="query-client",
+        query="social_connections",
+        claim_id=claimed["claim_id"],
+        claim_secret=claimed["claim_secret"],
+    )
+    obligations = tools["query_world"](
+        client_id="query-client",
+        query="open_obligations",
+        claim_id=claimed["claim_id"],
+        claim_secret=claimed["claim_secret"],
+    )
+    assert connections["result"][0]["character"]["id"] == str(hazel.id)
+    assert obligations["result"][0]["role"] == "debtor"
+    assert obligations["result"][0]["due_epoch"] == 77
     with pytest.raises(RuntimeError, match="unknown perspective query"):
         tools["query_world"](
             client_id="query-client",

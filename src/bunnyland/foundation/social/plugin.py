@@ -29,6 +29,7 @@ from ...plugins.model import (
     RuntimeContribution,
 )
 from .actions import ACTION_DEFINITIONS
+from .queries import SOCIAL_PERSPECTIVE_QUERIES
 
 
 def _social_factory(actor) -> None:
@@ -49,7 +50,10 @@ def _definition() -> Plugin:
             action_handlers=(ResolveObligationHandler,),
             typed_events=(ObligationResolvedEvent,),
         ),
-        runtime=RuntimeContribution(service_factories=(_social_factory,)),
+        runtime=RuntimeContribution(
+            service_factories=(_social_factory,),
+            perspective_queries=SOCIAL_PERSPECTIVE_QUERIES,
+        ),
         content=ContentContribution(
             persona_fragments=(relationship_fragments, gossip_fragments, obligation_fragments)
         ),

@@ -159,6 +159,13 @@ from .generation import (
     GenerationRequest,
     GenerationTarget,
 )
+from .graph_query import (
+    ComponentTerm,
+    EdgeTerm,
+    GraphQueryError,
+    GraphQueryExecutor,
+    GraphQuerySpec,
+)
 from .handlers import (
     CloseHandler,
     ConversationLineHandler,
@@ -201,6 +208,7 @@ from .mutations import (
     SetComponent,
     SetComponentFactory,
     execute_mutation_plan,
+    register_world_invariant,
     validate_core_invariants,
 )
 from .perspective import (
@@ -253,6 +261,7 @@ __all__ = [
     "SetComponent",
     "SetComponentFactory",
     "execute_mutation_plan",
+    "register_world_invariant",
     "validate_core_invariants",
     "PerspectiveQueryDefinition",
     "PerspectiveQueryRegistry",
@@ -290,6 +299,11 @@ __all__ = [
     "event_base",
     "ExitTo",
     "FocusPointsComponent",
+    "ComponentTerm",
+    "EdgeTerm",
+    "GraphQueryError",
+    "GraphQueryExecutor",
+    "GraphQuerySpec",
     "GeneratedEntityEvent",
     "GenerationChild",
     "GenerationDelta",

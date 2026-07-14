@@ -45,6 +45,11 @@ One entity can have only one component of each type.
 - If a character can have multiple instances of something, model it as relationship
   edges with properties, or as separate entities linked by edges.
 - Do not add a second component of the same type to represent another instance.
+- Use `GraphQuerySpec` only for bounded, connected conjunctive joins over plugin-registered
+  types. Do not add raw graph-query access to player or agent surfaces; register a typed,
+  claim-scoped perspective question instead.
+- For live entity references, document why a component field is singleton state; otherwise
+  prefer a directed edge with explicit cardinality, cleanup, visibility, and migration rules.
 
 Handler state updates should use the existing ECS helpers:
 - Parse ids with `parse_entity_id`.

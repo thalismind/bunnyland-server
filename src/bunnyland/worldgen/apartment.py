@@ -281,10 +281,10 @@ async def apartment_example(actor, seed: str, options: GenOptions) -> Instantiat
         AspirationComponent,
         BusinessOwnerComponent,
         CareerComponent,
-        HomeComponent,
         HouseholdFundsComponent,
         LifeStageComponent,
         OwnsBusiness,
+        OwnsHome,
         PartnerOf,
         ReputationComponent,
         SkillSetComponent,
@@ -809,7 +809,7 @@ async def apartment_example(actor, seed: str, options: GenOptions) -> Instantiat
                 entity.add_component(AspirationComponent(name=name, milestones=milestones))
             if "known_for" in r:
                 entity.add_component(ReputationComponent(known_for=r["known_for"]))
-            actor.world.get_entity(rooms[r["home"]]).add_component(HomeComponent(owner_id=str(cid)))
+            actor.world.get_entity(cid).add_relationship(OwnsHome(), rooms[r["home"]])
             _routines(actor, cid, r["schedule"])
 
         # Bruno's unlicensed supper club is a business he owns.

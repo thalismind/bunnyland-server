@@ -1,6 +1,12 @@
 """Declarative lifesim generation contributions."""
 
-from ...core.generation import GenerationDelta, GenerationRequest
+from ...core.ecs import parse_entity_id
+from ...core.generation import (
+    GenerationDelta,
+    GenerationEdge,
+    GenerationRequest,
+    GenerationTarget,
+)
 from ...worldgen.enrichment import (
     GenerationContext,
     generation_generated_id,
@@ -14,14 +20,14 @@ from .mechanics import (
     BusinessOwnerComponent,
     CareerComponent,
     CharacterProfileComponent,
+    ClaimsRoom,
     CustomerComponent,
-    HomeComponent,
     HomeObjectComponent,
     HouseholdComponent,
     JobScheduleComponent,
+    OwnsHome,
     ReproductiveComponent,
     ReputationComponent,
-    RoomClaimComponent,
     RoutineComponent,
     SkillSetComponent,
     WhimComponent,
@@ -54,26 +60,38 @@ class LifeGenerationEnricher:
     def enrich(self, request: GenerationRequest) -> GenerationDelta:
         ctx = GenerationContext.from_request(request)
         components = {}
+        edges = []
 
         def add(component):
             components[type(component)] = component
 
-        if ctx.is_room:
+        if ctx.is_character:
+            room_target = (
+                ctx.room_id
+                if parse_entity_id(ctx.room_id) is not None
+                else GenerationTarget(ctx.room_key)
+            )
+            household = next(
+                (
+                    component
+                    for component in request.context.get("base_components", ())
+                    if isinstance(component, HouseholdComponent)
+                ),
+                None,
+            )
             if generation_wants(ctx, "bunnyland.lifesim.home"):
-                add(
-                    HomeComponent(
-                        owner_id=generation_generated_id(ctx, "owner"),
-                        household_id=generation_generated_id(ctx, "household"),
+                edges.append(
+                    GenerationEdge(
+                        OwnsHome(
+                            household_id=household.household_id if household is not None else None
+                        ),
+                        room_target,
                     )
                 )
             if generation_wants(ctx, "bunnyland.lifesim.room-claim"):
-                add(
-                    RoomClaimComponent(
-                        claimed_by_id=generation_generated_id(ctx, "claimant"),
-                        claimed_at_epoch=ctx.world_epoch,
-                    )
+                edges.append(
+                    GenerationEdge(ClaimsRoom(claimed_at_epoch=ctx.world_epoch), room_target)
                 )
-        elif ctx.is_character:
             if generation_wants(
                 ctx, "bunnyland.lifesim.profile", "bunnyland.lifesim.character-profile"
             ) or generation_mentions(ctx, "routine", "interest", "hobby", "backstory"):
@@ -137,7 +155,7 @@ class LifeGenerationEnricher:
                 ctx, "fertile"
             ):
                 add(ReproductiveComponent(species_group=ctx.species))
-        else:
+        elif not ctx.is_room:
             name = ctx.name
             if generation_wants(ctx, "bunnyland.lifesim.whim") or generation_mentions(
                 ctx, "whim", "wish"
@@ -157,6 +175,7 @@ class LifeGenerationEnricher:
                 add(BusinessOwnerComponent(name=name))
         return GenerationDelta(
             components=tuple(components.values()),
+            edges=tuple(edges),
             satisfies=tuple(
                 capability for capability in request.capabilities if capability in CAPABILITIES
             ),

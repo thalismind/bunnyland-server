@@ -107,7 +107,9 @@ Claim the current room or name a reachable/adjacent room:
 !claim home North Tunnel
 ```
 
-This marks the room with `HomeComponent`, storing your character as owner and your current household id if you have one. After claiming, life-sim context includes:
+This creates an `OwnsHome` relationship from your character to the room, carrying your
+current household id when present. A character may own multiple rooms, but a room has at
+most one owner. After claiming, life-sim context includes:
 
 ```text
 Your home is North Tunnel.
@@ -120,7 +122,8 @@ You can also claim an individual room:
 !claim room North Tunnel
 ```
 
-That marks the room with `RoomClaimComponent` and adds context like:
+That creates a `ClaimsRoom` relationship. A room has at most one active claimant, and the
+relationship records when it was claimed. It adds context like:
 
 ```text
 Rooms you claim: North Tunnel.
@@ -141,6 +144,9 @@ Start a pregnancy:
 ```text
 !start-pregnancy co_parent_id=Hazel due_in_seconds=1
 ```
+
+Pregnancy timing stays on the pregnant character. Each current co-parent is represented by
+a `PregnancyCoParent` relationship, which is removed when birth resolves.
 
 Resolve a due birth:
 

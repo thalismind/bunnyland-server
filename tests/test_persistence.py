@@ -130,7 +130,7 @@ def test_schema_v1_quest_snapshot_migrates_to_canonical_graph_without_mutating_s
     migrated = migrate_snapshot(source)
 
     assert source["bunnyland"]["schema_version"] == 1
-    assert migrated["bunnyland"]["schema_version"] == 2
+    assert migrated["bunnyland"]["schema_version"] == 3
     assert (
         not {
             "GeneratedQuestComponent",
@@ -157,7 +157,7 @@ def test_schema_v1_quest_snapshot_migrates_to_canonical_graph_without_mutating_s
 
 def test_schema_migration_rejects_future_and_ambiguous_worlds():
     with pytest.raises(WorldMigrationError, match="newer than supported"):
-        migrate_snapshot({"bunnyland": {"schema_version": 3}})
+        migrate_snapshot({"bunnyland": {"schema_version": 4}})
 
     snapshot = _schema_v1_generated_quest_snapshot()
     snapshot["components"]["QuestComponent"] = {
@@ -168,9 +168,9 @@ def test_schema_migration_rejects_future_and_ambiguous_worlds():
         migrate_snapshot(snapshot)
 
 
-def test_load_schema_v1_migrates_in_memory_and_next_save_is_v2(tmp_path):
+def test_load_schema_v1_migrates_in_memory_and_next_save_is_v3(tmp_path):
     source = tmp_path / "world-v1.json"
-    dest = tmp_path / "world-v2.json"
+    dest = tmp_path / "world-v3.json"
     snapshot = _schema_v1_generated_quest_snapshot()
     source.write_text(json.dumps(snapshot))
 
@@ -190,12 +190,12 @@ def test_load_schema_v1_migrates_in_memory_and_next_save_is_v2(tmp_path):
     assert quest.has_relationship(QuestAcceptedBy, EntityId.parse("entity_2"))
     assert len(quest.get_relationships(QuestHasObjective)) == 1
     assert len(quest.get_relationships(QuestHasReward)) == 1
-    assert meta.schema_version == 2
+    assert meta.schema_version == 3
     assert json.loads(source.read_text())["bunnyland"]["schema_version"] == 1
 
     save_world(actor, dest, meta=meta)
 
-    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 2
+    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 3
 
 
 def test_schema_v1_regular_quest_collections_become_ordered_edges():
@@ -305,6 +305,295 @@ def test_schema_migration_validates_version_and_v2_sections():
         migrate_snapshot({"bunnyland": {"schema_version": 0}})
     with pytest.raises(WorldMigrationError, match="section 'entities'"):
         migrate_snapshot({"bunnyland": {"schema_version": 2}, "entities": []})
+
+
+def _lifesim_v2_snapshot(version: int = 2):
+    return {
+        "bunnyland": {"schema_version": version},
+        "entities": {
+            "entity_1": {"prefab": "entity"},
+            "entity_2": {"prefab": "entity"},
+            "entity_3": {"prefab": "entity"},
+        },
+        "components": {
+            "CharacterComponent": {"entity_1": {}, "entity_2": {}},
+            "RoomComponent": {"entity_3": {"title": "Moss Home"}},
+            "HomeComponent": {
+                "entity_3": {"owner_id": "entity_1", "household_id": "moss"}
+            },
+            "RoomClaimComponent": {
+                "entity_3": {"claimed_by_id": "entity_1", "claimed_at_epoch": 7}
+            },
+            "PregnancyComponent": {
+                "entity_1": {
+                    "started_at_epoch": 5,
+                    "due_at_epoch": 50,
+                    "co_parent_ids": ["entity_2"],
+                    "source_event_id": "event-1",
+                }
+            },
+        },
+        "relationships": {},
+    }
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_lifesim_v1_and_v2_relationship_fields_migrate_sequentially_to_v3(version):
+    source = _lifesim_v2_snapshot(version)
+
+    migrated = migrate_snapshot(source)
+
+    assert source["bunnyland"]["schema_version"] == version
+    assert migrated["bunnyland"]["schema_version"] == 3
+    assert "HomeComponent" not in migrated["components"]
+    assert "RoomClaimComponent" not in migrated["components"]
+    assert migrated["components"]["PregnancyComponent"]["entity_1"] == {
+        "started_at_epoch": 5,
+        "due_at_epoch": 50,
+        "source_event_id": "event-1",
+    }
+    assert migrated["relationships"]["OwnsHome"]["entity_1"] == [
+        {"target": "entity_3", "edge": {"household_id": "moss"}}
+    ]
+    assert migrated["relationships"]["ClaimsRoom"]["entity_1"] == [
+        {"target": "entity_3", "edge": {"claimed_at_epoch": 7}}
+    ]
+    assert migrated["relationships"]["PregnancyCoParent"]["entity_1"] == [
+        {"target": "entity_2", "edge": {}}
+    ]
+
+
+def test_lifesim_v2_json_and_yaml_migrations_are_identical():
+    import yaml
+
+    source = _lifesim_v2_snapshot()
+    from_json = migrate_snapshot(json.loads(json.dumps(source)))
+    from_yaml = migrate_snapshot(yaml.safe_load(yaml.safe_dump(source)))
+
+    assert from_json == from_yaml
+
+
+@pytest.mark.parametrize(
+    ("component", "field", "value"),
+    [
+        ("HomeComponent", "owner_id", "entity_999"),
+        ("RoomClaimComponent", "claimed_by_id", "entity_999"),
+        ("PregnancyComponent", "co_parent_ids", ["entity_999"]),
+    ],
+)
+def test_lifesim_v2_migration_rejects_missing_live_targets(component, field, value):
+    source = _lifesim_v2_snapshot()
+    owner = "entity_1" if component == "PregnancyComponent" else "entity_3"
+    source["components"][component][owner][field] = value
+
+    with pytest.raises(WorldMigrationError, match=rf"{component}\.{field}.*entity_999"):
+        migrate_snapshot(source)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda value: value["components"].update({"HomeComponent": []}),
+            "HomeComponent.*mapping",
+        ),
+        (
+            lambda value: value["components"]["HomeComponent"].update({"entity_3": []}),
+            "HomeComponent fields.*mapping",
+        ),
+        (
+            lambda value: value["entities"].pop("entity_3"),
+            "HomeComponent.entity.*missing entity 'entity_3'",
+        ),
+        (
+            lambda value: (
+                value["components"].pop("HomeComponent"),
+                value["components"]["RoomComponent"].pop("entity_3"),
+            ),
+            "RoomClaimComponent.entity.*does not have RoomComponent",
+        ),
+        (
+            lambda value: value["components"]["HomeComponent"]["entity_3"].update(
+                {"owner_id": "entity_3"}
+            ),
+            "HomeComponent.owner_id.*without CharacterComponent",
+        ),
+        (
+            lambda value: value["components"].update({"RoomClaimComponent": []}),
+            "RoomClaimComponent.*mapping",
+        ),
+        (
+            lambda value: value["components"]["RoomClaimComponent"].update(
+                {"entity_3": []}
+            ),
+            "RoomClaimComponent fields.*mapping",
+        ),
+        (
+            lambda value: value["components"]["RoomComponent"].pop("entity_3"),
+            "HomeComponent.entity.*does not have RoomComponent",
+        ),
+        (
+            lambda value: value["components"]["RoomClaimComponent"]["entity_3"].update(
+                {"claimed_by_id": "entity_3"}
+            ),
+            "RoomClaimComponent.claimed_by_id.*without CharacterComponent",
+        ),
+        (
+            lambda value: value["components"]["RoomClaimComponent"]["entity_3"].update(
+                {"claimed_at_epoch": True}
+            ),
+            "claimed_at_epoch.*integer",
+        ),
+        (
+            lambda value: value["components"]["PregnancyComponent"].update(
+                {"entity_1": []}
+            ),
+            "PregnancyComponent fields.*mapping",
+        ),
+        (
+            lambda value: value["components"]["PregnancyComponent"]["entity_1"].update(
+                {"co_parent_ids": "entity_2"}
+            ),
+            "co_parent_ids.*sequence",
+        ),
+        (
+            lambda value: value["components"]["PregnancyComponent"]["entity_1"].update(
+                {"co_parent_ids": ["entity_3"]}
+            ),
+            "co_parent_ids.*without CharacterComponent",
+        ),
+    ],
+)
+def test_lifesim_v2_migration_rejects_malformed_relationship_fields(mutate, message):
+    source = _lifesim_v2_snapshot()
+    mutate(source)
+
+    with pytest.raises(WorldMigrationError, match=message):
+        migrate_snapshot(source)
+
+
+def test_schema_v3_rejects_duplicate_cardinality_and_pregnancy_endpoint_violations():
+    duplicate = migrate_snapshot(_lifesim_v2_snapshot())
+    duplicate["relationships"]["OwnsHome"]["entity_2"] = [
+        {"target": "entity_3", "edge": {"household_id": None}}
+    ]
+    with pytest.raises(WorldMigrationError, match="multiple incoming OwnsHome"):
+        migrate_snapshot(duplicate)
+
+    invalid_pregnancy = migrate_snapshot(_lifesim_v2_snapshot())
+    invalid_pregnancy["components"]["PregnancyComponent"].pop("entity_1")
+    with pytest.raises(WorldMigrationError, match="does not have PregnancyComponent"):
+        migrate_snapshot(invalid_pregnancy)
+
+    duplicate_edge = migrate_snapshot(_lifesim_v2_snapshot())
+    duplicate_edge["relationships"]["ClaimsRoom"]["entity_1"] *= 2
+    with pytest.raises(WorldMigrationError, match="duplicate ClaimsRoom"):
+        migrate_snapshot(duplicate_edge)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda value: value["components"].update({"CharacterComponent": []}),
+            "CharacterComponent.*mapping",
+        ),
+        (
+            lambda value: value["components"]["PregnancyComponent"].update(
+                {"entity_1": []}
+            ),
+            "PregnancyComponent fields.*mapping",
+        ),
+        (
+            lambda value: value["components"]["PregnancyComponent"]["entity_1"].update(
+                {"co_parent_ids": []}
+            ),
+            "legacy PregnancyComponent.co_parent_ids",
+        ),
+        (
+            lambda value: value["components"].update(
+                {"HomeComponent": {"entity_3": {}}}
+            ),
+            "legacy HomeComponent",
+        ),
+        (
+            lambda value: value["components"].update(
+                {"RoomClaimComponent": {"entity_3": {}}}
+            ),
+            "legacy RoomClaimComponent",
+        ),
+        (
+            lambda value: value["relationships"]["OwnsHome"].update(
+                {"entity_999": [{"target": "entity_3", "edge": {}}]}
+            ),
+            "source 'entity_999'.*does not exist",
+        ),
+        (
+            lambda value: value["relationships"]["OwnsHome"].update({"entity_1": {}}),
+            "OwnsHome edges.*must be a list",
+        ),
+        (
+            lambda value: value["relationships"]["OwnsHome"].update(
+                {"entity_1": ["bad"]}
+            ),
+            "OwnsHome edge.*must be a mapping",
+        ),
+        (
+            lambda value: value["relationships"]["OwnsHome"].update(
+                {"entity_1": [{"target": "entity_3", "edge": []}]}
+            ),
+            "OwnsHome edge.*must be a mapping",
+        ),
+        (
+            lambda value: value["relationships"]["OwnsHome"].update(
+                {"entity_1": [{"target": "entity_999", "edge": {}}]}
+            ),
+            "missing target 'entity_999'",
+        ),
+        (
+            lambda value: value["relationships"]["OwnsHome"].update(
+                {"entity_3": [{"target": "entity_3", "edge": {}}]}
+            ),
+            "source 'entity_3'.*not a character",
+        ),
+        (
+            lambda value: value["relationships"]["OwnsHome"].update(
+                {"entity_1": [{"target": "entity_2", "edge": {}}]}
+            ),
+            "target 'entity_2'.*not a room",
+        ),
+        (
+            lambda value: value["relationships"]["OwnsHome"]["entity_1"][0]["edge"].update(
+                {"household_id": 7}
+            ),
+            "OwnsHome.household_id.*string or null",
+        ),
+        (
+            lambda value: value["relationships"]["ClaimsRoom"]["entity_1"][0]["edge"].update(
+                {"claimed_at_epoch": True}
+            ),
+            "ClaimsRoom.claimed_at_epoch.*integer",
+        ),
+        (
+            lambda value: value["relationships"]["PregnancyCoParent"]["entity_1"][0].update(
+                {"target": "entity_3"}
+            ),
+            "PregnancyCoParent target 'entity_3'.*not a character",
+        ),
+        (
+            lambda value: value["relationships"]["PregnancyCoParent"]["entity_1"][0][
+                "edge"
+            ].update({"role": "parent"}),
+            "PregnancyCoParent edge.*must not contain properties",
+        ),
+    ],
+)
+def test_schema_v3_rejects_malformed_lifesim_relationship_records(mutate, message):
+    source = migrate_snapshot(_lifesim_v2_snapshot())
+    mutate(source)
+
+    with pytest.raises(WorldMigrationError, match=message):
+        migrate_snapshot(source)
 
 
 def test_schema_v1_dragon_stealth_name_migrates_without_mutating_source():
@@ -420,7 +709,7 @@ def test_schema_v1_egg_parents_migrate_to_ordered_edges():
 
 
 @pytest.mark.parametrize("suffix", ["json", "yaml"])
-def test_schema_v1_relationship_fixtures_load_and_resave_as_v2(tmp_path, suffix):
+def test_schema_v1_relationship_fixtures_load_and_resave_as_v3(tmp_path, suffix):
     import yaml
 
     source = Path(__file__).parent / "fixtures" / "migrations" / f"relationships-v1.{suffix}"
@@ -430,7 +719,7 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v2(tmp_path, suffix)
     migrated = migrate_snapshot(raw)
 
     assert source.read_text() == before
-    assert migrated["bunnyland"]["schema_version"] == 2
+    assert migrated["bunnyland"]["schema_version"] == 3
     expected = {
         "AllowedIn": ("entity_1", "entity_2", {}),
         "MemberOfCaravan": ("entity_1", "entity_3", {}),
@@ -473,7 +762,7 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v2(tmp_path, suffix)
         assert record == {"target": target_id, "edge": edge}
 
     actor, meta = load_world(source, registry=PluginRegistry(bunnyland_plugins()))
-    destination = tmp_path / f"relationships-v2.{suffix}"
+    destination = tmp_path / f"relationships-v3.{suffix}"
     save_world(actor, destination, meta=meta)
     saved = (
         json.loads(destination.read_text())
@@ -481,7 +770,7 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v2(tmp_path, suffix)
         else yaml.safe_load(destination.read_text())
     )
     metadata_key = "bunnyland" if suffix == "json" else "__bunnyland__"
-    assert saved[metadata_key]["schema_version"] == 2
+    assert saved[metadata_key]["schema_version"] == 3
 
 
 @pytest.mark.parametrize("suffix", ["json", "yaml"])

@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 class WorldMigrationError(ValueError):
@@ -819,12 +819,255 @@ def _migrate_v1(snapshot: dict[str, Any]) -> dict[str, Any]:
         )
 
     bunnyland = _table(snapshot, "bunnyland")
-    bunnyland["schema_version"] = CURRENT_SCHEMA_VERSION
+    bunnyland["schema_version"] = 2
     return snapshot
 
 
+def _v2_live_target(
+    entities: dict[str, Any], target_id: Any, *, owner_id: str, component: str, field: str
+) -> str:
+    target = str(target_id or "")
+    if target not in entities:
+        raise WorldMigrationError(
+            f"schema-v2 entity {owner_id!r} component {component}.{field} "
+            f"refers to missing entity {target!r}"
+        )
+    return target
+
+
+def _migrate_v2(snapshot: dict[str, Any]) -> dict[str, Any]:
+    components = _table(snapshot, "components")
+    relationships = _table(snapshot, "relationships")
+    entities = _table(snapshot, "entities")
+    characters = _records(components, "CharacterComponent")
+    rooms = _records(components, "RoomComponent")
+
+    homes = components.pop("HomeComponent", {})
+    if not isinstance(homes, dict):
+        raise WorldMigrationError("persisted type 'HomeComponent' must contain a mapping")
+    for room_id, raw_fields in sorted(homes.items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(f"HomeComponent fields for {room_id!r} must be a mapping")
+        _v2_live_target(
+            entities,
+            room_id,
+            owner_id=room_id,
+            component="HomeComponent",
+            field="entity",
+        )
+        if room_id not in rooms:
+            raise WorldMigrationError(
+                f"schema-v2 entity {room_id!r} component HomeComponent.entity "
+                "does not have RoomComponent"
+            )
+        owner_id = _v2_live_target(
+            entities,
+            raw_fields.get("owner_id"),
+            owner_id=room_id,
+            component="HomeComponent",
+            field="owner_id",
+        )
+        if owner_id not in characters:
+            raise WorldMigrationError(
+                f"schema-v2 entity {room_id!r} component HomeComponent.owner_id "
+                f"refers to entity {owner_id!r} without CharacterComponent"
+            )
+        _add_edge(
+            relationships,
+            "OwnsHome",
+            owner_id,
+            room_id,
+            {"household_id": raw_fields.get("household_id")},
+        )
+
+    claims = components.pop("RoomClaimComponent", {})
+    if not isinstance(claims, dict):
+        raise WorldMigrationError("persisted type 'RoomClaimComponent' must contain a mapping")
+    for room_id, raw_fields in sorted(claims.items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(
+                f"RoomClaimComponent fields for {room_id!r} must be a mapping"
+            )
+        _v2_live_target(
+            entities,
+            room_id,
+            owner_id=room_id,
+            component="RoomClaimComponent",
+            field="entity",
+        )
+        if room_id not in rooms:
+            raise WorldMigrationError(
+                f"schema-v2 entity {room_id!r} component RoomClaimComponent.entity "
+                "does not have RoomComponent"
+            )
+        claimant_id = _v2_live_target(
+            entities,
+            raw_fields.get("claimed_by_id"),
+            owner_id=room_id,
+            component="RoomClaimComponent",
+            field="claimed_by_id",
+        )
+        if claimant_id not in characters:
+            raise WorldMigrationError(
+                f"schema-v2 entity {room_id!r} component RoomClaimComponent.claimed_by_id "
+                f"refers to entity {claimant_id!r} without CharacterComponent"
+            )
+        claimed_at_epoch = raw_fields.get("claimed_at_epoch")
+        if not isinstance(claimed_at_epoch, int) or isinstance(claimed_at_epoch, bool):
+            raise WorldMigrationError(
+                f"RoomClaimComponent.claimed_at_epoch for {room_id!r} must be an integer"
+            )
+        _add_edge(
+            relationships,
+            "ClaimsRoom",
+            claimant_id,
+            room_id,
+            {"claimed_at_epoch": claimed_at_epoch},
+        )
+
+    pregnancies = _records(components, "PregnancyComponent")
+    for pregnant_id, raw_fields in sorted(pregnancies.items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(
+                f"PregnancyComponent fields for {pregnant_id!r} must be a mapping"
+            )
+        fields = dict(raw_fields)
+        co_parent_ids = fields.pop("co_parent_ids", ()) or ()
+        if not isinstance(co_parent_ids, (list, tuple)):
+            raise WorldMigrationError(
+                f"PregnancyComponent.co_parent_ids for {pregnant_id!r} must be a sequence"
+            )
+        pregnancies[pregnant_id] = fields
+        for co_parent_id in co_parent_ids:
+            target_id = _v2_live_target(
+                entities,
+                co_parent_id,
+                owner_id=pregnant_id,
+                component="PregnancyComponent",
+                field="co_parent_ids",
+            )
+            if target_id not in characters:
+                raise WorldMigrationError(
+                    f"schema-v2 entity {pregnant_id!r} component "
+                    f"PregnancyComponent.co_parent_ids refers to entity {target_id!r} "
+                    "without CharacterComponent"
+                )
+            _add_edge(relationships, "PregnancyCoParent", pregnant_id, target_id)
+
+    _table(snapshot, "bunnyland")["schema_version"] = 3
+    _validate_v3(snapshot)
+    return snapshot
+
+
+def _validate_v3(snapshot: dict[str, Any]) -> None:
+    components = _table(snapshot, "components")
+    relationships = _table(snapshot, "relationships")
+    entities = _table(snapshot, "entities")
+    def read_records(table: dict[str, Any], type_name: str) -> dict[str, Any]:
+        value = table.get(type_name, {})
+        if not isinstance(value, dict):
+            raise WorldMigrationError(f"persisted type {type_name!r} must contain a mapping")
+        return value
+
+    characters = read_records(components, "CharacterComponent")
+    rooms = read_records(components, "RoomComponent")
+    pregnancies = read_records(components, "PregnancyComponent")
+    for pregnant_id, fields in pregnancies.items():
+        if not isinstance(fields, dict):
+            raise WorldMigrationError(
+                f"PregnancyComponent fields for {pregnant_id!r} must be a mapping"
+            )
+        if "co_parent_ids" in fields:
+            raise WorldMigrationError(
+                f"schema-v3 entity {pregnant_id!r} contains legacy "
+                "PregnancyComponent.co_parent_ids"
+            )
+    for legacy in ("HomeComponent", "RoomClaimComponent"):
+        if read_records(components, legacy):
+            raise WorldMigrationError(f"schema-v3 snapshot contains legacy {legacy}")
+
+    incoming: dict[tuple[str, str], str] = {}
+    for edge_name in ("OwnsHome", "ClaimsRoom", "PregnancyCoParent"):
+        sources = read_records(relationships, edge_name)
+        seen_edges: set[tuple[str, str]] = set()
+        for source_id, records in sorted(sources.items()):
+            if source_id not in entities:
+                raise WorldMigrationError(
+                    f"schema-v3 {edge_name} source {source_id!r} does not exist"
+                )
+            if not isinstance(records, list):
+                raise WorldMigrationError(f"{edge_name} edges for {source_id!r} must be a list")
+            for record in records:
+                if not isinstance(record, dict) or not isinstance(record.get("edge", {}), dict):
+                    raise WorldMigrationError(
+                        f"{edge_name} edge for {source_id!r} must be a mapping"
+                    )
+                target_id = str(record.get("target") or "")
+                if target_id not in entities:
+                    raise WorldMigrationError(
+                        f"schema-v3 {edge_name} edge owned by {source_id!r} "
+                        f"refers to missing target {target_id!r}"
+                    )
+                pair = (source_id, target_id)
+                if pair in seen_edges:
+                    raise WorldMigrationError(
+                        f"schema-v3 contains duplicate {edge_name} edge "
+                        f"{source_id!r} -> {target_id!r}"
+                    )
+                seen_edges.add(pair)
+                if source_id not in characters:
+                    raise WorldMigrationError(
+                        f"schema-v3 {edge_name} source {source_id!r} is not a character"
+                    )
+                if edge_name in {"OwnsHome", "ClaimsRoom"}:
+                    if target_id not in rooms:
+                        raise WorldMigrationError(
+                            f"schema-v3 {edge_name} target {target_id!r} is not a room"
+                        )
+                    key = (edge_name, target_id)
+                    previous = incoming.get(key)
+                    if previous is not None and previous != source_id:
+                        raise WorldMigrationError(
+                            f"schema-v3 room {target_id!r} has multiple incoming {edge_name} edges"
+                        )
+                    incoming[key] = source_id
+                    edge_fields = record.get("edge", {})
+                    if edge_name == "OwnsHome":
+                        household_id = edge_fields.get("household_id")
+                        if household_id is not None and not isinstance(household_id, str):
+                            raise WorldMigrationError(
+                                f"schema-v3 OwnsHome.household_id for {source_id!r} "
+                                "must be a string or null"
+                            )
+                    else:
+                        claimed_at_epoch = edge_fields.get("claimed_at_epoch")
+                        if not isinstance(claimed_at_epoch, int) or isinstance(
+                            claimed_at_epoch, bool
+                        ):
+                            raise WorldMigrationError(
+                                f"schema-v3 ClaimsRoom.claimed_at_epoch for {source_id!r} "
+                                "must be an integer"
+                            )
+                else:
+                    if source_id not in pregnancies:
+                        raise WorldMigrationError(
+                            f"schema-v3 PregnancyCoParent source {source_id!r} "
+                            "does not have PregnancyComponent"
+                        )
+                    if target_id not in characters:
+                        raise WorldMigrationError(
+                            f"schema-v3 PregnancyCoParent target {target_id!r} "
+                            "is not a character"
+                        )
+                    if record.get("edge"):
+                        raise WorldMigrationError(
+                            f"schema-v3 PregnancyCoParent edge for {source_id!r} "
+                            "must not contain properties"
+                        )
+
+
 def migrate_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
-    """Return a validated schema-v2 copy of a raw JSON/YAML snapshot."""
+    """Return a validated schema-v3 copy of a raw JSON/YAML snapshot."""
 
     if not isinstance(snapshot, dict):
         raise WorldMigrationError("world snapshot must be a mapping")
@@ -839,11 +1082,15 @@ def migrate_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         )
     if version < 1:
         raise WorldMigrationError(f"unsupported world schema {version}")
-    if version == CURRENT_SCHEMA_VERSION:
-        for section in ("entities", "components", "relationships"):
-            _table(migrated, section)
-        return migrated
-    return _migrate_v1(migrated)
+    if version == 1:
+        migrated = _migrate_v1(migrated)
+        version = 2
+    if version == 2:
+        return _migrate_v2(migrated)
+    for section in ("entities", "components", "relationships"):
+        _table(migrated, section)
+    _validate_v3(migrated)
+    return migrated
 
 
 __all__ = ["CURRENT_SCHEMA_VERSION", "WorldMigrationError", "migrate_snapshot"]

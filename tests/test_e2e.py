@@ -111,15 +111,15 @@ from bunnyland.simpacks.lifesim.mechanics import (
     BusinessOwnerComponent,
     BusinessPurchaseEvent,
     BusinessSaleEvent,
+    ClaimsRoom,
     CustomerComponent,
     HasBill,
-    HomeComponent,
     HouseholdComponent,
     HouseholdFundsComponent,
     LifeStageComponent,
     OwnsBusiness,
+    OwnsHome,
     RentChargedEvent,
-    RoomClaimComponent,
     lifesim_fragments,
 )
 from bunnyland.simpacks.nukesim.mechanics import (
@@ -921,12 +921,13 @@ async def test_scripted_agent_claims_home_and_pays_rent_bill():
 
     assert rejected == []
     north_tunnel = actor.world.get_entity(result.rooms["tunnel"])
-    home = north_tunnel.get_component(HomeComponent)
-    room_claim = north_tunnel.get_component(RoomClaimComponent)
+    home = character.get_relationships(OwnsHome)[0][0]
+    room_claim = character.get_relationships(ClaimsRoom)[0][0]
     household = character.get_component(HouseholdComponent)
-    assert home.owner_id == str(hazel)
     assert home.household_id == "moss-burrow"
-    assert room_claim.claimed_by_id == str(hazel)
+    assert room_claim.claimed_at_epoch > 0
+    assert character.has_relationship(OwnsHome, result.rooms["tunnel"])
+    assert character.has_relationship(ClaimsRoom, result.rooms["tunnel"])
     assert household.name == "Moss Burrow"
     fragments = lifesim_fragments(actor.world, character)
     assert "Your household is Moss Burrow." in fragments

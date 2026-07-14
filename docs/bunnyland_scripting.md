@@ -607,6 +607,31 @@ not match any `controller_kind`.
 `unknown` means the character has a controller entity, but that entity lacks the known
 Discord, LLM, or suspended controller components.
 
+### 11.6 Bounded graph selectors
+
+Trusted scripts can use a graph selector when one entity filter is not enough:
+
+```json
+{
+  "graph": {
+    "terms": [
+      {"kind": "edge", "source": "room", "edge": "Contains", "target": "person"},
+      {"kind": "component", "variable": "person", "component": "CharacterComponent"}
+    ],
+    "bindings": {"room": "$room"},
+    "select": ["room", "person"]
+  },
+  "target_variable": "person",
+  "mode": "each"
+}
+```
+
+Component and edge names must be exported by enabled plugins. Every selected variable is
+available to the action as a binding. Queries must be connected and stay within eight terms,
+six variables, 100 rows, and 10,000 candidate expansions. OR, negation, optional terms,
+recursive traversal, numeric comparisons, and arbitrary predicates are not supported.
+Legacy `EntityQuery` selector JSON is unchanged.
+
 ## 12. Target Selectors and Fanout
 
 Actions do not use queries directly. They use `TargetSelector`, which wraps a query with

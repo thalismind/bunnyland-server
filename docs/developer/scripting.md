@@ -164,6 +164,32 @@ Component names are Python class names. `controller_kind` matches the current co
 behind the character's `ControlledBy` edge and can be `discord`, `llm`, `behavioral`,
 `scripted`, `suspended`, or `unknown`.
 
+For a connected multi-entity join, use a graph target selector. This example selects every
+character contained by one bound room and exposes both `room` and `person` to the action as
+`$room` and `$person`:
+
+```json
+{
+  "graph": {
+    "terms": [
+      {"kind": "edge", "source": "room", "edge": "Contains", "target": "person"},
+      {"kind": "component", "variable": "person", "component": "CharacterComponent"}
+    ],
+    "bindings": {"room": "$current_room"},
+    "select": ["room", "person"]
+  },
+  "target_variable": "person",
+  "mode": "each",
+  "bind": "actor"
+}
+```
+
+Graph queries use plugin-registered type names and exact component-field matches. They are
+limited to eight terms, six variables, 100 results, and 10,000 candidate expansions. They
+must be connected; OR, negation, optional terms, recursion, numeric comparisons, and custom
+predicates are not supported. A selector error aborts the action before its mutation plan is
+applied. Existing `EntityQuery` JSON is unchanged.
+
 Fanout is explicit through `TargetSelector.mode`:
 
 - `one`: require exactly one match, otherwise the action fails.

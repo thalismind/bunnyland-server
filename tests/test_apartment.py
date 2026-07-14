@@ -14,7 +14,7 @@ from bunnyland.foundation.needs.mechanics import HungerComponent
 from bunnyland.plugins import bunnyland_plugins
 from bunnyland.simpacks.lifesim.mechanics import (
     CareerComponent,
-    HomeComponent,
+    OwnsHome,
     RoutineComponent,
 )
 from bunnyland.worldgen.apartment import APARTMENT_DEMO
@@ -49,7 +49,13 @@ async def test_tenants_have_needs_careers_homes_and_routines():
     assert _entities(actor, HungerComponent)  # life-sim needs from instantiate
     assert _entities(actor, CareerComponent)
     # One apartment owned per resident tenant (the animal has no home).
-    assert len(_entities(actor, HomeComponent)) == 9
+    assert (
+        sum(
+            len(entity.get_relationships(OwnsHome))
+            for entity in _entities(actor, CharacterComponent)
+        )
+        == 9
+    )
     # Each tenant carries a multi-entry daily schedule as routine entities.
     assert len(_entities(actor, RoutineComponent)) >= 9 * 3
 

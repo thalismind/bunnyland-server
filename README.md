@@ -218,6 +218,8 @@ metric/span reference and the Tempo setup.
   characters; enabling/disabling plugins.
 - **[Saving & reloading](docs/developer/persistence.md)** — save/autosave/reload a world, and what
   is (and isn't) persisted.
+- **[World-as-a-database modeling](docs/developer/world-database-modeling.md)** — choosing
+  components, edges, linked entities, and bounded relational queries.
 - **[Scripting catalogue](docs/bunnyland_scripting.md)** — external JSON scripts for deterministic
   tests, plugin scenarios, and scripted events.
 

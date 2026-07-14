@@ -112,7 +112,8 @@ Fragment providers own selection and access:
 - current character, current room, reachable entities, world markers, and relationship targets;
 - reachability checks and hidden/private state checks;
 - world queries and aggregate scans;
-- resolving entity ids stored in component fields;
+- traversing relationship edges and resolving the explicitly classified historical or
+  external ids that remain in component fields;
 - sorting and preserving provider-level output order.
 
 Component methods own formatting:
