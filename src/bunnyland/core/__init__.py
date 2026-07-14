@@ -213,10 +213,14 @@ from .mutations import (
     world_transaction,
 )
 from .perspective import (
+    AvailableActionsOutput,
     PerspectiveQueryDefinition,
     PerspectiveQueryRegistry,
     PerspectiveQueryRequest,
     PerspectiveQueryResult,
+    ValidTargetsOutput,
+    WhatChangedSinceOutput,
+    WhyNotOutput,
 )
 from .queue import CommandQueues
 from .systems import ClaimTimeoutSystem
@@ -237,6 +241,7 @@ __all__ = [
     "AffectDelta",
     "AffectVector",
     "AttentionComponent",
+    "AvailableActionsOutput",
     "BehaviorControllerComponent",
     "BleedingComponent",
     "BodyPlanComponent",
@@ -397,6 +402,9 @@ __all__ = [
     "WeightComponent",
     "WorldActor",
     "WorldClockComponent",
+    "ValidTargetsOutput",
+    "WhatChangedSinceOutput",
+    "WhyNotOutput",
     "world_transaction",
     "WorldLike",
     "WorldPauseStatusChangedEvent",

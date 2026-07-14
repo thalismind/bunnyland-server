@@ -1080,8 +1080,9 @@ def create_bunnyland_mcp_app(
                 query,
                 arguments or {},
                 actor_id=str(character),
+                access="claim",
             ).model_dump(mode="json")
-        except (RuntimeError, ValueError, TimeoutError) as exc:
+        except (PermissionError, RuntimeError, ValueError, TimeoutError) as exc:
             raise ToolError(str(exc)) from exc
 
     @mcp.tool()

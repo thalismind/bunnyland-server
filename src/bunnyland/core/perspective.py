@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
 class PerspectiveQueryInput(BaseModel):
@@ -29,12 +29,51 @@ class WhatChangedSinceInput(PerspectiveQueryInput):
     epoch: int = Field(ge=0)
 
 
+class AvailableActionsOutput(RootModel[list[dict[str, Any]]]):
+    pass
+
+
+class TargetOption(BaseModel):
+    id: str
+    label: str
+    kind: str
+
+
+class ValidTargetsOutput(RootModel[dict[str, list[TargetOption]]]):
+    pass
+
+
+class ActionAvailabilityOutput(BaseModel):
+    available: bool
+    enough_action_points: bool
+    enough_focus_points: bool
+    has_required_target: bool
+    meets_requirements: bool
+    reason: str | None = None
+
+
+class WhyNotOutput(BaseModel):
+    available: bool
+    reason: str | None = None
+    availability: ActionAvailabilityOutput
+    target_valid: bool | None = None
+
+
+class WhatChangedSinceOutput(BaseModel):
+    events: list[dict[str, Any]]
+    complete: bool
+    resync_required: bool
+    requested_epoch: int
+    available_after_epoch: int
+
+
 class PerspectiveQueryResult(BaseModel):
     query: str
     owner: str
     actor_id: str
     world_epoch: int
     visibility: str
+    output_type: str
     provenance: tuple[str, ...] = ()
     truncated: bool = False
     result: Any
@@ -53,6 +92,7 @@ class PerspectiveQueryDefinition(BaseModel):
 
     name: str
     input_model: type[PerspectiveQueryInput]
+    output_model: type[BaseModel]
     owner: str = ""
     visibility: Literal["claim", "public", "admin"] = "claim"
     result_limit: int = Field(default=100, gt=0)
@@ -82,10 +122,27 @@ class PerspectiveQueryRegistry:
         arguments: Mapping[str, Any],
         *,
         actor_id: str,
+        access: Literal["public", "claim", "admin"] = "claim",
     ) -> PerspectiveQueryResult:
         definition = self._definitions.get(name)
         if definition is None:
             raise ValueError(f"unknown perspective query {name!r}")
+        allowed = {
+            "public": {"public", "claim", "admin"},
+            "claim": {"claim", "admin"},
+            "admin": {"admin"},
+        }
+        if access not in allowed[definition.visibility]:
+            raise PermissionError(
+                f"perspective query {name!r} requires {definition.visibility} access"
+            )
+        available_indexes = set(getattr(actor, "perspective_index_names", ()))
+        missing_indexes = set(definition.required_indexes) - available_indexes
+        if missing_indexes:
+            missing = ", ".join(sorted(missing_indexes))
+            raise RuntimeError(
+                f"perspective query {name!r} requires unavailable indexes: {missing}"
+            )
         values = {**dict(arguments), "actor_id": actor_id}
         validated = definition.input_model.model_validate(values)
         started = time.perf_counter()
@@ -95,19 +152,37 @@ class PerspectiveQueryRegistry:
             raise TimeoutError(
                 f"perspective query {name!r} exceeded {definition.execution_budget_ms:g}ms budget"
             )
-        truncated = isinstance(result, list) and len(result) > definition.result_limit
-        if truncated:
-            result = result[: definition.result_limit]
+        validated_output = definition.output_model.model_validate(result)
+        result = validated_output.model_dump(mode="json")
+        result, truncated = _truncate_result(result, definition.result_limit)
+        result = definition.output_model.model_validate(result).model_dump(mode="json")
         return PerspectiveQueryResult(
             query=name,
             owner=definition.owner,
             actor_id=actor_id,
             world_epoch=actor.epoch,
             visibility=definition.visibility,
+            output_type=definition.output_model.__name__,
             provenance=(*definition.provenance, *runtime_provenance),
             truncated=truncated,
             result=result,
         )
+
+
+def _truncate_result(result: Any, limit: int) -> tuple[Any, bool]:
+    if isinstance(result, list):
+        return result[:limit], len(result) > limit
+    if isinstance(result, dict):
+        truncated = False
+        bounded = {}
+        for key, value in result.items():
+            if isinstance(value, list) and len(value) > limit:
+                bounded[key] = value[:limit]
+                truncated = True
+            else:
+                bounded[key] = value
+        return bounded, truncated
+    return result, False
 
 
 def _projection(actor: Any, actor_id: str):
@@ -196,24 +271,28 @@ V1_PERSPECTIVE_QUERIES = (
     PerspectiveQueryDefinition(
         name="available_actions",
         input_model=AvailableActionsInput,
+        output_model=AvailableActionsOutput,
         execute=_available_actions,
         provenance=("authoritative_ecs",),
     ),
     PerspectiveQueryDefinition(
         name="valid_targets",
         input_model=ValidTargetsInput,
+        output_model=ValidTargetsOutput,
         execute=_valid_targets,
         provenance=("authoritative_ecs",),
     ),
     PerspectiveQueryDefinition(
         name="why_not",
         input_model=WhyNotInput,
+        output_model=WhyNotOutput,
         execute=_why_not,
         provenance=("authoritative_ecs",),
     ),
     PerspectiveQueryDefinition(
         name="what_changed_since",
         input_model=WhatChangedSinceInput,
+        output_model=WhatChangedSinceOutput,
         execute=_what_changed_since,
         provenance=("authoritative_events",),
     ),
@@ -226,4 +305,8 @@ __all__ = [
     "PerspectiveQueryRequest",
     "PerspectiveQueryResult",
     "V1_PERSPECTIVE_QUERIES",
+    "AvailableActionsOutput",
+    "ValidTargetsOutput",
+    "WhyNotOutput",
+    "WhatChangedSinceOutput",
 ]

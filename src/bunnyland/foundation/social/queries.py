@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
 
 from ...core.components import IdentityComponent
 from ...core.ecs import parse_entity_id
@@ -48,6 +48,14 @@ class OpenObligation(BaseModel):
     text: str
     kind: str
     due_epoch: int
+
+
+class SocialConnectionsOutput(RootModel[list[SocialConnection]]):
+    pass
+
+
+class OpenObligationsOutput(RootModel[list[OpenObligation]]):
+    pass
 
 
 def _identity(actor, raw_id: str) -> EntityIdentity:
@@ -164,12 +172,14 @@ SOCIAL_PERSPECTIVE_QUERIES = (
     PerspectiveQueryDefinition(
         name="social_connections",
         input_model=SocialQuestionInput,
+        output_model=SocialConnectionsOutput,
         execute=_social_connections,
         provenance=("claim_scoped",),
     ),
     PerspectiveQueryDefinition(
         name="open_obligations",
         input_model=SocialQuestionInput,
+        output_model=OpenObligationsOutput,
         execute=_open_obligations,
         provenance=("claim_scoped",),
     ),

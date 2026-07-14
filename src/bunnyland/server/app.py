@@ -503,10 +503,13 @@ def create_app(
                 request.query,
                 request.arguments,
                 actor_id=id,
+                access="claim",
             )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except TimeoutError as exc:
+        except (RuntimeError, TimeoutError) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/world/room/{id}", response_model=RoomProjectionResponse)
