@@ -364,8 +364,8 @@ class RemoveEdge:
         ):
             return
         source = _entity(world, self.source_id)
-        target = _entity(world, self.target_id)
-        if not source.has_relationship(self.edge_type, target.id):
+        target_id = _target_id(self.target_id)
+        if target_id is None or not source.has_relationship(self.edge_type, target_id):
             raise MutationError(
                 f"entity {self.source_id!s} does not have {self.edge_type.__name__} "
                 f"edge to {self.target_id!s}"
@@ -373,14 +373,16 @@ class RemoveEdge:
 
     def apply(self, world: World) -> Callable[[], None]:
         source = _entity(world, self.source_id)
-        target = _entity(world, self.target_id)
+        target_id = _target_id(self.target_id)
+        if target_id is None:
+            raise MutationError("edge target reference has not been created")
         edge = next(
             edge
-            for edge, target_id in source.get_relationships(self.edge_type)
-            if target_id == target.id
+            for edge, candidate_id in source.get_relationships(self.edge_type)
+            if candidate_id == target_id
         )
-        source.remove_relationship(self.edge_type, target.id)
-        return lambda: source.add_relationship(edge, target.id)
+        source.remove_relationship(self.edge_type, target_id)
+        return lambda: source.add_relationship(edge, target_id)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -438,6 +440,8 @@ def validate_core_invariants(world: World) -> None:
     if len(clocks) != 1:
         raise MutationError(f"expected exactly one world clock, found {len(clocks)}")
     for entity in world.query().execute_entities():
+        if not world.has_entity(entity.id):
+            continue
         if len(entity.get_incoming_relationships(Contains)) > 1:
             raise MutationError(f"entity {entity.id} has more than one physical location")
         if len(entity.get_relationships(ControlledBy)) > 1:
