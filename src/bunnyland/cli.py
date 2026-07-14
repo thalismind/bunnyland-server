@@ -582,6 +582,10 @@ def _setup_discord_bot(
         ),
         imagegen=imagegen,
         claim_secrets=claim_secrets,
+        cooldown_seconds=max(
+            0,
+            _env_int("BUNNYLAND_DISCORD_COOLDOWN_SECONDS") or 0,
+        ),
     )
     _maybe_assign_startup_discord_claim(actor, args, meta, claim_secrets)
     return discord_bot
@@ -701,9 +705,11 @@ async def _run_api_runtime(
                 definitions_path=args.controller_definitions,
                 worldgen_options=_worldgen_options(args, credentials, models),
                 plugins=plugins,
-                admin_token=args.admin_token or os.environ.get("BUNNYLAND_ADMIN_TOKEN"),
+                    auth_users_path=getattr(args, "auth_users_file", "data/auth-users.yml"),
+                    token_db_path=getattr(args, "token_db", "data/auth-tokens.sqlite3"),
                 player_client_ids=getattr(args, "player_client_id", None),
                 admin_client_ids=getattr(args, "admin_client_id", None),
+                trust_x_real_ip=getattr(args, "trust_x_real_ip", False),
                 imagegen=imagegen,
                 character_chat=character_chat,
                 claim_secrets=claim_secrets,
@@ -781,9 +787,11 @@ _CONFIG_ARG_FLAGS: dict[str, tuple[str, ...]] = {
     "discord_allowed_bot_user_id": ("--discord-allowed-bot-user-id",),
     "mcp": ("--mcp",),
     "character_chat": ("--character-chat",),
-    "admin_token": ("--admin-token",),
+    "auth_users_file": ("--auth-users-file",),
+    "token_db": ("--token-db",),
     "player_client_id": ("--player-client-id",),
     "admin_client_id": ("--admin-client-id",),
+    "trust_x_real_ip": ("--trust-x-real-ip", "--no-trust-x-real-ip"),
 }
 
 
@@ -896,6 +904,41 @@ def main(argv: list[str] | None = None) -> int:
     )
     migrate_world.add_argument("source", help="source world; never modified")
     migrate_world.add_argument("dest", help="destination JSON or YAML world")
+
+    auth = sub.add_parser("auth", help="manage Bunnyland users and opaque access tokens")
+    auth_sub = auth.add_subparsers(dest="auth_command", required=True)
+    auth_hash = auth_sub.add_parser("hash-password", help="generate an Argon2 password hash")
+    auth_hash.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="read the password from stdin instead of a protected prompt",
+    )
+    auth_provision = auth_sub.add_parser(
+        "provision-token", help="provision a manual-rotation automation token"
+    )
+    auth_provision.add_argument("--db", required=True, help="private token SQLite database")
+    auth_provision.add_argument("--subject", required=True)
+    auth_provision.add_argument("--scope", action="append", required=True)
+    auth_provision.add_argument("--expires-days", type=int, default=90)
+    auth_list = auth_sub.add_parser("list-tokens", help="list token metadata without secrets")
+    auth_list.add_argument("--db", required=True, help="private token SQLite database")
+    auth_import = auth_sub.add_parser(
+        "import-token-digest", help="idempotently import pre-generated automation metadata"
+    )
+    auth_import.add_argument("--db", required=True, help="private token SQLite database")
+    auth_import.add_argument("--token-id", required=True)
+    auth_import.add_argument("--digest", required=True)
+    auth_import.add_argument("--subject", required=True)
+    auth_import.add_argument("--scope", action="append", required=True)
+    auth_import.add_argument("--expires-at", type=int, required=True)
+    auth_revoke = auth_sub.add_parser("revoke", help="revoke one token id or all subject tokens")
+    auth_revoke.add_argument("--db", required=True, help="private token SQLite database")
+    revoke_target = auth_revoke.add_mutually_exclusive_group(required=True)
+    revoke_target.add_argument("--token-id")
+    revoke_target.add_argument("--subject")
+    auth_replace = auth_sub.add_parser("replace-token", help="replace and revoke a manual token")
+    auth_replace.add_argument("--db", required=True, help="private token SQLite database")
+    auth_replace.add_argument("--token-id", required=True)
 
     serve = sub.add_parser("serve", help="generate a world and run the game loop")
     serve.add_argument("--config", default=None, help="read server settings from YAML")
@@ -1108,10 +1151,14 @@ def main(argv: list[str] | None = None) -> int:
         help="enable opt-in character chat routes on the HTTP API (needs llm and server extras)",
     )
     serve.add_argument(
-        "--admin-token",
-        default=None,
-        help="admin token gating snapshot/overview/DM projections, the world-updates "
-        "stream, and MCP world mutation tools (or BUNNYLAND_ADMIN_TOKEN)",
+        "--auth-users-file",
+        default=os.environ.get("BUNNYLAND_AUTH_USERS_FILE", "data/auth-users.yml"),
+        help="deployment-rendered YAML user credential file",
+    )
+    serve.add_argument(
+        "--token-db",
+        default=os.environ.get("BUNNYLAND_TOKEN_DB", "data/auth-tokens.sqlite3"),
+        help="private SQLite opaque-token store",
     )
     serve.add_argument(
         "--player-client-id",
@@ -1131,9 +1178,19 @@ def main(argv: list[str] | None = None) -> int:
             "(env: BUNNYLAND_ADMIN_CLIENT_IDS)"
         ),
     )
+    serve.add_argument(
+        "--trust-x-real-ip",
+        action=argparse.BooleanOptionalAction,
+        default=os.environ.get("BUNNYLAND_TRUST_X_REAL_IP", "").strip().lower()
+        in {"1", "true", "yes"},
+        help="trust nginx-overwritten X-Real-IP for application abuse limits",
+    )
 
     tui = sub.add_parser("tui", help="open the terminal client (needs the tui extra)")
     tui.add_argument("--server", help="connect to a running server (e.g. http://localhost:8765)")
+    tui.add_argument("--username", default="", help="login username for a remote server")
+    tui.add_argument("--password-stdin", action="store_true")
+    tui.add_argument("--token-file", default=None)
     tui.add_argument("--seed", default="a quiet marsh", help="seed for a locally hosted world")
     tui.add_argument(
         "--generator", default="apartment-demo", help="generator for a locally hosted world"
@@ -1195,6 +1252,70 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Migrated {source} -> {dest} (schema v4).")
         return 0
 
+    if args.command == "auth":
+        from .server.auth import TokenStore, hash_password
+
+        if args.auth_command == "hash-password":
+            if args.password_stdin:
+                password = sys.stdin.readline().rstrip("\r\n")
+            else:
+                from getpass import getpass
+
+                password = getpass("Password: ")
+                if password != getpass("Confirm password: "):
+                    parser.error("passwords do not match")
+            if not password:
+                parser.error("password must not be empty")
+            print(hash_password(password))
+            return 0
+        token_store = TokenStore(args.db)
+        try:
+            if args.auth_command == "provision-token":
+                if args.expires_days <= 0:
+                    parser.error("--expires-days must be positive")
+                token, _principal = token_store.issue(
+                    args.subject,
+                    args.scope,
+                    automatic_rotation=False,
+                    lifetime_seconds=args.expires_days * 24 * 60 * 60,
+                )
+                print(token)
+                return 0
+            if args.auth_command == "list-tokens":
+                print(json.dumps(token_store.list_metadata(), indent=2, sort_keys=True))
+                return 0
+            if args.auth_command == "import-token-digest":
+                try:
+                    imported = token_store.import_digest(
+                        args.token_id,
+                        args.digest,
+                        args.subject,
+                        args.scope,
+                        expires_at=args.expires_at,
+                    )
+                except ValueError as exc:
+                    parser.error(str(exc))
+                print(json.dumps({"imported": imported}))
+                return 0
+            if args.auth_command == "revoke":
+                count = (
+                    int(token_store.revoke_token(args.token_id))
+                    if args.token_id
+                    else token_store.revoke_subject(args.subject)
+                )
+                print(json.dumps({"revoked": count}))
+                return 0
+            # The parser requires one of the commands handled above; replacement is the
+            # only remaining choice here.
+            try:
+                token, _principal = token_store.replace(args.token_id)
+            except KeyError:
+                parser.error("token id does not exist")
+            print(token)
+            return 0
+        finally:
+            token_store.close()
+
     if args.command == "chat":
         from .chat import main as chat_main
 
@@ -1213,6 +1334,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.claim_fallback:
             tui_args.extend(["--claim-fallback", args.claim_fallback])
+        if args.username:
+            tui_args.extend(["--username", args.username])
+        if args.password_stdin:
+            tui_args.append("--password-stdin")
+        if args.token_file:
+            tui_args.extend(["--token-file", args.token_file])
         if args.claim_timeout_minutes is not None:
             tui_args.extend(["--claim-timeout-minutes", str(args.claim_timeout_minutes)])
         if args.no_icons:

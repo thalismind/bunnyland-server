@@ -537,7 +537,7 @@ async def test_character_chat_unresolved_reference_does_not_submit():
 @pytest.mark.asyncio
 async def test_character_chat_status_and_disabled_route():
     scenario = build_scenario()
-    app = create_app(scenario.actor)
+    app = create_app(scenario.actor, allow_unauthenticated=True)
 
     async with route_client(app) as client:
         assert (await client.get("/world/chat/status")).json()["enabled"] is False
@@ -561,7 +561,9 @@ async def test_character_chat_route_reports_invalid_character_and_wrong_kind():
     install_core(scenario.actor)
     service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
     item = spawn_entity(scenario.actor.world, [IdentityComponent(name="stone", kind="item")])
-    app = create_app(scenario.actor, character_chat=service)
+    app = create_app(
+        scenario.actor, character_chat=service, allow_unauthenticated=True
+    )
 
     async with route_client(app) as client:
         assert (
@@ -585,7 +587,9 @@ async def test_character_chat_route_conflicts_for_non_llm_character():
     web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="web")])
     scenario.actor.assign_controller(scenario.character, web.id)
     service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
-    app = create_app(scenario.actor, character_chat=service)
+    app = create_app(
+        scenario.actor, character_chat=service, allow_unauthenticated=True
+    )
 
     async with route_client(app) as client:
         response = await client.post(
@@ -601,7 +605,9 @@ async def test_character_chat_route_validates_request_and_reports_allowed_tools(
     scenario = build_scenario()
     install_core(scenario.actor)
     service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
-    app = create_app(scenario.actor, character_chat=service)
+    app = create_app(
+        scenario.actor, character_chat=service, allow_unauthenticated=True
+    )
 
     async with route_client(app) as client:
         status = (await client.get("/world/chat/status")).json()
@@ -624,7 +630,9 @@ async def test_character_chat_pending_route_reports_queued_action_and_scopes_cli
         FakeChatAgent([ChatAgentReply(tool_call=ToolCall("say", {"text": "soon"}))]),
         timeout=0.0,
     )
-    app = create_app(scenario.actor, character_chat=service)
+    app = create_app(
+        scenario.actor, character_chat=service, allow_unauthenticated=True
+    )
 
     async with route_client(app) as client:
         response = await client.post(

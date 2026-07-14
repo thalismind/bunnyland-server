@@ -646,6 +646,9 @@ class RemoteBackend(Backend):
         client_id: str | None = None,
         fallback_controller: str | None = None,
         timeout_seconds: int | None = None,
+        username: str = "",
+        password: str = "",
+        token_file: str | Path | None = None,
     ) -> None:
         self.base = base_url.rstrip("/")
         self.label = f"remote · {self.base}"
@@ -653,6 +656,12 @@ class RemoteBackend(Backend):
         self.client_id = client_id or persistent_client_id()
         self.fallback_controller = fallback_controller
         self.timeout_seconds = timeout_seconds
+        self.username = username
+        self._password = password
+        self.token_file = Path(token_file) if token_file else None
+        self._access_token = ""
+        self._rotate_after: int | None = None
+        self._rotation_task = None
         self._claims: dict[str, ControlClaim] = {}
 
     def _claim_for(self, character_id: str) -> ControlClaim | None:
@@ -682,10 +691,77 @@ class RemoteBackend(Backend):
         import httpx
 
         self._client = httpx.AsyncClient(timeout=10.0)
+        if self.token_file is not None and self.token_file.exists():
+            self._access_token = self.token_file.read_text(encoding="utf-8").strip()
+            self._set_access_token(self._access_token)
+            await self._refresh_auth_metadata()
+        elif self.username and self._password:
+            await self._login()
+        if self._access_token:
+            self._rotation_task = asyncio.create_task(self._rotation_loop())
 
     async def close(self) -> None:
+        if self._rotation_task is not None:
+            self._rotation_task.cancel()
+            try:
+                await self._rotation_task
+            except asyncio.CancelledError:
+                pass
         if self._client is not None:
             await self._client.aclose()
+
+    def _set_access_token(self, token: str) -> None:
+        self._access_token = token
+        if self._client is not None:
+            self._client.headers["Authorization"] = f"Bearer {token}"
+
+    def _persist_access_token(self) -> None:
+        if self.token_file is None:
+            return
+        self.token_file.parent.mkdir(parents=True, exist_ok=True)
+        self.token_file.write_text(f"{self._access_token}\n", encoding="utf-8")
+        self.token_file.chmod(0o600)
+
+    async def _login(self) -> None:
+        res = await self._client.post(
+            f"{self.base}/auth/login",
+            json={"username": self.username, "password": self._password, "delivery": "body"},
+        )
+        self._password = ""
+        res.raise_for_status()
+        body = res.json()
+        self._set_access_token(str(body["token"]))
+        self._rotate_after = body.get("rotate_after")
+        self._persist_access_token()
+
+    async def _refresh_auth_metadata(self) -> None:
+        res = await self._client.get(f"{self.base}/auth/me")
+        res.raise_for_status()
+        self._rotate_after = res.json().get("rotate_after")
+
+    async def _rotate_token(self) -> None:
+        res = await self._client.post(f"{self.base}/auth/rotate")
+        if res.status_code == 409:
+            await self._refresh_auth_metadata()
+            return
+        res.raise_for_status()
+        body = res.json()
+        self._set_access_token(str(body["token"]))
+        self._rotate_after = body.get("rotate_after")
+        self._persist_access_token()
+
+    async def _rotation_loop(self) -> None:
+        while True:
+            delay = 60.0
+            if self._rotate_after is not None:
+                delay = max(0.0, min(60.0, self._rotate_after - time.time()))
+            await asyncio.sleep(delay)
+            if self._rotate_after is not None and time.time() >= self._rotate_after:
+                try:
+                    await self._rotate_token()
+                except Exception:
+                    logger.warning("Could not rotate Bunnyland access token", exc_info=True)
+                    await asyncio.sleep(30.0)
 
     async def fetch_snapshot(self) -> dict:
         res = await self._client.get(f"{self.base}/world/snapshot")
@@ -817,6 +893,7 @@ class RemoteBackend(Backend):
                             {
                                 "type": "authenticate",
                                 "data": {
+                                    "token": self._access_token or None,
                                     "claim_id": control.claim_id if control else None,
                                     "claim_secret": control.claim_secret if control else None,
                                 },

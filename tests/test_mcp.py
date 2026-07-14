@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import socket
 import sys
 from datetime import UTC, datetime
 from types import ModuleType, SimpleNamespace
 
+import httpx
 import pytest
 from pydantic import AnyUrl
 
@@ -41,6 +43,7 @@ from bunnyland.persistence import WorldMeta
 from bunnyland.plugins import bunnyland_plugins, select
 from bunnyland.plugins.ids import MCP, WORLDGEN
 from bunnyland.server.app import create_app
+from bunnyland.server.auth import WORLD_ADMIN_SCOPE, WORLD_PLAY_SCOPE, TokenPrincipal, TokenStore
 from bunnyland.server.client_ids import CLIENT_ID_HEADER
 from bunnyland.server.models import (
     WorldCharacterGenerationResponse,
@@ -54,6 +57,30 @@ from bunnyland.server.models import (
     WorldRoomGenerationResponse,
 )
 from bunnyland.simpacks.lifesim.mechanics import LifeStageComponent
+
+_AUTHENTICATED_REQUEST = object()
+
+
+def _authenticated_mcp_context():
+    principal = TokenPrincipal(
+        token_id="test-token",
+        subject="test-admin",
+        scopes=frozenset({WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE}),
+        created_at=1,
+        rotate_after=None,
+        expires_at=2**31,
+        automatic_rotation=False,
+        family_id="test-family",
+    )
+    return SimpleNamespace(
+        session=object(),
+        request_context=SimpleNamespace(
+            request=SimpleNamespace(
+                headers={},
+                state=SimpleNamespace(auth_principal=principal),
+            )
+        ),
+    )
 
 
 def _free_port() -> int:
@@ -699,17 +726,7 @@ def test_mcp_release_to_existing_llm_keeps_active_character_active():
     assert not character.has_component(SuspendedComponent)
 
 
-def test_mcp_admin_token_and_prompt_errors(monkeypatch, scenario):
-    monkeypatch.delenv(mcp_server.ADMIN_TOKEN_ENV, raising=False)
-
-    with pytest.raises(PermissionError, match="BUNNYLAND_ADMIN_TOKEN is not configured"):
-        mcp_server._require_admin_token("secret", None)
-
-    monkeypatch.setenv(mcp_server.ADMIN_TOKEN_ENV, "secret")
-    with pytest.raises(PermissionError, match="invalid MCP admin token"):
-        mcp_server._require_admin_token("wrong", None)
-    mcp_server._require_admin_token("secret", None)
-
+def test_mcp_prompt_errors(scenario):
     with pytest.raises(RuntimeError, match="client is not controlling a character yet"):
         render_mcp_client_prompt(scenario.actor, client_id="client-a")
 
@@ -805,7 +822,7 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
             return decorate
 
         def get_context(self):
-            return SimpleNamespace(session=object())
+            return _authenticated_mcp_context()
 
         def streamable_http_app(self):
             async def asgi_app(scope, receive, send):
@@ -848,7 +865,6 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     app = create_app(
         scenario.actor,
         plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
-        admin_token="secret",
         imagegen=imagegen,
     )
 
@@ -882,30 +898,8 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
         registered_tools["client_prompt"](client_id="missing")
 
     patch_world_admin = registered_tools["patch_world_admin"]
-    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
-        asyncio.run(patch_world_admin(admin_token=None, operations=[]))
-    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
-        asyncio.run(patch_world_admin(admin_token="wrong", operations=[]))
-
-    patched = asyncio.run(patch_world_admin(admin_token="secret", operations=[]))
-    assert patched["ok"] is True
-
-    registered_tools.clear()
-    monkeypatch.delenv(mcp_server.ADMIN_TOKEN_ENV, raising=False)
-    create_app(
-        scenario.actor,
-        plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
-        admin_token=None,
-    )
-    patch_world_admin = registered_tools["patch_world_admin"]
-    with pytest.raises(RuntimeError, match="BUNNYLAND_ADMIN_TOKEN is not configured"):
-        asyncio.run(patch_world_admin(admin_token="secret", operations=[]))
-
-    monkeypatch.setenv(mcp_server.ADMIN_TOKEN_ENV, "env-secret")
-    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
-        asyncio.run(patch_world_admin(admin_token="secret", operations=[]))
-
-    patched = asyncio.run(patch_world_admin(admin_token="env-secret", operations=[]))
+    assert list(inspect.signature(patch_world_admin).parameters) == ["operations"]
+    patched = asyncio.run(patch_world_admin(operations=[]))
     assert patched["ok"] is True
 
 
@@ -947,6 +941,9 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
                 return func
 
             return decorate
+
+        def get_context(self):
+            return _authenticated_mcp_context()
 
         def streamable_http_app(self):
             return SimpleNamespace()
@@ -1027,7 +1024,6 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
         actor=scenario.actor,
         meta=WorldMeta(seed="moss"),
         loop=SimpleNamespace(running=True, paused=False),
-        admin_token="secret",
         patch_world=patch_world,
         generate_world=generate_world,
         generation_status=generation_status,
@@ -1042,9 +1038,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert characters["ok"] is True
     assert [character["name"] for character in characters["characters"]] == ["Juniper"]
 
-    with pytest.raises(RuntimeError):  # ToolError is monkeypatched to RuntimeError above
-        registered_tools["world_snapshot_admin"](admin_token="wrong")
-    snapshot = registered_tools["world_snapshot_admin"](admin_token="secret")
+    snapshot = registered_tools["world_snapshot_admin"]()
     assert snapshot["metadata"]["seed"] == "moss"
     assert any(entity["id"] == str(scenario.character) for entity in snapshot["entities"])
 
@@ -1077,12 +1071,11 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     )
     assert released["controller_kind"] == "suspended"
 
-    patched = await registered_tools["patch_world_admin"](admin_token="secret", operations=[])
+    patched = await registered_tools["patch_world_admin"](operations=[])
     assert patched["world_epoch"] == scenario.actor.epoch
     assert calls["patch_world"].operations == []
 
     generated_world = await registered_tools["generate_world_admin"](
-        admin_token="secret",
         seed="seed-a",
         generator="stub",
         max_rooms=2,
@@ -1094,13 +1087,10 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert calls["generate_world"].max_rooms == 2
     assert calls["generate_world"].confirm_reset is True
 
-    generation = await registered_tools["world_generation_status_admin"](
-        admin_token="secret",
-    )
+    generation = await registered_tools["world_generation_status_admin"]()
     assert generation["world_epoch"] == scenario.actor.epoch
 
     room = await registered_tools["generate_room_patch_admin"](
-        admin_token="secret",
         door_entity_id="door-1",
         direction="north",
         prompt="room prompt",
@@ -1109,7 +1099,6 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert calls["generate_room"].direction == "north"
 
     character = await registered_tools["generate_character_patch_admin"](
-        admin_token="secret",
         room_entity_id=str(scenario.room_a),
         prompt="character prompt",
     )
@@ -1117,7 +1106,6 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert calls["generate_character"].prompt == "character prompt"
 
     item = await registered_tools["generate_item_patch_admin"](
-        admin_token="secret",
         container_entity_id=str(scenario.room_a),
         prompt="item prompt",
     )
@@ -1125,19 +1113,22 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert calls["generate_item"].container_entity_id == str(scenario.room_a)
 
     event = await registered_tools["generate_event_patch_admin"](
-        admin_token="secret",
         room_entity_id=str(scenario.room_a),
         prompt="event prompt",
     )
     assert event["generated_kind"] == "scene"
     assert calls["generate_event"].prompt == "event prompt"
 
-    with pytest.raises(RuntimeError):  # wrong admin token
-        await registered_tools["generate_image_admin"](
-            admin_token="wrong", entity_id=str(scenario.character)
-        )
+    assert list(inspect.signature(registered_tools["generate_image_admin"]).parameters) == [
+        "entity_id",
+        "purpose",
+        "template",
+        "extra",
+        "alpha",
+        "force",
+    ]
     image = await registered_tools["generate_image_admin"](
-        admin_token="secret", entity_id=str(scenario.character), purpose="portrait"
+        entity_id=str(scenario.character), purpose="portrait"
     )
     assert image["job_id"] == "img-1"
     assert calls["generate_image"].entity_id == str(scenario.character)
@@ -1146,10 +1137,10 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     create_bunnyland_mcp_app(**create_kwargs)
     with pytest.raises(RuntimeError, match="not configured"):
         await registered_tools["generate_image_admin"](
-            admin_token="secret", entity_id=str(scenario.character)
+            entity_id=str(scenario.character)
         )
 
-    # Player-facing scene-image request (camera affordance, no admin token required).
+    # Player-facing scene-image request (camera affordance, no admin scope required).
     claimed = await registered_tools["claim_character"](
         client_id="client-a",
         character_name="Juniper",
@@ -1268,7 +1259,6 @@ async def test_mcp_registered_tools_wrap_runtime_errors(monkeypatch, scenario):
         actor=scenario.actor,
         meta=WorldMeta(seed="moss"),
         loop=None,
-        admin_token="secret",
         patch_world=patch_world,
         generate_world=generate_world,
         generation_status=generation_status,
@@ -1414,9 +1404,7 @@ def _install_fake_fastmcp(monkeypatch, *, registered_tools, low_server, get_cont
             return decorate
 
         def get_context(self):
-            if get_context is None:
-                raise LookupError("no context")
-            return get_context()
+            return _authenticated_mcp_context() if get_context is None else get_context()
 
         def streamable_http_app(self):
             return SimpleNamespace()
@@ -1471,12 +1459,10 @@ async def test_mcp_admin_tools_wrap_generator_failures_and_definition_tools(monk
     def list_controller_definitions():
         return ControllerDefinitionListResponse(scripts=["existing"])
 
-    monkeypatch.setenv(mcp_server.ADMIN_TOKEN_ENV, "secret")
     create_bunnyland_mcp_app(
         actor=scenario.actor,
         meta=WorldMeta(seed="moss"),
         loop=None,
-        admin_token="secret",
         patch_world=boom,
         generate_world=boom,
         generation_status=boom_status,
@@ -1504,21 +1490,19 @@ async def test_mcp_admin_tools_wrap_generator_failures_and_definition_tools(monk
         ("generate_image_admin", {"entity_id": str(scenario.character)}),
     ]:
         with pytest.raises(RuntimeError, match="generator unavailable"):
-            await registered_tools[tool_name](admin_token="secret", **kwargs)
+            await registered_tools[tool_name](**kwargs)
 
     # Controller-definition tools succeed and a registration failure wraps as ToolError.
-    listed = registered_tools["list_controller_definitions_admin"](admin_token="secret")
+    listed = registered_tools["list_controller_definitions_admin"]()
     assert listed["scripts"] == ["existing"]
 
     script = await registered_tools["register_script_admin"](
-        admin_token="secret",
         name="patrol",
         calls=[{"name": "wait", "arguments": {}}],
     )
     assert script["scripts"] == ["patrol"]
 
     behavior = await registered_tools["register_behavior_admin"](
-        admin_token="secret",
         name="guard",
         root={"kind": "action", "ref": "wait"},
     )
@@ -1526,7 +1510,6 @@ async def test_mcp_admin_tools_wrap_generator_failures_and_definition_tools(monk
 
     with pytest.raises(RuntimeError):
         await registered_tools["register_script_admin"](
-            admin_token="secret",
             name="bad",
             calls="not-a-list",
         )
@@ -1534,7 +1517,6 @@ async def test_mcp_admin_tools_wrap_generator_failures_and_definition_tools(monk
     # An invalid behavior tree root fails validation and wraps as ToolError (1081-1082).
     with pytest.raises(RuntimeError):
         await registered_tools["register_behavior_admin"](
-            admin_token="secret",
             name="bad",
             root="not-a-node",
         )
@@ -1565,13 +1547,11 @@ async def test_mcp_controller_definition_tools_report_when_unconfigured(monkeypa
     async def boom(_request):
         raise AssertionError("unused")
 
-    monkeypatch.setenv(mcp_server.ADMIN_TOKEN_ENV, "secret")
     # register_script / register_behavior / list_controller_definitions default to None.
     create_bunnyland_mcp_app(
         actor=scenario.actor,
         meta=WorldMeta(seed="moss"),
         loop=None,
-        admin_token="secret",
         patch_world=boom,
         generate_world=boom,
         generation_status=boom,
@@ -1582,12 +1562,12 @@ async def test_mcp_controller_definition_tools_report_when_unconfigured(monkeypa
     )
 
     with pytest.raises(RuntimeError, match="not configured"):
-        registered_tools["list_controller_definitions_admin"](admin_token="secret")
+        registered_tools["list_controller_definitions_admin"]()
     with pytest.raises(RuntimeError, match="not configured"):
-        await registered_tools["register_script_admin"](admin_token="secret", name="x", calls=[])
+        await registered_tools["register_script_admin"](name="x", calls=[])
     with pytest.raises(RuntimeError, match="not configured"):
         await registered_tools["register_behavior_admin"](
-            admin_token="secret", name="x", root={"kind": "action", "ref": "wait"}
+            name="x", root={"kind": "action", "ref": "wait"}
         )
 
 
@@ -1617,7 +1597,6 @@ async def test_mcp_send_command_reports_submission_rejection(monkeypatch, scenar
         actor=scenario.actor,
         meta=WorldMeta(seed="moss"),
         loop=None,
-        admin_token="secret",
         patch_world=boom,
         generate_world=boom,
         generation_status=boom,
@@ -1688,7 +1667,6 @@ async def test_mcp_send_command_rejects_control_verbs(monkeypatch, scenario, ver
         actor=scenario.actor,
         meta=WorldMeta(seed="moss"),
         loop=None,
-        admin_token="secret",
         patch_world=boom,
         generate_world=boom,
         generation_status=boom,
@@ -1715,7 +1693,7 @@ async def test_mcp_send_command_rejects_control_verbs(monkeypatch, scenario, ver
         )
 
 
-async def test_mcp_admin_header_fallback_when_request_is_absent(monkeypatch, scenario):
+async def test_mcp_admin_fails_closed_when_request_is_absent(monkeypatch, scenario):
     registered_tools = {}
 
     class FakeLowServer:
@@ -1743,12 +1721,10 @@ async def test_mcp_admin_header_fallback_when_request_is_absent(monkeypatch, sce
     async def boom(_request):
         raise AssertionError("unused")
 
-    monkeypatch.delenv(mcp_server.ADMIN_TOKEN_ENV, raising=False)
     create_bunnyland_mcp_app(
         actor=scenario.actor,
         meta=WorldMeta(seed="moss"),
         loop=None,
-        admin_token="secret",
         patch_world=boom,
         generate_world=boom,
         generation_status=boom,
@@ -1758,9 +1734,49 @@ async def test_mcp_admin_header_fallback_when_request_is_absent(monkeypatch, sce
         generate_event=boom,
     )
 
-    # supplied=None forces the header fallback, whose request is None (line 600 return None);
-    # with no header the configured token still rejects the call.
-    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
+    with pytest.raises(RuntimeError, match="world:admin scope required"):
+        await registered_tools["patch_world_admin"](operations=[])
+
+
+async def test_mcp_admin_fails_closed_when_request_context_is_absent(monkeypatch, scenario):
+    registered_tools = {}
+
+    class FakeLowServer:
+        def __init__(self):
+            self.get_capabilities = lambda _n, _e: SimpleNamespace(
+                resources=SimpleNamespace(subscribe=False, listChanged=False)
+            )
+
+        def subscribe_resource(self):
+            return lambda func: func
+
+        def unsubscribe_resource(self):
+            return lambda func: func
+
+    _install_fake_fastmcp(
+        monkeypatch,
+        registered_tools=registered_tools,
+        low_server=FakeLowServer(),
+        get_context=lambda: SimpleNamespace(session=object()),
+    )
+
+    async def boom(_request):
+        raise AssertionError("unused")
+
+    create_bunnyland_mcp_app(
+        actor=scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        loop=None,
+        patch_world=boom,
+        generate_world=boom,
+        generation_status=boom,
+        generate_room=boom,
+        generate_character=boom,
+        generate_item=boom,
+        generate_event=boom,
+    )
+
+    with pytest.raises(RuntimeError, match="world:admin scope required"):
         await registered_tools["patch_world_admin"](operations=[])
 
 
@@ -1771,7 +1787,14 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
     from mcp.types import ResourceUpdatedNotification, ServerNotification
 
     plugins = select(bunnyland_plugins(), [MCP, WORLDGEN])
-    app = create_app(scenario.actor, plugins=plugins, admin_token="secret")
+    token_store = TokenStore(":memory:")
+    play_token, _principal = token_store.issue(
+        "mcp-player", [WORLD_PLAY_SCOPE], automatic_rotation=False
+    )
+    app = create_app(scenario.actor, plugins=plugins, token_store=token_store)
+    mcp_http_client = httpx.AsyncClient(
+        headers={"Authorization": f"Bearer {play_token}"}
+    )
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     server_task = asyncio.create_task(server.serve())
@@ -1787,7 +1810,10 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
         async def message_handler(message) -> None:
             notifications.append(message)
 
-        async with streamable_http_client(f"http://127.0.0.1:{port}/mcp") as (
+        async with streamable_http_client(
+            f"http://127.0.0.1:{port}/mcp/",
+            http_client=mcp_http_client,
+        ) as (
             read_stream,
             write_stream,
             _get_session_id,
@@ -1800,6 +1826,10 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
                 init = await session.initialize()
                 assert init.capabilities.resources is not None
                 assert init.capabilities.resources.subscribe is True
+
+                admin_result = await session.call_tool("world_overview_admin", {})
+                assert admin_result.isError is True
+                assert "world:admin scope required" in admin_result.content[0].text
 
                 client_id = "e2e-client"
                 client_events_uri = f"bunnyland://clients/{client_id}/events"
@@ -1894,27 +1924,32 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
     finally:
         server.should_exit = True
         await server_task
+        await mcp_http_client.aclose()
+        token_store.close()
 
 
 def _capture_mcp_tools(
     monkeypatch,
     actor,
     *,
-    admin_token: str = "secret",
     player_client_ids=None,
     admin_client_ids=None,
     loop=None,
-    request_headers=None,
+    request_headers=_AUTHENTICATED_REQUEST,
+    request_scopes=None,
     registered_resources: dict | None = None,
     save_path=None,
 ) -> dict:
     """Build the MCP app with a fake FastMCP and return its registered tool closures.
 
     ``request_headers`` simulates the headers an authenticating proxy attaches to the
-    streamable-HTTP request the tools run under (e.g. the injected admin token); when None,
+    streamable-HTTP request the tools run under; when None,
     ``get_context()`` exposes no request, matching a direct/argument-only caller."""
 
     registered_tools: dict = {}
+    resolved_request_headers = (
+        {} if request_headers is _AUTHENTICATED_REQUEST else request_headers
+    )
 
     class FakeLowServer:
         def __init__(self):
@@ -1948,11 +1983,27 @@ def _capture_mcp_tools(
             return decorate
 
         def get_context(self):
-            if request_headers is None:
+            if resolved_request_headers is None:
                 return SimpleNamespace(session=object())
+            scopes = [WORLD_ADMIN_SCOPE] if request_scopes is None else request_scopes
+            principal = TokenPrincipal(
+                token_id="test-token",
+                subject="test-admin",
+                scopes=frozenset(scopes),
+                created_at=1,
+                rotate_after=None,
+                expires_at=2**31,
+                automatic_rotation=False,
+                family_id="test-family",
+            )
             return SimpleNamespace(
                 session=object(),
-                request_context=SimpleNamespace(request=SimpleNamespace(headers=request_headers)),
+                request_context=SimpleNamespace(
+                    request=SimpleNamespace(
+                        headers=resolved_request_headers,
+                        state=SimpleNamespace(auth_principal=principal),
+                    )
+                ),
             )
 
         def streamable_http_app(self):
@@ -1972,7 +2023,6 @@ def _capture_mcp_tools(
     create_app(
         actor,
         plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
-        admin_token=admin_token,
         player_client_ids=player_client_ids,
         admin_client_ids=admin_client_ids,
         loop=loop,
@@ -2086,13 +2136,37 @@ def test_mcp_client_resources_require_and_accept_claim_headers(monkeypatch, scen
     assert events["ok"] is True
     assert events["client_id"] == "client-a"
     assert "You are Juniper" in prompt
+    asyncio.run(
+        tools["release_character"](
+            client_id="client-a",
+            claim_id=claimed["claim_id"],
+            claim_secret=claimed["claim_secret"],
+        )
+    )
+
+    no_context_resources: dict = {}
+    no_context_tools = _capture_mcp_tools(
+        monkeypatch,
+        scenario.actor,
+        request_headers=None,
+        registered_resources=no_context_resources,
+    )
+    asyncio.run(
+        no_context_tools["claim_character"](
+            client_id="client-without-context", character_name="Juniper"
+        )
+    )
+    with pytest.raises(RuntimeError, match="invalid claim secret"):
+        no_context_resources["bunnyland://clients/{client_id}/events"](
+            "client-without-context"
+        )
 
 
 def test_save_world_admin_uses_configured_path(monkeypatch, scenario, tmp_path):
     path = tmp_path / "mcp-save.json"
     tools = _capture_mcp_tools(monkeypatch, scenario.actor, save_path=path)
 
-    saved = asyncio.run(tools["save_world_admin"](admin_token="secret"))
+    saved = asyncio.run(tools["save_world_admin"]())
 
     assert saved["path"] == str(path)
     assert saved["world_epoch"] == scenario.actor.epoch
@@ -2104,7 +2178,7 @@ def test_save_world_admin_requires_configured_path(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
 
     with pytest.raises(RuntimeError, match="server was not started with --save"):
-        asyncio.run(tools["save_world_admin"](admin_token="secret"))
+        asyncio.run(tools["save_world_admin"]())
 
 
 def test_save_world_admin_wraps_save_errors(monkeypatch, scenario, tmp_path):
@@ -2119,7 +2193,7 @@ def test_save_world_admin_wraps_save_errors(monkeypatch, scenario, tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="disk full"):
-        asyncio.run(tools["save_world_admin"](admin_token="secret"))
+        asyncio.run(tools["save_world_admin"]())
 
 
 def test_send_command_and_queue_report_resolves_at_epoch(monkeypatch, scenario):
@@ -2445,70 +2519,55 @@ def test_search_actions_smart_mode_reports_missing_chroma(monkeypatch, scenario)
 
 
 def test_world_overview_admin_tool_is_gated_and_returns_room_network(monkeypatch, scenario):
-    tools = _capture_mcp_tools(monkeypatch, scenario.actor, admin_token="secret")
-
-    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
-        tools["world_overview_admin"](admin_token="wrong")
-
-    overview = tools["world_overview_admin"](admin_token="secret")
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+    assert not inspect.signature(tools["world_overview_admin"]).parameters
+    overview = tools["world_overview_admin"]()
     assert overview["room_count"] == 2
     assert overview["character_count"] == 1
     titles = {room["title"] for room in overview["rooms"]}
     assert titles == {"Mosslit Burrow", "North Tunnel"}
 
 
-def test_admin_tool_authorizes_via_injected_header_without_arg(monkeypatch, scenario):
-    # The authenticating proxy injects X-Bunnyland-Admin-Secret, so a proxied caller does not
-    # pass admin_token: the tool authorizes from the header alone.
+def test_admin_tool_authorizes_via_request_principal(monkeypatch, scenario):
     tools = _capture_mcp_tools(
         monkeypatch,
         scenario.actor,
-        admin_token="secret",
-        request_headers={"X-Bunnyland-Admin-Secret": "secret"},
+        request_headers={},
     )
 
     overview = tools["world_overview_admin"]()
     assert overview["room_count"] == 2
 
-    # A wrong injected header is still rejected.
+    # A valid play-only bearer principal cannot invoke an admin tool.
     rejected = _capture_mcp_tools(
         monkeypatch,
         scenario.actor,
-        admin_token="secret",
-        request_headers={"X-Bunnyland-Admin-Secret": "wrong"},
+        request_headers={},
+        request_scopes=[WORLD_PLAY_SCOPE],
     )
-    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
+    with pytest.raises(RuntimeError, match="world:admin scope required"):
         rejected["world_overview_admin"]()
 
 
-def test_admin_tool_falls_back_to_argument_without_header(monkeypatch, scenario):
-    # With no proxy-injected header, the explicit admin_token argument still authorizes.
-    tools = _capture_mcp_tools(monkeypatch, scenario.actor, admin_token="secret")
-
-    overview = tools["world_overview_admin"](admin_token="secret")
-    assert overview["room_count"] == 2
-
-    with pytest.raises(RuntimeError, match="invalid MCP admin token"):
-        tools["world_overview_admin"]()
+def test_admin_tool_schema_has_no_credential_argument(monkeypatch, scenario):
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+    assert not inspect.signature(tools["world_overview_admin"]).parameters
 
 
 def test_mcp_admin_client_id_allowlist_uses_injected_header(monkeypatch, scenario):
     missing = _capture_mcp_tools(
         monkeypatch,
         scenario.actor,
-        admin_token="secret",
         admin_client_ids=["admin-a"],
     )
     with pytest.raises(RuntimeError, match="admin client_id is required"):
-        missing["world_overview_admin"](admin_token="secret")
+        missing["world_overview_admin"]()
 
     rejected = _capture_mcp_tools(
         monkeypatch,
         scenario.actor,
-        admin_token="secret",
         admin_client_ids=["admin-a"],
         request_headers={
-            "X-Bunnyland-Admin-Secret": "secret",
             CLIENT_ID_HEADER: "admin-b",
         },
     )
@@ -2518,10 +2577,8 @@ def test_mcp_admin_client_id_allowlist_uses_injected_header(monkeypatch, scenari
     allowed = _capture_mcp_tools(
         monkeypatch,
         scenario.actor,
-        admin_token="secret",
         admin_client_ids=["admin-a"],
         request_headers={
-            "X-Bunnyland-Admin-Secret": "secret",
             CLIENT_ID_HEADER: "admin-a",
         },
     )
@@ -2701,7 +2758,6 @@ def test_create_bunnyland_mcp_app_missing_extra_raises(monkeypatch, scenario):
             actor=scenario.actor,
             meta=WorldMeta(seed="moss"),
             loop=None,
-            admin_token="secret",
             patch_world=_unused,
             generate_world=_unused,
             generation_status=_unused,

@@ -167,7 +167,12 @@ def default_wizard_config() -> BunnylandConfig:
             data_dir="/var/lib/bunnyland",
         ),
         llm=LlmConfig(enabled=True),
-        server=ServerConfig(api_host="0.0.0.0", api_port=8765, character_chat=True),
+        server=ServerConfig(
+            api_host="0.0.0.0",
+            api_port=8765,
+            character_chat=True,
+            trust_x_real_ip=True,
+        ),
         world=WorldConfig(
             generator="lifesim-demo",
             save="/data/worlds/main.json",
@@ -226,7 +231,6 @@ FIELD_HELP_TEXT = {
     "player-password": "Password for optional player login. Examples: generated password.",
     "player2-user": "Optional second player basic-auth username. Examples: player2, guest.",
     "player2-password": "Password for second player login. Examples: generated password.",
-    "admin-token": "Secret for admin API, MCP, and web routes. Examples: long random token.",
     "player-client-ids": (
         "Allow list of client IDs permitted to use player APIs, comma-separated. "
         "Examples: web, discord."
@@ -387,7 +391,6 @@ def prompt_for_config() -> BunnylandConfig:
         )
 
     mcp = McpConfig(enabled=_confirm("Enable the HTTP MCP endpoint for agentic clients?"))
-    admin_token = _prompt_required("BUNNYLAND_ADMIN_TOKEN") if mcp.enabled else ""
 
     imagegen = ImageGenConfigBlock()
     if _confirm("Enable image generation via a ComfyUI server?"):
@@ -406,8 +409,8 @@ def prompt_for_config() -> BunnylandConfig:
         discord=discord,
         mcp=mcp,
         server=ServerConfig(
-            admin_token=admin_token,
             character_chat=server_character_chat,
+            trust_x_real_ip=True,
         ),
         imagegen=imagegen,
     )
@@ -742,20 +745,6 @@ def build_textual_wizard_app(
                                 id="generate-admin-password",
                                 classes="generate-password-button",
                                 tooltip="Generate a random UUID password",
-                            )
-                        yield field_label("Admin token", "admin-token")
-                        with Horizontal(classes="password-row"):
-                            yield Input(
-                                value=initial.server.admin_token,
-                                password=True,
-                                id="admin-token",
-                                classes="password-input",
-                            )
-                            yield Button(
-                                "Copy password",
-                                id="copy-admin-password-to-token",
-                                classes="copy-password-button",
-                                tooltip="Copy the admin password into the admin token",
                             )
                         yield field_label("Player username", "player-user")
                         yield Input(value=initial.auth.player_user, id="player-user")
@@ -1364,7 +1353,6 @@ def build_textual_wizard_app(
                 player_password = self._input("#player-password")
                 player2_user = self._input("#player2-user")
                 player2_password = self._input("#player2-password")
-                admin_token = self._input("#admin-token")
                 discord_url = self._input("#discord-url")
                 llm_enabled = self._enabled("#llm-enabled")
                 discord_enabled = self._enabled("#discord-enabled")
@@ -1412,9 +1400,6 @@ def build_textual_wizard_app(
                     return None
                 if discord_enabled and not self._input("#discord-token"):
                     self._fail("Discord bot token is required when Discord is enabled.")
-                    return None
-                if mcp_enabled and not admin_token:
-                    self._fail("Admin token is required when MCP is enabled.")
                     return None
                 if imagegen_enabled and not self._input("#comfy-url"):
                     self._fail("ComfyUI server URL is required for image generation.")
@@ -1501,10 +1486,10 @@ def build_textual_wizard_app(
                 server = ServerConfig(
                     api_host=self._input("#api-host"),
                     api_port=self._optional_int_input("#api-port"),
-                    admin_token=admin_token,
                     player_client_ids=_csv_values(self._input("#player-client-ids")),
                     admin_client_ids=_csv_values(self._input("#admin-client-ids")),
                     character_chat=character_chat,
+                    trust_x_real_ip=initial.server.trust_x_real_ip,
                 )
                 imagegen = ImageGenConfigBlock()
                 if imagegen_enabled:
@@ -1584,11 +1569,6 @@ def build_textual_wizard_app(
         @on(Button.Pressed, "#random-world-prompt")
         def random_world_prompt_pressed(self, _event: Button.Pressed) -> None:
             self.query_one("#seed", Input).value = choice(WORLD_PROMPT_PRESETS)
-
-        @on(Button.Pressed, "#copy-admin-password-to-token")
-        def copy_admin_password_to_token_pressed(self, _event: Button.Pressed) -> None:
-            self.query_one("#admin-token", Input).value = self._input("#admin-password")
-            self._update_save_state()
 
         @on(Button.Pressed, ".help-button")
         def help_pressed(self, event: Button.Pressed) -> None:

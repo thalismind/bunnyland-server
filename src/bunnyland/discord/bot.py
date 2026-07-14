@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import shlex
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from io import BytesIO
@@ -126,6 +127,22 @@ class DiscordClaimArgs:
     character_name: str | None = None
     fallback_controller: str | None = None
     timeout_seconds: int | None = None
+
+
+class DiscordCommandCooldown:
+    def __init__(self, seconds: float = 0) -> None:
+        self.seconds = max(0.0, float(seconds))
+        self._last_command: dict[int, float] = {}
+
+    def check(self, user_id: int, *, now: float | None = None) -> int:
+        if self.seconds == 0:
+            return 0
+        current = time.monotonic() if now is None else now
+        previous = self._last_command.get(user_id)
+        if previous is not None and current - previous < self.seconds:
+            return max(1, int(self.seconds - (current - previous) + 0.999))
+        self._last_command[user_id] = current
+        return 0
 
 
 def _minutes_to_timeout_seconds(value: str | int | None) -> int | None:
@@ -453,6 +470,7 @@ class DiscordBot:
         message_filters: DiscordMessageFilters | None = None,
         imagegen: ImageGenService | None = None,
         claim_secrets: ClaimSecretRegistry | None = None,
+        cooldown_seconds: float = 0,
     ) -> None:
         discord, commands = _require_discord()
         self.actor = actor
@@ -463,6 +481,7 @@ class DiscordBot:
         self.message_filters = message_filters or DiscordMessageFilters()
         self.imagegen = imagegen
         self.claim_secrets = claim_secrets
+        self.command_cooldown = DiscordCommandCooldown(cooldown_seconds)
         self._pause_status = pause_status
         self._world_paused = pause_status() if pause_status is not None else False
         intents = discord.Intents.default()
@@ -1090,6 +1109,11 @@ class DiscordBot:
         """Handle one Discord command body after the leading ``!`` has been removed."""
         stripped = text.strip()
         if not stripped:
+            return
+        cooldown = getattr(self, "command_cooldown", DiscordCommandCooldown())
+        retry_after = cooldown.check(ctx.author.id)
+        if retry_after:
+            await self._reply(ctx, f"Cooldown active. Try again in {retry_after} seconds.")
             return
         head, _, rest = stripped.partition(" ")
         head = head.lower()

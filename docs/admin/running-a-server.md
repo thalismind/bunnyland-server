@@ -60,7 +60,8 @@ The API exposes:
   `GET /admin/world/generation` for listing enabled generators, starting async world
   replacement, and checking generation status.
 
-Protect `/admin/*` at your reverse proxy.
+FastAPI requires `world:play` by default and `world:admin` for these routes. Keep the API
+behind TLS, but do not add a second proxy authentication scheme.
 
 ## Optional MCP endpoint
 
@@ -68,17 +69,18 @@ The MCP server is mounted into the same FastAPI app as the HTTP/websocket API. I
 not start a second process or listen on a second port.
 
 ```bash
-BUNNYLAND_ADMIN_TOKEN=change-me \
 uv run --extra server --extra mcp bunnyland serve \
   --ticks 0 \
   --api-host 127.0.0.1 \
   --api-port 8765 \
-  --mcp
+  --mcp \
+  --auth-users-file data/auth-users.yml \
+  --token-db data/auth-tokens.sqlite3
 ```
 
 This exposes the MCP Streamable HTTP endpoint at `http://127.0.0.1:8765/mcp`.
 Agent tools can list and claim characters, inspect snapshots, and queue normal world
-commands. World patching and generation tools require the MCP admin token.
+commands. World patching and generation tools require a bearer token with `world:admin`.
 
 See [MCP server](mcp-server.md) for tool details.
 
@@ -158,9 +160,11 @@ uv run bunnyland serve --config bunnyland.yml
 | `--api-host`     | `127.0.0.1`    | Host for the optional HTTP/websocket client API.                |
 | `--api-port`     | (none)         | Port for the optional HTTP/websocket client API.                |
 | `--mcp`          | off            | Mount the MCP endpoint at `/mcp` on the existing API server.    |
-| `--admin-token`  | env            | Admin secret gating the whole `/admin/*` surface plus snapshot/overview/DM projections, the world-updates stream, and MCP admin tools; defaults to `BUNNYLAND_ADMIN_TOKEN`. |
+| `--auth-users-file` | `data/auth-users.yml` | Deployment-rendered Argon2 user credentials. |
+| `--token-db` | `data/auth-tokens.sqlite3` | Private SQLite opaque-token and revocation store. |
 | `--player-client-id` | env        | Allow one player `client_id`; repeat or pass comma-separated values. Defaults to `BUNNYLAND_PLAYER_CLIENT_IDS`; unset allows any player client ID. |
-| `--admin-client-id` | env         | Allow one admin `client_id`; repeat or pass comma-separated values. Defaults to `BUNNYLAND_ADMIN_CLIENT_IDS`; unset allows any admin client ID with the admin token. |
+| `--admin-client-id` | env         | Allow one admin `client_id`; repeat or pass comma-separated values. Defaults to `BUNNYLAND_ADMIN_CLIENT_IDS`; unset allows any client ID after `world:admin` authentication. |
+| `--trust-x-real-ip` | off         | Trust nginx-overwritten `X-Real-IP` for abuse-limit keys. Enable only when direct API access is blocked. |
 | `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](./). |
 | `--starter-pack` | (none)         | Enable a startup preset: `peaceful`, `fantastic`, or `futuristic`. |
 | `--verbose`      | off            | Log each decision and world-generation step at INFO.           |
@@ -171,25 +175,19 @@ uv run bunnyland serve --config bunnyland.yml
 
 ## Admin surface security
 
-The entire `/admin/*` surface is gated **server-side and fail-closed**: every admin route
-requires the admin secret in the `X-Bunnyland-Admin-Secret` header, and if no admin token is
-configured (`--admin-token` / `BUNNYLAND_ADMIN_TOKEN`) those routes return `403` rather than
-falling open. This matters because routes such as `POST /admin/controllers/assign` and
-`PATCH /admin/world` reassign controllers and mutate the world directly, bypassing the
-per-player claim secret. The production nginx config performs admin Basic auth and then
-injects the `X-Bunnyland-Admin-Secret` header (clients can never supply their own), so
-browser admins log in once. Generic player `/api/` routes are protected by a separate
-player Basic-auth file. Basic-auth usernames are not Bunnyland `client_id` values; nginx
-forwards `X-Bunnyland-Client-Id` when a client provides it, and otherwise the server keeps
-using the request body or query `client_id`. Do **not** publish the API container's port
-directly — keep nginx the only ingress so the admin surface is never reachable without
-passing Basic auth first.
+The entire API is gated server-side and fail-closed. Opaque `blt_...` credentials arrive in
+`Authorization: Bearer` or the secure HttpOnly browser cookie. Normal routes require
+`world:play`; `/admin/*`, snapshots, global streams, overview/DM projections, and admin MCP
+tools require `world:admin`. Missing, invalid, expired, or revoked credentials return `401`;
+a valid token lacking the required scope returns `403`. nginx terminates TLS and forwards
+`Authorization` and cookies without authenticating Bunnyland itself.
 
 Optional client-ID allowlists add a second role-scoped check. Set
 `BUNNYLAND_PLAYER_CLIENT_IDS` and/or `BUNNYLAND_ADMIN_CLIENT_IDS` to comma-separated
 client IDs, or repeat `--player-client-id` / `--admin-client-id`. When configured, player
 claims and claim-secret-backed player requests must match the player list. Admin HTTP,
 WebSocket, and MCP requests must match the admin list via `X-Bunnyland-Client-Id`.
+Client IDs are optional policy filters, never authentication credentials.
 
 Player commands (`POST /world/commands`) and the MCP `send_command` tool reject the control
 verbs (`take-control`, `release-to-llm`, `suspend`, `resume`); controller changes go through
@@ -339,10 +337,9 @@ docker compose -f compose.yml -f compose.tls.yml -f compose.tempo.yml up -d
 
 Tempo publishes no host ports; it is reachable only on the compose network. Its query API
 is exposed for a remote Grafana through the **same** frontend nginx (the fragment mounts
-`deploy/nginx/tempo-location.inc`, which adds a `/tempo/` route behind the same
-`Bunnyland admin` Basic-auth realm as every other admin surface) — so it requires the same
-admin password. Point a Grafana Tempo datasource at `https://<your-host>/tempo/` with those
-credentials. nginx resolves the `tempo` upstream by its compose DNS name and caches the IP
+`deploy/nginx/tempo-location.inc`, which adds a `/tempo/` route behind its own Tempo-only
+Basic-auth realm. Those credentials are unrelated to Bunnyland users and bearer tokens.
+nginx resolves the `tempo` upstream by its compose DNS name and caches the IP
 at config load, so restart the `frontend` after recreating the `tempo` container. Trace
 retention defaults to 72h (tune `compactor.block_retention` in
 [`deploy/tempo/tempo.yaml`](../../deploy/tempo/tempo.yaml) to grow or shrink the volume).

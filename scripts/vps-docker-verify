@@ -2,25 +2,17 @@
 set -euo pipefail
 
 : "${BUNNYLAND_DOMAIN:?set BUNNYLAND_DOMAIN to your public domain, for example sandbox.example.com}"
-: "${BUNNYLAND_ADMIN_USER:?set BUNNYLAND_ADMIN_USER to the admin username}"
-: "${BUNNYLAND_ADMIN_PASSWORD:?set BUNNYLAND_ADMIN_PASSWORD to the admin password}"
-: "${BUNNYLAND_PLAYER_USER:?set BUNNYLAND_PLAYER_USER to a player username}"
-: "${BUNNYLAND_PLAYER_PASSWORD:?set BUNNYLAND_PLAYER_PASSWORD to a player password}"
+: "${BUNNYLAND_PLAY_TOKEN:?set BUNNYLAND_PLAY_TOKEN to a world:play bearer token}"
+: "${BUNNYLAND_OPERATOR_TOKEN:?set BUNNYLAND_OPERATOR_TOKEN to a world:admin bearer token}"
 
 export BUNNYLAND_DOMAIN
-export BUNNYLAND_ADMIN_USER
-export BUNNYLAND_ADMIN_PASSWORD
-export BUNNYLAND_PLAYER_USER
-export BUNNYLAND_PLAYER_PASSWORD
-export BUNNYLAND_PLAYER2_USER="${BUNNYLAND_PLAYER2_USER:-}"
-export BUNNYLAND_PLAYER2_PASSWORD="${BUNNYLAND_PLAYER2_PASSWORD:-}"
+export BUNNYLAND_PLAY_TOKEN
+export BUNNYLAND_OPERATOR_TOKEN
 export BUNNYLAND_VERIFY_CONNECT_HOST="${BUNNYLAND_VERIFY_CONNECT_HOST:-$BUNNYLAND_DOMAIN}"
 export BUNNYLAND_VERIFY_PORT="${BUNNYLAND_VERIFY_PORT:-443}"
 export BUNNYLAND_VERIFY_SCHEME="${BUNNYLAND_VERIFY_SCHEME:-https}"
 export BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS="${BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS:-401}"
 export BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS="${BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS:-200}"
-# Set to 1 when the deployment configured an admin token (so nginx injects it and the
-# Basic-authenticated snapshot/stream return data). Left unset, verify only asserts the gates.
 export BUNNYLAND_VERIFY_ADMIN_DATA="${BUNNYLAND_VERIFY_ADMIN_DATA:-0}"
 export BUNNYLAND_HOME_DOMAIN="${BUNNYLAND_HOME_DOMAIN:-}"
 export BUNNYLAND_HOME_EXPECT_TEXT="${BUNNYLAND_HOME_EXPECT_TEXT:-}"
@@ -41,22 +33,12 @@ port = int(os.environ["BUNNYLAND_VERIFY_PORT"])
 scheme = os.environ["BUNNYLAND_VERIFY_SCHEME"]
 admin_unauth_status = int(os.environ["BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS"])
 admin_auth_status = int(os.environ["BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS"])
-admin_user = os.environ["BUNNYLAND_ADMIN_USER"]
-admin_password = os.environ["BUNNYLAND_ADMIN_PASSWORD"]
-player_credentials = [
-    (os.environ["BUNNYLAND_PLAYER_USER"], os.environ["BUNNYLAND_PLAYER_PASSWORD"]),
-]
-if os.environ["BUNNYLAND_PLAYER2_USER"] or os.environ["BUNNYLAND_PLAYER2_PASSWORD"]:
-    player_credentials.append(
-        (os.environ["BUNNYLAND_PLAYER2_USER"], os.environ["BUNNYLAND_PLAYER2_PASSWORD"])
-    )
+play_token = os.environ["BUNNYLAND_PLAY_TOKEN"]
+operator_token = os.environ["BUNNYLAND_OPERATOR_TOKEN"]
 verify_admin_data = os.environ["BUNNYLAND_VERIFY_ADMIN_DATA"] == "1"
 home_domain = os.environ["BUNNYLAND_HOME_DOMAIN"]
 home_expect_text = os.environ["BUNNYLAND_HOME_EXPECT_TEXT"]
 base_url = f"{scheme}://{domain}"
-good_auth = f"{admin_user}:{admin_password}"
-bad_auth = f"{admin_user}:definitely-not-the-right-password"
-bad_player_auth = f"{player_credentials[0][0]}:definitely-not-the-right-password"
 
 
 def fail(message: str) -> None:
@@ -70,11 +52,6 @@ def ok(message: str) -> None:
 
 if scheme not in {"http", "https"}:
     fail(f"BUNNYLAND_VERIFY_SCHEME must be http or https, got {scheme!r}")
-
-for index, (username, password) in enumerate(player_credentials, start=1):
-    if not username or not password:
-        fail(f"player {index}: set both username and password")
-
 
 def decode_chunked(body: bytes) -> bytes:
     decoded = bytearray()
@@ -92,11 +69,11 @@ def decode_chunked(body: bytes) -> bytes:
         offset += size + 2
 
 
-def request(method: str, path: str, *, auth: str | None = None, target_domain: str | None = None) -> tuple[int, bytes]:
+def request(method: str, path: str, *, token: str | None = None, target_domain: str | None = None) -> tuple[int, bytes]:
     request_domain = target_domain or domain
     headers = {"User-Agent": "bunnyland-vps-docker-verify/1"}
-    if auth is not None:
-        headers["Authorization"] = "Basic " + base64.b64encode(auth.encode()).decode()
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
     headers["Host"] = request_domain
     headers["Connection"] = "close"
     raw_request = f"{method} {path} HTTP/1.1\r\n" + "".join(
@@ -133,10 +110,10 @@ def expect_status(
     path: str,
     expected: int,
     *,
-    auth: str | None = None,
+    token: str | None = None,
     target_domain: str | None = None,
 ) -> bytes:
-    status, body = request(method, path, auth=auth, target_domain=target_domain)
+    status, body = request(method, path, token=token, target_domain=target_domain)
     if status != expected:
         fail(f"{name}: expected HTTP {expected}, got HTTP {status}")
     ok(f"{name}: HTTP {status}")
@@ -176,35 +153,28 @@ health = json.loads(expect_status("REST health", "GET", "/api/health", 200).deco
 if health.get("ok") is not True:
     fail(f"REST health: expected ok=true, got {health!r}")
 
-# Health is public, but the player API requires player Basic auth.
+# Health is public, but the player API requires a scoped bearer token.
 expect_status("world characters require player auth", "GET", "/api/world/characters", 401)
 expect_status(
     "world characters reject bad player credentials",
     "GET",
     "/api/world/characters",
     401,
-    auth=bad_player_auth,
+    token="invalid",
 )
-for index, (username, password) in enumerate(player_credentials, start=1):
-    lobby = json.loads(
-        expect_status(
-            f"world characters player {index}",
-            "GET",
-            "/api/world/characters",
-            200,
-            auth=f"{username}:{password}",
-        ).decode()
-    )
-    ok(f"world characters player {index}: {len(lobby.get('characters', []))} claimable")
+lobby = json.loads(expect_status(
+    "world characters player", "GET", "/api/world/characters", 200, token=play_token
+).decode())
+ok(f"world characters player: {len(lobby.get('characters', []))} claimable")
 
-# The raw snapshot is admin-gated now: an unauthenticated caller gets the Basic-auth gate.
+# The raw snapshot is admin-scoped.
 expect_status(
     "world snapshot requires admin", "GET", "/api/world/snapshot", admin_unauth_status
 )
 if verify_admin_data:
     snapshot = json.loads(
         expect_status(
-            "world snapshot (admin)", "GET", "/api/world/snapshot", 200, auth=good_auth
+            "world snapshot (admin)", "GET", "/api/world/snapshot", 200, token=operator_token
         ).decode()
     )
     metadata = snapshot.get("metadata") or {}
@@ -219,7 +189,7 @@ expect_status(
     "POST",
     "/api/admin/pause",
     admin_unauth_status,
-    auth=bad_auth,
+    token=play_token,
 )
 
 pause_body = expect_status(
@@ -227,7 +197,7 @@ pause_body = expect_status(
     "POST",
     "/api/admin/pause",
     admin_auth_status,
-    auth=good_auth,
+    token=operator_token,
 )
 if admin_auth_status == 200:
     pause = json.loads(pause_body.decode())
@@ -239,14 +209,14 @@ resume_body = expect_status(
     "POST",
     "/api/admin/resume",
     admin_auth_status,
-    auth=good_auth,
+    token=operator_token,
 )
 if admin_auth_status == 200:
     resume = json.loads(resume_body.decode())
     if resume.get("ok") is not True or resume.get("paused") is not False:
         fail(f"admin resume: unexpected response {resume!r}")
 
-def websocket_handshake(auth: str | None = None) -> tuple[str, bytes | None]:
+def websocket_handshake(token: str | None = None) -> tuple[str, bytes | None]:
     """Open the updates stream and return (status line, first frame payload). The payload is
     None unless the server completed the upgrade (HTTP 101)."""
     key = base64.b64encode(os.urandom(16)).decode()
@@ -258,8 +228,8 @@ def websocket_handshake(auth: str | None = None) -> tuple[str, bytes | None]:
         f"Sec-WebSocket-Key: {key}",
         "Sec-WebSocket-Version: 13",
     ]
-    if auth is not None:
-        lines.append("Authorization: Basic " + base64.b64encode(auth.encode()).decode())
+    if token is not None:
+        lines.append(f"Authorization: Bearer {token}")
     raw_request = "\r\n".join(lines) + "\r\n\r\n"
     with socket.create_connection((connect_host, port), timeout=15) as raw:
         ctx = ssl.create_default_context() if scheme == "https" else None
@@ -276,6 +246,12 @@ def websocket_handshake(auth: str | None = None) -> tuple[str, bytes | None]:
             status_line = headers.split(b"\r\n", 1)[0].decode("ascii", "replace")
             if " 101 " not in status_line:
                 return status_line, None
+
+            payload = json.dumps({"type": "authenticate", "data": {}}).encode()
+            mask = os.urandom(4)
+            header = bytes((0x81, 0x80 | len(payload)))
+            masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+            sock.sendall(header + mask + masked)
 
             while len(rest) < 2:
                 rest += sock.recv(4096)
@@ -296,14 +272,14 @@ def websocket_handshake(auth: str | None = None) -> tuple[str, bytes | None]:
             return status_line, rest[offset : offset + length]
 
 
-# The stream is admin-gated: an unauthenticated handshake is rejected before the upgrade.
-unauth_status, _ = websocket_handshake()
-if " 101 " in unauth_status:
-    fail(f"websocket: expected the stream to require admin auth, got {unauth_status}")
-ok(f"websocket requires admin: {unauth_status.strip()}")
+# WebSocket credentials are validated in the first frame after upgrade.
+unauth_status, unauth_payload = websocket_handshake()
+if " 101 " not in unauth_status or not unauth_payload:
+    fail(f"websocket: expected upgrade followed by authentication rejection, got {unauth_status}")
+ok("websocket requires admin bearer in its first frame")
 
 if verify_admin_data:
-    status_line, payload = websocket_handshake(auth=good_auth)
+    status_line, payload = websocket_handshake(token=operator_token)
     if " 101 " not in status_line:
         fail(f"websocket (admin): expected HTTP 101, got {status_line}")
     if not payload or b'"type":"snapshot"' not in payload:

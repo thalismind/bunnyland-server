@@ -41,57 +41,16 @@ generation with `--llm-provider openrouter`, `--worldgen-provider openrouter`, a
 
 ## Docker Compose
 
-The server repo includes a ready-to-run Compose stack using published containers:
-Install Docker, nerdctl, or Podman with Compose support before running it. On Ubuntu,
-install Docker Engine from Docker's external apt repository using Docker's
-[Install using the repository](https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository)
-guide; do not rely on the older Ubuntu `docker.io` package for this setup.
+The checked-in Compose files are deployment building blocks, not a credential generator.
+A private `compose.user.yml` must mount an Argon2 `auth-users.yml` file read-only and persist
+`/data/auth-tokens.sqlite3`; without that token store, protected HTTP and WebSocket routes
+fail closed. The API is exposed only through the same-origin frontend proxy.
 
-```bash
-BUNNYLAND_CONTAINER_RUNTIME=docker \
-BUNNYLAND_TLS=0 \
-BUNNYLAND_CONFIGURE_FIREWALL=0 \
-BUNNYLAND_HTTP_BIND=127.0.0.1:8080 \
-BUNNYLAND_DOMAIN=localhost \
-BUNNYLAND_DATA_DIR=/tmp/bunnyland-data \
-BUNNYLAND_ADMIN_USER=editor \
-BUNNYLAND_ADMIN_PASSWORD=local \
-BUNNYLAND_ENABLE_LLM=0 \
-BUNNYLAND_ENABLE_DISCORD=0 \
-  scripts/vps-docker-setup
-```
-
-Open `http://localhost:8080/`. The `frontend` container serves the web client and proxies
-same-origin `/api/` requests to the private `server` container. Server state is bind-mounted
-from `BUNNYLAND_DATA_DIR` into `/data` so admins can inspect saved worlds directly. After
-editing secrets or runtime settings in `compose.user.yml`, run `scripts/vps-docker-restart`
-to reapply the deployment.
-For a real VPS deployment over HTTPS, the fastest path is the interactive
-`scripts/vps-docker-wizard`: it prompts for the required values and then runs
-`scripts/vps-docker-setup` for you. You can also run `scripts/vps-docker-setup` directly with
-the `BUNNYLAND_*` variables, as in the block above. Either way the setup script writes
-`compose.user.yml`, configures admin auth, obtains a Let's Encrypt certificate with certbot,
-and runs the checked-in Compose files. See the
-[VPS Docker setup guide](docs/admin/vps-admin-setup.md) for the full walkthrough.
-
-For local image development, add the build override:
-
-```bash
-docker compose --env-file /dev/null -f compose.yml -f compose.user.yml -f compose.build.yml up -d --build
-```
-
-To reload an existing bind-mounted world instead of generating one, add
-`BUNNYLAND_WORLD_SAVE` to the setup command:
-
-```bash
-BUNNYLAND_WORLD_SAVE=/tmp/bunnyland-data/worlds/main.json
-```
-
-To override the browser favicon, set `BUNNYLAND_FAVICON_FILE` during setup:
-
-```bash
-BUNNYLAND_FAVICON_FILE=/opt/bunnyland/favicon.png
-```
+Hosted VPS setup is managed by the `bunnyland-vps` Ansible playbook. The retired
+`scripts/vps-docker-setup` command exits without changing the host. See the
+[VPS administration guide](docs/admin/vps-admin-setup.md) for credential provisioning,
+bearer-token verification, encrypted backup, and rollback requirements. For a direct local
+server, follow [Running a server](docs/admin/running-a-server.md).
 
 CI builds and publishes `ghcr.io/thalismind/bunnyland-server`,
 `ghcr.io/thalismind/bunnyland-tui`, and `ghcr.io/thalismind/bunnyland-repl` on pushes to

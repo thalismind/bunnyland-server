@@ -131,12 +131,15 @@ from bunnyland.server.admin import (
     start_world_generation,
 )
 from bunnyland.server.app import (
-    create_app,
+    create_app as _create_app,
+)
+from bunnyland.server.app import (
     next_player_update,
     next_websocket_update,
     player_update_for_message,
     recent_player_updates,
 )
+from bunnyland.server.auth import WORLD_ADMIN_SCOPE, WORLD_PLAY_SCOPE, TokenStore
 from bunnyland.server.client_ids import CLIENT_ID_HEADER
 from bunnyland.server.models import (
     CharacterChatRequest,
@@ -152,6 +155,7 @@ from bunnyland.server.models import (
     WorldRoomGenerationRequest,
 )
 from bunnyland.server.patches import WorldPatchError, apply_world_patch
+from bunnyland.server.rate_limit import FixedWindowRateLimiter
 from bunnyland.server.runtime import run_loop_with_api
 from bunnyland.server.schema import _type_schema, world_schema
 from bunnyland.server.serialization import jsonable, serialize_world_overview
@@ -206,7 +210,7 @@ class _SyncASGIClient:
 
     def __init__(self, app, headers: dict[str, str] | None = None, **_kwargs) -> None:
         self.app = app
-        self.headers = dict(headers or {})
+        self.headers = _bearer_test_headers(headers)
         self._websocket_clients = []
 
     def __enter__(self):
@@ -216,6 +220,9 @@ class _SyncASGIClient:
         return False
 
     def request(self, method: str, url: str, **kwargs):
+        if "headers" in kwargs:
+            kwargs["headers"] = _bearer_test_headers(kwargs["headers"])
+
         async def run_request():
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=self.app),
@@ -287,7 +294,8 @@ async def _websocket_outputs(
         "raw_path": split.path.encode(),
         "query_string": split.query.encode(),
         "headers": [
-            (key.lower().encode(), value.encode()) for key, value in (headers or {}).items()
+            (key.lower().encode(), value.encode())
+            for key, value in _bearer_test_headers(headers).items()
         ],
         "client": ("testclient", 50000),
         "server": ("testserver", 80),
@@ -307,15 +315,44 @@ async def _websocket_outputs(
     return outputs
 
 
-#: The /admin/* surface is gated by the admin-secret middleware (fail-closed). Tests that
-#: drive admin routes build the app with this token and send the matching header, mirroring
-#: the secret nginx injects after Basic auth in production.
-_ADMIN_TOKEN = "secret"
-_ADMIN_SECRET_HEADERS = {"X-Bunnyland-Admin-Secret": _ADMIN_TOKEN}
+# Test helper for routes that need an operator principal. Product code has no alternate
+# credential path: authenticated embeddings receive the same opaque tokens as clients.
+_ADMIN_HEADERS: dict[str, str] = {}
 _ADMIN_CLIENT_HEADERS = {
-    "X-Bunnyland-Admin-Secret": _ADMIN_TOKEN,
     CLIENT_ID_HEADER: "admin-a",
 }
+
+
+def _bearer_test_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    return dict(headers or {})
+
+
+def create_app(*args, **kwargs):
+    use_admin = kwargs.pop("with_admin", False)
+    if use_admin and kwargs.get("token_store") is None:
+        store = TokenStore(":memory:")
+        token, _principal = store.issue(
+            "test-operator",
+            (WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE),
+            automatic_rotation=False,
+        )
+        kwargs["token_store"] = store
+        _ADMIN_HEADERS.clear()
+        _ADMIN_HEADERS["Authorization"] = f"Bearer {token}"
+        _ADMIN_CLIENT_HEADERS.clear()
+        _ADMIN_CLIENT_HEADERS.update(_ADMIN_HEADERS)
+        _ADMIN_CLIENT_HEADERS[CLIENT_ID_HEADER] = "admin-a"
+    elif kwargs.get("token_store") is None:
+        # This module exercises route behavior as an explicit unauthenticated library
+        # embedding. Authentication behavior itself is covered in tests/test_auth.py.
+        kwargs["allow_unauthenticated"] = True
+    app = _create_app(*args, **kwargs)
+    if use_admin:
+        player_token, _principal = kwargs["token_store"].issue(
+            "test-player", (WORLD_PLAY_SCOPE,), automatic_rotation=False
+        )
+        app.state.test_player_headers = {"Authorization": f"Bearer {player_token}"}
+    return app
 
 
 def test_world_snapshot_serializes_entities_relationships_and_metadata(scenario):
@@ -1373,6 +1410,49 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     assert "/world/updates" in paths
 
 
+def test_fixed_window_rate_limiter_bounds_and_recovers() -> None:
+    limiter = FixedWindowRateLimiter(2, 10)
+
+    assert limiter.check("client", now=0) == (True, 0)
+    assert limiter.check("client", now=1) == (True, 0)
+    assert limiter.check("client", now=2) == (False, 8)
+    assert limiter.check("other", now=2) == (True, 0)
+    assert limiter.check("client", now=10) == (True, 0)
+    assert limiter.check("fresh", now=20) == (True, 0)
+    assert set(limiter._requests) == {"fresh"}
+    assert FixedWindowRateLimiter(0, 10).check("client", now=0) == (True, 0)
+
+
+def test_fastapi_rate_limit_returns_retry_after_and_exempts_health(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(
+        scenario.actor,
+        rate_limit_requests=1,
+        rate_limit_window_seconds=60,
+    )
+    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
+
+    headers = {
+        "X-Forwarded-For": "198.51.100.1, 10.0.0.1",
+        "X-Bunnyland-Client-Id": "first",
+    }
+    assert client.get("/world/characters", headers=headers).status_code == 200
+    limited = client.get(
+        "/world/characters",
+        headers={**headers, "X-Bunnyland-Client-Id": "rotated"},
+    )
+    assert limited.status_code == 429
+    assert limited.headers["Retry-After"] == "60"
+    assert limited.json() == {"detail": "request rate limit exceeded"}
+    still_limited = client.get(
+        "/world/characters",
+        headers={"X-Forwarded-For": "198.51.100.1, 10.0.0.2"},
+    )
+    assert still_limited.status_code == 429
+    assert client.get("/health", headers=headers).status_code == 200
+    assert client.get("/health", headers=headers).status_code == 200
+
+
 def test_fastapi_app_factory_installs_plugin_server_routers(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     seen = {}
@@ -1392,7 +1472,7 @@ def test_fastapi_app_factory_installs_plugin_server_routers(scenario):
     )
     meta = WorldMeta(seed="moss")
     app = create_app(scenario.actor, meta=meta, plugins=(plugin,))
-    client = testclient.TestClient(app)
+    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
     response = client.get("/plugin/ping")
 
@@ -1416,18 +1496,18 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario, 
     app = create_app(
         scenario.actor,
         meta=meta,
-        admin_token="secret",
+        with_admin=True,
         claim_secrets=secrets,
     )
-    client = testclient.TestClient(app)
+    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
     health = client.get("/health")
-    snapshot = client.get("/world/snapshot", headers={"X-Bunnyland-Admin-Secret": "secret"})
+    snapshot = client.get("/world/snapshot", headers=_ADMIN_HEADERS)
     schema = client.get("/world/schema")
     library = client.get("/world/library")
     recent = client.get(
         "/world/events/recent",
-        headers={"X-Bunnyland-Admin-Secret": "secret"},
+        headers=_ADMIN_HEADERS,
     )
     player_params = {"claim_id": claim.claim_id}
     player_headers = {"X-Bunnyland-Claim-Secret": claim_secret}
@@ -1525,9 +1605,9 @@ def test_claim_scoped_perspective_query_route_and_stream_metrics(scenario, monke
     app = create_app(
         scenario.actor,
         claim_secrets=secrets,
-        admin_token="admin-secret",
+        with_admin=True,
     )
-    client = testclient.TestClient(app)
+    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
     headers = {"X-Bunnyland-Claim-Secret": secret}
     path = f"/world/character/{scenario.character}/query?claim_id={claim.claim_id}"
 
@@ -1550,7 +1630,7 @@ def test_claim_scoped_perspective_query_route_and_stream_metrics(scenario, monke
     )
     stats = client.get(
         "/admin/stream",
-        headers={"X-Bunnyland-Admin-Secret": "admin-secret"},
+        headers=_ADMIN_HEADERS,
     )
 
     assert valid.status_code == 200
@@ -1774,7 +1854,7 @@ def test_fastapi_room_projection_requires_claim_and_current_perception(scenario,
 
 def test_fastapi_openapi_exposes_projection_contract_route(scenario):
     pytest.importorskip("fastapi")
-    app = create_app(scenario.actor, admin_token="secret")
+    app = create_app(scenario.actor, with_admin=True)
 
     schema = app.openapi()
     operation = schema["paths"]["/world/character/{id}"]["get"]
@@ -1806,11 +1886,7 @@ def test_fastapi_openapi_exposes_projection_contract_route(scenario):
         "$ref": "#/components/schemas/RecentEventsResponse"
     }
     dm_operation = schema["paths"]["/world/dm/{id}"]["get"]
-    assert {parameter["name"] for parameter in dm_operation["parameters"]} == {
-        "id",
-        "X-Bunnyland-Admin-Secret",
-        "X-Bunnyland-Client-Id",
-    }
+    assert {parameter["name"] for parameter in dm_operation["parameters"]} == {"id"}
     assert dm_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/DmProjectionResponse"
     }
@@ -1830,15 +1906,15 @@ def test_fastapi_dm_projection_requires_permission_and_returns_typed_view(scenar
     world.get_entity(scenario.room_b).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), hidden_item.id
     )
-    app = create_app(scenario.actor, admin_token="secret")
+    app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
     missing = client.get("/world/dm/dm-1")
-    wrong = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Secret": "wrong"})
-    allowed = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Secret": "secret"})
+    wrong = client.get("/world/dm/dm-1", headers={"Authorization": "Bearer invalid"})
+    allowed = client.get("/world/dm/dm-1", headers=_ADMIN_HEADERS)
 
-    assert missing.status_code == 403
-    assert wrong.status_code == 403
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
     assert allowed.status_code == 200
     view = allowed.json()
     assert view["dm_id"] == "dm-1"
@@ -1859,15 +1935,15 @@ def test_fastapi_world_overview_requires_permission_and_returns_room_network(sce
     world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), berry.id
     )
-    app = create_app(scenario.actor, admin_token="secret")
+    app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
     missing = client.get("/world/overview")
-    wrong = client.get("/world/overview", headers={"X-Bunnyland-Admin-Secret": "wrong"})
-    allowed = client.get("/world/overview", headers={"X-Bunnyland-Admin-Secret": "secret"})
+    wrong = client.get("/world/overview", headers={"Authorization": "Bearer invalid"})
+    allowed = client.get("/world/overview", headers=_ADMIN_HEADERS)
 
-    assert missing.status_code == 403
-    assert wrong.status_code == 403
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
     assert allowed.status_code == 200
     view = allowed.json()
     assert view["room_count"] == 2
@@ -1884,17 +1960,17 @@ def test_fastapi_world_overview_requires_permission_and_returns_room_network(sce
     assert "relationships" not in rendered
 
 
-def test_fastapi_world_snapshot_requires_admin_token(scenario):
+def test_fastapi_world_snapshot_requires_admin_scope(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    app = create_app(scenario.actor, admin_token="secret")
+    app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
     missing = client.get("/world/snapshot")
-    wrong = client.get("/world/snapshot", headers={"X-Bunnyland-Admin-Secret": "wrong"})
-    allowed = client.get("/world/snapshot", headers={"X-Bunnyland-Admin-Secret": "secret"})
+    wrong = client.get("/world/snapshot", headers={"Authorization": "Bearer invalid"})
+    allowed = client.get("/world/snapshot", headers=_ADMIN_HEADERS)
 
-    assert missing.status_code == 403
-    assert wrong.status_code == 403
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
     assert allowed.status_code == 200
     assert any(entity["id"] == str(scenario.character) for entity in allowed.json()["entities"])
 
@@ -1916,15 +1992,15 @@ def test_fastapi_admin_memory_lists_characters_and_documents_without_backend_typ
         created_at_epoch=12,
         source="manual",
     )
-    app = create_app(scenario.actor, admin_token="secret")
+    app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
     characters = client.get(
-        "/admin/memory/characters", headers={"X-Bunnyland-Admin-Secret": "secret"}
+        "/admin/memory/characters", headers=_ADMIN_HEADERS
     )
     documents = client.get(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Secret": "secret"},
+        headers=_ADMIN_HEADERS,
     )
 
     assert characters.status_code == 200
@@ -1963,12 +2039,12 @@ def test_fastapi_admin_memory_updates_and_deletes_document(scenario):
         MemoryProfileComponent(vector_collection="juniper-private")
     )
     entry = store.add("juniper-private", text="old text", created_at_epoch=1)
-    app = create_app(scenario.actor, admin_token="secret")
+    app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
     updated = client.patch(
         f"/admin/memory/collections/juniper-private/documents/{entry.id}",
-        headers={"X-Bunnyland-Admin-Secret": "secret"},
+        headers=_ADMIN_HEADERS,
         json={
             "document": "updated text",
             "metadata": {"tags": ["edited"], "created_at_epoch": 22, "source": "admin"},
@@ -1976,15 +2052,15 @@ def test_fastapi_admin_memory_updates_and_deletes_document(scenario):
     )
     listed = client.get(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Secret": "secret"},
+        headers=_ADMIN_HEADERS,
     )
     deleted = client.delete(
         f"/admin/memory/collections/juniper-private/documents/{entry.id}",
-        headers={"X-Bunnyland-Admin-Secret": "secret"},
+        headers=_ADMIN_HEADERS,
     )
     after_delete = client.get(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Secret": "secret"},
+        headers=_ADMIN_HEADERS,
     )
 
     assert updated.status_code == 200
@@ -2005,12 +2081,12 @@ def test_fastapi_admin_memory_creates_document(scenario):
     scenario.actor.world.get_entity(scenario.character).add_component(
         MemoryProfileComponent(vector_collection="juniper-private")
     )
-    app = create_app(scenario.actor, admin_token="secret")
+    app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
     created = client.post(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Secret": "secret"},
+        headers=_ADMIN_HEADERS,
         json={
             "document": "new memory text",
             "metadata": {"tags": "new, note", "created_at_epoch": 33, "source": "admin"},
@@ -2018,7 +2094,7 @@ def test_fastapi_admin_memory_creates_document(scenario):
     )
     listed = client.get(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Secret": "secret"},
+        headers=_ADMIN_HEADERS,
     )
 
     assert created.status_code == 201
@@ -2044,17 +2120,17 @@ def test_fastapi_admin_memory_missing_document_returns_404(scenario):
     scenario.actor.world.get_entity(scenario.character).add_component(
         MemoryProfileComponent(vector_collection="juniper-private")
     )
-    app = create_app(scenario.actor, admin_token="secret")
+    app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
     updated = client.patch(
         "/admin/memory/collections/juniper-private/documents/missing",
-        headers={"X-Bunnyland-Admin-Secret": "secret"},
+        headers=_ADMIN_HEADERS,
         json={"document": "updated text", "metadata": {}},
     )
     deleted = client.delete(
         "/admin/memory/collections/juniper-private/documents/missing",
-        headers={"X-Bunnyland-Admin-Secret": "secret"},
+        headers=_ADMIN_HEADERS,
     )
 
     assert updated.status_code == 404
@@ -2065,16 +2141,16 @@ def test_fastapi_admin_memory_missing_document_returns_404(scenario):
 
 def test_fastapi_admin_memory_returns_generic_conflict_when_unconfigured(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    app = create_app(scenario.actor, admin_token="secret")
+    app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
     response = client.get(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Secret": "secret"},
+        headers=_ADMIN_HEADERS,
     )
     create_response = client.post(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Secret": "secret"},
+        headers=_ADMIN_HEADERS,
         json={"document": "new text", "metadata": {}},
     )
 
@@ -2086,27 +2162,27 @@ def test_fastapi_admin_memory_returns_generic_conflict_when_unconfigured(scenari
     assert "chroma" not in create_response.text.lower()
 
 
-def test_fastapi_admin_memory_requires_admin_token(scenario):
+def test_fastapi_admin_memory_requires_admin_scope(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     store = install_memory(scenario.actor, InMemoryStore())
     store.add("juniper-private", text="secret note")
-    app = create_app(scenario.actor, admin_token="secret")
+    app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
     missing = client.get("/admin/memory/characters")
     wrong = client.get(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Secret": "wrong"},
+        headers={"Authorization": "Bearer invalid"},
     )
     wrong_create = client.post(
         "/admin/memory/collections/juniper-private/documents",
-        headers={"X-Bunnyland-Admin-Secret": "wrong"},
+        headers={"Authorization": "Bearer invalid"},
         json={"document": "new text", "metadata": {}},
     )
 
-    assert missing.status_code == 403
-    assert wrong.status_code == 403
-    assert wrong_create.status_code == 403
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+    assert wrong_create.status_code == 401
 
 
 def _admin_route_targets(app):
@@ -2129,14 +2205,14 @@ def _admin_route_targets(app):
     return targets
 
 
-def test_admin_routes_require_admin_secret(scenario):
+def test_admin_routes_require_admin_bearer_scope(scenario):
     # Regression guard for the centralized admin gate: a new /admin/* route that forgets
     # authorization fails here instead of silently shipping an unauthenticated controller /
     # world-mutation primitive. With a token configured but none supplied, every admin route
     # must reject before its handler runs.
     testclient = pytest.importorskip("fastapi.testclient")
-    app = create_app(scenario.actor, admin_token=_ADMIN_TOKEN)
-    client = testclient.TestClient(app)
+    app = create_app(scenario.actor, with_admin=True)
+    client = testclient.TestClient(app, headers=app.state.test_player_headers)
 
     targets = _admin_route_targets(app)
     # Sanity: the introspection actually found the sensitive routes we care about.
@@ -2148,12 +2224,12 @@ def test_admin_routes_require_admin_secret(scenario):
     for method, concrete, path in targets:
         response = client.request(method, concrete)
         assert response.status_code == 403, f"{method} {path} is not admin-gated"
-        assert response.json()["detail"] == "invalid admin token"
+        assert response.json()["detail"] == "insufficient token scope"
 
 
-def test_admin_routes_allow_cors_preflight_without_admin_secret(scenario):
+def test_admin_routes_allow_cors_preflight_without_bearer_token(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    app = create_app(scenario.actor, admin_token=_ADMIN_TOKEN)
+    app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
     response = client.options(
@@ -2161,71 +2237,66 @@ def test_admin_routes_allow_cors_preflight_without_admin_secret(scenario):
         headers={
             "Origin": "http://127.0.0.1:8091",
             "Access-Control-Request-Method": "GET",
-            "Access-Control-Request-Headers": "X-Bunnyland-Admin-Secret",
+            "Access-Control-Request-Headers": "Authorization",
         },
     )
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "*"
-    assert "X-Bunnyland-Admin-Secret" in response.headers["access-control-allow-headers"]
+    assert "Authorization" in response.headers["access-control-allow-headers"]
 
 
-def test_admin_gate_fails_closed_when_token_unset(scenario, monkeypatch):
-    # With no admin token configured (arg unset and env cleared), the gate must reject rather
-    # than fall open — the /admin surface can never be reachable without a secret.
+def test_admin_gate_fails_closed_without_bearer_token(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    monkeypatch.delenv("BUNNYLAND_ADMIN_TOKEN", raising=False)
-    app = create_app(scenario.actor)
+    app = create_app(scenario.actor, token_store=TokenStore(":memory:"))
     client = testclient.TestClient(app)
 
     response = client.post(
         "/admin/controllers/assign",
-        headers={"X-Bunnyland-Admin-Secret": "anything"},
+        headers={"Authorization": "Bearer invalid"},
     )
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "BUNNYLAND_ADMIN_TOKEN is not configured"
+    assert response.status_code == 401
+    assert response.headers["WWW-Authenticate"] == "Bearer"
 
 
-def test_fastapi_dm_projection_uses_configured_admin_token_env(monkeypatch, scenario):
+def test_fastapi_dm_projection_accepts_admin_bearer(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    monkeypatch.setenv("BUNNYLAND_ADMIN_TOKEN", "env-secret")
-    app = create_app(scenario.actor)
+    app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
-    blocked = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Secret": "secret"})
-    allowed = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Secret": "env-secret"})
+    blocked = client.get("/world/dm/dm-1", headers={"Authorization": "Bearer invalid"})
+    allowed = client.get("/world/dm/dm-1", headers=_ADMIN_HEADERS)
 
-    assert blocked.status_code == 403
+    assert blocked.status_code == 401
     assert allowed.status_code == 200
     assert allowed.json()["dm_id"] == "dm-1"
 
 
-def test_fastapi_dm_projection_rejects_when_admin_token_unconfigured(monkeypatch, scenario):
+def test_fastapi_dm_projection_rejects_unknown_bearer(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    monkeypatch.delenv("BUNNYLAND_ADMIN_TOKEN", raising=False)
-    app = create_app(scenario.actor)
+    app = create_app(scenario.actor, token_store=TokenStore(":memory:"))
     client = testclient.TestClient(app)
 
-    response = client.get("/world/dm/dm-1", headers={"X-Bunnyland-Admin-Secret": "secret"})
+    response = client.get("/world/dm/dm-1", headers={"Authorization": "Bearer invalid"})
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "BUNNYLAND_ADMIN_TOKEN is not configured"
+    assert response.status_code == 401
+    assert response.headers["WWW-Authenticate"] == "Bearer"
 
 
 def test_fastapi_admin_client_id_allowlist_gates_admin_routes(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     app = create_app(
         scenario.actor,
-        admin_token=_ADMIN_TOKEN,
+        with_admin=True,
         admin_client_ids=["admin-a"],
     )
     client = testclient.TestClient(app)
 
-    missing = client.get("/world/overview", headers=_ADMIN_SECRET_HEADERS)
+    missing = client.get("/world/overview", headers=_ADMIN_HEADERS)
     rejected = client.get(
         "/world/overview",
-        headers={"X-Bunnyland-Admin-Secret": _ADMIN_TOKEN, CLIENT_ID_HEADER: "admin-b"},
+        headers={**_ADMIN_HEADERS, CLIENT_ID_HEADER: "admin-b"},
     )
     allowed = client.get("/world/overview", headers=_ADMIN_CLIENT_HEADERS)
 
@@ -2437,8 +2508,8 @@ async def test_character_chat_endpoint_maps_service_exceptions(scenario):
 
 def test_fastapi_world_generation_status_endpoint_reports_idle(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    app = create_app(scenario.actor, admin_token=_ADMIN_TOKEN)
-    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
+    app = create_app(scenario.actor, with_admin=True)
+    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
     response = client.get("/admin/world/generation")
 
@@ -2457,8 +2528,8 @@ def test_fastapi_runtime_endpoint_reports_attached_loop(scenario):
         time_scale = 1800.0
         next_tick_at_unix = None
 
-    app = create_app(scenario.actor, loop=FakeLoop(), admin_token=_ADMIN_TOKEN)
-    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
+    app = create_app(scenario.actor, loop=FakeLoop(), with_admin=True)
+    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
     response = client.get("/admin/runtime")
     queued = client.get(f"/world/character/{scenario.character}/commands")
@@ -2512,8 +2583,8 @@ def test_fastapi_pause_and_resume_endpoints_update_runtime(scenario):
             return publish()
 
     loop = FakeLoop()
-    app = create_app(scenario.actor, loop=loop, admin_token=_ADMIN_TOKEN)
-    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
+    app = create_app(scenario.actor, loop=loop, with_admin=True)
+    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
     paused = client.post("/admin/pause")
     resumed = client.post("/admin/resume")
@@ -2637,8 +2708,8 @@ def test_fastapi_world_generate_translates_start_errors(monkeypatch, scenario):
         raise RuntimeError("generator is already busy")
 
     monkeypatch.setattr(server_app, "start_world_generation", runtime_error)
-    app = create_app(scenario.actor, plugins=plugins, admin_token=_ADMIN_TOKEN)
-    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
+    app = create_app(scenario.actor, plugins=plugins, with_admin=True)
+    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
     conflict = client.post(
         "/admin/world/generate",
@@ -2700,8 +2771,8 @@ def test_fastapi_entity_generation_translates_unexpected_errors(
         raise RuntimeError("dm unavailable")
 
     monkeypatch.setattr(server_app, target, raise_unexpected)
-    app = create_app(scenario.actor, admin_token=_ADMIN_TOKEN)
-    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
+    app = create_app(scenario.actor, with_admin=True)
+    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
     response = client.post(path, json=payload)
 
@@ -2716,8 +2787,8 @@ def test_fastapi_save_endpoint_translates_save_errors(monkeypatch, scenario, tmp
         raise OSError("disk full")
 
     monkeypatch.setattr(server_app, "save_configured_world", raise_save_error)
-    app = create_app(scenario.actor, save_path=tmp_path / "world.json", admin_token=_ADMIN_TOKEN)
-    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
+    app = create_app(scenario.actor, save_path=tmp_path / "world.json", with_admin=True)
+    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
     response = client.post("/admin/world/save")
 
@@ -3876,8 +3947,8 @@ async def test_admin_patch_endpoint_translates_patch_errors_to_http_400(scenario
 
 def test_fastapi_list_controller_definitions_endpoint(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    app = create_app(scenario.actor, admin_token=_ADMIN_TOKEN)
-    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
+    app = create_app(scenario.actor, with_admin=True)
+    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
     response = client.get("/admin/controllers/definitions")
 
@@ -3921,11 +3992,11 @@ def test_create_app_requires_fastapi(scenario, monkeypatch):
 
 def test_fastapi_dm_projection_translates_value_errors_to_400(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
-    app = create_app(scenario.actor, admin_token="secret")
+    app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
     # A whitespace-only dm id strips to empty and raises ValueError from the serializer.
-    response = client.get("/world/dm/%20", headers={"X-Bunnyland-Admin-Secret": "secret"})
+    response = client.get("/world/dm/%20", headers=_ADMIN_HEADERS)
 
     assert response.status_code == 400
     assert response.json()["detail"] == "dm id must not be blank"
@@ -4086,18 +4157,22 @@ async def test_register_script_endpoint_translates_value_errors(scenario):
 async def test_world_updates_websocket_handles_disconnect_on_send(scenario, monkeypatch):
     from fastapi import WebSocketDisconnect
 
-    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), with_admin=True)
     route = next(route for route in app.routes if route.path == "/world/updates")
 
     closed = []
     monkeypatch.setattr(server_app, "WEBSOCKET_HEARTBEAT_SECONDS", 0.01)
 
     class FakeWebSocket:
-        headers = {"x-bunnyland-admin-secret": "secret"}
+        headers = _ADMIN_HEADERS
+        cookies = {}
         sent = 0
 
         async def accept(self):
             return None
+
+        async def receive_json(self):
+            return {"type": "authenticate", "data": {}}
 
         async def send_json(self, _payload):
             self.sent += 1
@@ -4163,8 +4238,8 @@ def test_pause_and_resume_tolerate_loops_without_publish(scenario):
             self.paused = False
             return None
 
-    app = create_app(scenario.actor, loop=QuietLoop(), admin_token=_ADMIN_TOKEN)
-    client = testclient.TestClient(app, headers=_ADMIN_SECRET_HEADERS)
+    app = create_app(scenario.actor, loop=QuietLoop(), with_admin=True)
+    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
     paused = client.post("/admin/pause")
     resumed = client.post("/admin/resume")
@@ -4176,10 +4251,13 @@ def test_pause_and_resume_tolerate_loops_without_publish(scenario):
 
 
 async def test_fastapi_world_updates_websocket_handles_client_disconnect(scenario):
-    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), with_admin=True)
 
     outputs = await _websocket_outputs(
-        app, "/world/updates", headers={"X-Bunnyland-Admin-Secret": "secret"}
+        app,
+        "/world/updates",
+        headers=_ADMIN_HEADERS,
+        messages=[{"type": "authenticate", "data": {}}],
     )
 
     assert outputs[0]["type"] == "websocket.accept"
@@ -5972,10 +6050,13 @@ async def test_character_updates_websocket_handles_revocation_before_ready_and_d
 
 
 async def test_fastapi_world_updates_websocket_sends_initial_snapshot(scenario):
-    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), with_admin=True)
 
     outputs = await _websocket_outputs(
-        app, "/world/updates", headers={"X-Bunnyland-Admin-Secret": "secret"}
+        app,
+        "/world/updates",
+        headers=_ADMIN_HEADERS,
+        messages=[{"type": "authenticate", "data": {}}],
     )
     message = json.loads(outputs[1]["text"])
 
@@ -5984,20 +6065,26 @@ async def test_fastapi_world_updates_websocket_sends_initial_snapshot(scenario):
     assert message["data"]["world_epoch"] == scenario.actor.epoch
 
 
-async def test_fastapi_world_updates_websocket_requires_admin_token(scenario):
-    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+async def test_fastapi_world_updates_websocket_requires_admin_scope(scenario):
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), with_admin=True)
 
-    missing = await _websocket_outputs(app, "/world/updates")
-    assert missing == [{"type": "websocket.close", "code": 1008, "reason": ""}]
+    auth_frame = [{"type": "authenticate", "data": {}}]
+    missing = await _websocket_outputs(app, "/world/updates", messages=auth_frame)
+    assert missing[-1] == {"type": "websocket.close", "code": 1008, "reason": ""}
 
     # A token in the query string is no longer honored -- only the injected header is.
-    query = await _websocket_outputs(app, "/world/updates?admin_token=secret")
-    assert query == [{"type": "websocket.close", "code": 1008, "reason": ""}]
+    query = await _websocket_outputs(
+        app, "/world/updates?credential=secret", messages=auth_frame
+    )
+    assert query[-1] == {"type": "websocket.close", "code": 1008, "reason": ""}
 
     wrong = await _websocket_outputs(
-        app, "/world/updates", headers={"X-Bunnyland-Admin-Secret": "wrong"}
+        app,
+        "/world/updates",
+        headers={"Authorization": "Bearer invalid"},
+        messages=auth_frame,
     )
-    assert wrong == [{"type": "websocket.close", "code": 1008, "reason": ""}]
+    assert wrong[-1] == {"type": "websocket.close", "code": 1008, "reason": ""}
 
 
 async def test_event_stream_fans_out_pause_status_events(scenario):

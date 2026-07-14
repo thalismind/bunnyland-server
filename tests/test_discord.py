@@ -81,6 +81,7 @@ from bunnyland.discord.bot import (
     PAUSED_REACTION,
     QUEUED_REACTION,
     DiscordBot,
+    DiscordCommandCooldown,
     _minutes_to_timeout_seconds,
     _parse_discord_claim_args,
     _parse_structured_payload,
@@ -101,6 +102,16 @@ from bunnyland.plugins import PluginRegistry, bunnyland_plugins
 ALL_ACTION_DEFINITIONS = tuple(
     definition for _owner, definition in PluginRegistry(bunnyland_plugins()).actions.values()
 )
+
+
+def test_discord_command_cooldown_is_per_user_and_recovers() -> None:
+    cooldown = DiscordCommandCooldown(5)
+
+    assert cooldown.check(1, now=10) == 0
+    assert cooldown.check(1, now=11) == 4
+    assert cooldown.check(2, now=11) == 0
+    assert cooldown.check(1, now=15) == 0
+    assert DiscordCommandCooldown().check(1, now=10) == 0
 
 
 def parse_discord_action(text, available_commands, definitions=ALL_ACTION_DEFINITIONS):
@@ -3255,6 +3266,18 @@ async def test_discord_bot_handle_text_command_routes_meta_parse_errors_and_acti
 
     assert submitted[0][1].command_type == "say"
     assert ctx.replies[-1][0] == "submitted"
+
+
+async def test_discord_bot_handle_text_command_reports_active_cooldown(scenario):
+    bot = _bot_for_scenario(scenario)
+    bot.command_cooldown = DiscordCommandCooldown(60)
+    ctx = _DiscordThreadCtx()
+
+    await bot.handle_text_command(ctx, "unknown")
+    await bot.handle_text_command(ctx, "unknown")
+
+    assert "Unknown world verb" in ctx.replies[0][0]
+    assert ctx.replies[1][0] == "Cooldown active. Try again in 60 seconds."
 
 
 def test_discord_require_discord_uses_installed_sdk(monkeypatch):

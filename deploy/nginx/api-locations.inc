@@ -1,141 +1,18 @@
-# Shared /api/* proxy locations, included by every frontend-*.conf server block so the
-# admin auth rules live in exactly one place. Rendered by the nginx image's envsubst (it is
-# mounted as a *.template into /etc/nginx/templates and emitted to /etc/nginx/conf.d as a
-# .inc, so nginx's conf.d/*.conf autoload does not load it as a standalone server).
-#
-# Admin surfaces share ONE Basic-auth realm ("Bunnyland admin") so a single browser login
-# carries to every admin path -- including the same-origin /world/updates WebSocket, whose
-# handshake replays the cached credentials. After Basic auth passes, nginx injects the single
-# X-Bunnyland-Admin-Secret the app checks. X-Bunnyland-Client-Id is an application
-# client identity header, not a Basic-auth username, so nginx forwards it when a client
-# provides it. Generic player-facing /api/ paths use a separate Basic-auth file.
+# Shared Bunnyland API proxy. FastAPI owns authentication and authorization for every
+# HTTP, WebSocket, plugin, and MCP surface; nginx retains only transport and overload
+# controls. Authorization and Cookie are forwarded explicitly so all clients use the same
+# opaque bearer-token verifier.
 
-location = /api/world/snapshot {
-    auth_basic "Bunnyland admin";
-    auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
+limit_req_status 429;
+error_page 429 = @bunnyland_rate_limited;
 
-    proxy_pass ${BUNNYLAND_API_UPSTREAM}/world/snapshot;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
-    proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;
+location @bunnyland_rate_limited {
+    add_header Retry-After "${BUNNYLAND_EDGE_RETRY_AFTER}" always;
+    return 429;
 }
 
-location = /api/world/overview {
-    auth_basic "Bunnyland admin";
-    auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
-
-    proxy_pass ${BUNNYLAND_API_UPSTREAM}/world/overview;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
-    proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;
-}
-
-location = /api/world/events/recent {
-    auth_basic "Bunnyland admin";
-    auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
-
-    proxy_pass ${BUNNYLAND_API_UPSTREAM}/world/events/recent;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
-    proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;
-}
-
-location ^~ /api/world/dm/ {
-    auth_basic "Bunnyland admin";
-    auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
-
-    proxy_pass ${BUNNYLAND_API_UPSTREAM}/world/dm/;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
-    proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;
-}
-
-location = /api/world/updates {
-    auth_basic "Bunnyland admin";
-    auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
-
-    proxy_pass ${BUNNYLAND_API_UPSTREAM}/world/updates;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection $connection_upgrade;
-    proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
-    proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;
-    proxy_read_timeout 3600s;
-}
-
-location /api/admin/ {
-    client_max_body_size 10m;
-
-    auth_basic "Bunnyland admin";
-    auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
-
-    proxy_pass ${BUNNYLAND_API_UPSTREAM}/admin/;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
-    proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;
-}
-
-location = /api/mcp {
-    auth_basic "Bunnyland admin";
-    auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
-
-    proxy_pass ${BUNNYLAND_API_UPSTREAM}/mcp;
-    proxy_http_version 1.1;
-    proxy_buffering off;
-    proxy_set_header Host 127.0.0.1:8765;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
-    proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;
-    proxy_read_timeout 3600s;
-}
-
-location /api/mcp/ {
-    auth_basic "Bunnyland admin";
-    auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
-
-    proxy_pass ${BUNNYLAND_API_UPSTREAM}/mcp/;
-    proxy_http_version 1.1;
-    proxy_buffering off;
-    proxy_set_header Host 127.0.0.1:8765;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";
-    proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;
-    proxy_read_timeout 3600s;
-}
-
-# Optional Grafana Tempo query API. The /tempo/ location lives in tempo-location.inc, which
-# the compose.tempo.yml fragment mounts into the frontend only when Tempo is deployed; this
-# wildcard include is a harmless no-op otherwise (so nginx never tries to resolve the tempo
-# upstream when it is absent). It shares the "Bunnyland admin" Basic-auth realm, so a remote
-# Grafana authenticates with the same admin password.
+# Optional Tempo query API. Its included location retains a dedicated, unrelated Basic
+# credential file and is never part of Bunnyland application authentication.
 include /etc/nginx/conf.d/tempo-location.inc*;
 
 location = /api/health {
@@ -148,15 +25,18 @@ location = /api/health {
 }
 
 location /api/ {
-    auth_basic "Bunnyland player";
-    auth_basic_user_file /etc/nginx/bunnyland/players.htpasswd;
+    limit_req zone=bunnyland_api burst=${BUNNYLAND_EDGE_API_BURST} nodelay;
+    client_max_body_size 10m;
 
     proxy_pass ${BUNNYLAND_API_UPSTREAM}/;
     proxy_http_version 1.1;
+    proxy_buffering off;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header Cookie $http_cookie;
     proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;

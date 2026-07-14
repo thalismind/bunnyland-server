@@ -302,12 +302,32 @@ User=bunnyland
 Group=bunnyland
 WorkingDirectory=/opt/bunnyland/server
 EnvironmentFile=/etc/bunnyland/server.env
-ExecStart=/opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve --llm --generator recursive --max-rooms 8 --ticks 0 --tick-seconds 30 --time-scale 1800 --api-host 127.0.0.1 --api-port 8765 --save /var/lib/bunnyland/worlds/main.json --autosave-every 20
+ExecStart=/opt/bunnyland/.local/bin/uv run --extra server --extra llm bunnyland serve --llm --generator recursive --max-rooms 8 --ticks 0 --tick-seconds 30 --time-scale 1800 --api-host 127.0.0.1 --api-port 8765 --save /var/lib/bunnyland/worlds/main.json --autosave-every 20 --auth-users-file /etc/bunnyland/auth-users.yml --token-db /var/lib/bunnyland/auth-tokens.sqlite3
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
+```
+
+Create the application user inventory before starting the service. Generate the Argon2 hash
+with `bunnyland auth hash-password`, then place it in the private YAML file:
+
+```bash
+sudo install -d -o bunnyland -g bunnyland -m 0700 /etc/bunnyland
+sudo -u bunnyland /opt/bunnyland/.local/bin/uv run --directory /opt/bunnyland/server \
+  bunnyland auth hash-password
+sudoedit /etc/bunnyland/auth-users.yml
+sudo chown bunnyland:bunnyland /etc/bunnyland/auth-users.yml
+sudo chmod 0600 /etc/bunnyland/auth-users.yml
+```
+
+```yaml
+users:
+  - username: editor
+    password_hash: '$argon2id$...'
+    enabled: true
+    scopes: [world:play, world:admin]
 ```
 
 Enable it:
@@ -323,15 +343,6 @@ curl -fsS http://127.0.0.1:8765/health
 
 Serve the homepage at the apex domain, serve the web client at the sandbox domain, and proxy
 the Bunnyland API under `/api` on the sandbox domain.
-
-Create the editor password file:
-
-```bash
-sudo install -d -o root -g www-data -m 0750 /etc/nginx/bunnyland
-sudo htpasswd -c /etc/nginx/bunnyland/world-editor.htpasswd editor
-sudo chown root:www-data /etc/nginx/bunnyland/world-editor.htpasswd
-sudo chmod 0640 /etc/nginx/bunnyland/world-editor.htpasswd
-```
 
 Create the websocket upgrade map before enabling the site config. On Ubuntu, files in
 `/etc/nginx/conf.d/*.conf` are included from nginx's `http` block, so this defines
@@ -390,18 +401,6 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
-    location /api/admin/ {
-        auth_basic "Bunnyland world editor";
-        auth_basic_user_file /etc/nginx/bunnyland/world-editor.htpasswd;
-
-        proxy_pass http://127.0.0.1:8765/admin/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
     location /api/ {
         proxy_pass http://127.0.0.1:8765/;
         proxy_http_version 1.1;
@@ -409,6 +408,8 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Cookie $http_cookie;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_read_timeout 3600s;
@@ -449,7 +450,8 @@ In the web client's **Server** field:
 - use `http://localhost:8765` when running both pieces locally;
 - use `https://api.example.com` if you expose the API on a separate hostname.
 
-Click **Connect Live**. The client first requests:
+Sign in through the shared login dialog. The browser keeps the resulting secure HttpOnly
+cookie and rotates it while active. The world editor then requests:
 
 ```text
 GET /world/snapshot
@@ -472,15 +474,20 @@ curl -fsS -I https://home.example.com/
 curl -fsS https://sandbox.example.com/
 curl -fsS https://sandbox.example.com/config.json
 curl -fsS https://sandbox.example.com/api/health
-curl -fsS https://sandbox.example.com/api/world/snapshot
+curl -i https://sandbox.example.com/api/world/snapshot
 curl -i -X PATCH https://sandbox.example.com/api/admin/world
-curl -fsS -u editor:YOUR_PASSWORD -X PATCH https://sandbox.example.com/api/admin/world \
+TOKEN="$(curl -fsS -X POST https://sandbox.example.com/api/auth/login \
+  -H 'Content-Type: application/json' \
+  --data '{"username":"editor","password":"YOUR_PASSWORD","delivery":"body"}' \
+  | jq -r .token)"
+curl -fsS -X PATCH https://sandbox.example.com/api/admin/world \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   --data '{"operations":[]}'
 curl -i -X POST https://sandbox.example.com/api/admin/world/save
-curl -fsS -u editor:YOUR_PASSWORD -X POST https://sandbox.example.com/api/admin/world/save
-curl -fsS -u editor:YOUR_PASSWORD -X POST https://sandbox.example.com/api/admin/pause
-curl -fsS -u editor:YOUR_PASSWORD -X POST https://sandbox.example.com/api/admin/resume
+curl -fsS -H "Authorization: Bearer $TOKEN" -X POST https://sandbox.example.com/api/admin/world/save
+curl -fsS -H "Authorization: Bearer $TOKEN" -X POST https://sandbox.example.com/api/admin/pause
+curl -fsS -H "Authorization: Bearer $TOKEN" -X POST https://sandbox.example.com/api/admin/resume
 cd /opt/bunnyland/server
 /opt/bunnyland/.local/bin/uv run --extra server python - <<'PY'
 import asyncio
@@ -489,6 +496,7 @@ import websockets
 
 async def main():
     async with websockets.connect("wss://sandbox.example.com/api/world/updates") as ws:
+        await ws.send(json.dumps({"type": "authenticate", "data": {"token": "YOUR_TOKEN"}}))
         message = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
         print(message["type"])
 

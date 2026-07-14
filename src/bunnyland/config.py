@@ -104,6 +104,7 @@ class DiscordConfig:
     allowed_dm_user_ids: tuple[int, ...] = ()
     allowed_bot_user_ids: tuple[int, ...] = ()
     public_url: str = ""
+    cooldown_seconds: int = 0
 
 
 @dataclass(frozen=True)
@@ -115,10 +116,14 @@ class McpConfig:
 class ServerConfig:
     api_host: str = "127.0.0.1"
     api_port: int | None = None
-    admin_token: str = ""
+    auth_users_file: str = "data/auth-users.yml"
+    token_db: str = "data/auth-tokens.sqlite3"
     player_client_ids: tuple[str, ...] = ()
     admin_client_ids: tuple[str, ...] = ()
     character_chat: bool = False
+    http_rate_limit_requests: int = 0
+    http_rate_limit_window_seconds: float = 1.0
+    trust_x_real_ip: bool = False
 
 
 @dataclass(frozen=True)
@@ -293,9 +298,11 @@ class BunnylandConfig:
             "discord_allowed_bot_user_id": list(discord.allowed_bot_user_ids) or None,
             "mcp": self.mcp.enabled,
             "character_chat": server.character_chat,
-            "admin_token": server.admin_token or None,
+            "auth_users_file": server.auth_users_file,
+            "token_db": server.token_db,
             "player_client_id": list(server.player_client_ids) or None,
             "admin_client_id": list(server.admin_client_ids) or None,
+            "trust_x_real_ip": server.trust_x_real_ip,
             "ollama_host": llm.ollama_host,
             "ollama_api_key": llm.ollama_api_key,
             "openrouter_api_key": llm.openrouter_api_key,
@@ -357,9 +364,17 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_ENABLE_DISCORD", discord.enabled)
         _set_if(env, "BUNNYLAND_ENABLE_MCP", self.mcp.enabled)
         _set_if(env, "BUNNYLAND_ENABLE_CHARACTER_CHAT", server.character_chat)
-        _set_if(env, "BUNNYLAND_ADMIN_TOKEN", server.admin_token)
+        _set_if(env, "BUNNYLAND_AUTH_USERS_FILE", server.auth_users_file)
+        _set_if(env, "BUNNYLAND_TOKEN_DB", server.token_db)
         _set_if(env, "BUNNYLAND_PLAYER_CLIENT_IDS", _csv(server.player_client_ids))
         _set_if(env, "BUNNYLAND_ADMIN_CLIENT_IDS", _csv(server.admin_client_ids))
+        _set_if(env, "BUNNYLAND_TRUST_X_REAL_IP", server.trust_x_real_ip)
+        _set_if(env, "BUNNYLAND_HTTP_RATE_LIMIT_REQUESTS", server.http_rate_limit_requests)
+        _set_if(
+            env,
+            "BUNNYLAND_HTTP_RATE_LIMIT_WINDOW_SECONDS",
+            server.http_rate_limit_window_seconds,
+        )
         _set_if(env, "BUNNYLAND_DISCORD_URL", discord.public_url)
         _set_if(env, "BUNNYLAND_WEB_THEME", web.theme)
         _set_if(env, "BUNNYLAND_WEB_THEMES", _web_themes_json(web.themes))
@@ -377,6 +392,7 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS", _csv(discord.allowed_channel_ids))
         _set_if(env, "BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS", _csv(discord.allowed_dm_user_ids))
         _set_if(env, "BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS", _csv(discord.allowed_bot_user_ids))
+        _set_if(env, "BUNNYLAND_DISCORD_COOLDOWN_SECONDS", discord.cooldown_seconds)
         _set_if(env, "COMFYUI_SERVER_URL", imagegen.server_url)
         _set_if(env, "COMFYUI_USE_WEBSOCKET", imagegen.use_websocket)
         _set_if(env, "COMFYUI_POLL_INTERVAL_SECONDS", imagegen.poll_interval_seconds)

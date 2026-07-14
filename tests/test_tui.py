@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import io
 import json
 import sys
 from types import SimpleNamespace
@@ -1639,7 +1640,7 @@ async def test_remote_backend_watches_authenticated_player_updates(monkeypatch):
     assert "top-secret" not in sockets[0].url
     assert json.loads(sockets[0].sent[0]) == {
         "type": "authenticate",
-        "data": {"claim_id": "claim-1", "claim_secret": "top-secret"},
+        "data": {"token": None, "claim_id": "claim-1", "claim_secret": "top-secret"},
     }
     assert states == ["connecting", "live"]
     assert [frame["type"] for frame in frames] == ["ready", "event"]
@@ -1660,6 +1661,115 @@ async def test_live_updates_are_optional_for_local_and_missing_dependency(monkey
     await backend.watch_updates("character:1", None, lambda _frame: None, states.append)
     assert states == ["fallback"]
     assert await RemoteBackend("http://server.example").recent_events() == []
+
+
+async def test_remote_backend_login_persistence_refresh_rotation_and_close(tmp_path, monkeypatch):
+    class Response:
+        def __init__(self, body, status_code=200):
+            self._body = body
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(self.status_code)
+
+        def json(self):
+            return self._body
+
+    class Client:
+        def __init__(self, *_args, **_kwargs):
+            self.headers = {}
+            self.closed = False
+            self.rotate_conflict = False
+
+        async def post(self, url, **_kwargs):
+            if url.endswith("/auth/login"):
+                return Response({"token": "login-token", "rotate_after": 123})
+            if self.rotate_conflict:
+                return Response({}, 409)
+            return Response({"token": "rotated-token", "rotate_after": 456})
+
+        async def get(self, _url):
+            return Response({"rotate_after": 321})
+
+        async def aclose(self):
+            self.closed = True
+
+    client = Client()
+    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(AsyncClient=lambda **_kw: client))
+    token_file = tmp_path / "credentials" / "token"
+    backend = RemoteBackend(
+        "http://server/api",
+        username="player",
+        password="password",
+        token_file=token_file,
+    )
+    await backend.start()
+    assert backend._access_token == "login-token"
+    assert backend._password == ""
+    assert token_file.read_text().strip() == "login-token"
+    assert token_file.stat().st_mode & 0o777 == 0o600
+    await backend._refresh_auth_metadata()
+    assert backend._rotate_after == 321
+    client.rotate_conflict = True
+    await backend._rotate_token()
+    assert backend._rotate_after == 321
+    client.rotate_conflict = False
+    await backend._rotate_token()
+    assert backend._access_token == "rotated-token"
+    await backend.close()
+    assert client.closed is True
+
+    existing = RemoteBackend("http://server/api", token_file=token_file)
+    second_client = Client()
+    monkeypatch.setitem(
+        sys.modules, "httpx", SimpleNamespace(AsyncClient=lambda **_kw: second_client)
+    )
+    await existing.start()
+    assert second_client.headers["Authorization"] == "Bearer rotated-token"
+    await existing.close()
+
+
+async def test_remote_backend_rotation_loop_recovers_from_failure(monkeypatch, caplog):
+    backend = RemoteBackend("http://server/api")
+    backend._rotate_after = 0
+
+    async def fail_rotation():
+        raise RuntimeError("offline")
+
+    sleeps = 0
+
+    async def controlled_sleep(_delay):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(backend, "_rotate_token", fail_rotation)
+    monkeypatch.setattr(asyncio, "sleep", controlled_sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await backend._rotation_loop()
+    assert "Could not rotate Bunnyland access token" in caplog.text
+
+
+async def test_remote_backend_in_memory_token_and_idle_rotation_loop(monkeypatch):
+    backend = RemoteBackend("http://server/api")
+    backend._set_access_token("memory-only")
+    backend._persist_access_token()
+    assert backend._access_token == "memory-only"
+
+    sleeps = 0
+
+    async def controlled_sleep(delay):
+        nonlocal sleeps
+        assert delay == 60.0
+        sleeps += 1
+        if sleeps == 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(asyncio, "sleep", controlled_sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await backend._rotation_loop()
 
 
 async def test_remote_backend_live_updates_reconnect_after_transport_failure(monkeypatch):
@@ -3706,10 +3816,22 @@ def test_main_runs_remote_backend(monkeypatch):
     apps = []
 
     class BackendStub:
-        def __init__(self, server, *, fallback_controller=None, timeout_seconds=None):
+        def __init__(
+            self,
+            server,
+            *,
+            fallback_controller=None,
+            timeout_seconds=None,
+            username="",
+            password="",
+            token_file=None,
+        ):
             self.server = server
             self.fallback_controller = fallback_controller
             self.timeout_seconds = timeout_seconds
+            self.username = username
+            self.password = password
+            self.token_file = token_file
             backends.append(self)
 
     class AppStub:
@@ -3741,6 +3863,32 @@ def test_main_runs_remote_backend(monkeypatch):
     assert backends[0].fallback_controller == "llm"
     assert backends[0].timeout_seconds == 600
     assert apps[0].show_generator_selector is False
+
+
+@pytest.mark.parametrize("password_stdin", [False, True])
+def test_main_reads_remote_password(monkeypatch, password_stdin):
+    captured = {}
+
+    class BackendStub:
+        def __init__(self, _server, **kwargs):
+            captured.update(kwargs)
+
+    class AppStub:
+        def __init__(self, _backend):
+            pass
+
+        def run(self):
+            pass
+
+    monkeypatch.setattr(tui_app, "RemoteBackend", BackendStub)
+    monkeypatch.setattr(tui_app, "BunnylandTUI", AppStub)
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: "prompt password")
+    monkeypatch.setattr(sys, "stdin", io.StringIO("stdin password\n"))
+    argv = ["--server", "http://example.test", "--username", "player"]
+    if password_stdin:
+        argv.append("--password-stdin")
+    assert tui_app.main(argv) == 0
+    assert captured["password"] == ("stdin password" if password_stdin else "prompt password")
 
 
 def test_main_runs_local_backend(monkeypatch):

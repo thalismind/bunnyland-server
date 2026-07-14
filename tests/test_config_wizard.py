@@ -64,31 +64,12 @@ def test_compose_startup_commands_wire_memory_env_flags() -> None:
     assert "BUNNYLAND_MEMORY_PATH: ${BUNNYLAND_MEMORY_PATH:-}" in base_compose
 
 
-def test_vps_docker_setup_renders_memory_flags_and_env_values() -> None:
+def test_vps_docker_setup_directs_operators_to_coordinated_ansible_flow() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     text = (repo_root / "scripts" / "vps-docker-setup").read_text()
 
-    assert 'memory_backend="${BUNNYLAND_MEMORY_BACKEND:-in-memory}"' in text
-    assert 'memory_path="${BUNNYLAND_MEMORY_PATH:-}"' in text
-    assert "unsupported BUNNYLAND_MEMORY_BACKEND" in text
-    assert "--memory-backend %s" in text
-    assert "--memory-path %s" in text
-    assert "BUNNYLAND_MEMORY_BACKEND: %s" in text
-    assert "BUNNYLAND_MEMORY_PATH: %s" in text
-    assert "BUNNYLAND_PLAYER_USER" in text
-    assert "players.htpasswd" in text
-    assert 'openssl passwd -apr1 "$player_password"' in text
-    assert 'web_theme="${BUNNYLAND_WEB_THEME:-}"' in text
-    assert 'web_themes="${BUNNYLAND_WEB_THEMES:-[]}"' in text
-    assert 'config_file="${BUNNYLAND_CONFIG_FILE:-}"' in text
-    assert 'web_config_file="${BUNNYLAND_WEB_CONFIG_FILE:-}"' in text
-    assert 'web_theme_css_files="${BUNNYLAND_WEB_THEME_CSS_FILES:-}"' in text
-    assert "--config %s" in text
-    assert "/usr/share/nginx/config/config.json.template" in text
-    assert "/usr/share/nginx/html/assets/bunnyland-themes.css" in text
-    assert "BUNNYLAND_WEB_THEME: %s" in text
-    assert "BUNNYLAND_WEB_REPLACE_THEMES: %s" in text
-    assert "BUNNYLAND_WEB_THEMES: %s" in text
+    assert "standalone VPS setup flow has been retired" in text
+    assert "bunnyland-vps Ansible playbook" in text
 
 
 def test_home_nginx_template_denies_hidden_paths() -> None:
@@ -100,7 +81,7 @@ def test_home_nginx_template_denies_hidden_paths() -> None:
     assert "return 404;" in text
 
 
-def test_api_nginx_template_gates_player_api_without_reusing_basic_auth_user() -> None:
+def test_api_nginx_template_forwards_bearer_and_cookie_without_basic_auth() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     text = (repo_root / "deploy" / "nginx" / "api-locations.inc").read_text()
 
@@ -108,12 +89,12 @@ def test_api_nginx_template_gates_player_api_without_reusing_basic_auth_user() -
     player_location = text.index("location /api/ {")
 
     assert health_location < player_location
-    assert 'auth_basic "Bunnyland player";' in text
-    assert "auth_basic_user_file /etc/nginx/bunnyland/players.htpasswd;" in text
+    assert "auth_basic" not in text
+    assert "auth_basic_user_file" not in text
+    assert "proxy_set_header Authorization $http_authorization;" in text
+    assert "proxy_set_header Cookie $http_cookie;" in text
     assert "proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;" in text
     assert "proxy_set_header X-Bunnyland-Client-Id $remote_user;" not in text
-    assert 'auth_basic "Bunnyland admin";' in text
-    assert 'proxy_set_header X-Bunnyland-Admin-Secret "${BUNNYLAND_ADMIN_TOKEN}";' in text
 
 
 def test_generic_player_proxy_carries_character_websocket_upgrades() -> None:
@@ -127,6 +108,21 @@ def test_generic_player_proxy_carries_character_websocket_upgrades() -> None:
     assert "location = /api/world/character/" not in text
 
 
+def test_nginx_api_limits_return_retry_after_without_limiting_health() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    locations = (repo_root / "deploy" / "nginx" / "api-locations.inc").read_text()
+    frontend = (repo_root / "deploy" / "nginx" / "frontend-tls.conf").read_text()
+    health = locations[
+        locations.index("location = /api/health") : locations.index("location /api/ {")
+    ]
+
+    assert "limit_req_zone $binary_remote_addr zone=bunnyland_api:10m" in frontend
+    assert "limit_req_status 429;" in locations
+    assert 'add_header Retry-After "${BUNNYLAND_EDGE_RETRY_AFTER}" always;' in locations
+    assert "limit_req zone=bunnyland_api" not in health
+    assert locations.count("limit_req zone=bunnyland_api") == 1
+
+
 def test_bunnyland_config_round_trips_yaml_with_private_mode(tmp_path: Path) -> None:
     path = tmp_path / "bunnyland.yml"
     config = BunnylandConfig(
@@ -135,7 +131,7 @@ def test_bunnyland_config_round_trips_yaml_with_private_mode(tmp_path: Path) -> 
         world=WorldConfig(starter_pack="peaceful", memory_backend="json"),
         llm=LlmConfig(enabled=True, ollama_api_key="ollama-key"),
         discord=DiscordConfig(enabled=True, token="discord-token"),
-        server=ServerConfig(admin_token="admin-token", character_chat=True),
+        server=ServerConfig(character_chat=True),
     )
 
     config.save(path)
@@ -178,6 +174,12 @@ def test_bunnyland_config_renders_setup_env() -> None:
         discord=DiscordConfig(
             public_url="https://discord.gg/example",
             allowed_bot_user_ids=(123,),
+            cooldown_seconds=3,
+        ),
+        server=ServerConfig(
+            http_rate_limit_requests=20,
+            http_rate_limit_window_seconds=2.5,
+            trust_x_real_ip=True,
         ),
     )
 
@@ -190,6 +192,10 @@ def test_bunnyland_config_renders_setup_env() -> None:
     assert env["BUNNYLAND_STARTER_PACK"] == "peaceful"
     assert env["BUNNYLAND_DISCORD_URL"] == "https://discord.gg/example"
     assert env["BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS"] == "123"
+    assert env["BUNNYLAND_DISCORD_COOLDOWN_SECONDS"] == "3"
+    assert env["BUNNYLAND_HTTP_RATE_LIMIT_REQUESTS"] == "20"
+    assert env["BUNNYLAND_HTTP_RATE_LIMIT_WINDOW_SECONDS"] == "2.5"
+    assert env["BUNNYLAND_TRUST_X_REAL_IP"] == "1"
     assert env["BUNNYLAND_SETUP_DRY_RUN"] == "1"
 
 
@@ -413,7 +419,6 @@ def test_config_wizard_prompt_full_openrouter_path(monkeypatch) -> None:
             "456",
             "Juniper",
             "y",
-            "admin-token",
             "y",
             "http://comfy.local:8188",
             "flux2dev",
@@ -432,7 +437,6 @@ def test_config_wizard_prompt_full_openrouter_path(monkeypatch) -> None:
     assert config.server.character_chat is True
     assert config.discord.user_id == 123
     assert config.mcp.enabled is True
-    assert config.server.admin_token == "admin-token"
     assert config.imagegen.workflows == "flux2dev"
 
 
@@ -504,10 +508,7 @@ async def test_textual_config_wizard_saves_config() -> None:
         assert generated_password != initial_password
         app.query_one("#admin-user", Input).value = "editor"
         app.query_one("#admin-password", Input).value = "secret"
-        app.query_one("#copy-admin-password-to-token", Button).press()
-        await pilot.pause()
         assert app.query_one("#save", Button).disabled is False
-        assert app.query_one("#admin-token", Input).value == "secret"
         app.query_one("#starter-pack", Select).value = "peaceful"
         app.query_one("#discord-url", Input).value = "https://discord.gg/example"
         app.query_one("#next", Button).press()
@@ -554,7 +555,6 @@ async def test_textual_config_wizard_saves_live_services_and_addons() -> None:
         app.query_one("#discord-token", Input).value = "discord-token"
         app.query_one("#character-chat", Select).value = "yes"
         app.query_one("#mcp-enabled", Select).value = "yes"
-        app.query_one("#admin-token", Input).value = "admin-token"
         app.query_one("#imagegen-enabled", Select).value = "yes"
         app.query_one("#comfy-url", Input).value = "http://comfy.local:8188"
         app.query_one("#image-workflows", Input).value = "flux2dev"
@@ -571,7 +571,6 @@ async def test_textual_config_wizard_saves_live_services_and_addons() -> None:
     assert app.return_value.discord.token == "discord-token"
     assert app.return_value.server.character_chat is True
     assert app.return_value.mcp.enabled is True
-    assert app.return_value.server.admin_token == "admin-token"
     assert app.return_value.imagegen.server_url == "http://comfy.local:8188"
     assert app.return_value.imagegen.workflows == "flux2dev"
 
@@ -723,10 +722,6 @@ async def test_textual_config_wizard_direct_handler_branches(monkeypatch) -> Non
         app.random_world_prompt_pressed(SimpleNamespace())
         assert app.query_one("#seed", Input).value == WORLD_PROMPT_PRESETS[0]
 
-        app.query_one("#admin-password", Input).value = "copy-me"
-        app.copy_admin_password_to_token_pressed(SimpleNamespace())
-        assert app.query_one("#admin-token", Input).value == "copy-me"
-
         app.back_pressed(SimpleNamespace())
         assert app.step_index == 0
         app.next_pressed(SimpleNamespace())
@@ -807,10 +802,6 @@ async def test_textual_config_wizard_validation_branches() -> None:
     await assert_review_error(
         "Discord bot token",
         lambda app: app.query_one("#discord-enabled", Select).__setattr__("value", "yes"),
-    )
-    await assert_review_error(
-        "Admin token is required",
-        lambda app: app.query_one("#mcp-enabled", Select).__setattr__("value", "yes"),
     )
     await assert_review_error(
         "ComfyUI server URL",

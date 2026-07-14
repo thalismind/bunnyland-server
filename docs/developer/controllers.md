@@ -156,7 +156,8 @@ misplaced `ref`/`children`, bad params) returns `400`.
 
 The same actions are available over MCP: `list_controller_definitions_admin`,
 `register_script_admin(name, calls, description)`, and
-`register_behavior_admin(name, root, description)`. All require the MCP admin token.
+`register_behavior_admin(name, root, description)`. All require an authenticated MCP
+request with `world:admin` scope.
 
 ### Persistence
 

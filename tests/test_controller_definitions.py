@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 from types import ModuleType, SimpleNamespace
@@ -27,6 +28,7 @@ from bunnyland.llm_agents import (
     resolve_behavior_tree,
     resolve_script,
 )
+from bunnyland.server.auth import WORLD_ADMIN_SCOPE, TokenPrincipal
 
 
 def _forager_spec(name: str = "data-forager") -> BehaviorTreeSpec:
@@ -308,13 +310,11 @@ def _client(scenario, tmp_path):
     app = create_app(
         scenario.actor,
         definitions_path=str(tmp_path / "defs.json"),
-        admin_token="secret",
+        allow_unauthenticated=True,
     )
-    # The /admin/* surface is gated server-side; send the injected admin secret like nginx.
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://testserver",
-        headers={"X-Bunnyland-Admin-Secret": "secret"},
     )
 
 
@@ -409,6 +409,25 @@ def _install_fake_mcp(monkeypatch) -> dict:
 
             return decorate
 
+        def get_context(self):
+            principal = TokenPrincipal(
+                token_id="test-token",
+                subject="test-admin",
+                scopes=frozenset({WORLD_ADMIN_SCOPE}),
+                created_at=1,
+                rotate_after=None,
+                expires_at=2**31,
+                automatic_rotation=False,
+                family_id="test-family",
+            )
+            return SimpleNamespace(
+                request_context=SimpleNamespace(
+                    request=SimpleNamespace(
+                        headers={}, state=SimpleNamespace(auth_principal=principal)
+                    )
+                )
+            )
+
         def streamable_http_app(self):
             return SimpleNamespace()
 
@@ -457,7 +476,6 @@ def _make_mcp(monkeypatch, scenario, *, with_definitions=True):
         actor=scenario.actor,
         meta=WorldMeta(seed="moss"),
         loop=SimpleNamespace(running=True, paused=False),
-        admin_token="secret",
         patch_world=_noop_async,
         generate_world=_noop_async,
         generation_status=_noop_async,
@@ -488,11 +506,10 @@ async def test_mcp_register_and_list_definitions(monkeypatch):
     scenario = build_scenario()
     tools = _make_mcp(monkeypatch, scenario)
 
-    listing = tools["list_controller_definitions_admin"](admin_token="secret")
+    listing = tools["list_controller_definitions_admin"]()
     assert "idle" in listing["behaviors"]
 
     script = await tools["register_script_admin"](
-        admin_token="secret",
         name="mcp-script",
         calls=[{"name": "move", "arguments": {"direction": "north"}}],
     )
@@ -500,18 +517,20 @@ async def test_mcp_register_and_list_definitions(monkeypatch):
     assert script["stored"]["scripts"] == ["mcp-script"]
 
     behavior = await tools["register_behavior_admin"](
-        admin_token="secret",
         name="mcp-forager",
         root=_forager_spec("mcp-forager").root.model_dump(mode="json"),
     )
     assert "mcp-forager" in behavior["behaviors"]
 
 
-async def test_mcp_register_requires_admin_token(monkeypatch):
+async def test_mcp_register_has_no_credential_argument(monkeypatch):
     scenario = build_scenario()
     tools = _make_mcp(monkeypatch, scenario)
-    with pytest.raises(RuntimeError):  # ToolError patched to RuntimeError
-        await tools["register_script_admin"](admin_token="wrong", name="x", calls=[])
+    assert list(inspect.signature(tools["register_script_admin"]).parameters) == [
+        "name",
+        "calls",
+        "description",
+    ]
 
 
 async def test_mcp_register_reports_invalid_behavior(monkeypatch):
@@ -519,7 +538,6 @@ async def test_mcp_register_reports_invalid_behavior(monkeypatch):
     tools = _make_mcp(monkeypatch, scenario)
     with pytest.raises(RuntimeError, match="unknown action"):
         await tools["register_behavior_admin"](
-            admin_token="secret",
             name="broken",
             root={"kind": "action", "ref": "nope"},
         )
@@ -529,10 +547,10 @@ async def test_mcp_tools_guard_when_not_configured(monkeypatch):
     scenario = build_scenario()
     tools = _make_mcp(monkeypatch, scenario, with_definitions=False)
     with pytest.raises(RuntimeError, match="not configured"):
-        tools["list_controller_definitions_admin"](admin_token="secret")
+        tools["list_controller_definitions_admin"]()
     with pytest.raises(RuntimeError, match="not configured"):
-        await tools["register_script_admin"](admin_token="secret", name="x", calls=[])
+        await tools["register_script_admin"](name="x", calls=[])
     with pytest.raises(RuntimeError, match="not configured"):
         await tools["register_behavior_admin"](
-            admin_token="secret", name="x", root={"kind": "selector"}
+            name="x", root={"kind": "selector"}
         )

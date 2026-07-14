@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import os
 import time
@@ -74,6 +75,18 @@ from ..persistence import WorldMeta
 from ..plugins import collect_persona_fragments, collect_prompt_fragments
 from ..worldgen import GenOptions, collect_generators
 from .admin import idle_generation_status, save_configured_world, start_world_generation
+from .auth import (
+    AUTH_COOKIE_NAME,
+    WORLD_ADMIN_SCOPE,
+    WORLD_PLAY_SCOPE,
+    AuthMeResponse,
+    LoginRequest,
+    RequestAuthenticator,
+    TokenPrincipal,
+    TokenResponse,
+    TokenStore,
+    UserCredentialStore,
+)
 from .character_chat import CharacterChatService
 from .client_ids import (
     ADMIN_CLIENT_IDS_ENV,
@@ -138,6 +151,7 @@ from .models import (
     WorldSchemaResponse,
 )
 from .patches import WorldPatchError, apply_world_patch
+from .rate_limit import FixedWindowRateLimiter
 from .schema import world_schema
 from .serialization import (
     serialize_character_list,
@@ -185,22 +199,36 @@ try:
         HTTPException,
         Request,
         Response,
+        Security,
         WebSocket,
         WebSocketDisconnect,
     )
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import JSONResponse
 except ImportError:
-    FastAPI = Header = HTTPException = Request = Response = None  # type: ignore[assignment, misc]
+    FastAPI = Header = HTTPException = Request = Response = Security = None  # type: ignore[assignment, misc]
     WebSocket = WebSocketDisconnect = CORSMiddleware = JSONResponse = None  # type: ignore[assignment, misc]
 
 
-ADMIN_TOKEN_ENV = "BUNNYLAND_ADMIN_TOKEN"
-#: Header carrying the admin bearer secret. nginx injects it after Basic auth; it mirrors the
-#: player-facing ``X-Bunnyland-Claim-Secret`` naming. Compared case-insensitively on read.
-ADMIN_SECRET_HEADER = "X-Bunnyland-Admin-Secret"
 logger = logging.getLogger("bunnyland.server")
 GIT_HASH_ENV = "BUNNYLAND_GIT_HASH"
+RATE_LIMIT_REQUESTS_ENV = "BUNNYLAND_HTTP_RATE_LIMIT_REQUESTS"
+RATE_LIMIT_WINDOW_ENV = "BUNNYLAND_HTTP_RATE_LIMIT_WINDOW_SECONDS"
+TRUST_X_REAL_IP_ENV = "BUNNYLAND_TRUST_X_REAL_IP"
+LOGIN_RATE_LIMIT_REQUESTS = 5
+LOGIN_RATE_LIMIT_WINDOW_SECONDS = 60
+TOKEN_FAILURE_RATE_LIMIT_REQUESTS = 20
+TOKEN_FAILURE_RATE_LIMIT_WINDOW_SECONDS = 60
+PUBLIC_AUTH_PATHS = {
+    "/health",
+    "/auth/login",
+    "/world/schema",
+    "/world/library",
+    "/openapi.json",
+    "/docs",
+    "/docs/oauth2-redirect",
+    "/redoc",
+}
 
 
 async def next_websocket_update(actor: WorldActor, subscription: EventSubscription) -> dict:
@@ -304,13 +332,18 @@ def create_app(
     definitions_path: str | Path | None = None,
     worldgen_options: GenOptions | None = None,
     plugins: list[Plugin] | None = None,
-    admin_token: str | None = None,
+    token_store: TokenStore | None = None,
+    user_credentials: UserCredentialStore | None = None,
     player_client_ids: str | list[str] | None = None,
     admin_client_ids: str | list[str] | None = None,
     imagegen: ImageGenService | None = None,
     character_chat: CharacterChatService | None = None,
     claim_secrets: ClaimSecretRegistry | None = None,
     memory_store=None,
+    rate_limit_requests: int | None = None,
+    rate_limit_window_seconds: float | None = None,
+    trust_x_real_ip: bool | None = None,
+    allow_unauthenticated: bool = False,
     title: str = "bunnyland",
 ):
     """Create the HTTP/websocket app around a live ``WorldActor``."""
@@ -355,6 +388,32 @@ def create_app(
         allow_origins=["*"],
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    request_limit = (
+        int(os.environ.get(RATE_LIMIT_REQUESTS_ENV, "0"))
+        if rate_limit_requests is None
+        else rate_limit_requests
+    )
+    request_window = (
+        float(os.environ.get(RATE_LIMIT_WINDOW_ENV, "1"))
+        if rate_limit_window_seconds is None
+        else rate_limit_window_seconds
+    )
+    rate_limiter = FixedWindowRateLimiter(request_limit, request_window)
+    login_ip_rate_limiter = FixedWindowRateLimiter(
+        LOGIN_RATE_LIMIT_REQUESTS, LOGIN_RATE_LIMIT_WINDOW_SECONDS
+    )
+    login_username_rate_limiter = FixedWindowRateLimiter(
+        LOGIN_RATE_LIMIT_REQUESTS, LOGIN_RATE_LIMIT_WINDOW_SECONDS
+    )
+    token_failure_rate_limiter = FixedWindowRateLimiter(
+        TOKEN_FAILURE_RATE_LIMIT_REQUESTS, TOKEN_FAILURE_RATE_LIMIT_WINDOW_SECONDS
+    )
+    authenticator = RequestAuthenticator(token_store) if token_store is not None else None
+    trust_real_ip = (
+        os.environ.get(TRUST_X_REAL_IP_ENV, "").strip().lower() in {"1", "true", "yes"}
+        if trust_x_real_ip is None
+        else trust_x_real_ip
     )
     meta = meta or WorldMeta()
     actor.world_id = meta.world_id
@@ -428,6 +487,141 @@ def create_app(
         hash_value = os.environ.get(GIT_HASH_ENV, "").strip()
         return hash_value if hash_value else "unknown"
 
+    def _client_host(request: Request) -> str:
+        peer = getattr(getattr(request, "client", None), "host", "") or "unknown"
+        if not trust_real_ip:
+            return peer
+        forwarded = request.headers.get("X-Real-IP", "").strip()
+        try:
+            return str(ipaddress.ip_address(forwarded))
+        except ValueError:
+            return peer
+
+    def _auth_response(principal: TokenPrincipal, token: str | None = None) -> TokenResponse:
+        return TokenResponse(
+            token=token,
+            subject=principal.subject,
+            scopes=sorted(principal.scopes),
+            expires_at=principal.expires_at,
+            rotate_after=principal.rotate_after,
+            rotation_eligible=principal.can_rotate(),
+        )
+
+    def _set_auth_cookie(response: Response, token: str, expires_at: int) -> None:
+        response.set_cookie(
+            AUTH_COOKIE_NAME,
+            token,
+            secure=True,
+            httponly=True,
+            samesite="strict",
+            path="/",
+            max_age=max(0, expires_at - int(time.time())),
+        )
+
+    def _current_token(request: Request) -> tuple[str, bool]:
+        authorization = request.headers.get("Authorization")
+        if authorization:
+            # The security dependency has already validated the Bearer wire format.
+            return authorization.partition(" ")[2].strip(), False
+        # The security dependency has already required and validated one of these sources.
+        return request.cookies[AUTH_COOKIE_NAME], True
+
+    async def _authentication_unavailable() -> TokenPrincipal:
+        raise HTTPException(status_code=503, detail="authentication is not configured")
+
+    auth_dependency = authenticator or _authentication_unavailable
+
+    @app.post("/auth/login", response_model=TokenResponse)
+    async def auth_login(
+        login: LoginRequest,
+        request: Request,
+        response: Response,
+    ) -> TokenResponse:
+        if token_store is None or user_credentials is None:
+            raise HTTPException(status_code=401, detail="invalid username or password")
+        normalized_username = login.username.strip().casefold()
+        ip_allowed, ip_retry_after = login_ip_rate_limiter.check(_client_host(request))
+        username_allowed, username_retry_after = login_username_rate_limiter.check(
+            normalized_username
+        )
+        if not ip_allowed or not username_allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="login rate limit exceeded",
+                headers={"Retry-After": str(max(ip_retry_after, username_retry_after))},
+            )
+        user = user_credentials.authenticate(login.username, login.password)
+        if user is None:
+            raise HTTPException(
+                status_code=401,
+                detail="invalid username or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        token, principal = token_store.issue(
+            user.username,
+            user.scopes,
+            automatic_rotation=True,
+        )
+        if login.delivery == "cookie":
+            _set_auth_cookie(response, token, principal.expires_at)
+            return _auth_response(principal)
+        return _auth_response(principal, token)
+
+    @app.get("/auth/me", response_model=AuthMeResponse)
+    async def auth_me(
+        principal: TokenPrincipal = Security(  # noqa: B008
+            auth_dependency, scopes=[WORLD_PLAY_SCOPE]
+        ),
+    ) -> AuthMeResponse:
+        return AuthMeResponse(
+            subject=principal.subject,
+            scopes=sorted(principal.scopes),
+            expires_at=principal.expires_at,
+            rotate_after=principal.rotate_after,
+            rotation_eligible=principal.can_rotate(),
+        )
+
+    @app.post("/auth/rotate", response_model=TokenResponse)
+    async def auth_rotate(
+        request: Request,
+        response: Response,
+        principal: TokenPrincipal = Security(  # noqa: B008
+            auth_dependency, scopes=[WORLD_PLAY_SCOPE]
+        ),
+    ) -> TokenResponse:
+        del principal
+        token, cookie_delivery = _current_token(request)
+        try:
+            replacement, replacement_principal = token_store.rotate(token)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if cookie_delivery:
+            _set_auth_cookie(response, replacement, replacement_principal.expires_at)
+            return _auth_response(replacement_principal)
+        return _auth_response(replacement_principal, replacement)
+
+    @app.post("/auth/logout")
+    async def auth_logout(
+        request: Request,
+        response: Response,
+        principal: TokenPrincipal = Security(  # noqa: B008
+            auth_dependency, scopes=[WORLD_PLAY_SCOPE]
+        ),
+    ) -> dict[str, bool]:
+        del principal
+        token, _cookie_delivery = _current_token(request)
+        token_store.revoke_token(token)
+        response.delete_cookie(
+            AUTH_COOKIE_NAME,
+            secure=True,
+            httponly=True,
+            samesite="strict",
+            path="/",
+        )
+        return {"ok": True}
+
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse(
@@ -442,16 +636,9 @@ def create_app(
         )
 
     @app.get("/world/snapshot")
-    async def world_snapshot(
-        admin_token: str | None = Header(
-            default=None,
-            alias=ADMIN_SECRET_HEADER,
-        ),
-        admin_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
-    ) -> dict:
+    async def world_snapshot() -> dict:
         # The raw ECS dump reveals the whole world; gate it like the DM/overview
         # projections so it is not a back door around the per-room player views.
-        _require_projection_admin(admin_token, admin_client_id)
         with telemetry.span("world.snapshot"):
             return serialize_world(actor, meta)
 
@@ -547,31 +734,58 @@ def create_app(
             status = 400 if detail == "entity is not a room" else 404
             raise HTTPException(status_code=status, detail=detail) from exc
 
-    def _require_projection_admin(supplied: str | None, admin_client_id: str | None = None) -> None:
-        expected = (admin_token or os.environ.get(ADMIN_TOKEN_ENV) or "").strip()
-        if not expected:
-            raise HTTPException(status_code=403, detail=f"{ADMIN_TOKEN_ENV} is not configured")
-        if supplied != expected:
-            raise HTTPException(status_code=403, detail="invalid admin token")
-        _require_allowed_admin_client_id(admin_client_id)
+    @app.middleware("http")
+    async def _enforce_request_rate_limit(request: Request, call_next):
+        if request.method == "OPTIONS" or request.url.path == "/health":
+            return await call_next(request)
+        allowed, retry_after = rate_limiter.check(_client_host(request))
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "request rate limit exceeded"},
+                headers={"Retry-After": str(retry_after)},
+            )
+        return await call_next(request)
 
     @app.middleware("http")
-    async def _enforce_admin_secret(request: Request, call_next):
-        # Single choke point for the whole /admin/* surface so a newly added admin route
-        # cannot silently ship unauthenticated. Routes that touch the claim graph
-        # (/admin/controllers/assign, /admin/world) are reassignment primitives, so this
-        # must fail closed: an unset BUNNYLAND_ADMIN_TOKEN rejects rather than opens. The
-        # privileged /world/{snapshot,dm,overview} projections and the /world/updates
-        # WebSocket are not under /admin and keep their own explicit guard. nginx injects
-        # the admin secret after Basic auth; direct callers must supply it themselves.
-        if request.url.path.startswith("/admin") and request.method != "OPTIONS":
-            try:
-                _require_projection_admin(
-                    request.headers.get(ADMIN_SECRET_HEADER.lower()),
-                    request.headers.get(CLIENT_ID_HEADER.lower()),
-                )
-            except HTTPException as exc:
-                return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    async def _enforce_authentication(request: Request, call_next):
+        path = request.url.path.rstrip("/") or "/"
+        if request.method == "OPTIONS" or path in PUBLIC_AUTH_PATHS:
+            return await call_next(request)
+        if authenticator is None:
+            if allow_unauthenticated:
+                return await call_next(request)
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "authentication is not configured"},
+            )
+        admin_path = (
+            path.startswith("/admin")
+            or path == "/world/snapshot"
+            or path.startswith("/world/dm/")
+            or path == "/world/overview"
+            or path == "/world/events/recent"
+            or (path.startswith("/world/event/") and path.endswith("/image"))
+        )
+        required_scope = WORLD_ADMIN_SCOPE if admin_path else WORLD_PLAY_SCOPE
+        try:
+            authenticator.authenticate_request(request, required_scopes=(required_scope,))
+            if admin_path:
+                _require_allowed_admin_client_id(request.headers.get(CLIENT_ID_HEADER.lower()))
+        except HTTPException as exc:
+            if exc.status_code == 401:
+                allowed, retry_after = token_failure_rate_limiter.check(_client_host(request))
+                if not allowed:
+                    return JSONResponse(
+                        status_code=429,
+                        content={"detail": "token verification rate limit exceeded"},
+                        headers={"Retry-After": str(retry_after)},
+                    )
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=exc.headers or {},
+            )
         return await call_next(request)
 
     from ..foundation.media.plugin import plugin as media_plugin
@@ -769,15 +983,7 @@ def create_app(
         raise HTTPException(status_code=400, detail="fallback_controller is not a controller")
 
     @app.get("/world/dm/{id}", response_model=DmProjectionResponse)
-    async def world_dm_projection(
-        id: str,
-        admin_token: str | None = Header(
-            default=None,
-            alias=ADMIN_SECRET_HEADER,
-        ),
-        admin_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
-    ) -> DmProjectionResponse:
-        _require_projection_admin(admin_token, admin_client_id)
+    async def world_dm_projection(id: str) -> DmProjectionResponse:
         try:
             with telemetry.span("dm.projection", {"dm.id": id}):
                 return serialize_dm_projection(actor, id)
@@ -785,14 +991,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/world/overview", response_model=WorldOverviewResponse)
-    async def world_overview(
-        admin_token: str | None = Header(
-            default=None,
-            alias=ADMIN_SECRET_HEADER,
-        ),
-        admin_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
-    ) -> WorldOverviewResponse:
-        _require_projection_admin(admin_token, admin_client_id)
+    async def world_overview() -> WorldOverviewResponse:
         with telemetry.span("world.overview"):
             return serialize_world_overview(actor)
 
@@ -805,11 +1004,7 @@ def create_app(
         return WorldLibraryResponse.model_validate(load_content_library().model_dump(mode="json"))
 
     @app.get("/world/events/recent", response_model=RecentEventsResponse)
-    async def recent_events(
-        admin_token: str | None = Header(default=None, alias=ADMIN_SECRET_HEADER),
-        admin_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
-    ) -> RecentEventsResponse:
-        _require_projection_admin(admin_token, admin_client_id)
+    async def recent_events() -> RecentEventsResponse:
         return RecentEventsResponse(events=stream.recent_messages())
 
     @app.get(
@@ -1898,21 +2093,47 @@ def create_app(
 
     @app.websocket("/world/updates")
     async def world_updates(websocket: WebSocket) -> None:
-        # This stream pushes the full world snapshot — the same privileged surface as
-        # /world/snapshot. The production nginx config does Basic auth and then injects
-        # X-Bunnyland-Admin-Secret before proxying, so the secret never rides in the query
-        # string. Direct (non-proxied) clients must set the header themselves. (The /admin
-        # middleware does not cover WebSocket handshakes, so this guard stays explicit.)
-        try:
-            _require_projection_admin(
-                websocket.headers.get(ADMIN_SECRET_HEADER.lower()),
-                websocket.headers.get(CLIENT_ID_HEADER.lower())
-                or getattr(websocket, "query_params", {}).get("client_id"),
-            )
-        except HTTPException:
-            await websocket.close(code=1008)  # policy violation
+        if authenticator is None and not allow_unauthenticated:
+            await websocket.close(code=1013)
             return
-        await websocket.accept()
+        access_token = None
+        if authenticator is not None:
+            await websocket.accept()
+            try:
+                auth = await asyncio.wait_for(
+                    websocket.receive_json(), timeout=PLAYER_WEBSOCKET_AUTH_SECONDS
+                )
+                data = auth.get("data") if isinstance(auth, dict) else None
+                if (
+                    not isinstance(auth, dict)
+                    or auth.get("type") != "authenticate"
+                    or not isinstance(data, dict)
+                ):
+                    raise ValueError("invalid authentication frame")
+                frame_token = data.get("token")
+                if frame_token is not None and not isinstance(frame_token, str):
+                    raise ValueError("invalid bearer token")
+                header_auth = websocket.headers.get("Authorization")
+                if frame_token:
+                    if header_auth and header_auth != f"Bearer {frame_token}":
+                        raise ValueError("conflicting bearer credentials")
+                    header_auth = f"Bearer {frame_token}"
+                principal = authenticator.authenticate_values(
+                    authorization=header_auth,
+                    cookie_token=websocket.cookies.get(AUTH_COOKIE_NAME),
+                    required_scopes=(WORLD_ADMIN_SCOPE,),
+                )
+                access_token = frame_token or websocket.cookies.get(AUTH_COOKIE_NAME)
+                if access_token is None and header_auth:
+                    access_token = header_auth.partition(" ")[2]
+                client_id = data.get("client_id") or websocket.headers.get(CLIENT_ID_HEADER)
+                _require_allowed_admin_client_id(client_id)
+                del principal
+            except (HTTPException, TimeoutError, ValueError, TypeError, WebSocketDisconnect):
+                await websocket.close(code=1008)
+                return
+        else:
+            await websocket.accept()
         subscription = stream.subscribe()
         try:
             projection_started = time.perf_counter()
@@ -1923,6 +2144,9 @@ def create_app(
                 subscription.frame(actor, {"type": "snapshot", "data": snapshot})
             )
             while True:
+                if access_token is not None and token_store.verify(access_token) is None:
+                    await websocket.close(code=1008)
+                    return
                 message = await next_websocket_update(actor, subscription)
                 await websocket.send_json(subscription.frame(actor, message))
         except WebSocketDisconnect:
@@ -1935,6 +2159,9 @@ def create_app(
         # Claim secrets deliberately travel only in the first WebSocket frame.  Accepting
         # first avoids putting player state in handshake failures and keeps credentials out
         # of URLs, proxy logs, and telemetry attributes.
+        if authenticator is None and not allow_unauthenticated:
+            await websocket.close(code=1013)
+            return
         await websocket.accept()
         try:
             auth = await asyncio.wait_for(
@@ -1958,7 +2185,27 @@ def create_app(
             return
         claim_id = data["claim_id"]
         claim_secret = data["claim_secret"]
+        access_token = None
         try:
+            if authenticator is not None:
+                frame_token = data.get("token")
+                if frame_token is not None and not isinstance(frame_token, str):
+                    raise HTTPException(status_code=401, detail="invalid bearer token")
+                header_auth = websocket.headers.get("Authorization")
+                if frame_token:
+                    if header_auth and header_auth != f"Bearer {frame_token}":
+                        raise HTTPException(
+                            status_code=401, detail="conflicting bearer credentials"
+                        )
+                    header_auth = f"Bearer {frame_token}"
+                authenticator.authenticate_values(
+                    authorization=header_auth,
+                    cookie_token=websocket.cookies.get(AUTH_COOKIE_NAME),
+                    required_scopes=(WORLD_PLAY_SCOPE,),
+                )
+                access_token = frame_token or websocket.cookies.get(AUTH_COOKIE_NAME)
+                if access_token is None and header_auth:
+                    access_token = header_auth.partition(" ")[2]
             claim_context = _require_claim_secret(
                 character_id,
                 claim_id=claim_id,
@@ -1977,6 +2224,8 @@ def create_app(
 
         async def send_frame(frame: dict) -> bool:
             try:
+                if access_token is not None and token_store.verify(access_token) is None:
+                    raise HTTPException(status_code=401, detail="invalid bearer token")
                 _require_claim_secret(
                     character_id,
                     claim_id=claim_id,
@@ -2015,7 +2264,6 @@ def create_app(
             actor=actor,
             meta=meta,
             loop=loop,
-            admin_token=admin_token,
             player_client_ids=allowed_player_client_ids,
             admin_client_ids=allowed_admin_client_ids,
             save_path=save_path,

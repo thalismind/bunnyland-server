@@ -12,6 +12,7 @@ from ..core.world_actor import WorldActor
 from ..engine import GameLoop
 from ..persistence import WorldMeta
 from .app import create_app
+from .auth import TokenStore, UserCredentialStore
 
 if TYPE_CHECKING:
     from ..imagegen.service import ImageGenService
@@ -31,9 +32,11 @@ async def run_loop_with_api(
     definitions_path: str | Path | None = None,
     worldgen_options: GenOptions | None = None,
     plugins: list[Plugin] | None = None,
-    admin_token: str | None = None,
+    auth_users_path: str | Path = "data/auth-users.yml",
+    token_db_path: str | Path = "data/auth-tokens.sqlite3",
     player_client_ids: str | list[str] | None = None,
     admin_client_ids: str | list[str] | None = None,
+    trust_x_real_ip: bool = False,
     imagegen: ImageGenService | None = None,
     character_chat: CharacterChatService | None = None,
     claim_secrets: ClaimSecretRegistry | None = None,
@@ -48,6 +51,7 @@ async def run_loop_with_api(
             "bunnyland server API requires uvicorn; install the server dependencies first"
         ) from exc
 
+    token_store = TokenStore(token_db_path)
     app = create_app(
         actor,
         meta,
@@ -56,9 +60,11 @@ async def run_loop_with_api(
         definitions_path=definitions_path,
         worldgen_options=worldgen_options,
         plugins=plugins,
-        admin_token=admin_token,
+        token_store=token_store,
+        user_credentials=UserCredentialStore(auth_users_path),
         player_client_ids=player_client_ids,
         admin_client_ids=admin_client_ids,
+        trust_x_real_ip=trust_x_real_ip,
         imagegen=imagegen,
         character_chat=character_chat,
         claim_secrets=claim_secrets,
@@ -74,11 +80,14 @@ async def run_loop_with_api(
     if server_task in done:
         server_task.result()
         loop.stop()
-        return await game_task
+        ticks = await game_task
+        token_store.close()
+        return ticks
 
     ticks = game_task.result()
     server.should_exit = True
     await server_task
+    token_store.close()
     return ticks
 
 

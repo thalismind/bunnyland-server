@@ -75,12 +75,12 @@ returns an outcome hint. Items marked FOLLOW-UP remain.
    The play path now uses scoped projections (`character_view` = the player's own perceived
    room, the most common request; `room_view` for a specific room). Added a slim,
    admin-only `world_overview` (the room-network graph: ids, titles, exits, occupant/item
-   counts) for the admin and web graph clients — gated on both the HTTP route
-   (`GET /world/overview`, `X-Bunnyland-Admin-Secret`) and the MCP tool
-   (`world_overview_admin`). The raw ECS dump is now admin-only on every surface:
-   `world_snapshot_admin` (MCP tool, admin token), `GET /world/snapshot` and the
-   `/world/updates` websocket (both require the `X-Bunnyland-Admin-Secret` / `admin_token`
-   admin token), so a regular player cannot see the whole world through any door. The
+   counts) for the admin and web graph clients — gated by the `world:admin` scope on both
+   the HTTP route (`GET /world/overview`) and the MCP tool (`world_overview_admin`). The raw
+   ECS dump is now admin-only on every surface: `world_snapshot_admin` (MCP tool),
+   `GET /world/snapshot`, and the `/world/updates` websocket all require a Bunnyland bearer
+   token with `world:admin`, so a regular player cannot see the whole world through any
+   door. The
    standard player clients (TUI, REPL) now read the per-room character/room projections
    instead of the snapshot.
 

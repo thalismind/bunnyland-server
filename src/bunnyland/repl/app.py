@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import sys
 
 from rich.text import Text
 from textual import events, on
@@ -274,6 +275,13 @@ class BunnylandReplApp(App[None]):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bunnyland-repl", description=__doc__)
     parser.add_argument("--server", help="connect to a running server (e.g. http://localhost:8765)")
+    parser.add_argument("--username", default="", help="login username for a remote server")
+    parser.add_argument("--password-stdin", action="store_true")
+    parser.add_argument(
+        "--token-file",
+        default=None,
+        help="explicitly persist the bearer token in this mode-0600 credential file",
+    )
     parser.add_argument("--seed", default=None, help="seed for a locally hosted world")
     parser.add_argument("--generator", default=None, help="generator for a locally hosted world")
     parser.add_argument("--claim-fallback", choices=("suspend", "llm"), default=None)
@@ -296,6 +304,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.claim_timeout_minutes is not None
         else None
     )
+    password = ""
+    if args.server and args.username:
+        if args.password_stdin:
+            password = sys.stdin.readline().rstrip("\r\n")
+        else:
+            from getpass import getpass
+
+            password = getpass("Bunnyland password: ")
 
     show_generator_selector = not args.server and args.generator is None
     backend: Backend = (
@@ -303,6 +319,9 @@ def main(argv: list[str] | None = None) -> int:
             args.server,
             fallback_controller=args.claim_fallback,
             timeout_seconds=timeout_seconds,
+            username=args.username,
+            password=password,
+            token_file=args.token_file,
         )
         if args.server
         else LocalBackend(

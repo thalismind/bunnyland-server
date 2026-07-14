@@ -38,6 +38,7 @@ from bunnyland.llm_agents.agent import (
     _openrouter_usage,
 )
 from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.server.auth import WORLD_ADMIN_SCOPE, TokenPrincipal
 from bunnyland.server.character_chat import CharacterChatService, _trace_json
 from bunnyland.server.models import CharacterChatRequest
 
@@ -997,6 +998,26 @@ async def test_mcp_save_world_admin_traces_status(otel_capture, monkeypatch, tmp
         def resource(self, _uri, **_kwargs):
             return lambda func: func
 
+        def get_context(self):
+            principal = TokenPrincipal(
+                token_id="test-token",
+                subject="test-admin",
+                scopes=frozenset({WORLD_ADMIN_SCOPE}),
+                created_at=1,
+                rotate_after=None,
+                expires_at=2**31,
+                automatic_rotation=False,
+                family_id="test-family",
+            )
+            return types.SimpleNamespace(
+                request_context=types.SimpleNamespace(
+                    request=types.SimpleNamespace(
+                        headers={},
+                        state=types.SimpleNamespace(auth_principal=principal),
+                    )
+                )
+            )
+
         def streamable_http_app(self):
             return types.SimpleNamespace()
 
@@ -1017,7 +1038,6 @@ async def test_mcp_save_world_admin_traces_status(otel_capture, monkeypatch, tmp
         actor=scenario.actor,
         meta=WorldMeta(seed="moss"),
         loop=None,
-        admin_token="secret",
         save_path=path,
         patch_world=unused,
         generate_world=unused,
@@ -1028,7 +1048,7 @@ async def test_mcp_save_world_admin_traces_status(otel_capture, monkeypatch, tmp
         generate_event=unused,
     )
 
-    saved = await registered_tools["save_world_admin"](admin_token="secret")
+    saved = await registered_tools["save_world_admin"]()
 
     assert saved["path"] == str(path)
     assert path.exists()
@@ -1048,13 +1068,15 @@ async def test_rest_snapshot_emits_child_span_under_request(otel_capture):
 
     span_exporter, _reader = otel_capture
     actor = WorldActor()
-    app = create_app(actor, meta=WorldMeta(seed="s", generator="stub"), admin_token="secret")
+    app = create_app(
+        actor,
+        meta=WorldMeta(seed="s", generator="stub"),
+        allow_unauthenticated=True,
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
     ) as client:
-        response = await client.get(
-            "/world/snapshot", headers={"X-Bunnyland-Admin-Secret": "secret"}
-        )
+        response = await client.get("/world/snapshot")
         assert response.status_code == 200
 
     assert "world.snapshot" in _spans_by_name(span_exporter)
@@ -1162,7 +1184,7 @@ async def test_controller_assign_endpoint_is_traced(otel_capture):
 
     span_exporter, _reader = otel_capture
     scenario = build_scenario()
-    app = create_app(scenario.actor)
+    app = create_app(scenario.actor, allow_unauthenticated=True)
     route = next(
         route for route in app.routes if getattr(route, "path", None) == "/admin/controllers/assign"
     )
@@ -1186,7 +1208,7 @@ async def test_web_controller_claim_endpoint_reports_client_id_in_trace(otel_cap
 
     span_exporter, _reader = otel_capture
     scenario = build_scenario()
-    app = create_app(scenario.actor)
+    app = create_app(scenario.actor, allow_unauthenticated=True)
     route = next(
         route
         for route in app.routes

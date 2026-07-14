@@ -646,7 +646,9 @@ def test_live_character_chat_endpoints_use_real_llm(provider):
         PromptBuilder(actor.world),
         _character_agent(provider),
     )
-    client = testclient.TestClient(create_app(actor, character_chat=service))
+    client = testclient.TestClient(
+        create_app(actor, character_chat=service, allow_unauthenticated=True)
+    )
 
     status = client.get("/world/chat/status")
     assert status.status_code == 200
@@ -698,7 +700,9 @@ def test_live_character_chat_take_note_prompt_calls_tool(provider):
         PromptBuilder(actor.world),
         _character_agent(provider),
     )
-    client = testclient.TestClient(create_app(actor, character_chat=service))
+    client = testclient.TestClient(
+        create_app(actor, character_chat=service, allow_unauthenticated=True)
+    )
 
     response = client.post(
         f"/world/character/{character_id}/chat",

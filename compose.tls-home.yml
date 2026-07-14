@@ -6,7 +6,6 @@ services:
       BUNNYLAND_CERT_NAME: ${BUNNYLAND_CERT_NAME:-sandbox.example.com}
       BUNNYLAND_HOME_NAME: ${BUNNYLAND_HOME_DOMAIN:?set BUNNYLAND_HOME_DOMAIN to the homepage domain}
       BUNNYLAND_HOME_CERT_NAME: ${BUNNYLAND_HOME_CERT_NAME:?set BUNNYLAND_HOME_CERT_NAME to the homepage certificate name}
-      BUNNYLAND_ADMIN_TOKEN: ${BUNNYLAND_ADMIN_TOKEN:-}
     volumes:
       - ./deploy/nginx/frontend-tls-home.conf:/etc/nginx/templates/default.conf.template:ro
       - ./deploy/nginx/api-locations.inc:/etc/nginx/templates/api-locations.inc.template:ro

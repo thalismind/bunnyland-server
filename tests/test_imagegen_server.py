@@ -24,9 +24,10 @@ from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
 from bunnyland.imagegen.wiring import build_image_service, select_enhancer
 from bunnyland.persistence import WorldMeta
 from bunnyland.server.app import MAX_UPLOAD_IMAGE_BYTES, create_app
+from bunnyland.server.auth import WORLD_ADMIN_SCOPE, WORLD_PLAY_SCOPE, TokenStore
 from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 
-ADMIN = {"X-Bunnyland-Admin-Secret": "secret"}
+ADMIN = {}
 
 
 class _FakeClient:
@@ -47,7 +48,12 @@ def _service(actor, tmp_path):
 
 
 def _app(actor, service):
-    return create_app(actor, meta=WorldMeta(seed="moss"), admin_token="secret", imagegen=service)
+    return create_app(
+        actor,
+        meta=WorldMeta(seed="moss"),
+        imagegen=service,
+        allow_unauthenticated=True,
+    )
 
 
 def _client(app, *, headers: dict[str, str] | None = None) -> httpx.AsyncClient:
@@ -63,11 +69,48 @@ def _client(app, *, headers: dict[str, str] | None = None) -> httpx.AsyncClient:
 
 async def test_generate_image_requires_admin(tmp_path):
     scenario = build_scenario()
-    async with _client(_app(scenario.actor, _service(scenario.actor, tmp_path))) as client:
+    store = TokenStore(":memory:")
+    token, _principal = store.issue("player", [WORLD_PLAY_SCOPE], automatic_rotation=False)
+    app = create_app(
+        scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        imagegen=_service(scenario.actor, tmp_path),
+        token_store=store,
+    )
+    async with _client(app, headers={"Authorization": f"Bearer {token}"}) as client:
         response = await client.post(
             "/admin/world/generate-image", json={"entity_id": str(scenario.character)}
         )
     assert response.status_code == 403
+
+
+async def test_event_image_requires_admin_scope(tmp_path):
+    scenario = build_scenario()
+    store = TokenStore(":memory:")
+    player, _principal = store.issue(
+        "player", [WORLD_PLAY_SCOPE], automatic_rotation=False
+    )
+    operator, _principal = store.issue(
+        "operator", [WORLD_ADMIN_SCOPE], automatic_rotation=False
+    )
+    app = create_app(
+        scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        imagegen=_service(scenario.actor, tmp_path),
+        token_store=store,
+    )
+    async with _client(app) as client:
+        denied = await client.post(
+            "/world/event/record-1/image",
+            headers={"Authorization": f"Bearer {player}"},
+        )
+        allowed = await client.post(
+            "/world/event/record-1/image",
+            headers={"Authorization": f"Bearer {operator}"},
+        )
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    store.close()
 
 
 async def test_generate_image_success_and_status(tmp_path):
@@ -111,7 +154,9 @@ async def test_image_job_status_unknown(tmp_path):
 
 async def test_endpoints_409_when_imagegen_disabled():
     scenario = build_scenario()
-    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    app = create_app(
+        scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated=True
+    )
     async with _client(app) as client:
         assert (
             await client.post("/admin/world/generate-image", headers=ADMIN, json={"entity_id": "x"})
@@ -123,12 +168,17 @@ async def test_endpoints_409_when_imagegen_disabled():
 async def test_admin_upload_character_images_without_imagegen(tmp_path, monkeypatch):
     monkeypatch.setenv("BUNNYLAND_MEDIA_DIR", str(tmp_path))
     scenario = build_scenario()
-    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
-    async with _client(app) as client:
+    store = TokenStore(":memory:")
+    player, _principal = store.issue("player", [WORLD_PLAY_SCOPE], automatic_rotation=False)
+    operator, _principal = store.issue(
+        "operator", [WORLD_ADMIN_SCOPE], automatic_rotation=False
+    )
+    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), token_store=store)
+    async with _client(app, headers={"Authorization": f"Bearer {operator}"}) as client:
         denied = await client.post(
             f"/admin/world/character/{scenario.character}/image/portrait",
             content=b"PNG",
-            headers={"Content-Type": "image/png"},
+            headers={"Content-Type": "image/png", "Authorization": f"Bearer {player}"},
         )
         assert denied.status_code == 403
 
@@ -164,7 +214,9 @@ async def test_admin_upload_character_images_without_imagegen(tmp_path, monkeypa
 async def test_admin_upload_character_image_rejects_bad_inputs(tmp_path, monkeypatch):
     monkeypatch.setenv("BUNNYLAND_MEDIA_DIR", str(tmp_path))
     scenario = build_scenario()
-    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    app = create_app(
+        scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated=True
+    )
     async with _client(app) as client:
         bad_purpose = await client.post(
             f"/admin/world/character/{scenario.character}/image/avatar",
@@ -267,7 +319,9 @@ async def test_scene_image_endpoint_no_room(tmp_path):
 
 async def test_scene_image_endpoint_409_without_imagegen():
     scenario = build_scenario()
-    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    app = create_app(
+        scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated=True
+    )
     async with _client(app) as client:
         response = await client.post(f"/world/character/{scenario.character}/scene-image")
         assert response.status_code == 409
@@ -361,7 +415,9 @@ async def test_character_projection_includes_portrait(tmp_path):
     entity.add_component(
         PortraitImageComponent(url="/media/portraits/p.png", alpha_url="/media/alpha/p.png")
     )
-    app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), admin_token="secret")
+    app = create_app(
+        scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated=True
+    )
     async with _client(app) as client:
         body = (await client.get(f"/world/character/{scenario.character}")).json()
     assert body["portrait"]["url"] == "/media/portraits/p.png"
@@ -381,8 +437,8 @@ async def test_room_projection_entity_portrait_default_empty(tmp_path):
     app = create_app(
         scenario.actor,
         meta=WorldMeta(seed="moss"),
-        admin_token="secret",
         claim_secrets=secrets,
+        allow_unauthenticated=True,
     )
     room = scenario.character_room()
     async with _client(app) as client:
