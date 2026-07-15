@@ -100,16 +100,15 @@ def collect(actor, event_type):
     return seen
 
 
-async def test_failed_consequence_rolls_back_its_world_phase():
+async def test_failed_consequence_propagates_without_an_implicit_transaction():
     scenario = build_scenario()
     character = scenario.actor.world.get_entity(scenario.character)
-    original = character.get_component(IdentityComponent)
     scenario.actor._consequences = [_FailingConsequence(scenario.character)]
 
     with pytest.raises(RuntimeError, match="consequence failed"):
         await scenario.actor._run_consequences()
 
-    assert character.get_component(IdentityComponent) == original
+    assert character.get_component(IdentityComponent).name == "partially changed"
 
 
 def test_require_reachable_entity_reports_validation_failures():

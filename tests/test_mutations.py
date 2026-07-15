@@ -29,7 +29,6 @@ from bunnyland.core import (
     replace_single_edge_operations,
     spawn_entity,
     validate_core_invariants,
-    world_transaction,
 )
 from bunnyland.core.handlers.base import planned
 
@@ -77,64 +76,22 @@ def test_plan_preflights_every_operation_before_mutating(scenario):
     assert character.get_component(IdentityComponent).name == identity.name
 
 
-def test_world_transaction_rejects_a_new_invariant_failure_in_an_invalid_world(scenario):
+def test_mutation_plan_validates_only_its_write_set(scenario):
     world = scenario.actor.world
     character = world.get_entity(scenario.character)
+    unrelated = spawn_entity(world, [IdentityComponent("unrelated", "item")])
     points = character.get_component(ActionPointsComponent)
     character.remove_component(ActionPointsComponent)
     character.add_component(replace(points, current=-1))
 
-    with pytest.raises(MutationError, match="more than one physical location"):
-        with world_transaction(world):
-            world.get_entity(scenario.room_b).add_relationship(
-                Contains(mode=ContainmentMode.ROOM_CONTENT), scenario.character
-            )
+    execute_mutation_plan(
+        world,
+        MutationPlan((SetComponent(unrelated.id, IdentityComponent("updated", "item")),)),
+    )
 
-    assert not world.get_entity(scenario.room_b).has_relationship(Contains, scenario.character)
-
-
-def test_world_transaction_preserves_queued_observer_references_on_rollback(scenario):
-    class UncopyableObserver:
-        def __deepcopy__(self, _memo):
-            raise TypeError("observer must not be deep-copied")
-
-    world = scenario.actor.world
-    queued = (UncopyableObserver(), ("on_event", object()))
-    world._observer_queue.append(queued)
-    entered = False
-
-    with pytest.raises(RuntimeError, match="rollback"):
-        with world_transaction(world):
-            entered = True
-            world._observer_queue.clear()
-            raise RuntimeError("rollback")
-
-    assert entered is True
-    assert tuple(world._observer_queue) == (queued,)
-
-
-def test_world_transaction_copies_index_state_without_copying_the_live_world(scenario):
-    class UncopyableObserver:
-        def __deepcopy__(self, _memo):
-            raise TypeError("runtime observer must not be deep-copied")
-
-    @dataclass
-    class RuntimeIndex:
-        _world: object
-        cache: list[int]
-
-    world = scenario.actor.world
-    world._observers.append(UncopyableObserver())
-    world._indexes["runtime"] = RuntimeIndex(world, [1])
-
-    with pytest.raises(RuntimeError, match="rollback"):
-        with world_transaction(world):
-            world._indexes["runtime"].cache.append(2)
-            raise RuntimeError("rollback")
-
-    restored = world._indexes["runtime"]
-    assert restored._world is world
-    assert restored.cache == [1]
+    assert unrelated.get_component(IdentityComponent).name == "updated"
+    with pytest.raises(MutationError, match="out-of-bounds ActionPointsComponent"):
+        validate_core_invariants(world)
 
 
 def test_remove_edge_apply_rejects_an_unresolved_reference(scenario):

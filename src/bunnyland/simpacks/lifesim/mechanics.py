@@ -813,12 +813,24 @@ def pregnancy_co_parents(entity: Entity) -> tuple[EntityId, ...]:
     )
 
 
-def validate_lifesim_relationships(world: World) -> None:
+def validate_lifesim_relationships(
+    world: World,
+    entity_ids: frozenset[EntityId] | None = None,
+) -> None:
     """Assert the cardinality and endpoint contracts of Lifesim's pilot edges."""
 
     from ...core.mutations import MutationError
 
-    for entity in world.query().execute_entities():
+    entities = (
+        world.query().execute_entities()
+        if entity_ids is None
+        else (
+            world.get_entity(entity_id)
+            for entity_id in entity_ids
+            if world.has_entity(entity_id)
+        )
+    )
+    for entity in entities:
         owners = entity.get_incoming_relationships(OwnsHome)
         if len(owners) > 1:
             raise MutationError(f"room {entity.id} has more than one owner")

@@ -3497,8 +3497,20 @@ def voidsim_fragments(world: World, character: Entity) -> list[str]:
     return sorted(lines)
 
 
-def validate_voidsim_relationships(world: World) -> None:
-    for ship in world.query().execute_entities():
+def validate_voidsim_relationships(
+    world: World,
+    entity_ids: frozenset[EntityId] | None = None,
+) -> None:
+    ships = (
+        world.query().execute_entities()
+        if entity_ids is None
+        else (
+            world.get_entity(entity_id)
+            for entity_id in entity_ids
+            if world.has_entity(entity_id)
+        )
+    )
+    for ship in ships:
         has_orbit = ship.has_component(OrbitComponent)
         has_route = ship.has_component(NavigationRouteComponent)
         orbits = ship.get_relationships(OrbitsBody)

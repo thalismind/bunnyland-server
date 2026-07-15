@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import copy
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -19,55 +17,10 @@ class MutationError(RuntimeError):
     pass
 
 
-_TRANSACTIONAL_WORLD_FIELDS = (
-    "_epoch",
-    "_entities",
-    "_prefab_index",
-    "_sequence_generator",
-    "_component_types",
-    "_relationships",
-    "_incoming_relationships",
-    "_edge_types",
-    "_component_index",
-    "_indexes",
-)
-
-
-@contextmanager
-def world_transaction(world: World) -> Iterator[None]:
-    """Roll back one legacy world-mutation phase when it fails validation.
-
-    Command handlers use typed ``MutationPlan`` operations. Relics systems, consequence
-    passes, and plugin reactions predate that contract and may perform several direct
-    mutations. This boundary gives those separately ordered phases the same atomic
-    failure behavior without pretending they are part of the initiating command.
-    """
-
-    baseline_error: Exception | None = None
-    try:
-        validate_core_invariants(world)
-    except Exception as exc:
-        baseline_error = exc
-    snapshot = copy.deepcopy(
-        {name: getattr(world, name) for name in _TRANSACTIONAL_WORLD_FIELDS},
-        {id(world): world},
-    )
-    observer_queue = copy.copy(world._observer_queue)
-    try:
-        yield
-        try:
-            validate_core_invariants(world)
-        except Exception as exc:
-            if baseline_error is None or (type(exc), str(exc)) != (
-                type(baseline_error),
-                str(baseline_error),
-            ):
-                raise
-    except Exception:
-        for name, value in snapshot.items():
-            setattr(world, name, value)
-        world._observer_queue = observer_queue
-        raise
+@dataclass(frozen=True)
+class AppliedMutation:
+    inverse: Callable[[], None]
+    entity_ids: tuple[EntityId, ...]
 
 
 @dataclass
@@ -88,7 +41,7 @@ class EntityReference:
 class MutationOperation(Protocol):
     def preflight(self, world: World) -> None: ...
 
-    def apply(self, world: World) -> Callable[[], None]: ...
+    def apply(self, world: World) -> AppliedMutation: ...
 
     def summary(self) -> dict[str, Any]: ...
 
@@ -148,7 +101,7 @@ class AddEntity:
         if len(types) != len(set(types)):
             raise MutationError("new entity has duplicate component types")
 
-    def apply(self, world: World) -> Callable[[], None]:
+    def apply(self, world: World) -> AppliedMutation:
         if self.prefab is None:
             entity = spawn_entity(world, self.components)
         else:
@@ -167,7 +120,7 @@ class AddEntity:
             if self.reference is not None:
                 self.reference.entity_id = None
 
-        return inverse
+        return AppliedMutation(inverse, (entity.id,))
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -191,7 +144,7 @@ class AddComponent:
                 f"entity {self.entity_id!s} already has component {type(self.component).__name__}"
             )
 
-    def apply(self, world: World) -> Callable[[], None]:
+    def apply(self, world: World) -> AppliedMutation:
         entity = _entity(world, self.entity_id)
         component_type = type(self.component)
         if entity.has_component(component_type):
@@ -199,7 +152,7 @@ class AddComponent:
                 f"entity {self.entity_id!s} already has component {component_type.__name__}"
             )
         entity.add_component(self.component)
-        return lambda: entity.remove_component(component_type)
+        return AppliedMutation(lambda: entity.remove_component(component_type), (entity.id,))
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -219,7 +172,7 @@ class SetComponent:
             return
         _entity(world, self.entity_id)
 
-    def apply(self, world: World) -> Callable[[], None]:
+    def apply(self, world: World) -> AppliedMutation:
         entity = _entity(world, self.entity_id)
         component_type = type(self.component)
         previous = (
@@ -233,7 +186,7 @@ class SetComponent:
             else:
                 replace_component(entity, previous)
 
-        return inverse
+        return AppliedMutation(inverse, (entity.id,))
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -256,7 +209,7 @@ class SetComponentFactory:
             return
         _entity(world, self.entity_id)
 
-    def apply(self, world: World) -> Callable[[], None]:
+    def apply(self, world: World) -> AppliedMutation:
         entity = _entity(world, self.entity_id)
         component = self.factory()
         if type(component) is not self.component_type:
@@ -277,7 +230,7 @@ class SetComponentFactory:
             else:
                 replace_component(entity, previous)
 
-        return inverse
+        return AppliedMutation(inverse, (entity.id,))
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -301,11 +254,11 @@ class RemoveComponent:
                 f"entity {self.entity_id!s} does not have component {self.component_type.__name__}"
             )
 
-    def apply(self, world: World) -> Callable[[], None]:
+    def apply(self, world: World) -> AppliedMutation:
         entity = _entity(world, self.entity_id)
         previous = entity.get_component(self.component_type)
         entity.remove_component(self.component_type)
-        return lambda: entity.add_component(previous)
+        return AppliedMutation(lambda: entity.add_component(previous), (entity.id,))
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -327,7 +280,7 @@ class AddEdge:
         if not isinstance(self.target_id, EntityReference):
             _entity(world, self.target_id)
 
-    def apply(self, world: World) -> Callable[[], None]:
+    def apply(self, world: World) -> AppliedMutation:
         source = _entity(world, self.source_id)
         target = _entity(world, self.target_id)
         previous = next(
@@ -345,7 +298,7 @@ class AddEdge:
             if previous is not None:
                 source.add_relationship(previous, target.id)
 
-        return inverse
+        return AppliedMutation(inverse, (source.id, target.id))
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -375,7 +328,7 @@ class RemoveEdge:
                 f"edge to {self.target_id!s}"
             )
 
-    def apply(self, world: World) -> Callable[[], None]:
+    def apply(self, world: World) -> AppliedMutation:
         source = _entity(world, self.source_id)
         target_id = _target_id(self.target_id)
         if target_id is None:
@@ -386,7 +339,10 @@ class RemoveEdge:
             if candidate_id == target_id
         )
         source.remove_relationship(self.edge_type, target_id)
-        return lambda: source.add_relationship(edge, target_id)
+        return AppliedMutation(
+            lambda: source.add_relationship(edge, target_id),
+            (source.id, target_id),
+        )
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -425,9 +381,10 @@ class DeleteEntity:
             return
         _entity(world, self.entity_id)
 
-    def apply(self, world: World) -> Callable[[], None]:
+    def apply(self, world: World) -> AppliedMutation:
         del world
-        return lambda: None
+        entity_id = _target_id(self.entity_id)
+        return AppliedMutation(lambda: None, (() if entity_id is None else (entity_id,)))
 
     def commit(self, world: World) -> None:
         world.remove(_entity(world, self.entity_id).id)
@@ -437,9 +394,10 @@ class DeleteEntity:
 
 
 Invariant = Callable[[World], None]
+WorldInvariant = Callable[[World, frozenset[EntityId] | None], None]
 
 
-def register_world_invariant(world: World, invariant: Invariant) -> None:
+def register_world_invariant(world: World, invariant: WorldInvariant) -> None:
     """Register one plugin-owned invariant for every transactional mutation."""
 
     registered = tuple(getattr(world, "_bunnyland_invariants", ()))
@@ -456,13 +414,34 @@ class MutationPlan:
         return tuple(operation.summary() for operation in self.operations)
 
 
-def validate_core_invariants(world: World) -> None:
+def _related_entity_ids(world: World, entity_ids: Iterable[EntityId]) -> frozenset[EntityId]:
+    related = set(entity_ids)
+    for entity_id in tuple(related):
+        for targets in world._relationships.get(entity_id, {}).values():
+            related.update(targets)
+        for sources in world._incoming_relationships.get(entity_id, {}).values():
+            related.update(sources)
+    return frozenset(related)
+
+
+def validate_core_invariants(
+    world: World,
+    entity_ids: Iterable[EntityId] | None = None,
+) -> None:
     clocks = list(world.query().with_all([WorldClockComponent]).execute_entities())
     if len(clocks) != 1:
         raise MutationError(f"expected exactly one world clock, found {len(clocks)}")
-    for entity in world.query().execute_entities():
-        if not world.has_entity(entity.id):
-            continue
+    if entity_ids is None:
+        entities = world.query().execute_entities()
+        scope = None
+    else:
+        scope = _related_entity_ids(world, entity_ids)
+        entities = (
+            world.get_entity(entity_id)
+            for entity_id in scope
+            if world.has_entity(entity_id)
+        )
+    for entity in entities:
         if len(entity.get_incoming_relationships(Contains)) > 1:
             raise MutationError(f"entity {entity.id} has more than one physical location")
         if len(entity.get_relationships(ControlledBy)) > 1:
@@ -475,7 +454,7 @@ def validate_core_invariants(world: World) -> None:
                         f"entity {entity.id} has out-of-bounds {component_type.__name__}"
                     )
     for invariant in getattr(world, "_bunnyland_invariants", ()):
-        invariant(world)
+        invariant(world, scope)
 
 
 def execute_mutation_plan(
@@ -497,11 +476,18 @@ def execute_mutation_plan(
         except MutationError:
             if not _preflight_supplied_by_prior(operation, plan.operations[:index]):
                 raise
-    inverses: list[Callable[[], None]] = []
+    applied_mutations: list[AppliedMutation] = []
     try:
         for operation in plan.operations:
-            inverses.append(operation.apply(world))
-        validate_core_invariants(world)
+            applied_mutations.append(operation.apply(world))
+        validate_core_invariants(
+            world,
+            (
+                entity_id
+                for applied in applied_mutations
+                for entity_id in applied.entity_ids
+            ),
+        )
         for invariant in plan.invariants:
             invariant(world)
         after_result = after_apply() if after_apply is not None else None
@@ -518,8 +504,8 @@ def execute_mutation_plan(
             if entity.has_component(WorldClockComponent):
                 raise MutationError("the world clock cannot be deleted")
     except Exception:
-        for inverse in reversed(inverses):
-            inverse()
+        for applied in reversed(applied_mutations):
+            applied.inverse()
         raise
     for deletion in deletions:
         deletion.commit(world)
@@ -544,5 +530,4 @@ __all__ = [
     "SetComponent",
     "execute_mutation_plan",
     "validate_core_invariants",
-    "world_transaction",
 ]

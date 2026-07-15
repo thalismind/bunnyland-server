@@ -15,7 +15,7 @@ One `WorldActor` owns one Relics world and one async lock. A tick runs, in order
 4. reconcile direct room perception into durable `KnowsRoom` edges;
 5. execute commands by descending initiative, focus before world lane, then ascending
    submission epoch and actor-assigned submission sequence;
-6. run consequences as separately ordered transactions;
+6. run consequences as a separately ordered, fail-stop phase;
 7. run registered after-tick work, including persistence and integrations;
 8. close the event-bus transaction.
 
@@ -33,8 +33,9 @@ must be named and added to checkpoint and journal records before use.
 
 New authoritative handlers return a `MutationPlan` containing typed entity, component,
 and edge operations. The executor preflights every operation, applies them under the actor
-lock, asserts central and plan-specific invariants, and rolls applied operations back in
-reverse order on failure. Action and focus costs belong to the same command transaction.
+lock, asserts central and plan-specific invariants for the plan's write set, and rolls
+applied operations back in reverse order on failure. Action and focus costs belong to the
+same command transaction.
 Events are published only after commit and their IDs are recorded in `CommitReceipt`.
 Entity deletion is a terminal operation: the executor validates all other work, constructs
 post-apply events, resolves every deletion target, rejects duplicate or world-clock
@@ -48,16 +49,25 @@ callers must execute returned plans explicitly; handlers cannot use it to apply 
 a compatibility side effect. Admin patch and scripting surfaces compile to mutation plans
 and may not invent a second mutation authority.
 
-Passive systems and event reactions are not part of an initiating command's atomic
-transaction. Their tick phase and causation/correlation identifiers establish their
-boundary. When a passive system reuses handler validation, it explicitly executes the
-returned plan as its own ordered transaction. A failure in a later reaction does not
+Passive systems and event reactions are not implicit transactions. They run directly on
+the single actor and fail stop on programmer errors. When one needs atomic multi-operation
+behavior, it must explicitly construct and execute a `MutationPlan`; the event bus and tick
+runner do not add rollback semantics around it. A failure in a later reaction does not
 retroactively uncommit its cause.
+
+Runtime mutation cost must scale with the write set, not total world size. Runtime code
+must never copy or snapshot the live world. A plan retains inverse functions only for its
+applied operations, expands validation at most one relationship hop from touched entities,
+and runs plugin invariants against that scope. Full-world validation is an explicit
+load-time, persistence, test, or administrative diagnostic operation; it is not part of
+event delivery, reactions, ticks, or ordinary command execution.
 
 Core invariants are: exactly one world clock; monotonic time; at most one physical
 `Contains` parent; legal, acyclic containment; existing edge endpoints; at most one active
 `ControlledBy` relationship; bounded AP/FP and mechanic meters; and projections that
-contain only facts allowed for their viewer. Violations fail closed.
+contain only facts allowed for their viewer. Mutation plans check these constraints within
+their affected relationship neighborhood; explicit full-world validation checks the whole
+database. Violations fail closed.
 
 ## Persistence and recovery
 

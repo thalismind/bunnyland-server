@@ -3565,8 +3565,20 @@ def neonsim_fragments(world: World, character: Entity) -> list[str]:
 # --- Installation --------------------------------------------------------------------
 
 
-def validate_neonsim_relationships(world: World) -> None:
-    for evidence in world.query().execute_entities():
+def validate_neonsim_relationships(
+    world: World,
+    entity_ids: frozenset[EntityId] | None = None,
+) -> None:
+    evidence_entities = (
+        world.query().execute_entities()
+        if entity_ids is None
+        else (
+            world.get_entity(entity_id)
+            for entity_id in entity_ids
+            if world.has_entity(entity_id)
+        )
+    )
+    for evidence in evidence_entities:
         subjects = evidence.get_relationships(EvidenceSubject)
         devices = evidence.get_relationships(RecordedByDevice)
         if not evidence.has_component(RecordedEvidenceComponent):

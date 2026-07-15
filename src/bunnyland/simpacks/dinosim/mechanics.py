@@ -4421,7 +4421,10 @@ _SINGLE_DINOSIM_EDGES = (
 )
 
 
-def validate_dinosim_relationships(world: World) -> None:
+def validate_dinosim_relationships(
+    world: World,
+    entity_ids: frozenset[EntityId] | None = None,
+) -> None:
     """Enforce Dinosim's live endpoint and single-valued relationship contracts."""
 
     character_targets = {
@@ -4471,7 +4474,16 @@ def validate_dinosim_relationships(world: World) -> None:
         AssignedBy: (RanchLaborComponent, GuardAnimalComponent),
         RanchWorkTarget: RanchLaborComponent,
     }
-    for entity in world.query().execute_entities():
+    entities = (
+        world.query().execute_entities()
+        if entity_ids is None
+        else (
+            world.get_entity(entity_id)
+            for entity_id in entity_ids
+            if world.has_entity(entity_id)
+        )
+    )
+    for entity in entities:
         for edge_type in (*_SINGLE_DINOSIM_EDGES, SurveyedBy, StudiedBy):
             relationships = entity.get_relationships(edge_type)
             if edge_type in _SINGLE_DINOSIM_EDGES and len(relationships) > 1:

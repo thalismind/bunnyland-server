@@ -211,7 +211,6 @@ from .mutations import (
     register_world_invariant,
     replace_single_edge_operations,
     validate_core_invariants,
-    world_transaction,
 )
 from .perspective import (
     AvailableActionsOutput,
@@ -407,7 +406,6 @@ __all__ = [
     "ValidTargetsOutput",
     "WhatChangedSinceOutput",
     "WhyNotOutput",
-    "world_transaction",
     "WorldLike",
     "WorldPauseStatusChangedEvent",
     "WritableComponent",

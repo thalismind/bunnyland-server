@@ -100,7 +100,6 @@ from .mutations import (
     RemoveEdge,
     SetComponent,
     execute_mutation_plan,
-    world_transaction,
 )
 from .perspective import PerspectiveQueryRegistry
 from .queue import CommandQueues
@@ -155,7 +154,7 @@ class WorldActor:
     ) -> None:
         self.world = world or World()
         ensure_blank_prefab(self.world)
-        self.bus = EventBus(reaction_transaction=lambda: world_transaction(self.world))
+        self.bus = EventBus()
         self.queues = CommandQueues()
         self._handlers: dict[str, list[CommandHandler]] = {}
         self._action_definitions: dict[str, ActionDefinition] = {}
@@ -512,9 +511,8 @@ class WorldActor:
                         await self._ingest()
                     # Phases 2-4: advance clock, regen Action/Focus, run passive systems.
                     with telemetry.span("tick.systems"):
-                        with world_transaction(self.world):
-                            self.world.tick(game_delta_seconds)
-                            self._reconcile_room_knowledge()
+                        self.world.tick(game_delta_seconds)
+                        self._reconcile_room_knowledge()
                     tick_span.set_attribute("tick.epoch", self.epoch)
                     # Phase 5: process queued commands in initiative order.
                     with telemetry.span("tick.commands"):
@@ -529,18 +527,16 @@ class WorldActor:
 
     async def _run_consequences(self) -> None:
         events: list[DomainEvent] = []
-        with world_transaction(self.world):
-            for consequence in self._consequences:
-                events.extend(consequence.process(self.world, self.epoch))
+        for consequence in self._consequences:
+            events.extend(consequence.process(self.world, self.epoch))
         for event in events:
             await self._publish(event)
 
     async def _run_after_tick(self) -> None:
         for hook in self._after_tick:
-            with world_transaction(self.world):
-                result = hook(self)
-                if inspect.isawaitable(result):
-                    await result
+            result = hook(self)
+            if inspect.isawaitable(result):
+                await result
 
     async def _ingest(self) -> None:
         while not self._inbox.empty():
@@ -842,8 +838,7 @@ class WorldActor:
         telemetry.record_command_accepted(command.command_type)
         for event in result.events:
             await self._publish(event)
-        with world_transaction(self.world):
-            self._reconcile_room_knowledge(character)
+        self._reconcile_room_knowledge(character)
         self._record_receipt(
             command,
             CommitStatus.COMMITTED,

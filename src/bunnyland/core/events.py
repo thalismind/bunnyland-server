@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable, Mapping
-from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -675,7 +674,6 @@ class EventBus:
         *,
         max_deliveries: int = 256,
         max_causal_hops: int = 16,
-        reaction_transaction: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> None:
         self._handlers: dict[type[DomainEvent], list[Handler]] = defaultdict(list)
         self._subscriptions: list[_Subscription] = []
@@ -695,7 +693,6 @@ class EventBus:
         self.max_deliveries = max_deliveries
         self.max_causal_hops = max_causal_hops
         self.diagnostics: list[ReactionCascadeLimitedEvent] = []
-        self._reaction_transaction = reaction_transaction or nullcontext
 
     def subscribe(
         self,
@@ -832,10 +829,9 @@ class EventBus:
                 self._current_event = event
                 self._current_depth = depth
                 try:
-                    with self._reaction_transaction():
-                        result = subscription.handler(event)
-                        if isinstance(result, Awaitable):
-                            await result
+                    result = subscription.handler(event)
+                    if isinstance(result, Awaitable):
+                        await result
                 except Exception:
                     self._events = events_before
                     self._deliveries = deliveries_before
