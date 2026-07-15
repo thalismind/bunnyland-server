@@ -113,6 +113,30 @@ def test_world_transaction_preserves_queued_observer_references_on_rollback(scen
     assert tuple(world._observer_queue) == (queued,)
 
 
+def test_world_transaction_copies_index_state_without_copying_the_live_world(scenario):
+    class UncopyableObserver:
+        def __deepcopy__(self, _memo):
+            raise TypeError("runtime observer must not be deep-copied")
+
+    @dataclass
+    class RuntimeIndex:
+        _world: object
+        cache: list[int]
+
+    world = scenario.actor.world
+    world._observers.append(UncopyableObserver())
+    world._indexes["runtime"] = RuntimeIndex(world, [1])
+
+    with pytest.raises(RuntimeError, match="rollback"):
+        with world_transaction(world):
+            world._indexes["runtime"].cache.append(2)
+            raise RuntimeError("rollback")
+
+    restored = world._indexes["runtime"]
+    assert restored._world is world
+    assert restored.cache == [1]
+
+
 def test_remove_edge_apply_rejects_an_unresolved_reference(scenario):
     with pytest.raises(MutationError, match="target reference has not been created"):
         RemoveEdge(scenario.room_a, EntityReference(), Contains).apply(scenario.actor.world)

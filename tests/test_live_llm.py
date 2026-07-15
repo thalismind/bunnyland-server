@@ -135,7 +135,7 @@ def _world_agent(provider: str):
         return OllamaWorldAgent(model=model, host=host, api_key=api_key)
     if provider == "openrouter":
         api_key, server_url = _openrouter_connection()
-        model = os.environ.get("BUNNYLAND_LIVE_OPENROUTER_WORLD_MODEL", "openai/gpt-4.1")
+        model = os.environ.get("BUNNYLAND_LIVE_OPENROUTER_WORLD_MODEL", "openai/gpt-4.1-mini")
         return OpenRouterWorldAgent(model=model, api_key=api_key, server_url=server_url)
     raise AssertionError(f"unknown provider {provider!r}")
 
@@ -154,7 +154,7 @@ def _world_options(provider: str, *, max_rooms: int = 2) -> GenOptions:
         )
     if provider == "openrouter":
         api_key, server_url = _openrouter_connection()
-        model = os.environ.get("BUNNYLAND_LIVE_OPENROUTER_WORLD_MODEL", "openai/gpt-4.1")
+        model = os.environ.get("BUNNYLAND_LIVE_OPENROUTER_WORLD_MODEL", "openai/gpt-4.1-mini")
         return GenOptions(
             llm=True,
             provider=provider,

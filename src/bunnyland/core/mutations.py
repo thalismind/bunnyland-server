@@ -48,7 +48,10 @@ def world_transaction(world: World) -> Iterator[None]:
         validate_core_invariants(world)
     except Exception as exc:
         baseline_error = exc
-    snapshot = copy.deepcopy({name: getattr(world, name) for name in _TRANSACTIONAL_WORLD_FIELDS})
+    snapshot = copy.deepcopy(
+        {name: getattr(world, name) for name in _TRANSACTIONAL_WORLD_FIELDS},
+        {id(world): world},
+    )
     observer_queue = copy.copy(world._observer_queue)
     try:
         yield
