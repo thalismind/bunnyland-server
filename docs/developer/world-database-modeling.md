@@ -33,6 +33,33 @@ Keep these other categories distinct:
 - **External ids:** Discord users, transport messages, provider jobs, and similar identifiers
   belong at the integration boundary and must not be treated as Relics entity ids.
 
+## Map systems to indexed components
+
+Each independent system effect has one driving component: the component whose state the
+system owns or changes. Its query must require that component so Relics can begin with the
+per-component entity index. Exclusions, secondary indexes, and bounded relationship terms
+may reduce that candidate set further.
+
+Do not combine independent effects into an A-or-B system. A disjunctive component query, or
+a full-world query followed by `has_component(A)` and `has_component(B)` branches, obscures
+ownership and can make an idle tick scan every entity. Define one system for A and another
+for B. An entity carrying both components then participates once in each system, while an
+entity carrying only one participates only in the matching system.
+
+An A-and-B system is different and remains valid when one semantic effect inherently needs
+both components. Require both components in the query. Do not select A and discover B in
+the processing loop, because that admits candidates the system cannot process.
+
+Use this review checklist for every system:
+
+1. Name the component whose state the system owns or changes.
+2. Confirm the query is anchored by that component's index.
+3. Split independent branches that operate on different components.
+4. Keep multi-component systems only for genuinely conjunctive behavior.
+5. Test entities with A only, B only, both, and neither.
+6. For query-shape changes, prove cost scales with matching candidates rather than total
+   world size.
+
 ## Edge contract checklist
 
 Every new edge must document and test:

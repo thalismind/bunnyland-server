@@ -59,6 +59,25 @@ Handler state updates should use the existing ECS helpers:
 - Update frozen components with `replace_component(entity, replace(component, ...))`.
 - Use `spawn_entity(...)` for newly created inventory, quest, event, or resource objects.
 
+System-to-component mapping must preserve indexed candidate selection:
+
+- Give each independent system effect one driving component: the component whose state the
+  system owns or changes. Select it with `with_all([DrivingComponent])` so Relics starts
+  from that component's index.
+- Do not use `with_any([A, B])` for systems, and do not query the whole world before
+  branching on `has_component(A)` or `has_component(B)`. Split independent A-or-B behavior
+  into separate systems.
+- An entity with both components should run once in each independent system. An entity with
+  only one should run only in that component's system.
+- Keep a single A-and-B system only when one semantic effect inherently requires both
+  components. Express that contract as `with_all([A, B])`; do not query A and discover B in
+  the processing loop.
+- `with_none(...)`, secondary indexes, and bounded relationship conditions may refine an
+  indexed driving set. They must not turn a bounded system into a full-world scan.
+- Cover A-only, B-only, both, and neither in behavior tests. When query shape changes, add
+  or update a performance test proving cost scales with matching candidates rather than
+  total world size.
+
 ## 4. Mechanics And Plugins
 
 Mechanics packs live under `src/bunnyland/mechanics/`; built-in plugin surfaces are wired
