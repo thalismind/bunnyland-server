@@ -1,7 +1,7 @@
 # Controlled preview rules, privacy, and incident contact
 
-This notice applies to the hosted Bunnyland sandbox. It is a small, experimental service
-operated by one person, not a production platform. Access may be paused or withdrawn to
+This notice applies to the hosted Bunnyland sandbox. It is an experimental, best-effort
+service, not a production platform. Access may be paused or withdrawn to
 protect players, world consistency, privacy, or operating cost.
 
 ## Sandbox rules
@@ -58,7 +58,7 @@ Report a vulnerability privately through the
 Do not include live credentials, private memory text, or exploit details in a public issue.
 For non-sensitive defects, use the repository issue tracker.
 
-## Solo-operator incident procedure
+## Operator incident procedure
 
 The operator may pause the world, freeze autonomous controllers, suspend or revoke claims,
 disable LLM, chat, MCP, image, or write surfaces, and restore the last verified checkpoint.
