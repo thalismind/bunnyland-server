@@ -55,7 +55,9 @@ not duplicate its scope check.
 Browser clients are same-origin. Cross-origin server overrides, socket targets, media
 URLs, and configuration values are rejected. Explicit CORS configuration is a secondary
 browser defense, not an alternative to bearer authentication and TLS. Non-browser
-clients may connect remotely only over HTTPS, except for loopback development.
+clients may connect remotely only over HTTPS, except for loopback development. MCP DNS
+rebinding protection derives its allowed Host and Origin values from that same validated
+origin list; terminal MCP clients may omit Origin but do not bypass Host validation.
 
 ## Addon conventions
 

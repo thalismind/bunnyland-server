@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlsplit
 
 from pydantic import AnyUrl
 from relics import EntityId
@@ -713,6 +713,7 @@ def create_bunnyland_mcp_app(
     worldgen_options: GenOptions | None = None,
     claim_secrets: ClaimSecretRegistry | None = None,
     plugins: Sequence[Plugin] = (),
+    trusted_origins: Sequence[str] = (),
 ):
     """Create the ASGI MCP app.
 
@@ -727,6 +728,18 @@ def create_bunnyland_mcp_app(
             "the MCP server requires the 'mcp' extra: pip install bunnyland[mcp]"
         ) from exc
 
+    transport_security = None
+    if trusted_origins:
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=list(
+                dict.fromkeys(urlsplit(origin).netloc for origin in trusted_origins)
+            ),
+            allowed_origins=list(dict.fromkeys(trusted_origins)),
+        )
+
     mcp = FastMCP(
         "Bunnyland",
         instructions=(
@@ -736,6 +749,7 @@ def create_bunnyland_mcp_app(
         stateless_http=False,
         json_response=True,
         streamable_http_path="/",
+        transport_security=transport_security,
     )
     event_bridge = MCPEventBridge(actor)
     claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS

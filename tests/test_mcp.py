@@ -1981,11 +1981,19 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
     admin_token, _admin_principal = token_store.issue(
         "mcp-admin", [WORLD_ADMIN_SCOPE], automatic_rotation=False
     )
-    app = create_app(scenario.actor, plugins=plugins, token_store=token_store)
-    mcp_http_client = httpx.AsyncClient(
-        headers={"Authorization": f"Bearer {play_token}"}
-    )
     port = _free_port()
+    app = create_app(
+        scenario.actor,
+        plugins=plugins,
+        token_store=token_store,
+        cors_origins=[f"http://127.0.0.1:{port}"],
+    )
+    mcp_http_client = httpx.AsyncClient(
+        headers={
+            "Authorization": f"Bearer {play_token}",
+            "Origin": f"http://127.0.0.1:{port}",
+        }
+    )
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     server_task = asyncio.create_task(server.serve())
     try:
@@ -2004,6 +2012,26 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
                     json={},
                 )
             ).status_code == 401
+            assert (
+                await raw_client.post(
+                    "/mcp/",
+                    headers={
+                        "Authorization": f"Bearer {play_token}",
+                        "Host": "hostile.invalid",
+                    },
+                    json={},
+                )
+            ).status_code == 421
+            assert (
+                await raw_client.post(
+                    "/mcp/",
+                    headers={
+                        "Authorization": f"Bearer {play_token}",
+                        "Origin": "https://hostile.invalid",
+                    },
+                    json={},
+                )
+            ).status_code == 403
 
         notifications = []
 

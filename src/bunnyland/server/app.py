@@ -481,6 +481,7 @@ def create_app(
             if imagegen is not None:
                 await imagegen.aclose()
 
+    trusted_origins = _configured_cors_origins(cors_origins)
     app = FastAPI(
         title=title,
         lifespan=lifespan,
@@ -491,7 +492,7 @@ def create_app(
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=_configured_cors_origins(cors_origins),
+        allow_origins=trusted_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
@@ -2420,6 +2421,7 @@ def create_app(
             worldgen_options=worldgen_options,
             claim_secrets=claim_secrets,
             plugins=plugins or (),
+            trusted_origins=trusted_origins,
         )
         mcp_session_manager = getattr(mcp_app, "bunnyland_mcp_session_manager", None)
         mcp_event_bridge = getattr(mcp_app, "bunnyland_mcp_event_bridge", None)
