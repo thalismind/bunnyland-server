@@ -79,7 +79,11 @@ from bunnyland.core.events import (
     EventVisibility,
 )
 from bunnyland.core.handlers.base import planned
-from bunnyland.core.systems import ClaimTimeoutSystem
+from bunnyland.core.systems import (
+    ActionRegenSystem,
+    ClaimTimeoutSystem,
+    FocusRegenSystem,
+)
 
 HOUR = 3600.0
 
@@ -192,6 +196,18 @@ async def test_regen_caps_at_maximum():
     await scenario.actor.tick(10 * HOUR)
     assert char.get_component(ActionPointsComponent).current == pytest.approx(5.0)
     assert char.get_component(FocusPointsComponent).current == pytest.approx(3.0)
+
+
+def test_regen_systems_use_independent_component_indexes():
+    scenario = build_scenario()
+    systems = scenario.actor.world._systems
+    action = next(system for system in systems if isinstance(system, ActionRegenSystem))
+    focus = next(system for system in systems if isinstance(system, FocusRegenSystem))
+
+    assert action.query()._with_all == [ActionPointsComponent]
+    assert action.query()._with_any == []
+    assert focus.query()._with_all == [FocusPointsComponent]
+    assert focus.query()._with_any == []
 
 
 async def test_world_clock_advances():
@@ -494,7 +510,6 @@ async def test_claim_timeout_leaves_active_controller_untouched():
 
 async def test_action_focus_regen_handles_focus_only_entity():
     scenario = build_scenario()
-    # Entity with only FocusPoints exercises the 96->103 skip branch.
     focus_only = spawn_entity(
         scenario.actor.world,
         [FocusPointsComponent(current=0.0, maximum=3.0, regen_per_hour=0.5)],
@@ -503,6 +518,18 @@ async def test_action_focus_regen_handles_focus_only_entity():
     await scenario.actor.tick(HOUR)
 
     assert focus_only.get_component(FocusPointsComponent).current == pytest.approx(0.5)
+
+
+async def test_action_focus_regen_handles_action_only_entity():
+    scenario = build_scenario()
+    action_only = spawn_entity(
+        scenario.actor.world,
+        [ActionPointsComponent(current=0.0, maximum=5.0, regen_per_hour=1.0)],
+    )
+
+    await scenario.actor.tick(HOUR)
+
+    assert action_only.get_component(ActionPointsComponent).current == pytest.approx(1.0)
 
 
 def test_claim_timeout_controller_kind_classifies_every_controller():

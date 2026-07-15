@@ -733,7 +733,6 @@ CONSTANT_EDGE_OPERATIONS = (
 }
 
 KNOWN_SCALING_LIMITS = {
-    ("idle_tick", "entities_at_one_edge"): 1.2,
     ("bounded_graph_query", "edges_at_largest_world"): 1.2,
 }
 

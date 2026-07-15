@@ -71,13 +71,17 @@ flat.
 
 ## Problematic performance areas
 
-1. **Idle ticks scan unrelated entities.** An otherwise idle tick grew with an exponent of
-   0.91–0.92 and reached about 1.2 seconds at one million entities. Profiling showed the
-   Relics system executor spending nearly the whole tick in query execution. `with_any`
-   does not seed candidates from the component index, so Action/Focus regeneration copies
-   and filters the full entity set even when almost no entities carry either component.
-   The immediate option is to make `with_any` use the union of its component indexes and
-   intersect that union with any `with_all`/secondary-index candidates.
+1. **Resolved: idle ticks scanned unrelated entities.** The baseline idle tick grew with
+   an exponent of 0.91–0.92 and reached about 1.2 seconds at one million entities.
+   Profiling showed the Relics system executor spending nearly the whole tick in query
+   execution because `with_any` does not seed candidates from component indexes.
+   Action/Focus regeneration was split into independent systems whose `with_all` queries
+   use the Action Points and Focus Points indexes directly. The post-fix smoke matrix was
+   flat through 10,000 entities (slopes -0.009 and -0.002), with an idle tick around 54
+   microseconds at that tier. The CI gate no longer permits the old linear scaling limit.
+   An audit found no other registered ECS system using `with_any` or a combined A-or-B
+   query; future systems should likewise prefer independent indexed systems when their
+   effects are independent.
 
 2. **Exact graph checks materialize the full adjacency list.** A fully bound graph query
    was flat on balanced worlds but grew with concentrated degree at slope 0.86, reaching

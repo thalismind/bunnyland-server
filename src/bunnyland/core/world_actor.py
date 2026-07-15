@@ -103,7 +103,7 @@ from .mutations import (
 )
 from .perspective import PerspectiveQueryRegistry
 from .queue import CommandQueues
-from .systems import ActionFocusRegenSystem, WorldClockSystem
+from .systems import ActionRegenSystem, FocusRegenSystem, WorldClockSystem
 
 #: Control verbs change the controller itself (spec 7.4); they carry no point cost and
 #: bypass generation/participation gates so handoff and resume always work.
@@ -188,7 +188,8 @@ class WorldActor:
         self.perspective_queries = PerspectiveQueryRegistry()
 
         self.world.register_system(WorldClockSystem())
-        self.world.register_system(ActionFocusRegenSystem())
+        self.world.register_system(ActionRegenSystem())
+        self.world.register_system(FocusRegenSystem())
 
         # World singleton holds the authoritative clock.
         self._clock_entity = spawn_entity(self.world, [WorldClockComponent()])

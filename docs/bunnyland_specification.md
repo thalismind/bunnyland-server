@@ -2742,7 +2742,8 @@ This section lists likely systems. Plugins may add/remove systems.
 
 ```text
 WorldClockSystem
-ActionFocusRegenSystem
+ActionRegenSystem
+FocusRegenSystem
 ContainmentIntegritySystem
 InventoryCapacitySystem
 EquipmentIntegritySystem

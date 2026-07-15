@@ -83,35 +83,54 @@ def _regen(
     return min(cap, current + gained)
 
 
-class ActionFocusRegenSystem(System):
-    """Regenerate Action and Focus for *all* characters in real time (spec 6.2).
+class ActionRegenSystem(System):
+    """Regenerate Action for every entity that has Action Points (spec 6.2).
 
     Includes suspended characters: they regenerate but never spend, so they recharge
     fully. Spending is handled by command execution, not here.
     """
 
     def query(self):
-        return self.q.with_any([ActionPointsComponent, FocusPointsComponent])
+        return self.q.with_all([ActionPointsComponent])
 
     def frequency(self) -> Frequency:
         return Frequency.EVERY_TICK
 
     def process(self, entities, components, delta) -> None:
         for entity in entities:
-            if entity.has_component(ActionPointsComponent):
-                ap = entity.get_component(ActionPointsComponent)
-                new_current = _regen(
-                    ap.current, ap.maximum, ap.overflow_maximum, ap.regen_per_hour, delta
-                )
-                if new_current != ap.current:
-                    replace_component(entity, replace(ap, current=new_current))
-            if entity.has_component(FocusPointsComponent):
-                fp = entity.get_component(FocusPointsComponent)
-                new_current = _regen(
-                    fp.current, fp.maximum, fp.overflow_maximum, fp.regen_per_hour, delta
-                )
-                if new_current != fp.current:
-                    replace_component(entity, replace(fp, current=new_current))
+            action = entity.get_component(ActionPointsComponent)
+            new_current = _regen(
+                action.current,
+                action.maximum,
+                action.overflow_maximum,
+                action.regen_per_hour,
+                delta,
+            )
+            if new_current != action.current:
+                replace_component(entity, replace(action, current=new_current))
+
+
+class FocusRegenSystem(System):
+    """Regenerate Focus for every entity that has Focus Points (spec 6.2)."""
+
+    def query(self):
+        return self.q.with_all([FocusPointsComponent])
+
+    def frequency(self) -> Frequency:
+        return Frequency.EVERY_TICK
+
+    def process(self, entities, components, delta) -> None:
+        for entity in entities:
+            focus = entity.get_component(FocusPointsComponent)
+            new_current = _regen(
+                focus.current,
+                focus.maximum,
+                focus.overflow_maximum,
+                focus.regen_per_hour,
+                delta,
+            )
+            if new_current != focus.current:
+                replace_component(entity, replace(focus, current=new_current))
 
 
 class ClaimTimeoutSystem:
@@ -251,4 +270,9 @@ class ClaimTimeoutSystem:
         return controller
 
 
-__all__ = ["ActionFocusRegenSystem", "ClaimTimeoutSystem", "WorldClockSystem"]
+__all__ = [
+    "ActionRegenSystem",
+    "ClaimTimeoutSystem",
+    "FocusRegenSystem",
+    "WorldClockSystem",
+]
