@@ -44,6 +44,9 @@ jobs:
           BUNNYLAND_PLAYTEST_TRACE_DIR: artifacts/playtests
         run: scripts/test-coverage
 
+      - name: Check bounded world operations across CI-sized worlds
+        run: scripts/test-performance
+
       - name: Publish test and coverage summary
         if: always()
         run: python3 scripts/ci_report.py
@@ -65,6 +68,14 @@ jobs:
             artifacts/coverage/pytest.xml
             coverage.xml
             htmlcov
+          if-no-files-found: error
+
+      - name: Upload performance smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-smoke
+          path: artifacts/performance/smoke
           if-no-files-found: error
 
   package:

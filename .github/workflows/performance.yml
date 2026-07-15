@@ -1,0 +1,60 @@
+name: World Performance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 7 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  world-scale:
+    name: Million-entity world matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Run full world-size matrix
+        run: scripts/benchmark-world full --fail-on-regression
+
+      - name: Profile known scaling paths
+        if: always()
+        run: |
+          for operation in idle_tick bounded_graph_query mutation_component_high_degree serialize_world; do
+            scripts/benchmark-world profile \
+              --entities 100000 \
+              --edges 100000 \
+              --topology concentrated \
+              --operation "$operation" \
+              --output artifacts/performance/profiles
+          done
+
+      - name: Upload measurements and profiles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: world-performance-${{ github.sha }}
+          path: artifacts/performance
+          if-no-files-found: error
+          retention-days: 30

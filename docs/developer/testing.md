@@ -40,6 +40,37 @@ uv run ruff check src tests
 git diff --check
 ```
 
+## World-scale performance
+
+`scripts/test-performance` is the routine CI complexity gate. It compares bounded
+operations within one run across deterministic worlds through 10,000 entities and edges;
+it does not use absolute wall-clock limits tied to one runner. Generated measurements live
+under `artifacts/performance/` and are not source artifacts.
+
+Use `scripts/benchmark-world full` for the complete power-of-ten matrix through one
+million entities and one million total edges. The runner tests every feasible pair where
+the requested unique directed edge count does not exceed
+`entities × (entities − 1)`, under balanced and source-concentrated topologies. It records
+impossible pairs rather than manufacturing synthetic relationship types or self-loops to
+make them appear feasible.
+
+Every entity-count/topology tier runs in a subprocess. A killed or exhausted worker leaves
+its earlier JSONL checkpoints intact so memory limits and crashes are results, not missing
+data. The full job measures persistence because persistence is intentionally world-scale;
+the CI gate omits it because filesystem latency is not a stable per-commit signal.
+
+To inspect one operation with `cProfile`, run:
+
+```bash
+scripts/benchmark-world profile \
+  --entities 100000 --edges 100000 --topology concentrated \
+  --operation mutation_component_high_degree
+```
+
+Supported profile operations are listed by an invalid `--operation` value. Profiles and
+the raw JSONL/CSV output retain the commit, Python, platform, CPU, timing, and RSS context
+needed to compare runs honestly.
+
 ## Distribution gate
 
 CI runs packaging only after the test job succeeds. It builds both a wheel and source
