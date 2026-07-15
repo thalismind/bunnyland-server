@@ -60,6 +60,28 @@ without copying state from a sibling checkout or the running server. Afterward, 
 rollback to the recorded checkpoint and repeat checksum, namespace, projection, and story
 aftermath verification.
 
+## Authenticated stream load gate
+
+Run the exact-container gate with an immutable image digest, never a mutable branch tag:
+
+```bash
+BUNNYLAND_SERVER_IMAGE=IMAGE@sha256:DIGEST scripts/container-stream-load
+```
+
+Set `BUNNYLAND_CONTAINER_RUNTIME` when the local runtime is not Docker. The gate creates an
+isolated 40-character world, 40 distinct play-scoped credentials, 40 distinct client
+identities, and 40 distinct claims. It opens every character stream concurrently, publishes
+an invalidation while one client is disconnected, verifies connection-local sequence reset
+and fresh-projection recovery, revokes one credential while its stream is live, and requires
+policy close code `1008`. It also checks the private token database and SQLite sidecars are
+`0600`.
+
+The client count may be raised for capacity work but may not be lowered below 40 for release
+acceptance. Credentials and fixture state exist only in the temporary isolated directory and
+are removed on exit. Record the immutable image digest and the JSON summary in the release
+validation record. OpenAPI remains the reference for the concrete transport operations and
+schemas exercised by the gate.
+
 ## Stuck ticks or runaway agents
 
 Pause the runtime. Capture health, recent traces, queue depths, the operational journal,

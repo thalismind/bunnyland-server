@@ -1,0 +1,370 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+runtime="${BUNNYLAND_CONTAINER_RUNTIME:-docker}"
+image="${BUNNYLAND_SERVER_IMAGE:-ghcr.io/thalismind/bunnyland-server:main}"
+port="${BUNNYLAND_STREAM_LOAD_PORT:-18767}"
+count="${BUNNYLAND_STREAM_LOAD_CLIENTS:-40}"
+container="bunnyland-stream-load-$$"
+work_dir="$(mktemp -d)"
+data_dir="${work_dir}/data"
+world_file="${data_dir}/worlds/stream-load.json"
+users_file="${work_dir}/users.yml"
+token_file="${work_dir}/tokens.json"
+token_db="${data_dir}/auth-tokens.sqlite3"
+
+cleanup() {
+  "$runtime" rm -f "$container" >/dev/null 2>&1 || true
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
+
+mkdir -p "${data_dir}/worlds"
+chmod 0700 "$work_dir" "$data_dir"
+
+cd "$repo_dir"
+STREAM_LOAD_COUNT="$count" \
+STREAM_LOAD_WORLD="$world_file" \
+STREAM_LOAD_USERS="$users_file" \
+STREAM_LOAD_TOKENS="$token_file" \
+STREAM_LOAD_TOKEN_DB="$token_db" \
+uv run python - <<'PY'
+import json
+import os
+import secrets
+from pathlib import Path
+
+import yaml
+from pwdlib import PasswordHash
+
+from bunnyland.core import (
+    CharacterComponent,
+    ContainmentMode,
+    Contains,
+    IdentityComponent,
+    RoomComponent,
+    WorldActor,
+    spawn_entity,
+)
+from bunnyland.persistence import WorldMeta, save_world
+from bunnyland.server.auth import TokenStore, WORLD_ADMIN_SCOPE, WORLD_PLAY_SCOPE
+
+count = int(os.environ["STREAM_LOAD_COUNT"])
+if count < 40:
+    raise SystemExit("authenticated stream load requires at least 40 clients")
+
+actor = WorldActor()
+room = spawn_entity(
+    actor.world,
+    [
+        IdentityComponent(name="Stream Load Hall", kind="room"),
+        RoomComponent(title="Stream Load Hall"),
+    ],
+)
+for index in range(count):
+    character = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name=f"Load Character {index + 1:03d}", kind="character"),
+            CharacterComponent(species="bunny"),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), character.id)
+
+world_path = Path(os.environ["STREAM_LOAD_WORLD"])
+save_world(
+    actor,
+    world_path,
+    meta=WorldMeta(seed="authenticated-stream-load", generator="stream-load-fixture"),
+    backup_count=0,
+)
+
+store = TokenStore(os.environ["STREAM_LOAD_TOKEN_DB"])
+try:
+    players = [
+        store.issue(
+            f"stream-load-player-{index + 1:03d}",
+            [WORLD_PLAY_SCOPE],
+            automatic_rotation=False,
+            lifetime_seconds=3600,
+        )[0]
+        for index in range(count)
+    ]
+    admin = store.issue(
+        "stream-load-admin",
+        [WORLD_ADMIN_SCOPE],
+        automatic_rotation=False,
+        lifetime_seconds=3600,
+    )[0]
+finally:
+    store.close()
+
+users_path = Path(os.environ["STREAM_LOAD_USERS"])
+users_path.write_text(
+    yaml.safe_dump(
+        {
+            "users": [
+                {
+                    "username": "disabled-stream-load-user",
+                    "password_hash": PasswordHash.recommended().hash(
+                        secrets.token_urlsafe(32)
+                    ),
+                    "enabled": False,
+                    "scopes": [WORLD_PLAY_SCOPE],
+                }
+            ]
+        },
+        sort_keys=False,
+    )
+)
+users_path.chmod(0o600)
+tokens_path = Path(os.environ["STREAM_LOAD_TOKENS"])
+tokens_path.write_text(json.dumps({"players": players, "admin": admin}))
+tokens_path.chmod(0o600)
+PY
+echo "Prepared ${count} distinct characters and scoped credentials."
+
+"$runtime" run -d --name "$container" \
+  -p "127.0.0.1:${port}:8765" \
+  -v "${data_dir}:/data" \
+  -v "${users_file}:/run/secrets/bunnyland-users.yml:ro" \
+  "$image" \
+  bunnyland serve \
+    --load /data/worlds/stream-load.json \
+    --load-paused \
+    --ticks 0 \
+    --api-host 0.0.0.0 \
+    --api-port 8765 \
+    --auth-users-file /run/secrets/bunnyland-users.yml \
+    --token-db /data/auth-tokens.sqlite3 >/dev/null
+
+for _attempt in $(seq 1 60); do
+  if curl -fsS -H 'User-Agent: bunnyland-stream-load/1' \
+    "http://127.0.0.1:${port}/public/health" >/dev/null 2>&1; then
+    break
+  fi
+  if [ "$("$runtime" inspect --format '{{.State.Running}}' "$container" 2>/dev/null)" != true ]; then
+    "$runtime" logs "$container" >&2 || true
+    echo "stream-load container exited before readiness" >&2
+    exit 1
+  fi
+  sleep 1
+done
+if ! curl -fsS -H 'User-Agent: bunnyland-stream-load/1' \
+  "http://127.0.0.1:${port}/public/health" >/dev/null; then
+  "$runtime" logs "$container" >&2 || true
+  echo "stream-load server did not become ready" >&2
+  exit 1
+fi
+echo "Exact-image stream-load server is ready on loopback."
+
+STREAM_LOAD_COUNT="$count" \
+STREAM_LOAD_PORT="$port" \
+STREAM_LOAD_TOKENS="$token_file" \
+STREAM_LOAD_TOKEN_DB="$token_db" \
+uv run python - <<'PY'
+import asyncio
+import json
+import os
+import time
+from pathlib import Path
+from urllib.parse import urlencode, urlsplit, urlunsplit
+
+import httpx
+import websockets
+from websockets.exceptions import ConnectionClosed
+
+from bunnyland.server.auth import TokenStore
+
+count = int(os.environ["STREAM_LOAD_COUNT"])
+port = int(os.environ["STREAM_LOAD_PORT"])
+credentials = json.loads(Path(os.environ["STREAM_LOAD_TOKENS"]).read_text())
+tokens = credentials["players"]
+admin_token = credentials["admin"]
+if len(tokens) != count or len(set(tokens)) != count:
+    raise SystemExit("stream-load credentials are not distinct")
+
+base_url = f"http://127.0.0.1:{port}"
+ws_base = urlunsplit(("ws", f"127.0.0.1:{port}", "", "", ""))
+
+
+def headers(token, client_id=None, claim_secret=None):
+    result = {
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "bunnyland-stream-load/1",
+    }
+    if client_id is not None:
+        result["X-Bunnyland-Client-Id"] = client_id
+    if claim_secret is not None:
+        result["X-Bunnyland-Claim-Secret"] = claim_secret
+    return result
+
+
+async def open_stream(index, character_id, claim):
+    client_id = f"stream-load-client-{index + 1:03d}"
+    socket = await websockets.connect(
+        f"{ws_base}/play/world/character/{character_id}/updates",
+        additional_headers={"X-Bunnyland-Client-Id": client_id},
+        open_timeout=15,
+        close_timeout=5,
+        ping_interval=None,
+    )
+    await socket.send(
+        json.dumps(
+            {
+                "type": "authenticate",
+                "data": {
+                    "token": tokens[index],
+                    "claim_id": claim["claim_id"],
+                    "claim_secret": claim["claim_secret"],
+                },
+            }
+        )
+    )
+    ready = json.loads(await asyncio.wait_for(socket.recv(), timeout=15))
+    if ready.get("type") != "ready" or ready.get("data", {}).get(
+        "character_id"
+    ) != character_id:
+        raise AssertionError(f"client {index} did not receive its ready frame")
+    if ready.get("stream_sequence") != 1:
+        raise AssertionError(f"client {index} did not start at stream sequence 1")
+    return socket, ready
+
+
+async def main():
+    started = time.perf_counter()
+    async with httpx.AsyncClient(base_url=base_url, timeout=20) as client:
+        lobby = await client.get("/play/world/characters", headers=headers(tokens[0]))
+        lobby.raise_for_status()
+        characters = [entry["character_id"] for entry in lobby.json()["characters"]]
+        if len(characters) < count or len(set(characters[:count])) != count:
+            raise AssertionError(f"expected {count} distinct characters, got {len(characters)}")
+        characters = characters[:count]
+        client_ids = [f"stream-load-client-{index + 1:03d}" for index in range(count)]
+
+        async def claim(index):
+            response = await client.post(
+                "/play/world/controllers/web/claim",
+                headers=headers(tokens[index], client_ids[index]),
+                json={
+                    "character_id": characters[index],
+                    "client_id": client_ids[index],
+                    "label": "authenticated-stream-load",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+
+        claims = await asyncio.gather(*(claim(index) for index in range(count)))
+        if len({claim["claim_id"] for claim in claims}) != count:
+            raise AssertionError("claim ids are not distinct")
+
+        opened = await asyncio.gather(
+            *(open_stream(index, characters[index], claims[index]) for index in range(count))
+        )
+        sockets = [item[0] for item in opened]
+        ready_frames = [item[1] for item in opened]
+        if len({frame["world_id"] for frame in ready_frames}) != 1:
+            raise AssertionError("clients did not join the same world")
+
+        # Disconnect one client, publish an invalidation while it is absent, then prove that
+        # reconnect starts a new connection-local sequence and a fresh projection is usable.
+        await sockets[0].close()
+        gap_update = await client.patch(
+            "/admin/world",
+            headers=headers(admin_token),
+            json={"operations": []},
+        )
+        gap_update.raise_for_status()
+        gap_frame = json.loads(await asyncio.wait_for(sockets[1].recv(), timeout=10))
+        if gap_frame.get("type") != "invalidate" or gap_frame.get("stream_sequence") != 2:
+            raise AssertionError(f"connected witness received an invalid gap frame: {gap_frame}")
+
+        sockets[0], reconnected = await open_stream(0, characters[0], claims[0])
+        if reconnected["stream_sequence"] != 1:
+            raise AssertionError("reconnected client did not reset its connection sequence")
+        projection = await client.get(
+            f"/play/world/character/{characters[0]}?{urlencode({'claim_id': claims[0]['claim_id']})}",
+            headers=headers(tokens[0], client_ids[0], claims[0]["claim_secret"]),
+        )
+        projection.raise_for_status()
+        if projection.json()["character_id"] != characters[0]:
+            raise AssertionError("gap recovery projection returned the wrong character")
+
+        # Revoke one bearer credential while its stream is live. The shared WebSocket auth
+        # path must close it with the same policy code used for other authorization failures.
+        revoked_index = count - 1
+        store = TokenStore(os.environ["STREAM_LOAD_TOKEN_DB"])
+        try:
+            if not store.revoke_token(tokens[revoked_index]):
+                raise AssertionError("test token was not revoked")
+        finally:
+            store.close()
+        close_code = None
+        deadline = asyncio.get_running_loop().time() + 25
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                await asyncio.wait_for(sockets[revoked_index].recv(), timeout=16)
+            except ConnectionClosed as exc:
+                close_code = exc.code
+                break
+            except TimeoutError:
+                continue
+        if close_code != 1008:
+            raise AssertionError(f"revoked stream closed with {close_code!r}, expected 1008")
+
+        stats = None
+        for _attempt in range(20):
+            stream_status = await client.get(
+                "/admin/world/stream", headers=headers(admin_token)
+            )
+            stream_status.raise_for_status()
+            stats = stream_status.json()
+            if stats["connections"] == count - 1:
+                break
+            await asyncio.sleep(0.05)
+        assert stats is not None
+        if stats["connections_total"] < count + 1:
+            raise AssertionError("stream statistics did not record the reconnect")
+        if stats["connections"] != count - 1:
+            raise AssertionError(
+                f"expected {count - 1} live streams after revocation, got {stats['connections']}"
+            )
+
+        await asyncio.gather(
+            *(socket.close() for socket in sockets),
+            return_exceptions=True,
+        )
+        elapsed = time.perf_counter() - started
+        print(
+            json.dumps(
+                {
+                    "clients": count,
+                    "distinct_characters": len(set(characters)),
+                    "distinct_claims": len({claim["claim_id"] for claim in claims}),
+                    "gap_frame_type": gap_frame["type"],
+                    "gap_witness_sequence": gap_frame["stream_sequence"],
+                    "reconnect_sequence": reconnected["stream_sequence"],
+                    "revoked_close_code": close_code,
+                    "connections_total": stats["connections_total"],
+                    "elapsed_seconds": round(elapsed, 3),
+                },
+                sort_keys=True,
+            )
+        )
+
+
+asyncio.run(main())
+PY
+
+for path in "${token_db}"*; do
+  [ -e "$path" ] || continue
+  mode="$(stat -c '%a' "$path")"
+  if [ "$mode" != "600" ]; then
+    echo "$path has mode $mode, expected 600" >&2
+    exit 1
+  fi
+done
+
+echo "Authenticated ${count}-character stream load passed for ${image}."

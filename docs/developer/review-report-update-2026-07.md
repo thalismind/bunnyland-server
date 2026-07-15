@@ -46,7 +46,7 @@ The release recommendation remains an invite-only controlled sandbox preview. Th
 | Goals, obligations, and routines | **Implemented.** Unified causal scoring and long-horizon behavioral evidence remain evaluation work. |
 | Controller evaluation benchmark | **Implemented for scripted, behavior-tree, goal-directed, and LLM contracts.** RL remains future work. |
 | Three Clover City systemic outcomes | **One of three demonstrated.** Missing parcel is persistent and cross-controller; shortage/conflict and disruption/repair remain. |
-| Real 40-WebSocket validation and soak | **Partial.** An automated 40-subscriber fan-out/overflow/reconnect harness exists; hosted authenticated load, reconnect storm, and multi-day soak remain. |
+| Real 40-WebSocket validation and soak | **Partial.** The deterministic in-process fan-out/overflow harness and an exact-container test with 40 distinct characters, scoped credentials, client identities, and claims now pass, including disconnect-gap recovery and mid-stream revocation. The post-deploy hosted rerun and multi-day soak remain. |
 | Security/trace hardening and measured release gates | **Partial.** Trace redaction and room authorization are implemented; adversarial memory/guard tests, governance artifacts, live drills, and fresh-player measurements remain. |
 
 ## Updated implementation TODO
@@ -58,7 +58,7 @@ The remaining work is ordered by controlled-preview risk:
 1. [ ] Complete the shortage/conflict Clover City story with ordinary actions, a recoverable failure, cross-controller outcome probes, visible aftermath, and mid-story save/reload.
 2. [ ] Complete the disruption/repair Clover City story to the same standard.
 3. [ ] Instrument Apple Crossing lightly and run ten fresh-player comprehension sessions; fix recurring action, target, rejection, and persistence confusion.
-4. [ ] Run the real authenticated 40-client stream/reconnect/gap-recovery gate and multi-day restart/restore soak.
+4. [ ] Rerun the authenticated 40-client stream gate after deployment and complete the multi-day restart/restore soak.
 5. [ ] Automate coordinated world/memory/media checkpoint and restore behavior, including future-memory quarantine, namespace/clone checks, and clean-host restoration.
 6. [ ] Red-team cross-character memory isolation, instruction-like memories, claim boundaries, provider/guard failure, rate limits, and secret handling.
 7. [ ] Publish proportionate sandbox rules, privacy notice, security contact, model-safety failure behavior, operator runbooks, compatibility statement, and preview release notes.
