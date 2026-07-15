@@ -216,6 +216,35 @@ def test_auth_cli_manages_passwords_and_token_lifecycle(tmp_path, monkeypatch, c
     assert main(import_args) == 0
     assert json.loads(capsys.readouterr().out) == {"imported": False}
 
+    assert main(import_args + ["--scope", "world:admin"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"imported": True}
+    assert main(["auth", "list-tokens", "--db", database]) == 0
+    imported = next(
+        item
+        for item in json.loads(capsys.readouterr().out)
+        if item["token_id"] == "0123456789abcdef"
+    )
+    assert imported["scopes"] == ["world:admin", "world:play"]
+
+    mismatched = import_args.copy()
+    mismatched[mismatched.index(digest)] = "f" * 64
+    with pytest.raises(SystemExit):
+        main(mismatched)
+
+    assert main(["auth", "revoke", "--db", database, "--token-id", "0123456789abcdef"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"revoked": 1}
+    extended = import_args + ["--scope", "world:admin"]
+    extended[extended.index("2000000000")] = "2000000001"
+    assert main(extended) == 0
+    assert json.loads(capsys.readouterr().out) == {"imported": True}
+    assert main(["auth", "list-tokens", "--db", database]) == 0
+    imported = next(
+        item
+        for item in json.loads(capsys.readouterr().out)
+        if item["token_id"] == "0123456789abcdef"
+    )
+    assert imported["revoked_at"] is not None
+
 
 def test_auth_cli_rejects_invalid_operator_input(tmp_path, monkeypatch):
     database = str(tmp_path / "tokens.sqlite3")

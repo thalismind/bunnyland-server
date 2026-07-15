@@ -379,7 +379,7 @@ class TokenStore:
         expires_at: int,
         created_at: int | None = None,
     ) -> bool:
-        """Idempotently import operator-generated automation-token metadata."""
+        """Import or reconcile operator-generated automation-token metadata."""
         if not re.fullmatch(r"[0-9a-f]{16}", token_id):
             raise ValueError("token id must be 16 lowercase hexadecimal characters")
         if not re.fullmatch(r"[0-9a-f]{64}", digest):
@@ -387,25 +387,48 @@ class TokenStore:
         created = int(time.time()) if created_at is None else created_at
         normalized = normalized_scopes(scopes)
         with self._lock, self._connection:
-            cursor = self._connection.execute(
-                """
-                INSERT OR IGNORE INTO auth_tokens (
-                    token_id, digest, subject, scopes, created_at, rotate_after, expires_at,
-                    automatic_rotation, family_id
-                ) VALUES (?, ?, ?, ?, ?, NULL, ?, 0, ?)
-                """,
-                (
-                    token_id,
-                    digest,
-                    subject,
-                    json.dumps(sorted(normalized), separators=(",", ":")),
-                    created,
-                    expires_at,
-                    secrets.token_hex(16),
-                ),
-            )
+            scopes_json = json.dumps(sorted(normalized), separators=(",", ":"))
+            existing = self._connection.execute(
+                "SELECT digest, subject, scopes, expires_at FROM auth_tokens WHERE token_id = ?",
+                (token_id,),
+            ).fetchone()
+            if existing is not None:
+                if not secrets.compare_digest(existing["digest"], digest):
+                    raise ValueError("token id already exists with a different digest")
+                changed = (
+                    existing["subject"] != subject
+                    or existing["scopes"] != scopes_json
+                    or existing["expires_at"] != expires_at
+                )
+                if changed:
+                    self._connection.execute(
+                        """
+                        UPDATE auth_tokens SET subject = ?, scopes = ?, expires_at = ?
+                        WHERE token_id = ?
+                        """,
+                        (subject, scopes_json, expires_at, token_id),
+                    )
+            else:
+                self._connection.execute(
+                    """
+                    INSERT INTO auth_tokens (
+                        token_id, digest, subject, scopes, created_at, rotate_after, expires_at,
+                        automatic_rotation, family_id
+                    ) VALUES (?, ?, ?, ?, ?, NULL, ?, 0, ?)
+                    """,
+                    (
+                        token_id,
+                        digest,
+                        subject,
+                        scopes_json,
+                        created,
+                        expires_at,
+                        secrets.token_hex(16),
+                    ),
+                )
+                changed = True
         self._lock_permissions()
-        return cursor.rowcount > 0
+        return changed
 
     def verify(self, token: str, *, now: int | None = None) -> TokenPrincipal | None:
         match = _TOKEN_RE.fullmatch(token)

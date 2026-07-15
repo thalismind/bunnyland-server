@@ -28,7 +28,9 @@ The playbook renders the user file and root-owned operator token with mode `0600
 both read-only, and persists `/data/auth-tokens.sqlite3`. Uvicorn accepts forwarded headers
 only from the frontend's deterministic private address, and nginx overwrites the forwarded
 client chain. Client IDs remain optional policy filters; they are not credentials and do
-not authenticate a request.
+not authenticate a request. Reapplying vaulted automation-token metadata reconciles its
+subject, scopes, and expiration only when the stored digest matches, without clearing a
+persisted revocation.
 
 ## Validate and apply
 
