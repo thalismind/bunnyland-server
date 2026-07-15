@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+runtime="${BUNNYLAND_CONTAINER_RUNTIME:-docker}"
+image="${BUNNYLAND_SERVER_IMAGE:-ghcr.io/thalismind/bunnyland-server:main}"
+port="${BUNNYLAND_SMOKE_PORT:-18765}"
+container="bunnyland-auth-smoke-$$"
+work_dir="$(mktemp -d)"
+data_dir="${work_dir}/data"
+users_file="${work_dir}/users.yml"
+token_file="${work_dir}/revoked-token"
+
+cleanup() {
+  "$runtime" rm -f "$container" >/dev/null 2>&1 || true
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
+
+mkdir -p "${data_dir}/worlds"
+chmod 0700 "$work_dir" "$data_dir"
+
+hash_password() {
+  printf '%s\n' "$1" | "$runtime" run --rm -i "$image" \
+    bunnyland auth hash-password --password-stdin
+}
+
+player_hash="$(hash_password 'player-smoke-password')"
+operator_hash="$(hash_password 'operator-smoke-password')"
+printf '%s\n' \
+  'users:' \
+  '  - username: player-smoke' \
+  "    password_hash: '${player_hash}'" \
+  '    enabled: true' \
+  '    scopes: [world:play]' \
+  '  - username: operator-smoke' \
+  "    password_hash: '${operator_hash}'" \
+  '    enabled: true' \
+  '    scopes: [world:play, world:admin]' > "$users_file"
+chmod 0600 "$users_file"
+
+start_server() {
+  "$runtime" run -d --name "$container" \
+    -p "127.0.0.1:${port}:8765" \
+    -v "${data_dir}:/data" \
+    -v "${users_file}:/run/secrets/bunnyland-users.yml:ro" \
+    "$image" \
+    bunnyland serve \
+      --generator lifesim-demo \
+      --ticks 0 \
+      --api-host 0.0.0.0 \
+      --api-port 8765 \
+      --save /data/worlds/main.json \
+      --auth-users-file /run/secrets/bunnyland-users.yml \
+      --token-db /data/auth-tokens.sqlite3 \
+      --mcp >/dev/null
+  for _attempt in $(seq 1 60); do
+    if curl -fsS "http://127.0.0.1:${port}/public/health" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 1
+  done
+  "$runtime" logs "$container" >&2 || true
+  echo "server did not become ready" >&2
+  return 1
+}
+
+start_server
+
+SMOKE_PORT="$port" TOKEN_FILE="$token_file" python3 - <<'PY'
+import base64
+import json
+import os
+import socket
+import struct
+import urllib.error
+import urllib.request
+
+port = int(os.environ["SMOKE_PORT"])
+base_url = f"http://127.0.0.1:{port}"
+
+
+def request(method, path, *, token=None, body=None, accept=None):
+    headers = {}
+    data = None
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    if accept:
+        headers["Accept"] = accept
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(base_url + path, data=data, headers=headers, method=method),
+            timeout=15,
+        ) as response:
+            return response.status, response.read(), response.headers
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read(), exc.headers
+
+
+def expect(expected, method, path, **kwargs):
+    status, payload, headers = request(method, path, **kwargs)
+    if status != expected:
+        raise SystemExit(f"{method} {path}: expected {expected}, got {status}: {payload!r}")
+    return payload, headers
+
+
+expect(200, "GET", "/public/health")
+expect(401, "GET", "/play/world/characters")
+expect(401, "GET", "/admin/world/snapshot")
+
+
+def login(username, password):
+    payload, _headers = expect(
+        200,
+        "POST",
+        "/auth/login",
+        body={"username": username, "password": password, "delivery": "body"},
+    )
+    token = json.loads(payload)["token"]
+    if not isinstance(token, str) or not token.startswith("blt_"):
+        raise SystemExit(f"login for {username!r} did not return an opaque token")
+    return token
+
+
+player = login("player-smoke", "player-smoke-password")
+operator = login("operator-smoke", "operator-smoke-password")
+expect(200, "GET", "/play/world/characters", token=player)
+expect(403, "GET", "/admin/world/snapshot", token=player)
+expect(200, "GET", "/play/world/characters", token=operator)
+expect(200, "GET", "/admin/world/snapshot", token=operator)
+expect(409, "POST", "/auth/rotate", token=player)
+
+mcp_init = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "container-auth-smoke", "version": "1"},
+    },
+}
+expect(
+    401,
+    "POST",
+    "/mcp/",
+    body=mcp_init,
+    accept="application/json, text/event-stream",
+)
+expect(
+    200,
+    "POST",
+    "/mcp/",
+    token=player,
+    body=mcp_init,
+    accept="application/json, text/event-stream",
+)
+
+
+def websocket_snapshot(token):
+    key = base64.b64encode(os.urandom(16)).decode()
+    request_bytes = (
+        "GET /admin/world/updates HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{port}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n"
+    ).encode()
+    with socket.create_connection(("127.0.0.1", port), timeout=15) as stream:
+        stream.sendall(request_bytes)
+        response = b""
+        while b"\r\n\r\n" not in response:
+            response += stream.recv(4096)
+        headers, buffered = response.split(b"\r\n\r\n", 1)
+        if b" 101 " not in headers.split(b"\r\n", 1)[0]:
+            raise SystemExit(f"websocket upgrade failed: {headers!r}")
+
+        payload = json.dumps({"type": "authenticate", "data": {"token": token}}).encode()
+        mask = os.urandom(4)
+        length = len(payload)
+        frame = bytearray([0x81])
+        if length < 126:
+            frame.append(0x80 | length)
+        else:
+            frame.append(0x80 | 126)
+            frame.extend(struct.pack("!H", length))
+        frame.extend(mask)
+        frame.extend(value ^ mask[index % 4] for index, value in enumerate(payload))
+        stream.sendall(frame)
+
+        while len(buffered) < 2:
+            buffered += stream.recv(4096)
+        length = buffered[1] & 0x7F
+        offset = 2
+        if length == 126:
+            while len(buffered) < offset + 2:
+                buffered += stream.recv(4096)
+            length = struct.unpack("!H", buffered[offset : offset + 2])[0]
+            offset += 2
+        elif length == 127:
+            while len(buffered) < offset + 8:
+                buffered += stream.recv(4096)
+            length = struct.unpack("!Q", buffered[offset : offset + 8])[0]
+            offset += 8
+        while len(buffered) < offset + length:
+            buffered += stream.recv(65536)
+        message = json.loads(buffered[offset : offset + length])
+        if message.get("type") != "snapshot":
+            raise SystemExit(f"websocket did not return an admin snapshot: {message!r}")
+
+
+websocket_snapshot(operator)
+expect(200, "POST", "/auth/logout", token=player)
+expect(401, "GET", "/play/world/characters", token=player)
+with open(os.environ["TOKEN_FILE"], "w", encoding="utf-8") as token_handle:
+    token_handle.write(player)
+os.chmod(os.environ["TOKEN_FILE"], 0o600)
+PY
+
+"$runtime" stop "$container" >/dev/null
+for path in "${data_dir}/auth-tokens.sqlite3"*; do
+  [ -e "$path" ] || continue
+  mode="$(stat -c '%a' "$path")"
+  if [ "$mode" != "600" ]; then
+    echo "$path has mode $mode, expected 600" >&2
+    exit 1
+  fi
+done
+"$runtime" rm "$container" >/dev/null
+
+start_server
+revoked_token="$(cat "$token_file")"
+status="$(curl -sS -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer ${revoked_token}" \
+  "http://127.0.0.1:${port}/play/world/characters")"
+if [ "$status" != "401" ]; then
+  echo "revoked token survived restart with HTTP $status" >&2
+  exit 1
+fi
+
+echo "Exact-container auth smoke passed for ${image}."

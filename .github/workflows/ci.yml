@@ -274,11 +274,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          enable-cache: true
-
       - name: Check Docker availability
         run: |
           docker version
@@ -286,102 +281,8 @@ jobs:
           sudo docker version
           sudo docker compose version
 
-      - name: Validate wizard-rendered Compose config
-        env:
-          BUNNYLAND_SETUP_DRY_RUN: "1"
-          BUNNYLAND_TLS: "0"
-          BUNNYLAND_CONFIGURE_FIREWALL: "0"
-          BUNNYLAND_HTTP_BIND: 127.0.0.1:18080
-          BUNNYLAND_NGINX_AUTH_DIR: ${{ runner.temp }}/bunnyland-vps-auth-dry-run
-          BUNNYLAND_SERVER_TAG: main
-          BUNNYLAND_PLAYER_USER: player1
-          BUNNYLAND_PLAYER_PASSWORD: local-player-one
-          BUNNYLAND_PLAYER2_USER: player2
-          BUNNYLAND_PLAYER2_PASSWORD: local-player-two
-        run: |
-          data_dir="${{ runner.temp }}/bunnyland-vps-data-dry-run"
-          favicon_file="${{ runner.temp }}/bunnyland-favicon-dry-run.png"
-          printf 'favicon\n' > "$favicon_file"
-          # One answer per wizard prompt, in order; keep this list aligned with the prompts
-          # in scripts/vps-docker-wizard.
-          answers=(
-            ""                            # container runtime (blank = first available)
-            "localhost"                   # sandbox domain
-            "$data_dir"                   # host data directory
-            ""                            # Let's Encrypt email (blank)
-            "editor"                      # admin username
-            "local"                       # admin password
-            "none"                        # starter pack
-            "y"                           # use a custom favicon?
-            "$favicon_file"               # custom favicon path
-            ""                            # homepage domain (blank to skip)
-            "n"                           # full deployment with LLM + Discord?
-            "https://discord.gg/example"  # community Discord invite URL
-            "n"                           # enable HTTP MCP endpoint?
-            "n"                           # enable image generation via ComfyUI?
-            "y"                           # proceed?
-          )
-          printf '%s\n' "${answers[@]}" | scripts/vps-docker-wizard
-
-      - name: Run setup script
+      - name: Run exact-container auth smoke
         env:
           BUNNYLAND_CONTAINER_RUNTIME: docker
-          BUNNYLAND_TLS: "0"
-          BUNNYLAND_CONFIGURE_FIREWALL: "0"
-          BUNNYLAND_HTTP_BIND: 127.0.0.1:18080
-          BUNNYLAND_DOMAIN: localhost
-          BUNNYLAND_DATA_DIR: ${{ runner.temp }}/bunnyland-vps-data
-          BUNNYLAND_NGINX_AUTH_DIR: ${{ runner.temp }}/bunnyland-vps-auth
-          BUNNYLAND_ADMIN_USER: editor
-          BUNNYLAND_ADMIN_PASSWORD: local
-          BUNNYLAND_PLAYER_USER: player1
-          BUNNYLAND_PLAYER_PASSWORD: local-player-one
-          BUNNYLAND_PLAYER2_USER: player2
-          BUNNYLAND_PLAYER2_PASSWORD: local-player-two
-          BUNNYLAND_SERVER_TAG: main
-          BUNNYLAND_ENABLE_LLM: "0"
-          BUNNYLAND_ENABLE_DISCORD: "0"
-          # Enable MCP with a throwaway token so nginx injects it and the smoke test can
-          # exercise the authenticated snapshot/stream, not just the unauthenticated gates.
-          BUNNYLAND_ENABLE_MCP: "1"
-          BUNNYLAND_ADMIN_TOKEN: ci-smoke-admin-token
-          BUNNYLAND_FAVICON_FILE: ${{ runner.temp }}/bunnyland-favicon.png
-        run: |
-          printf 'favicon\n' > "$BUNNYLAND_FAVICON_FILE"
-          scripts/vps-docker-setup
-
-      - name: Restart local deployment
-        env:
-          BUNNYLAND_CONTAINER_RUNTIME: docker
-        run: scripts/vps-docker-restart
-
-      - name: Verify local deployment
-        env:
-          BUNNYLAND_VERIFY_SCHEME: http
-          BUNNYLAND_VERIFY_CONNECT_HOST: 127.0.0.1
-          BUNNYLAND_VERIFY_PORT: "18080"
-          BUNNYLAND_DOMAIN: localhost
-          BUNNYLAND_ADMIN_USER: editor
-          BUNNYLAND_ADMIN_PASSWORD: local
-          BUNNYLAND_PLAYER_USER: player1
-          BUNNYLAND_PLAYER_PASSWORD: local-player-one
-          BUNNYLAND_PLAYER2_USER: player2
-          BUNNYLAND_PLAYER2_PASSWORD: local-player-two
-          # A token was configured above, so assert the authenticated snapshot/stream too.
-          BUNNYLAND_VERIFY_ADMIN_DATA: "1"
-        run: |
-          for attempt in {1..24}; do
-            if curl -fsS -H 'Host: localhost' http://127.0.0.1:18080/api/health >/dev/null; then
-              break
-            fi
-            sleep 5
-          done
-          scripts/vps-docker-verify
-
-      - name: Clean up local deployment
-        if: always()
-        run: |
-          sudo docker compose --env-file /dev/null -p bunnyland -f compose.yml -f compose.user.yml down -v --remove-orphans || true
-          sudo rm -rf "${{ runner.temp }}/bunnyland-vps-data" "${{ runner.temp }}/bunnyland-vps-data-dry-run"
-          sudo rm -rf "${{ runner.temp }}/bunnyland-vps-auth" "${{ runner.temp }}/bunnyland-vps-auth-dry-run"
-          sudo rm -f "${{ runner.temp }}/bunnyland-favicon.png" "${{ runner.temp }}/bunnyland-favicon-dry-run.png"
+          BUNNYLAND_SERVER_IMAGE: ghcr.io/${{ github.repository_owner }}/bunnyland-server:main
+        run: scripts/container-auth-smoke
