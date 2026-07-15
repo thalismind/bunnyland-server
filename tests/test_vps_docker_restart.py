@@ -61,3 +61,13 @@ exit 1
     ps_index = next(i for i, command in enumerate(commands) if command.endswith(" ps"))
 
     assert config_index < pull_index < up_index < ps_index
+
+
+def test_vps_verify_distinguishes_anonymous_and_player_admin_denials() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    verify = (repo_root / "scripts" / "vps-docker-verify").read_text()
+
+    assert 'BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS:-401' in verify
+    assert 'BUNNYLAND_VERIFY_ADMIN_PLAY_STATUS:-403' in verify
+    assert '"admin rejects player scope"' in verify
+    assert "admin_play_status," in verify

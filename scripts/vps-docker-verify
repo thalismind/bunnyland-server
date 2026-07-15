@@ -12,6 +12,7 @@ export BUNNYLAND_VERIFY_CONNECT_HOST="${BUNNYLAND_VERIFY_CONNECT_HOST:-$BUNNYLAN
 export BUNNYLAND_VERIFY_PORT="${BUNNYLAND_VERIFY_PORT:-443}"
 export BUNNYLAND_VERIFY_SCHEME="${BUNNYLAND_VERIFY_SCHEME:-https}"
 export BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS="${BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS:-401}"
+export BUNNYLAND_VERIFY_ADMIN_PLAY_STATUS="${BUNNYLAND_VERIFY_ADMIN_PLAY_STATUS:-403}"
 export BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS="${BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS:-200}"
 export BUNNYLAND_VERIFY_ADMIN_DATA="${BUNNYLAND_VERIFY_ADMIN_DATA:-0}"
 export BUNNYLAND_HOME_DOMAIN="${BUNNYLAND_HOME_DOMAIN:-}"
@@ -32,6 +33,7 @@ connect_host = os.environ["BUNNYLAND_VERIFY_CONNECT_HOST"]
 port = int(os.environ["BUNNYLAND_VERIFY_PORT"])
 scheme = os.environ["BUNNYLAND_VERIFY_SCHEME"]
 admin_unauth_status = int(os.environ["BUNNYLAND_VERIFY_ADMIN_UNAUTH_STATUS"])
+admin_play_status = int(os.environ["BUNNYLAND_VERIFY_ADMIN_PLAY_STATUS"])
 admin_auth_status = int(os.environ["BUNNYLAND_VERIFY_ADMIN_AUTH_STATUS"])
 play_token = os.environ["BUNNYLAND_PLAY_TOKEN"]
 operator_token = os.environ["BUNNYLAND_OPERATOR_TOKEN"]
@@ -185,10 +187,10 @@ if verify_admin_data:
     )
 
 expect_status(
-    "admin rejects bad credentials",
+    "admin rejects player scope",
     "POST",
     "/api/admin/world/pause",
-    admin_unauth_status,
+    admin_play_status,
     token=play_token,
 )
 
