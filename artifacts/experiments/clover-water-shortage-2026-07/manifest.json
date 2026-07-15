@@ -1,0 +1,58 @@
+{
+  "artifacts_sha256": {
+    "README.md": "d2128e910969531efa219c8d23ba81c0bf40025198b211a4dd2aac585db07bba",
+    "final-world-behavior_tree.json": "6a765c6787028c9a9cab304c1768d59b85aab8e8b839ae1993936608f6ebb91b",
+    "final-world-behavior_tree.json.journal.jsonl": "9617cfef4a3070547a596df780f670e071113b5e89b5c04b5cee36c839907194",
+    "final-world-behavior_tree.json.sha256": "e0e8ef32c67f3c7fef03ce164c1230e2255bdf870365f2bceb94a6f5a39fbeff",
+    "final-world-goal_directed.json": "5b7ae9e5d05a193be01811fb746ce0110666ef3642b424f570e21dbdf04d6052",
+    "final-world-goal_directed.json.journal.jsonl": "c8ba403b1787a8a2aec522c9acd53ca7f02059a79fcf0d26bb78dafbfb54275e",
+    "final-world-goal_directed.json.sha256": "6e1dba9c51abdf7b0c61b6fa18d0e518eb4d179c3af06cb1ff5dbc2f7feb96ef",
+    "final-world-llm.json": "4b514002b477fa2b89ade9bb5f84604bb331e783695de8aa05083d6a467ee7f5",
+    "final-world-llm.json.journal.jsonl": "5b4b2d85202e336ce36459e110ca7cdb7fe39ee33f98366be1715e47461d47eb",
+    "final-world-llm.json.sha256": "afd38ecd62cd20e2d27b0bacdf6dc4f41b92d7e068e9788cef2f06807def0317",
+    "final-world-scripted.json": "01c07926404696b4ad191a1774306a6ceabd0da436af74693182b316bd5b35f6",
+    "final-world-scripted.json.journal.jsonl": "f3b2e79115e7a3aa912d4017c2f76578fca94392bdd2a2654155772d072b0a12",
+    "final-world-scripted.json.sha256": "b2945bf8d2480759ca8e20ea5a1424072407fea9909956735cae64e90f3ce31c",
+    "initial-world.json": "178e4e096335f46336dbf38f1111e1e36752ef900645772e3839bcfdbfe69ad1",
+    "initial-world.json.journal.jsonl": "a96cfdef16c58b1d597b88686839379955080a774ed1c962a340381353efac01",
+    "initial-world.json.sha256": "3406e93ba1ca15793de13dcac1f8ab035a6be91b9e531b56b76888e03a1b0822",
+    "receipts.jsonl": "118bd66ac227e6766460ba5650563f6ff07fb312493d90e14914efb4f948215f",
+    "results.json": "2f6890b6a7f0775892becc60752e37ec75e83f1141d99de8e838be55446f12fb",
+    "traces.jsonl": "c55fcc3e43dcf92b2939b3e7174389dcc087deb811ea35caf410427f4e9f81f3"
+  },
+  "benchmark_invocation": "scripts/export-clover-experiment --snapshot artifacts/experiments/clover-water-shortage-2026-07/initial-world.json --output /tmp/clover-water-reproduction",
+  "bunnyland_version": "0.2.0",
+  "controller_families": [
+    "scripted",
+    "behavior_tree",
+    "goal_directed",
+    "llm"
+  ],
+  "expected_attempted_actions_per_family": 17,
+  "expected_committed_commands_per_family": 16,
+  "expected_probes": [
+    "water_replenished",
+    "pressure_persisted",
+    "obligation_fulfilled",
+    "relationship_changed",
+    "incident_resolved",
+    "aftermath_recorded"
+  ],
+  "expected_recovered_rejections_per_family": 1,
+  "expected_rejections_per_family": 1,
+  "experiment": "clover-city-water-shortage",
+  "final_state_reload_verified": [
+    "behavior_tree",
+    "goal_directed",
+    "llm",
+    "scripted"
+  ],
+  "generated_at": "2026-07-15T22:35:00.563732+00:00",
+  "implementation_commit": "5008323862c1836e1a25be882e5e179c092bc03d",
+  "model": "deterministic contract fixture",
+  "prompt_config_version": "world-contract-v1 at implementation_commit",
+  "provider": null,
+  "schema_version": 1,
+  "snapshot_sha256": "178e4e096335f46336dbf38f1111e1e36752ef900645772e3839bcfdbfe69ad1",
+  "world_seed": "clover-water-benchmark"
+}

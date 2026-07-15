@@ -14,7 +14,7 @@ from ..core.commands import CommitStatus
 from ..core.components import CharacterComponent
 from ..core.ecs import parse_entity_id, spawn_entity
 from ..core.world_actor import WorldActor
-from ..persistence import load_world
+from ..persistence import WorldMeta, load_world
 from ..plugins import PluginRegistry, collect_persona_fragments
 from ..prompts.builder import PromptBuilder
 from .agent import CharacterAgent
@@ -83,6 +83,8 @@ async def run_fixed_snapshot_controller_benchmark(
     cases: tuple[ControllerBenchmarkCase, ...],
     probes: tuple[ControllerBenchmarkProbe, ...] = (),
     turns: int = 1,
+    on_case_completed: Callable[[WorldActor, WorldMeta, ControllerBenchmarkResult], None]
+    | None = None,
 ) -> tuple[ControllerBenchmarkResult, ...]:
     """Run every controller from an independent load of one checksummed snapshot."""
 
@@ -140,8 +142,7 @@ async def run_fixed_snapshot_controller_benchmark(
         rejected = [
             index
             for index, decision in enumerate(decisions)
-            if decision.receipt_status
-            in {CommitStatus.REJECTED.value, "policy_rejected"}
+            if decision.receipt_status in {CommitStatus.REJECTED.value, "policy_rejected"}
         ]
         recovered = sum(
             any(
@@ -150,24 +151,25 @@ async def run_fixed_snapshot_controller_benchmark(
             )
             for index in rejected
         )
-        results.append(
-            ControllerBenchmarkResult(
-                case=case.name,
-                family=case.family,
-                snapshot_sha256=snapshot_hash,
-                world_seed=meta.seed,
-                turns=turns,
-                decisions=tuple(decisions),
-                attempted_actions=len(attempted),
-                structurally_valid_actions=len(structurally_valid),
-                committed_commands=len(committed),
-                rejected_commands=len(rejected),
-                recovered_rejections=recovered,
-                trace_complete=all(_trace_complete(decision) for decision in decisions),
-                outcomes=tuple((probe.name, bool(probe.evaluate(actor))) for probe in probes),
-                elapsed_seconds=elapsed,
-            )
+        result = ControllerBenchmarkResult(
+            case=case.name,
+            family=case.family,
+            snapshot_sha256=snapshot_hash,
+            world_seed=meta.seed,
+            turns=turns,
+            decisions=tuple(decisions),
+            attempted_actions=len(attempted),
+            structurally_valid_actions=len(structurally_valid),
+            committed_commands=len(committed),
+            rejected_commands=len(rejected),
+            recovered_rejections=recovered,
+            trace_complete=all(_trace_complete(decision) for decision in decisions),
+            outcomes=tuple((probe.name, bool(probe.evaluate(actor))) for probe in probes),
+            elapsed_seconds=elapsed,
         )
+        results.append(result)
+        if on_case_completed is not None:
+            on_case_completed(actor, meta, result)
     return tuple(results)
 
 
