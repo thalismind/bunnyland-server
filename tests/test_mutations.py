@@ -93,6 +93,26 @@ def test_world_transaction_rejects_a_new_invariant_failure_in_an_invalid_world(s
     assert not world.get_entity(scenario.room_b).has_relationship(Contains, scenario.character)
 
 
+def test_world_transaction_preserves_queued_observer_references_on_rollback(scenario):
+    class UncopyableObserver:
+        def __deepcopy__(self, _memo):
+            raise TypeError("observer must not be deep-copied")
+
+    world = scenario.actor.world
+    queued = (UncopyableObserver(), ("on_event", object()))
+    world._observer_queue.append(queued)
+    entered = False
+
+    with pytest.raises(RuntimeError, match="rollback"):
+        with world_transaction(world):
+            entered = True
+            world._observer_queue.clear()
+            raise RuntimeError("rollback")
+
+    assert entered is True
+    assert tuple(world._observer_queue) == (queued,)
+
+
 def test_remove_edge_apply_rejects_an_unresolved_reference(scenario):
     with pytest.raises(MutationError, match="target reference has not been created"):
         RemoveEdge(scenario.room_a, EntityReference(), Contains).apply(scenario.actor.world)

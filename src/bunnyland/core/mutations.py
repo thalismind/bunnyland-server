@@ -24,7 +24,6 @@ _TRANSACTIONAL_WORLD_FIELDS = (
     "_entities",
     "_prefab_index",
     "_sequence_generator",
-    "_observer_queue",
     "_component_types",
     "_relationships",
     "_incoming_relationships",
@@ -50,6 +49,7 @@ def world_transaction(world: World) -> Iterator[None]:
     except Exception as exc:
         baseline_error = exc
     snapshot = copy.deepcopy({name: getattr(world, name) for name in _TRANSACTIONAL_WORLD_FIELDS})
+    observer_queue = copy.copy(world._observer_queue)
     try:
         yield
         try:
@@ -63,6 +63,7 @@ def world_transaction(world: World) -> Iterator[None]:
     except Exception:
         for name, value in snapshot.items():
             setattr(world, name, value)
+        world._observer_queue = observer_queue
         raise
 
 
