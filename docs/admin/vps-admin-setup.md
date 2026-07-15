@@ -25,9 +25,10 @@ printf '%s\n' "$PASSWORD" | bunnyland auth hash-password --password-stdin
 ```
 
 The playbook renders the user file and root-owned operator token with mode `0600`, mounts
-both read-only, persists `/data/auth-tokens.sqlite3`, and enables trusted `X-Real-IP`
-handling because nginx is the only published path to the API. Client IDs remain optional
-policy filters; they are not credentials and do not authenticate a request.
+both read-only, and persists `/data/auth-tokens.sqlite3`. Uvicorn accepts forwarded headers
+only from the frontend's deterministic private address, and nginx overwrites the forwarded
+client chain. Client IDs remain optional policy filters; they are not credentials and do
+not authenticate a request.
 
 ## Validate and apply
 

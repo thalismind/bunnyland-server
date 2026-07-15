@@ -73,6 +73,24 @@ class WorldMeta(BaseModel):
     rng_stream_state: dict[str, Any] = Field(default_factory=dict)
 
 
+class RecoveryManifest(BaseModel):
+    """One portable restore boundary for a pinned preview release."""
+
+    version: int = 1
+    release: str
+    release_pins: dict[str, str]
+    world_id: str
+    world_epoch: int
+    world_checksum_sha256: str
+    memory_backend: str
+    memory_namespace: str
+    memory_checkpoint_epoch: int
+    memory_high_watermark: int
+    media_manifest_checksum_sha256: str
+    rollback_checkpoint: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class OperationalJournal:
     """Bounded append-only JSONL audit trail adjacent to a canonical snapshot."""
 
@@ -306,6 +324,25 @@ def load_world(
             raise
 
 
+def read_world_meta(
+    path: str | Path,
+    *,
+    format: PersistenceFormat | None = None,
+) -> WorldMeta:
+    """Read and validate saved-world metadata without constructing the ECS world."""
+
+    path = Path(path)
+    _verify_checksum(path)
+    selected_format = _format_for_path(path, format)
+    data = (
+        YAMLPersistenceDriver().read_snapshot(path)
+        if selected_format == "yaml"
+        else json.loads(path.read_text())
+    )
+    migrated = migrate_snapshot(data)
+    return WorldMeta.model_validate(migrated.get("bunnyland", {}))
+
+
 def reload_world(
     actor: WorldActor,
     path: str | Path,
@@ -333,6 +370,31 @@ def reload_world(
     actor.queues = CommandQueues()
     actor._inbox = asyncio.Queue()
 
+    memory_store = getattr(actor, "memory_store", None)
+    if memory_store is not None:
+        from .core.components import MemoryProfileComponent
+        from .memory import quarantine_after_epoch
+
+        collections = set()
+        for character in actor.world.query().with_all([MemoryProfileComponent]).execute_entities():
+            profile = character.get_component(MemoryProfileComponent)
+            collections.add(profile.vector_collection)
+            collections.update(profile.shared_collections)
+        quarantine = quarantine_after_epoch(
+            memory_store,
+            tuple(sorted(collections)),
+            checkpoint_epoch=loaded_meta.memory.checkpoint_epoch,
+            world_namespace=loaded_meta.memory.world_namespace or loaded_meta.world_id,
+        )
+        if quarantine.quarantined:
+            OperationalJournal(path).append(
+                "memory_quarantine",
+                world_id=loaded_meta.world_id,
+                checkpoint_epoch=quarantine.checkpoint_epoch,
+                quarantined=quarantine.quarantined,
+                collections=quarantine.collections,
+            )
+
     updates = loaded_meta.model_dump()
     for key, value in updates.items():
         setattr(meta, key, value)
@@ -343,6 +405,114 @@ def reload_world(
         plugin_context=plugin_context,
     )
     return meta
+
+
+def clone_world_identity(
+    actor: WorldActor,
+    meta: WorldMeta,
+    *,
+    world_id: str | None = None,
+) -> WorldMeta:
+    """Assign a clone its own world id and active memory collection namespace."""
+
+    from .core.components import MemoryProfileComponent
+    from .core.ecs import replace_component
+
+    clone_id = world_id or uuid4().hex
+    previous_namespaces = tuple(
+        dict.fromkeys(
+            value
+            for value in (
+                meta.memory.collection_namespace,
+                meta.memory.world_namespace,
+            )
+            if value and value != "main"
+        )
+    )
+
+    def rebase(collection: str) -> str:
+        base = collection
+        for previous in previous_namespaces:
+            prefix = f"{previous}--"
+            if base.startswith(prefix):
+                base = base[len(prefix) :]
+                break
+        return f"{clone_id}--{base}"
+
+    for character in actor.world.query().with_all([MemoryProfileComponent]).execute_entities():
+        profile = character.get_component(MemoryProfileComponent)
+        replace_component(
+            character,
+            profile.__class__(
+                vector_collection=rebase(profile.vector_collection),
+                shared_collections=tuple(rebase(name) for name in profile.shared_collections),
+                last_event_seen_id=profile.last_event_seen_id,
+                last_reflection_epoch=profile.last_reflection_epoch,
+            ),
+        )
+    memory = meta.memory.model_copy(
+        update={
+            "world_namespace": clone_id,
+            "collection_namespace": clone_id,
+            "checkpoint_epoch": actor.epoch,
+            "high_watermark": actor.epoch,
+        }
+    )
+    actor.world_id = clone_id
+    return meta.model_copy(
+        update={
+            "world_id": clone_id,
+            "saved_at_epoch": actor.epoch,
+            "saved_at": None,
+            "memory": memory,
+        }
+    )
+
+
+def build_recovery_manifest(
+    snapshot_path: str | Path,
+    *,
+    meta: WorldMeta,
+    release: str,
+    release_pins: dict[str, str],
+    media_manifest_path: str | Path,
+    rollback_checkpoint: str,
+) -> RecoveryManifest:
+    """Build recovery metadata from the exact snapshot and media manifest bytes."""
+
+    snapshot = Path(snapshot_path)
+    media_manifest = Path(media_manifest_path)
+    return RecoveryManifest(
+        release=release,
+        release_pins=dict(sorted(release_pins.items())),
+        world_id=meta.world_id,
+        world_epoch=meta.saved_at_epoch,
+        world_checksum_sha256=_checksum(snapshot),
+        memory_backend=meta.memory.backend,
+        memory_namespace=meta.memory.collection_namespace,
+        memory_checkpoint_epoch=meta.memory.checkpoint_epoch,
+        memory_high_watermark=meta.memory.high_watermark,
+        media_manifest_checksum_sha256=_checksum(media_manifest),
+        rollback_checkpoint=rollback_checkpoint,
+    )
+
+
+def write_recovery_manifest(path: str | Path, manifest: RecoveryManifest) -> None:
+    """Atomically write and checksum a recovery manifest."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    _fsync_file(temporary)
+    checksum = _checksum(temporary)
+    checksum_path = _checksum_path(path)
+    checksum_temporary = checksum_path.with_name(f".{checksum_path.name}.tmp")
+    checksum_temporary.write_text(f"{checksum}  {path.name}\n", encoding="utf-8")
+    _fsync_file(checksum_temporary)
+    os.replace(temporary, path)
+    os.replace(checksum_temporary, checksum_path)
+    _fsync_directory(path.parent)
 
 
 def _checksum_path(path: Path) -> Path:
@@ -403,10 +573,15 @@ __all__ = [
     "PersistenceFormat",
     "MemoryManifest",
     "OperationalJournal",
+    "RecoveryManifest",
     "WorldMeta",
     "YAMLPersistenceDriver",
+    "build_recovery_manifest",
+    "clone_world_identity",
     "load_world",
+    "read_world_meta",
     "reload_world",
     "save_world",
     "type_registries",
+    "write_recovery_manifest",
 ]

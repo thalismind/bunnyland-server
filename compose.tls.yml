@@ -8,6 +8,6 @@ services:
       - ./deploy/nginx/frontend-tls.conf:/etc/nginx/templates/default.conf.template:ro
       - ./deploy/nginx/api-locations.inc:/etc/nginx/templates/api-locations.inc.template:ro
       - ${BUNNYLAND_LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
-      - ${BUNNYLAND_NGINX_AUTH_DIR:-/etc/nginx/bunnyland}:/etc/nginx/bunnyland:ro
+      - ${BUNNYLAND_TEMPO_AUTH_DIR:-/etc/nginx/bunnyland-tempo}:/etc/nginx/bunnyland:ro
     ports:
       - "${BUNNYLAND_HTTPS_BIND:-0.0.0.0:443}:443"

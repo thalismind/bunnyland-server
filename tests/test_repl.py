@@ -4,6 +4,8 @@ the Textual app (RichLog scrollback, clickable target links, Tab completion, his
 from __future__ import annotations
 
 import asyncio
+import io
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -441,10 +443,10 @@ async def test_drain_events_surfaces_scene_image_and_failure():
             "event": {"world_epoch": epoch, "purpose": "event", "url": url},
         }
 
-    lines = repl.drain_events([completed(5, "/media/events/a.png")])
+    lines = repl.drain_events([completed(5, "/public/media/events/a.png")])
     assert any("scene image ready" in line.plain and "a.png" in line.plain for line in lines)
     # The same image does not repeat.
-    repeat = repl.drain_events([completed(5, "/media/events/a.png")])
+    repeat = repl.drain_events([completed(5, "/public/media/events/a.png")])
     assert all("scene image ready" not in line.plain for line in repeat)
 
     def failed(epoch, reason=None):
@@ -1506,10 +1508,22 @@ def test_main_runs_remote_backend(monkeypatch):
     backends, runs, apps = [], [], []
 
     class BackendStub:
-        def __init__(self, server, *, fallback_controller=None, timeout_seconds=None):
+        def __init__(
+            self,
+            server,
+            *,
+            fallback_controller=None,
+            timeout_seconds=None,
+            username="",
+            password="",
+            token_file=None,
+        ):
             self.server = server
             self.fallback_controller = fallback_controller
             self.timeout_seconds = timeout_seconds
+            self.username = username
+            self.password = password
+            self.token_file = token_file
             backends.append(self)
 
     class AppStub:
@@ -1527,7 +1541,7 @@ def test_main_runs_remote_backend(monkeypatch):
         repl_app.main(
             [
                 "--server",
-                "http://example.test",
+                "https://example.test",
                 "--claim-fallback",
                 "llm",
                 "--claim-timeout-minutes",
@@ -1537,9 +1551,35 @@ def test_main_runs_remote_backend(monkeypatch):
         == 0
     )
     assert [app.backend for app in runs] == backends
-    assert backends[0].server == "http://example.test"
+    assert backends[0].server == "https://example.test"
     assert backends[0].timeout_seconds == 600
     assert apps[0].show_generator_selector is False
+
+
+@pytest.mark.parametrize("password_stdin", [False, True])
+def test_main_reads_remote_password(monkeypatch, password_stdin):
+    captured = {}
+
+    class BackendStub:
+        def __init__(self, _server, **kwargs):
+            captured.update(kwargs)
+
+    class AppStub:
+        def __init__(self, _backend):
+            pass
+
+        def run(self):
+            pass
+
+    monkeypatch.setattr(repl_app, "RemoteBackend", BackendStub)
+    monkeypatch.setattr(repl_app, "BunnylandReplApp", AppStub)
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: "prompt password")
+    monkeypatch.setattr(sys, "stdin", io.StringIO("stdin password\n"))
+    argv = ["--server", "https://example.test", "--username", "player"]
+    if password_stdin:
+        argv.append("--password-stdin")
+    assert repl_app.main(argv) == 0
+    assert captured["password"] == ("stdin password" if password_stdin else "prompt password")
 
 
 def test_main_runs_local_backend(monkeypatch):

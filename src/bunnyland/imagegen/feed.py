@@ -4,7 +4,7 @@ Image generation completes asynchronously and announces itself with an
 ``ImageGenerationCompletedEvent`` (or ``...FailedEvent``) on the event bus. Those events
 ride at ``SYSTEM`` visibility and carry no ``actor_id``, so the per-player perception
 filter in ``EventNarrator`` deliberately drops them. Clients that want to surface "your
-scene image is ready" therefore read the raw ``/world/events/recent`` feed and look for the
+scene image is ready" therefore read the admin recent-event feed and look for the
 completion directly — exactly what the web clients' ``latestImageCompletion`` JS helper
 does. These functions are the Python equivalent shared by the TUI and REPL.
 

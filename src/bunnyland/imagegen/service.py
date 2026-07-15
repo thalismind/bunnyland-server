@@ -3,7 +3,7 @@
 Generation is slow and must never block a tick or the web server, so requests are queued and
 run one at a time by a background worker: the slow ComfyUI call happens off the event loop and
 outside the world lock, and the lock is taken only briefly to attach the resulting reference
-component and publish a completion event (which the existing ``/world/updates`` websocket then
+component and publish a completion event (which the admin world websocket then
 broadcasts). Once an entity or record has an image it is reused -- duplicate requests return the
 existing reference instead of regenerating, and the backfill picker only selects entities that
 are still missing one, so generated images persist with their entity/event.

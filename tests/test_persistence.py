@@ -26,7 +26,7 @@ from bunnyland.core import (
     container_of,
     spawn_entity,
 )
-from bunnyland.core.components import IdentityComponent
+from bunnyland.core.components import IdentityComponent, MemoryProfileComponent
 from bunnyland.core.ecs import contents
 from bunnyland.discord.components import DiscordRoomFeedComponent
 from bunnyland.engine import GameLoop
@@ -35,13 +35,20 @@ from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.migrations import WorldMigrationError, migrate_snapshot
 from bunnyland.offline import advance_offline_life
 from bunnyland.persistence import (
+    MemoryManifest,
     OperationalJournal,
+    RecoveryManifest,
     WorldMeta,
     YAMLPersistenceDriver,
     _format_for_path,
+    build_recovery_manifest,
+    clone_world_identity,
     load_world,
+    read_world_meta,
+    reload_world,
     save_world,
     type_registries,
+    write_recovery_manifest,
 )
 from bunnyland.plugins import PluginRegistry, apply_plugins, bunnyland_plugins
 from bunnyland.prompts.builder import PromptBuilder
@@ -2238,6 +2245,191 @@ def test_operational_journal_is_bounded_and_checkpointed(tmp_path):
     records = journal.records()
     assert len(records) == 2
     assert [record["to_epoch"] for record in records] == [1, 2]
+
+
+def test_recovery_manifest_pins_world_memory_media_and_release(tmp_path):
+    actor = WorldActor()
+    snapshot = tmp_path / "world.json"
+    media_manifest = tmp_path / "media.sha256"
+    media_manifest.write_text("portrait.png abc123\n", encoding="utf-8")
+    stamped = save_world(
+        actor,
+        snapshot,
+        meta=WorldMeta(
+            seed="recovery",
+            memory=MemoryManifest(
+                world_namespace="preview-world",
+                backend="chroma",
+                collection_namespace="preview-world",
+                high_watermark=17,
+            ),
+        ),
+    )
+
+    manifest = build_recovery_manifest(
+        snapshot,
+        meta=stamped,
+        release="bunnyland-ecs-agent-preview-2026-07",
+        release_pins={"server": "abc", "web": "def"},
+        media_manifest_path=media_manifest,
+        rollback_checkpoint="world.json.bak.1",
+    )
+    path = tmp_path / "recovery.json"
+    write_recovery_manifest(path, manifest)
+    loaded = RecoveryManifest.model_validate_json(path.read_text(encoding="utf-8"))
+
+    assert loaded.version == 1
+    assert loaded.release_pins == {"server": "abc", "web": "def"}
+    assert loaded.world_id == stamped.world_id
+    assert loaded.world_epoch == actor.epoch
+    assert loaded.world_checksum_sha256 == snapshot.with_name(
+        "world.json.sha256"
+    ).read_text().split()[0]
+    assert loaded.memory_backend == "chroma"
+    assert loaded.memory_namespace == "preview-world"
+    assert loaded.memory_checkpoint_epoch == actor.epoch
+    assert loaded.memory_high_watermark == 17
+    assert loaded.media_manifest_checksum_sha256
+    assert loaded.rollback_checkpoint == "world.json.bak.1"
+    assert path.with_name("recovery.json.sha256").exists()
+
+
+def test_read_world_meta_supports_checksummed_yaml(tmp_path):
+    snapshot = tmp_path / "world.yaml"
+    stamped = save_world(
+        WorldActor(),
+        snapshot,
+        meta=WorldMeta(seed="yaml metadata", generator="oneshot"),
+    )
+
+    loaded = read_world_meta(snapshot)
+
+    assert loaded.world_id == stamped.world_id
+    assert loaded.seed == "yaml metadata"
+    assert loaded.generator == "oneshot"
+
+
+def test_reload_automatically_quarantines_future_memory_documents(tmp_path):
+    from bunnyland.memory import InMemoryStore
+
+    plugins = bunnyland_plugins()
+    actor = WorldActor()
+    apply_plugins(plugins, actor)
+    spawn_entity(
+        actor.world,
+        [MemoryProfileComponent(vector_collection="character-memory")],
+    )
+    store = InMemoryStore()
+    actor.memory_store = store
+    snapshot = tmp_path / "world.json"
+    stamped = save_world(
+        actor,
+        snapshot,
+        meta=WorldMeta(
+            seed="older-world",
+            memory=MemoryManifest(
+                world_namespace="older-world",
+                collection_namespace="older-world",
+            ),
+        ),
+    )
+    old = store.add("character-memory", text="before checkpoint", created_at_epoch=0)
+    store.add("character-memory", text="after checkpoint", created_at_epoch=1)
+
+    reload_world(
+        actor,
+        snapshot,
+        meta=stamped,
+        registry=PluginRegistry(plugins),
+    )
+
+    assert [entry.id for entry in store.search("character-memory")] == [old.id]
+    quarantined = store.list_documents("older-world.quarantine.character-memory")
+    assert [document.document for document in quarantined] == ["after checkpoint"]
+    assert OperationalJournal(snapshot).records()[-1]["record_type"] == "memory_quarantine"
+
+
+def test_reload_with_memory_store_and_no_future_documents_skips_quarantine_journal(tmp_path):
+    from bunnyland.memory import InMemoryStore
+
+    plugins = bunnyland_plugins()
+    actor = WorldActor()
+    apply_plugins(plugins, actor)
+    spawn_entity(actor.world, [MemoryProfileComponent(vector_collection="character-memory")])
+    actor.memory_store = InMemoryStore()
+    snapshot = tmp_path / "world.json"
+    stamped = save_world(actor, snapshot, meta=WorldMeta(seed="current-world"))
+
+    reload_world(
+        actor,
+        snapshot,
+        meta=stamped,
+        registry=PluginRegistry(plugins),
+    )
+
+    assert all(
+        record["record_type"] != "memory_quarantine"
+        for record in OperationalJournal(snapshot).records()
+    )
+
+
+def test_cloning_rebases_active_memory_collections_to_the_new_world():
+    actor = WorldActor()
+    character = spawn_entity(
+        actor.world,
+        [
+            MemoryProfileComponent(
+                vector_collection="source-world--private",
+                shared_collections=("source-world--notice-board",),
+            )
+        ],
+    )
+    source = WorldMeta(
+        world_id="source-world",
+        memory=MemoryManifest(
+            world_namespace="source-world",
+            collection_namespace="source-world",
+        ),
+    )
+
+    first = clone_world_identity(actor, source, world_id="clone-one")
+    first_profile = actor.world.get_entity(character.id).get_component(MemoryProfileComponent)
+    assert first.world_id == "clone-one"
+    assert first.memory.collection_namespace == "clone-one"
+    assert first_profile.vector_collection == "clone-one--private"
+    assert first_profile.shared_collections == ("clone-one--notice-board",)
+
+    second = clone_world_identity(actor, first, world_id="clone-two")
+    second_profile = actor.world.get_entity(character.id).get_component(MemoryProfileComponent)
+    assert second.world_id == "clone-two"
+    assert second_profile.vector_collection == "clone-two--private"
+    assert second_profile.shared_collections == ("clone-two--notice-board",)
+
+
+def test_cloning_rebases_matching_later_namespace_and_unprefixed_collection():
+    actor = WorldActor()
+    character = spawn_entity(
+        actor.world,
+        [
+            MemoryProfileComponent(
+                vector_collection="source-world--private",
+                shared_collections=("plain-board",),
+            )
+        ],
+    )
+    source = WorldMeta(
+        world_id="source-world",
+        memory=MemoryManifest(
+            world_namespace="source-world",
+            collection_namespace="active-memory",
+        ),
+    )
+
+    clone_world_identity(actor, source, world_id="clone")
+
+    profile = actor.world.get_entity(character.id).get_component(MemoryProfileComponent)
+    assert profile.vector_collection == "clone--private"
+    assert profile.shared_collections == ("clone--plain-board",)
 
 
 def test_operational_journal_empty_receipt_and_deeper_backup_rotation(tmp_path):

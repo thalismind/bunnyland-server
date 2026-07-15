@@ -15,12 +15,11 @@ location @bunnyland_rate_limited {
 # credential file and is never part of Bunnyland application authentication.
 include /etc/nginx/conf.d/tempo-location.inc*;
 
-location = /api/health {
-    proxy_pass ${BUNNYLAND_API_UPSTREAM}/health;
+location = /api/public/health {
+    proxy_pass ${BUNNYLAND_API_UPSTREAM}/public/health;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
@@ -32,8 +31,7 @@ location /api/ {
     proxy_http_version 1.1;
     proxy_buffering off;
     proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header Authorization $http_authorization;
     proxy_set_header Cookie $http_cookie;

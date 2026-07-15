@@ -97,7 +97,9 @@ def quarantine_after_epoch(
 
     quarantined = 0
     for collection in collections:
-        destination = f"{world_namespace}:quarantine:{collection}"
+        safe_namespace = re.sub(r"[^a-zA-Z0-9._-]+", "-", world_namespace).strip("-._")
+        safe_collection = re.sub(r"[^a-zA-Z0-9._-]+", "-", collection).strip("-._")
+        destination = f"{safe_namespace or 'world'}.quarantine.{safe_collection or 'memory'}"
         for document in tuple(store.list_documents(collection)):
             created_at = int(document.metadata.get("created_at_epoch", 0) or 0)
             if created_at <= checkpoint_epoch:

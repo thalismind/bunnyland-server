@@ -211,11 +211,11 @@ async def test_start_generates_and_attaches_portrait(tmp_path):
 
     entity = scenario.actor.world.get_entity(scenario.character)
     portrait = entity.get_component(PortraitImageComponent)
-    assert portrait.url.startswith("/media/portraits/")
+    assert portrait.url.startswith("/public/media/portraits/")
     assert portrait.seed == _seed_for(str(scenario.character))
     assert not entity.has_component(ImageRequestComponent)  # cleared
     # File written and a completion event emitted.
-    segment, name = portrait.url.split("/")[2:4]
+    segment, name = portrait.url.split("/")[-2:]
     assert MediaStore(tmp_path).read(SEGMENT_PORTRAITS, name) == b"PORTRAIT"
     assert any(isinstance(e, ImageGenerationCompletedEvent) for e in events)
     await service.aclose()
@@ -224,18 +224,18 @@ async def test_start_generates_and_attaches_portrait(tmp_path):
 async def test_start_reuses_existing_image(tmp_path):
     scenario = build_scenario()
     entity = scenario.actor.world.get_entity(scenario.character)
-    entity.add_component(PortraitImageComponent(url="/media/portraits/old.png"))
+    entity.add_component(PortraitImageComponent(url="/public/media/portraits/old.png"))
     service = _service(scenario.actor, tmp_path)
 
     job = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
     assert job.status == "skipped"
-    assert job.url == "/media/portraits/old.png"
+    assert job.url == "/public/media/portraits/old.png"
 
 
 async def test_start_force_regenerates(tmp_path):
     scenario = build_scenario()
     entity = scenario.actor.world.get_entity(scenario.character)
-    entity.add_component(PortraitImageComponent(url="/media/portraits/old.png"))
+    entity.add_component(PortraitImageComponent(url="/public/media/portraits/old.png"))
     service = _service(scenario.actor, tmp_path)
 
     job = await service.start(str(scenario.character), ImagePurpose.PORTRAIT, force=True)
@@ -245,7 +245,7 @@ async def test_start_force_regenerates(tmp_path):
         .get_component(PortraitImageComponent)
         .url
     )
-    assert new_url != "/media/portraits/old.png"
+    assert new_url != "/public/media/portraits/old.png"
     assert job.status in {"queued", "running", "succeeded"}
     await service.aclose()
 
@@ -279,7 +279,7 @@ async def test_start_sprite_sets_sprite_image(tmp_path):
     await service.start(str(scenario.character), ImagePurpose.SPRITE)
     await service.wait_idle()
     sprite = scenario.actor.world.get_entity(scenario.character).get_component(SpriteImageComponent)
-    assert sprite.url.startswith("/media/sprites/")
+    assert sprite.url.startswith("/public/media/sprites/")
     await service.aclose()
 
 
@@ -300,7 +300,7 @@ async def test_start_event_attaches_event_image(tmp_path):
     await service.start(str(record.id), ImagePurpose.EVENT)
     await service.wait_idle()
     image = world.get_entity(record.id).get_component(EventImageComponent)
-    assert image.url.startswith("/media/events/")
+    assert image.url.startswith("/public/media/events/")
     assert image.source_event_id == "evt-7"
     await service.aclose()
 
@@ -420,7 +420,7 @@ async def test_enqueue_one_missing_returns_none_when_busy(tmp_path):
 async def test_enqueue_one_missing_picks_sprite_when_portrait_done(tmp_path):
     scenario = build_scenario()
     entity = scenario.actor.world.get_entity(scenario.character)
-    entity.add_component(PortraitImageComponent(url="/media/portraits/x.png"))
+    entity.add_component(PortraitImageComponent(url="/public/media/portraits/x.png"))
     entity.add_component(SpriteImageComponent())  # empty url -> needs a sprite
     service = _service(scenario.actor, tmp_path)
     job = await service.enqueue_one_missing()
@@ -433,7 +433,7 @@ async def test_enqueue_one_missing_picks_sprite_when_portrait_done(tmp_path):
 async def test_enqueue_one_missing_none_when_all_done(tmp_path):
     scenario = build_scenario()
     entity = scenario.actor.world.get_entity(scenario.character)
-    entity.add_component(PortraitImageComponent(url="/media/portraits/x.png"))
+    entity.add_component(PortraitImageComponent(url="/public/media/portraits/x.png"))
     service = _service(scenario.actor, tmp_path)
     assert await service.enqueue_one_missing() is None
 
@@ -485,12 +485,12 @@ def test_existing_image_url_all_purposes():
     assert _existing_image_url(entity, ImagePurpose.SPRITE) == ""
     assert _existing_image_url(entity, ImagePurpose.EVENT) == ""
     assert _existing_image_url(entity, ImagePurpose.PORTRAIT) == ""
-    entity.add_component(SpriteImageComponent(url="/media/sprites/s.png"))
-    entity.add_component(EventImageComponent(url="/media/events/e.png"))
-    entity.add_component(PortraitImageComponent(url="/media/portraits/p.png"))
-    assert _existing_image_url(entity, ImagePurpose.SPRITE) == "/media/sprites/s.png"
-    assert _existing_image_url(entity, ImagePurpose.EVENT) == "/media/events/e.png"
-    assert _existing_image_url(entity, ImagePurpose.ENTITY) == "/media/portraits/p.png"
+    entity.add_component(SpriteImageComponent(url="/public/media/sprites/s.png"))
+    entity.add_component(EventImageComponent(url="/public/media/events/e.png"))
+    entity.add_component(PortraitImageComponent(url="/public/media/portraits/p.png"))
+    assert _existing_image_url(entity, ImagePurpose.SPRITE) == "/public/media/sprites/s.png"
+    assert _existing_image_url(entity, ImagePurpose.EVENT) == "/public/media/events/e.png"
+    assert _existing_image_url(entity, ImagePurpose.ENTITY) == "/public/media/portraits/p.png"
 
 
 def test_clear_request_both_branches():
@@ -505,7 +505,7 @@ def test_clear_request_both_branches():
 def test_first_missing_sprite_skips_filled_sprites():
     scenario = build_scenario()
     entity = scenario.actor.world.get_entity(scenario.character)
-    entity.add_component(SpriteImageComponent(url="/media/sprites/done.png"))
+    entity.add_component(SpriteImageComponent(url="/public/media/sprites/done.png"))
     # Only character already has a sprite url, so nothing is missing.
     assert _first_missing_sprite(scenario.actor, set()) is None
 

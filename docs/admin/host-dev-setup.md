@@ -405,8 +405,7 @@ server {
         proxy_pass http://127.0.0.1:8765/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Authorization $http_authorization;
         proxy_set_header Cookie $http_cookie;
@@ -444,69 +443,15 @@ After TLS is enabled, verify that the certbot-managed HTTPS server for
 
 Open `https://sandbox.example.com`.
 
-In the web client's **Server** field:
-
-- use `https://sandbox.example.com/api/` when nginx proxies the API under `/api`;
-- use `http://localhost:8765` when running both pieces locally;
-- use `https://api.example.com` if you expose the API on a separate hostname.
+Use `/api/` in the web client's **Server** field. Hosted browser clients require the API,
+WebSocket, media, and configuration surfaces to share the page origin. Local development
+should proxy `/api/` to a loopback server rather than configure a cross-origin API URL.
 
 Sign in through the shared login dialog. The browser keeps the resulting secure HttpOnly
-cookie and rotates it while active. The world editor then requests:
-
-```text
-GET /world/snapshot
-```
-
-through the configured base URL, then opens:
-
-```text
-WS /world/updates
-```
-
-for the initial snapshot and later typed events. If nginx is mounted at `/api`, those become
-`/api/world/snapshot` and `/api/world/updates` externally.
-
-Useful checks:
-
-```bash
-curl -fsS https://example.com/
-curl -fsS -I https://home.example.com/
-curl -fsS https://sandbox.example.com/
-curl -fsS https://sandbox.example.com/config.json
-curl -fsS https://sandbox.example.com/api/health
-curl -i https://sandbox.example.com/api/world/snapshot
-curl -i -X PATCH https://sandbox.example.com/api/admin/world
-TOKEN="$(curl -fsS -X POST https://sandbox.example.com/api/auth/login \
-  -H 'Content-Type: application/json' \
-  --data '{"username":"editor","password":"YOUR_PASSWORD","delivery":"body"}' \
-  | jq -r .token)"
-curl -fsS -X PATCH https://sandbox.example.com/api/admin/world \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  --data '{"operations":[]}'
-curl -i -X POST https://sandbox.example.com/api/admin/world/save
-curl -fsS -H "Authorization: Bearer $TOKEN" -X POST https://sandbox.example.com/api/admin/world/save
-curl -fsS -H "Authorization: Bearer $TOKEN" -X POST https://sandbox.example.com/api/admin/pause
-curl -fsS -H "Authorization: Bearer $TOKEN" -X POST https://sandbox.example.com/api/admin/resume
-cd /opt/bunnyland/server
-/opt/bunnyland/.local/bin/uv run --extra server python - <<'PY'
-import asyncio
-import json
-import websockets
-
-async def main():
-    async with websockets.connect("wss://sandbox.example.com/api/world/updates") as ws:
-        await ws.send(json.dumps({"type": "authenticate", "data": {"token": "YOUR_TOKEN"}}))
-        message = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
-        print(message["type"])
-
-asyncio.run(main())
-PY
-```
-
-The unauthenticated `PATCH` and save checks should return `401 Unauthorized`. The
-authenticated empty patch should return JSON with the current `world_epoch`, and the
-authenticated save should include the server-side save path.
+cookie and rotates it while active. Player clients use only the play zone; editors and
+inspectors use the admin zone and its global stream. Run `scripts/vps-docker-verify` for
+the exact anonymous, play, admin, and WebSocket checks. Use the deployed OpenAPI document
+as the endpoint and payload reference.
 
 If the page loads but **Connect Live** fails, check:
 
@@ -546,9 +491,9 @@ Default: deny (incoming), allow (outgoing)
 Verify that nginx still reaches the app locally, but the app port is not public:
 
 ```bash
-curl -fsS http://127.0.0.1:8765/health
-curl -fsS https://sandbox.example.com/api/health
-curl --connect-timeout 5 http://YOUR_VPS_PUBLIC_IP:8765/health || true
+curl -fsS http://127.0.0.1:8765/public/health
+curl -fsS https://sandbox.example.com/api/public/health
+curl --connect-timeout 5 http://YOUR_VPS_PUBLIC_IP:8765/public/health || true
 ```
 
 The last command should time out or fail. The public API should be available only through

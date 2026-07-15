@@ -6,6 +6,7 @@ from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
     AdminComponent,
+    ButtonComponent,
     CharacterComponent,
     CommandCost,
     ContainmentMode,
@@ -451,6 +452,12 @@ def test_storyteller_returned_and_reported_resolution_rules(scenario):
         ReadableComponent(text="Parcel-01 resolved after the missing parcel witness report.")
     )
     assert story._incident_reported(world, incident, report) is True
+
+    button = spawn_entity(world, [ButtonComponent(pressed=False)])
+    assert story._button_activated(world, incident, button) is False
+    button.remove_component(ButtonComponent)
+    button.add_component(ButtonComponent(pressed=True))
+    assert story._button_activated(world, incident, button) is True
 
 
 def test_incident_ready_and_resolve_handler_cover_error_paths_directly(scenario):

@@ -1071,12 +1071,12 @@ async def test_rest_snapshot_emits_child_span_under_request(otel_capture):
     app = create_app(
         actor,
         meta=WorldMeta(seed="s", generator="stub"),
-        allow_unauthenticated=True,
+        allow_unauthenticated_embedding=True,
     )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
     ) as client:
-        response = await client.get("/world/snapshot")
+        response = await client.get("/admin/world/snapshot")
         assert response.status_code == 200
 
     assert "world.snapshot" in _spans_by_name(span_exporter)
@@ -1184,7 +1184,7 @@ async def test_controller_assign_endpoint_is_traced(otel_capture):
 
     span_exporter, _reader = otel_capture
     scenario = build_scenario()
-    app = create_app(scenario.actor, allow_unauthenticated=True)
+    app = create_app(scenario.actor, allow_unauthenticated_embedding=True)
     route = next(
         route for route in app.routes if getattr(route, "path", None) == "/admin/controllers/assign"
     )
@@ -1208,11 +1208,11 @@ async def test_web_controller_claim_endpoint_reports_client_id_in_trace(otel_cap
 
     span_exporter, _reader = otel_capture
     scenario = build_scenario()
-    app = create_app(scenario.actor, allow_unauthenticated=True)
+    app = create_app(scenario.actor, allow_unauthenticated_embedding=True)
     route = next(
         route
         for route in app.routes
-        if getattr(route, "path", None) == "/world/controllers/web/claim"
+        if getattr(route, "path", None) == "/play/world/controllers/web/claim"
     )
     response = await route.endpoint(
         WebControllerClaimRequest(

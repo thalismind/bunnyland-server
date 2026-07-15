@@ -32,6 +32,31 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 _cookie_scheme = APIKeyCookie(name=AUTH_COOKIE_NAME, auto_error=False)
 
 
+class _UniqueKeyLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_unique_mapping(loader, node, deep=False):
+    seen: set[object] = set()
+    for key_node, _value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            raise yaml.constructor.ConstructorError(
+                "while constructing authentication users",
+                node.start_mark,
+                "duplicate key is not allowed",
+                key_node.start_mark,
+            )
+        seen.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+
+_UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=1, max_length=1024)
@@ -99,36 +124,101 @@ class UserCredentialStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
-    def _load(self) -> dict[str, UserCredential]:
+    def _load(self, *, strict: bool = False) -> dict[str, UserCredential]:
         try:
-            raw = yaml.safe_load(self.path.read_text()) or {}
-        except (OSError, yaml.YAMLError, UnicodeError):
+            raw = yaml.load(self.path.read_text(), Loader=_UniqueKeyLoader) or {}
+        except yaml.constructor.ConstructorError as exc:
+            if strict and "duplicate key" in str(exc):
+                raise ValueError("authentication user file contains duplicate YAML keys") from exc
+            if strict:
+                raise ValueError(
+                    f"authentication user file is not readable YAML: {self.path}"
+                ) from exc
+            return {}
+        except (OSError, yaml.YAMLError, UnicodeError) as exc:
+            if strict:
+                raise ValueError(
+                    f"authentication user file is not readable YAML: {self.path}"
+                ) from exc
             return {}
         entries = raw.get("users", raw) if isinstance(raw, dict) else raw
         if isinstance(entries, dict):
-            entries = [
-                dict(value, username=key)
-                for key, value in entries.items()
-                if isinstance(value, dict)
-            ]
+            mapped_entries = []
+            for key, value in entries.items():
+                if not isinstance(value, dict):
+                    if strict:
+                        raise ValueError("authentication user entries must be mappings")
+                    continue
+                mapped_entries.append(dict(value, username=key))
+            entries = mapped_entries
         if not isinstance(entries, list):
+            if strict:
+                raise ValueError("authentication user file must contain a users list or mapping")
             return {}
         users: dict[str, UserCredential] = {}
         for entry in entries:
             if not isinstance(entry, dict):
+                if strict:
+                    raise ValueError("authentication user entries must be mappings")
                 continue
             username = str(entry.get("username", "")).strip()
             password_hash = str(entry.get("password_hash", "")).strip()
             if not username or not password_hash:
+                if strict:
+                    raise ValueError(
+                        "authentication users require non-empty username and password_hash"
+                    )
                 continue
+            if username in users:
+                raise ValueError(f"duplicate authentication username: {username!r}")
             scopes = entry.get("scopes", [])
+            if not isinstance(scopes, list):
+                if strict:
+                    raise ValueError(f"authentication scopes for {username!r} must be a list")
+                scopes = []
+            enabled = entry.get("enabled", True)
+            if strict and not isinstance(enabled, bool):
+                raise ValueError(f"authentication enabled for {username!r} must be a boolean")
+            if strict and not scopes:
+                raise ValueError(f"authentication scopes for {username!r} must not be empty")
+            if strict and any(
+                not isinstance(scope, str)
+                or scope not in {WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE}
+                for scope in scopes
+            ):
+                raise ValueError(
+                    f"authentication scopes for {username!r} must be world:play or world:admin"
+                )
             users[username] = UserCredential(
                 username=username,
                 password_hash=password_hash,
-                enabled=bool(entry.get("enabled", True)),
-                scopes=normalized_scopes(scopes if isinstance(scopes, list) else []),
+                enabled=enabled if isinstance(enabled, bool) else bool(enabled),
+                scopes=normalized_scopes(scopes),
             )
         return users
+
+    def validate(self) -> None:
+        """Fail before listening when the deployment credential file is unusable."""
+
+        try:
+            from pwdlib import PasswordHash
+            from pwdlib.exceptions import UnknownHashError
+        except ImportError as exc:
+            raise RuntimeError("password login requires pwdlib[argon2]") from exc
+        users = self._load(strict=True)
+        if not users:
+            raise ValueError("authentication user file must contain at least one user")
+        try:
+            verifier = PasswordHash.recommended()
+        except (ImportError, RuntimeError) as exc:
+            raise RuntimeError("password login requires pwdlib[argon2]") from exc
+        for username, user in users.items():
+            if not user.password_hash.startswith(("$argon2id$", "$argon2i$", "$argon2d$")):
+                raise ValueError(f"invalid Argon2 password hash for user {username!r}")
+            try:
+                verifier.verify("bunnyland-startup-validation", user.password_hash)
+            except (TypeError, ValueError, UnknownHashError) as exc:
+                raise ValueError(f"invalid Argon2 password hash for user {username!r}") from exc
 
     def authenticate(self, username: str, password: str) -> UserCredential | None:
         user = self._load().get(username)
@@ -196,6 +286,15 @@ class TokenStore:
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS auth_tokens_subject ON auth_tokens(subject)"
             )
+        self._lock_permissions()
+
+    def _lock_permissions(self) -> None:
+        if self.path == ":memory:":
+            return
+        for suffix in ("", "-wal", "-shm"):
+            candidate = Path(f"{self.path}{suffix}")
+            if candidate.exists():
+                candidate.chmod(0o600)
 
     def close(self) -> None:
         with self._lock:
@@ -267,6 +366,7 @@ class TokenStore:
             row = self._connection.execute(
                 "SELECT * FROM auth_tokens WHERE token_id = ?", (token_id,)
             ).fetchone()
+        self._lock_permissions()
         return token, self._principal(row)
 
     def import_digest(
@@ -304,6 +404,7 @@ class TokenStore:
                     secrets.token_hex(16),
                 ),
             )
+        self._lock_permissions()
         return cursor.rowcount > 0
 
     def verify(self, token: str, *, now: int | None = None) -> TokenPrincipal | None:
@@ -401,6 +502,7 @@ class TokenStore:
             except Exception:
                 self._connection.rollback()
                 raise
+        self._lock_permissions()
         return replacement, self._principal(replacement_row)
 
     def revoke_token(self, token_or_id: str, *, now: int | None = None) -> bool:
@@ -415,6 +517,7 @@ class TokenStore:
                 """,
                 (current, token_id),
             )
+        self._lock_permissions()
         return cursor.rowcount > 0
 
     def revoke_subject(self, subject: str, *, now: int | None = None) -> int:
@@ -427,6 +530,7 @@ class TokenStore:
                 """,
                 (current, subject),
             )
+        self._lock_permissions()
         return cursor.rowcount
 
     def replace(self, token_id: str, *, now: int | None = None) -> tuple[str, TokenPrincipal]:
@@ -453,6 +557,7 @@ class TokenStore:
                 """,
                 (current, principal.token_id, token_id),
             )
+        self._lock_permissions()
         return replacement, principal
 
     def list_metadata(self) -> list[dict[str, object]]:

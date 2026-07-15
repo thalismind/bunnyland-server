@@ -5,7 +5,13 @@ from __future__ import annotations
 import os
 
 from ...plugins.ids import MEDIA
-from ...plugins.model import Plugin, PluginPlacement, RuntimeContribution
+from ...plugins.model import (
+    HttpContribution,
+    HttpZone,
+    Plugin,
+    PluginPlacement,
+    RuntimeContribution,
+)
 from .service import MediaError, MediaService, content_type_for
 
 
@@ -15,10 +21,10 @@ def _install_service(actor) -> None:
         actor.media_service = MediaService(root)
 
 
-def _install_routes(app, actor, **_context) -> None:
+def _install_routes(router, actor, **_context) -> None:
     from fastapi import HTTPException, Response
 
-    @app.get("/media/{namespace}/{name}")
+    @router.get("/media/{namespace}/{name}")
     async def get_media(namespace: str, name: str):
         try:
             data = actor.media_service.read(namespace, name)
@@ -39,7 +45,7 @@ def plugin() -> Plugin:
         placement=PluginPlacement.FOUNDATION,
         runtime=RuntimeContribution(
             service_factories=(_install_service,),
-            server_routers=(_install_routes,),
+            http=(HttpContribution(zone=HttpZone.PUBLIC, registrars=(_install_routes,)),),
         ),
     )
 

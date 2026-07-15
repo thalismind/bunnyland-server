@@ -133,7 +133,7 @@ curl -fsS -u editor:YOUR_PASSWORD \
 The endpoint uses the same enabled plugin generator registry as the CLI, clears volatile
 command queues, updates world metadata, starts generation as a background job, and returns
 a job id immediately. Clients should watch `GET /admin/world/generation`, websocket domain
-events such as `WorldGenerationCompletedEvent`, and `/world/snapshot` for newly appearing
+events such as `WorldGenerationCompletedEvent`, and admin snapshots for newly appearing
 entities. The web client's `world-generator.html` page wraps this flow with generator
 selection, seed entry, snapshot polling, and highlighting for new entity ids. See
 [generating worlds](../admin/generating-worlds.md) for the player/admin workflow.

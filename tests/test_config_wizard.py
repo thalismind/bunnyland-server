@@ -3,12 +3,10 @@ from __future__ import annotations
 import stat
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import UUID
 
 from conftest import install_plugin_module
 
 from bunnyland.config import (
-    AuthConfig,
     BunnylandConfig,
     DeploymentConfig,
     DiscordConfig,
@@ -23,6 +21,7 @@ from bunnyland.config import (
 )
 from bunnyland.config_wizard import (
     WORLD_PROMPT_PRESETS,
+    _confirm,
     _format_field_help,
     _optional_bool,
     _parse_themes_text,
@@ -85,7 +84,7 @@ def test_api_nginx_template_forwards_bearer_and_cookie_without_basic_auth() -> N
     repo_root = Path(__file__).resolve().parents[1]
     text = (repo_root / "deploy" / "nginx" / "api-locations.inc").read_text()
 
-    health_location = text.index("location = /api/health")
+    health_location = text.index("location = /api/public/health")
     player_location = text.index("location /api/ {")
 
     assert health_location < player_location
@@ -113,7 +112,7 @@ def test_nginx_api_limits_return_retry_after_without_limiting_health() -> None:
     locations = (repo_root / "deploy" / "nginx" / "api-locations.inc").read_text()
     frontend = (repo_root / "deploy" / "nginx" / "frontend-tls.conf").read_text()
     health = locations[
-        locations.index("location = /api/health") : locations.index("location /api/ {")
+        locations.index("location = /api/public/health") : locations.index("location /api/ {")
     ]
 
     assert "limit_req_zone $binary_remote_addr zone=bunnyland_api:10m" in frontend
@@ -123,22 +122,52 @@ def test_nginx_api_limits_return_retry_after_without_limiting_health() -> None:
     assert locations.count("limit_req zone=bunnyland_api") == 1
 
 
+def test_compose_and_nginx_use_exact_proxy_trust_without_publishing_the_api() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    compose = (repo_root / "compose.yml").read_text()
+    locations = (repo_root / "deploy" / "nginx" / "api-locations.inc").read_text()
+
+    server_block = compose[compose.index("  server:") : compose.index("  frontend:")]
+    assert "ports:" not in server_block
+    assert 'expose:\n      - "8765"' in server_block
+    assert "BUNNYLAND_TRUST_X_REAL_IP" not in compose
+    assert "BUNNYLAND_FORWARDED_ALLOW_IPS" in compose
+    assert "BUNNYLAND_COMPOSE_SUBNET" in compose
+    assert "BUNNYLAND_FRONTEND_IP" in compose
+    assert "X-Real-IP" not in locations
+    assert "proxy_set_header X-Forwarded-For $remote_addr;" in locations
+    assert "$proxy_add_x_forwarded_for" not in locations
+
+
+def test_tls_templates_set_one_year_origin_only_hsts() -> None:
+    root = Path(__file__).resolve().parents[1] / "deploy" / "nginx"
+    for name in ("frontend-tls.conf", "frontend-tls-home.conf"):
+        text = (root / name).read_text()
+        assert 'Strict-Transport-Security "max-age=31536000" always' in text
+        assert "includeSubDomains" not in text
+        assert "preload" not in text
+
+
 def test_bunnyland_config_round_trips_yaml_with_private_mode(tmp_path: Path) -> None:
     path = tmp_path / "bunnyland.yml"
     config = BunnylandConfig(
         deployment=DeploymentConfig(domain="localhost", data_dir="/tmp/bunnyland"),
-        auth=AuthConfig(admin_user="editor", admin_password="local"),
         world=WorldConfig(starter_pack="peaceful", memory_backend="json"),
         llm=LlmConfig(enabled=True, ollama_api_key="ollama-key"),
         discord=DiscordConfig(enabled=True, token="discord-token"),
-        server=ServerConfig(character_chat=True),
+        server=ServerConfig(
+            character_chat=True,
+            auth_users_file="/tmp/users.yml",
+            token_db="/tmp/tokens.sqlite3",
+        ),
     )
 
     config.save(path)
 
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     loaded = BunnylandConfig.load(path)
-    assert loaded.auth.admin_password == "local"
+    assert loaded.server.auth_users_file == "/tmp/users.yml"
+    assert loaded.server.token_db == "/tmp/tokens.sqlite3"
     assert loaded.llm.ollama_api_key == "ollama-key"
     assert loaded.world.memory_backend == "json"
 
@@ -148,6 +177,28 @@ def test_bunnyland_config_loads_empty_file_as_defaults(tmp_path: Path) -> None:
     path.write_text("")
 
     assert BunnylandConfig.load(path) == BunnylandConfig()
+
+
+def test_bunnyland_config_rejects_obsolete_authentication_keys() -> None:
+    for mapping, key in (
+        ({"auth": {}}, "auth"),
+        ({"server": {"admin_token": "old"}}, "server.admin_token"),
+        ({"server": {"trust_x_real_ip": True}}, "server.trust_x_real_ip"),
+        ({"deployment": {"nginx_auth_dir": "/old"}}, "deployment.nginx_auth_dir"),
+    ):
+        try:
+            BunnylandConfig.from_mapping(mapping)
+        except ValueError as exc:
+            assert "obsolete authentication configuration" in str(exc)
+            assert key in str(exc)
+        else:
+            raise AssertionError(f"obsolete key was accepted: {key}")
+
+
+def test_confirm_uses_default_for_empty_input(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+    assert _confirm("Continue", default=True) is True
+    assert _confirm("Continue", default=False) is False
 
 
 def test_bunnyland_config_rejects_non_mapping_yaml(tmp_path: Path) -> None:
@@ -169,7 +220,6 @@ def test_bunnyland_config_renders_setup_env() -> None:
             data_dir="/var/lib/bunnyland",
             container_runtime="docker",
         ),
-        auth=AuthConfig(admin_user="editor", admin_password="local"),
         world=WorldConfig(starter_pack="peaceful"),
         discord=DiscordConfig(
             public_url="https://discord.gg/example",
@@ -179,7 +229,8 @@ def test_bunnyland_config_renders_setup_env() -> None:
         server=ServerConfig(
             http_rate_limit_requests=20,
             http_rate_limit_window_seconds=2.5,
-            trust_x_real_ip=True,
+            cors_origins=("https://sandbox.example.com",),
+            forwarded_allow_ips="172.28.0.2",
         ),
     )
 
@@ -187,15 +238,17 @@ def test_bunnyland_config_renders_setup_env() -> None:
 
     assert env["BUNNYLAND_DOMAIN"] == "sandbox.example.com"
     assert env["BUNNYLAND_DATA_DIR"] == "/var/lib/bunnyland"
-    assert env["BUNNYLAND_ADMIN_USER"] == "editor"
-    assert env["BUNNYLAND_ADMIN_PASSWORD"] == "local"
+    assert "BUNNYLAND_ADMIN_USER" not in env
+    assert "BUNNYLAND_ADMIN_PASSWORD" not in env
     assert env["BUNNYLAND_STARTER_PACK"] == "peaceful"
     assert env["BUNNYLAND_DISCORD_URL"] == "https://discord.gg/example"
     assert env["BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS"] == "123"
     assert env["BUNNYLAND_DISCORD_COOLDOWN_SECONDS"] == "3"
     assert env["BUNNYLAND_HTTP_RATE_LIMIT_REQUESTS"] == "20"
     assert env["BUNNYLAND_HTTP_RATE_LIMIT_WINDOW_SECONDS"] == "2.5"
-    assert env["BUNNYLAND_TRUST_X_REAL_IP"] == "1"
+    assert env["BUNNYLAND_CORS_ORIGINS"] == "https://sandbox.example.com"
+    assert env["BUNNYLAND_FORWARDED_ALLOW_IPS"] == "172.28.0.2"
+    assert "BUNNYLAND_TRUST_X_REAL_IP" not in env
     assert env["BUNNYLAND_SETUP_DRY_RUN"] == "1"
 
 
@@ -203,11 +256,11 @@ def test_bunnyland_config_renders_web_config_and_theme_assets(tmp_path: Path) ->
     css_file = tmp_path / "night.css"
     css_file.write_text(":root.bl-theme-night {}\n")
     config = BunnylandConfig(
-        auth=AuthConfig(player_user="player", player_password="secret"),
         discord=DiscordConfig(public_url="https://discord.gg/example"),
         web=WebConfig(
             theme="night",
             themes=(WebTheme(value="night", label="Night", css_file=str(css_file)),),
+            player_auth_required=True,
         ),
     )
 
@@ -240,18 +293,21 @@ def test_bunnyland_config_renders_setup_env_without_dry_run() -> None:
     assert "BUNNYLAND_SETUP_DRY_RUN" not in env
 
 
-def test_config_wizard_review_masks_secrets() -> None:
+def test_config_wizard_review_lists_external_credential_stores() -> None:
     lines = review_lines(
         BunnylandConfig(
             deployment=DeploymentConfig(domain="sandbox.example.com", data_dir="/data"),
-            auth=AuthConfig(admin_user="editor", admin_password="secret"),
+            server=ServerConfig(
+                auth_users_file="/data/users.yml",
+                token_db="/data/tokens.sqlite3",
+            ),
             discord=DiscordConfig(public_url="https://discord.gg/example"),
         )
     )
 
     text = "\n".join(lines)
-    assert "Admin password    : (set)" in text
-    assert "secret" not in text
+    assert "User file         : /data/users.yml" in text
+    assert "Token database    : /data/tokens.sqlite3" in text
     assert "Discord link      : https://discord.gg/example" in text
     assert "Live services     : offline smoke test" in text
     assert "Plugins           : default set" in text
@@ -326,12 +382,11 @@ def test_config_wizard_prompt_smoke_path(monkeypatch) -> None:
             "localhost",
             "/data",
             "",
-            "editor",
-            "",
             "bad-pack",
             "peaceful",
             "n",
             "",
+            "y",
             "n",
             "ftp://bad",
             "https://discord.gg/example",
@@ -344,7 +399,7 @@ def test_config_wizard_prompt_smoke_path(monkeypatch) -> None:
     config = prompt_for_config()
 
     assert config.deployment.domain == "localhost"
-    assert str(UUID(config.auth.admin_password)) == config.auth.admin_password
+    assert config.web.player_auth_required is True
     assert config.world.starter_pack == "peaceful"
     assert config.discord.public_url == "https://discord.gg/example"
     assert config.llm.enabled is False
@@ -358,12 +413,11 @@ def test_config_wizard_prompt_full_ollama_path(monkeypatch) -> None:
             "sandbox.example.com",
             "/var/lib/bunnyland",
             "",
-            "editor",
-            "secret",
             "none",
             "n",
             "",
-            "",
+            "y",
+            "y",
             "",
             "ollama",
             "sk-ollama",
@@ -398,15 +452,14 @@ def test_config_wizard_prompt_full_openrouter_path(monkeypatch) -> None:
             "sandbox.example.com",
             "/var/lib/bunnyland",
             "admin@example.com",
-            "editor",
-            "secret",
             "fantastic",
             "y",
             "/opt/favicon.png",
             "example.com",
             "/opt/home",
             "example.com",
-            "",
+            "y",
+            "y",
             "",
             "openrouter",
             "sk-or",
@@ -449,7 +502,8 @@ async def test_textual_config_wizard_saves_config() -> None:
         assert str(app.query_one("#step-0", Button).label) == "1. World"
         assert app.query_one("#domain", Input).value == "sandbox.example.com"
         assert app.query_one("#data-dir", Input).value == "/var/lib/bunnyland"
-        assert app.query_one("#admin-user", Input).value == "admin"
+        assert app.query_one("#auth-users-file", Input).value == "data/auth-users.yml"
+        assert app.query_one("#token-db", Input).value == "data/auth-tokens.sqlite3"
         world_input_ids = [
             widget.id for widget in app.query_one("#page-world").query("Input, Select") if widget.id
         ]
@@ -469,8 +523,6 @@ async def test_textual_config_wizard_saves_config() -> None:
         await pilot.pause()
         assert app.query_one("#character-chat", Select).value == "yes"
         app.query_one("#character-chat", Select).value = "no"
-        initial_password = app.query_one("#admin-password", Input).value
-        assert str(UUID(initial_password)) == initial_password
         help_buttons = list(app.query(Button).filter(".help-button"))
         assert help_buttons
         assert all(str(button.label) == "?" for button in help_buttons)
@@ -493,21 +545,12 @@ async def test_textual_config_wizard_saves_config() -> None:
         assert app.query_one("#save", Button).disabled is False
         assert app.query_one("#container-runtime", Select).display is False
         assert app.query_one("#api-port", Input).display is False
-        assert app.query_one("#player2-user", Input).display is False
-        assert app.query_one("#player2-password", Input).display is False
+        assert app.query_one("#forwarded-allow-ips", Input).display is False
         await pilot.press("ctrl+a")
         await pilot.pause()
         assert app.query_one("#api-port", Input).display is True
         assert app.query_one("#container-runtime", Select).display is True
-        assert app.query_one("#player2-user", Input).display is True
-        assert app.query_one("#player2-password", Input).display is True
-        app.query_one("#generate-admin-password", Button).press()
-        await pilot.pause()
-        generated_password = app.query_one("#admin-password", Input).value
-        assert str(UUID(generated_password)) == generated_password
-        assert generated_password != initial_password
-        app.query_one("#admin-user", Input).value = "editor"
-        app.query_one("#admin-password", Input).value = "secret"
+        assert app.query_one("#forwarded-allow-ips", Input).display is True
         assert app.query_one("#save", Button).disabled is False
         app.query_one("#starter-pack", Select).value = "peaceful"
         app.query_one("#discord-url", Input).value = "https://discord.gg/example"
@@ -525,8 +568,8 @@ async def test_textual_config_wizard_saves_config() -> None:
 
     assert app.return_value.deployment.domain == "sandbox.example.com"
     assert app.return_value.deployment.data_dir == "/var/lib/bunnyland"
-    assert app.return_value.auth.admin_user == "editor"
-    assert app.return_value.auth.admin_password == "secret"
+    assert app.return_value.server.auth_users_file == "data/auth-users.yml"
+    assert app.return_value.server.token_db == "data/auth-tokens.sqlite3"
     assert app.return_value.world.generator == "recursive"
     assert app.return_value.world.starter_pack == "peaceful"
     assert app.return_value.discord.public_url == "https://discord.gg/example"
@@ -542,8 +585,6 @@ async def test_textual_config_wizard_saves_live_services_and_addons() -> None:
     async with app.run_test() as pilot:
         app.query_one("#domain", Input).value = "sandbox.example.com"
         app.query_one("#data-dir", Input).value = "/var/lib/bunnyland"
-        app.query_one("#admin-user", Input).value = "editor"
-        app.query_one("#admin-password", Input).value = "secret"
         app.query_one("#llm-enabled", Select).value = "yes"
         app.query_one("#llm-provider", Select).value = "openrouter"
         app.query_one("#worldgen-provider", Select).value = "openrouter"
@@ -583,8 +624,6 @@ async def test_textual_config_wizard_filters_and_selects_plugins() -> None:
     async with app.run_test() as pilot:
         app.query_one("#domain", Input).value = "sandbox.example.com"
         app.query_one("#data-dir", Input).value = "/var/lib/bunnyland"
-        app.query_one("#admin-user", Input).value = "editor"
-        app.query_one("#admin-password", Input).value = "secret"
         app.query_one("#llm-enabled", Select).value = "no"
         app.query_one("#character-chat", Select).value = "no"
         app.query_one("#plugin-search", Input).value = "memory"
@@ -633,8 +672,6 @@ async def test_textual_config_wizard_validates_and_cancels() -> None:
 
         app.query_one("#domain", Input).value = "sandbox.example.com"
         app.query_one("#data-dir", Input).value = "/var/lib/bunnyland"
-        app.query_one("#admin-user", Input).value = "editor"
-        app.query_one("#admin-password", Input).value = "secret"
         app.query_one("#discord-url", Input).value = "ftp://bad"
         await pilot.pause()
         app.query_one("#save", Button).press()
@@ -654,7 +691,6 @@ async def test_textual_config_wizard_handles_unlisted_initial_generator() -> Non
     app = build_textual_wizard_app(
         BunnylandConfig(
             deployment=DeploymentConfig(domain="sandbox.example.com", data_dir="/data"),
-            auth=AuthConfig(admin_user="admin", admin_password="secret"),
             world=WorldConfig(generator="custom-generator"),
         )
     )
@@ -685,18 +721,17 @@ async def test_textual_config_wizard_non_review_errors_and_button_paths() -> Non
         app.cancel_pressed(SimpleNamespace())
 
 
-async def test_textual_config_wizard_reuse_admin_readiness() -> None:
-    from textual.widgets import Button, Input, Select
+async def test_textual_config_wizard_auth_store_readiness() -> None:
+    from textual.widgets import Button, Input
 
     app = build_textual_wizard_app()
 
     async with app.run_test():
-        app.query_one("#admin-user", Input).value = ""
-        app.query_one("#admin-password", Input).value = ""
+        app.query_one("#auth-users-file", Input).value = ""
         app._update_save_state()
         assert app._required_fields_ready() is False
 
-        app.query_one("#reuse-admin", Select).value = "yes"
+        app.query_one("#auth-users-file", Input).value = "/data/users.yml"
         app._update_save_state()
         assert app._required_fields_ready() is True
         assert app.query_one("#save", Button).disabled is False
@@ -731,8 +766,6 @@ async def test_textual_config_wizard_direct_handler_branches(monkeypatch) -> Non
 
         app.query_one("#domain", Input).value = "sandbox.example.com"
         app.query_one("#data-dir", Input).value = "/var/lib/bunnyland"
-        app.query_one("#admin-user", Input).value = "admin"
-        app.query_one("#admin-password", Input).value = "secret"
         app.query_one("#llm-enabled").value = "no"
         app.query_one("#character-chat").value = "no"
         app.save_pressed(SimpleNamespace())
@@ -751,8 +784,6 @@ async def test_textual_config_wizard_validation_branches() -> None:
         async with app.run_test():
             app.query_one("#domain", Input).value = "sandbox.example.com"
             app.query_one("#data-dir", Input).value = "/var/lib/bunnyland"
-            app.query_one("#admin-user", Input).value = "admin"
-            app.query_one("#admin-password", Input).value = "secret"
             app.query_one("#llm-enabled", Select).value = "no"
             app.query_one("#character-chat", Select).value = "no"
             app.step_index = app.step_count - 1
@@ -761,29 +792,8 @@ async def test_textual_config_wizard_validation_branches() -> None:
             assert message in str(app.query_one("#review", Static).render())
 
     await assert_review_error(
-        "Reuse admin cannot",
-        lambda app: app.query_one("#reuse-admin", Select).__setattr__("value", "yes"),
-    )
-    await assert_review_error(
-        "Admin username and password",
-        lambda app: app.query_one("#admin-password", Input).__setattr__("value", ""),
-    )
-    await assert_review_error(
-        "Player username and password",
-        lambda app: app.query_one("#player-user", Input).__setattr__("value", "player"),
-    )
-    await assert_review_error(
-        "Second player username and password",
-        lambda app: app.query_one("#player2-user", Input).__setattr__("value", "player2"),
-    )
-    await assert_review_error(
-        "Player usernames must be different",
-        lambda app: (
-            app.query_one("#player-user", Input).__setattr__("value", "same"),
-            app.query_one("#player-password", Input).__setattr__("value", "secret"),
-            app.query_one("#player2-user", Input).__setattr__("value", "same"),
-            app.query_one("#player2-password", Input).__setattr__("value", "secret"),
-        ),
+        "Authentication user file",
+        lambda app: app.query_one("#auth-users-file", Input).__setattr__("value", ""),
     )
     await assert_review_error(
         "Ollama API key",
@@ -960,8 +970,8 @@ def test_run_textual_wizard_loads_initial_config(tmp_path: Path, monkeypatch) ->
     assert run_textual_wizard(config_path).deployment.domain == "textual.example.com"
     fresh_config = run_textual_wizard(tmp_path / "missing.yml")
     assert fresh_config.deployment.domain == "sandbox.example.com"
-    assert fresh_config.auth.admin_user == "admin"
-    assert str(UUID(fresh_config.auth.admin_password)) == fresh_config.auth.admin_password
+    assert fresh_config.server.auth_users_file == "data/auth-users.yml"
+    assert fresh_config.server.token_db == "data/auth-tokens.sqlite3"
     run_textual_wizard(tmp_path / "missing.yml", enabled_plugins=("bar",))
     assert calls["enabled_plugins"] == ("bar",)
 

@@ -1,7 +1,7 @@
 """Read-only view over a world snapshot, shared by every TUI backend.
 
 The shape is exactly what ``server.serialization.serialize_world`` returns (and what the
-HTTP ``/world/snapshot`` endpoint serves): ``entities`` is a list of dicts carrying a
+HTTP admin snapshot surface serves): ``entities`` is a list of dicts carrying a
 ``components`` map and a ``relationships`` map whose edges use ``target_id``. The helpers
 here mirror the web toon client so both clients reason about a room the same way.
 """

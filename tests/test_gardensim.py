@@ -3538,6 +3538,94 @@ def test_repair_intact_machine_skips_breakdown_removal_directly():
     assert machine.get_component(MachineComponent).quality == 0.8
 
 
+def test_repair_machine_enforces_declared_inventory_tool():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    machine = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="lift controls", kind="machine"),
+            MachineComponent(machine_type="elevator control", quality=0.2),
+            MachineBreakdownComponent(required_tool_kind="repair_tool"),
+        ],
+    )
+    wrong_tool = spawn_entity(
+        world,
+        [IdentityComponent(name="paint brush", kind="brush"), PortableComponent()],
+    )
+    repair_tool = spawn_entity(
+        world,
+        [IdentityComponent(name="relay kit", kind="repair_tool"), PortableComponent()],
+    )
+    for entity in (machine, wrong_tool, repair_tool):
+        room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), entity.id)
+
+    handler = RepairMachineHandler()
+    missing = execute_handler(
+        handler,
+        ctx,
+        _handler_cmd(scenario, "repair-machine", machine_id=str(machine.id)),
+    )
+    nonexistent = execute_handler(
+        handler,
+        ctx,
+        _handler_cmd(
+            scenario,
+            "repair-machine",
+            machine_id=str(machine.id),
+            tool_id="entity_999999",
+        ),
+    )
+    not_carried = execute_handler(
+        handler,
+        ctx,
+        _handler_cmd(
+            scenario,
+            "repair-machine",
+            machine_id=str(machine.id),
+            tool_id=str(repair_tool.id),
+        ),
+    )
+    room.remove_relationship(Contains, wrong_tool.id)
+    world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), wrong_tool.id
+    )
+    wrong = execute_handler(
+        handler,
+        ctx,
+        _handler_cmd(
+            scenario,
+            "repair-machine",
+            machine_id=str(machine.id),
+            tool_id=str(wrong_tool.id),
+        ),
+    )
+    room.remove_relationship(Contains, repair_tool.id)
+    world.get_entity(scenario.character).add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), repair_tool.id
+    )
+    repaired = execute_handler(
+        handler,
+        ctx,
+        _handler_cmd(
+            scenario,
+            "repair-machine",
+            machine_id=str(machine.id),
+            tool_id=str(repair_tool.id),
+        ),
+    )
+
+    assert missing.reason == "matching repair tool is required"
+    assert nonexistent.reason == "repair tool does not exist"
+    assert not_carried.reason == "repair tool must be in inventory"
+    assert wrong.reason == "matching repair tool is required"
+    assert repaired.ok is True
+    assert not machine.has_component(MachineBreakdownComponent)
+
+
 def test_claim_mail_and_complete_quest_without_reward_skip_spawn_directly():
     scenario = build_scenario()
     _install(scenario.actor)

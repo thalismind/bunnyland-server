@@ -20,6 +20,7 @@ import logging
 import re
 import shlex
 import time
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from io import BytesIO
@@ -730,9 +731,12 @@ class DiscordBot:
 
     async def _post_image(self, message, url: str) -> None:
         discord, _ = _require_discord()
-        parts = url.strip("/").split("/")
-        data = self.imagegen.media.read(parts[1], parts[2])
-        await message.reply(file=discord.File(BytesIO(data), filename=parts[2]))
+        parts = urllib.parse.urlsplit(url).path.strip("/").split("/")
+        if len(parts) != 4 or parts[:2] != ["public", "media"]:
+            raise ValueError("image URL is outside the public media surface")
+        namespace, name = parts[2:]
+        data = self.imagegen.media.read(namespace, name)
+        await message.reply(file=discord.File(BytesIO(data), filename=name))
 
     async def _build_command(
         self,

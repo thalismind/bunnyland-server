@@ -5,13 +5,21 @@ from __future__ import annotations
 import math
 import time
 from collections import deque
+from collections.abc import Callable
 from threading import Lock
 
 
 class FixedWindowRateLimiter:
-    def __init__(self, requests: int, window_seconds: float) -> None:
+    def __init__(
+        self,
+        requests: int,
+        window_seconds: float,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.requests = max(0, int(requests))
         self.window_seconds = max(0.001, float(window_seconds))
+        self._clock = clock
         self._requests: dict[str, deque[float]] = {}
         self._last_cleanup = 0.0
         self._lock = Lock()
@@ -21,7 +29,7 @@ class FixedWindowRateLimiter:
 
         if self.requests == 0:
             return True, 0
-        current = time.monotonic() if now is None else now
+        current = self._clock() if now is None else now
         cutoff = current - self.window_seconds
         with self._lock:
             if current - self._last_cleanup >= self.window_seconds:
@@ -41,6 +49,12 @@ class FixedWindowRateLimiter:
                 return False, retry_after
             entries.append(current)
         return True, 0
+
+    def reset(self, key: str) -> None:
+        """Forget one caller bucket after a successful authentication."""
+
+        with self._lock:
+            self._requests.pop(key, None)
 
 
 __all__ = ["FixedWindowRateLimiter"]

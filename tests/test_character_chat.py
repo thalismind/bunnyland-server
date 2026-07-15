@@ -537,18 +537,18 @@ async def test_character_chat_unresolved_reference_does_not_submit():
 @pytest.mark.asyncio
 async def test_character_chat_status_and_disabled_route():
     scenario = build_scenario()
-    app = create_app(scenario.actor, allow_unauthenticated=True)
+    app = create_app(scenario.actor, allow_unauthenticated_embedding=True)
 
     async with route_client(app) as client:
-        assert (await client.get("/world/chat/status")).json()["enabled"] is False
+        assert (await client.get("/play/world/chat/status")).json()["enabled"] is False
         response = await client.post(
-            f"/world/character/{scenario.character}/chat",
+            f"/play/world/character/{scenario.character}/chat",
             json={"client_id": "c", "message": "hi"},
         )
         assert response.status_code == 409
         assert response.json()["detail"] == "character chat is not enabled"
         pending = await client.get(
-            f"/world/character/{scenario.character}/chat/pending/missing",
+            f"/play/world/character/{scenario.character}/chat/pending/missing",
             params={"client_id": "c"},
         )
         assert pending.status_code == 409
@@ -562,19 +562,19 @@ async def test_character_chat_route_reports_invalid_character_and_wrong_kind():
     service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
     item = spawn_entity(scenario.actor.world, [IdentityComponent(name="stone", kind="item")])
     app = create_app(
-        scenario.actor, character_chat=service, allow_unauthenticated=True
+        scenario.actor, character_chat=service, allow_unauthenticated_embedding=True
     )
 
     async with route_client(app) as client:
         assert (
             await client.post(
-                "/world/character/not-real/chat",
+                "/play/world/character/not-real/chat",
                 json={"client_id": "c", "message": "hi"},
             )
         ).status_code == 404
         assert (
             await client.post(
-                f"/world/character/{item.id}/chat",
+                f"/play/world/character/{item.id}/chat",
                 json={"client_id": "c", "message": "hi"},
             )
         ).status_code == 400
@@ -588,12 +588,12 @@ async def test_character_chat_route_conflicts_for_non_llm_character():
     scenario.actor.assign_controller(scenario.character, web.id)
     service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
     app = create_app(
-        scenario.actor, character_chat=service, allow_unauthenticated=True
+        scenario.actor, character_chat=service, allow_unauthenticated_embedding=True
     )
 
     async with route_client(app) as client:
         response = await client.post(
-            f"/world/character/{scenario.character}/chat",
+            f"/play/world/character/{scenario.character}/chat",
             json={"client_id": "c", "message": "hi"},
         )
     assert response.status_code == 409
@@ -606,16 +606,16 @@ async def test_character_chat_route_validates_request_and_reports_allowed_tools(
     install_core(scenario.actor)
     service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
     app = create_app(
-        scenario.actor, character_chat=service, allow_unauthenticated=True
+        scenario.actor, character_chat=service, allow_unauthenticated_embedding=True
     )
 
     async with route_client(app) as client:
-        status = (await client.get("/world/chat/status")).json()
+        status = (await client.get("/play/world/chat/status")).json()
         assert status["enabled"] is True
         assert set(status["allowed_tools"]) == ALLOWED_CHAT_TOOLS
         assert {"remember", "take_note", "reflect", "forget"}.issubset(status["allowed_tools"])
         response = await client.post(
-            f"/world/character/{scenario.character}/chat",
+            f"/play/world/character/{scenario.character}/chat",
             json={"client_id": "c", "message": ""},
         )
         assert response.status_code == 422
@@ -631,12 +631,12 @@ async def test_character_chat_pending_route_reports_queued_action_and_scopes_cli
         timeout=0.0,
     )
     app = create_app(
-        scenario.actor, character_chat=service, allow_unauthenticated=True
+        scenario.actor, character_chat=service, allow_unauthenticated_embedding=True
     )
 
     async with route_client(app) as client:
         response = await client.post(
-            f"/world/character/{scenario.character}/chat",
+            f"/play/world/character/{scenario.character}/chat",
             json={"client_id": "c", "message": "say something"},
         )
         body = response.json()
@@ -645,7 +645,7 @@ async def test_character_chat_pending_route_reports_queued_action_and_scopes_cli
 
         pending = (
             await client.get(
-                f"/world/character/{scenario.character}/chat/pending/{command_id}",
+                f"/play/world/character/{scenario.character}/chat/pending/{command_id}",
                 params={"client_id": "c"},
             )
         ).json()
@@ -654,7 +654,7 @@ async def test_character_chat_pending_route_reports_queued_action_and_scopes_cli
         assert pending["reply"] == ""
 
         missing = await client.get(
-            f"/world/character/{scenario.character}/chat/pending/{command_id}",
+            f"/play/world/character/{scenario.character}/chat/pending/{command_id}",
             params={"client_id": "other"},
         )
         assert missing.status_code == 404

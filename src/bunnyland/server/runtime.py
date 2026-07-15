@@ -36,7 +36,8 @@ async def run_loop_with_api(
     token_db_path: str | Path = "data/auth-tokens.sqlite3",
     player_client_ids: str | list[str] | None = None,
     admin_client_ids: str | list[str] | None = None,
-    trust_x_real_ip: bool = False,
+    cors_origins: str | list[str] | None = None,
+    forwarded_allow_ips: str = "127.0.0.1",
     imagegen: ImageGenService | None = None,
     character_chat: CharacterChatService | None = None,
     claim_secrets: ClaimSecretRegistry | None = None,
@@ -51,6 +52,8 @@ async def run_loop_with_api(
             "bunnyland server API requires uvicorn; install the server dependencies first"
         ) from exc
 
+    user_credentials = UserCredentialStore(auth_users_path)
+    user_credentials.validate()
     token_store = TokenStore(token_db_path)
     app = create_app(
         actor,
@@ -61,16 +64,25 @@ async def run_loop_with_api(
         worldgen_options=worldgen_options,
         plugins=plugins,
         token_store=token_store,
-        user_credentials=UserCredentialStore(auth_users_path),
+        user_credentials=user_credentials,
         player_client_ids=player_client_ids,
         admin_client_ids=admin_client_ids,
-        trust_x_real_ip=trust_x_real_ip,
+        cors_origins=cors_origins,
         imagegen=imagegen,
         character_chat=character_chat,
         claim_secrets=claim_secrets,
     )
     telemetry.instrument_fastapi(app)
-    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="info"))
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_level="info",
+            proxy_headers=True,
+            forwarded_allow_ips=forwarded_allow_ips,
+        )
+    )
     game_task = asyncio.create_task(loop.run(max_ticks=max_ticks))
     server_task = asyncio.create_task(server.serve())
 

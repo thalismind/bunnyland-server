@@ -633,6 +633,339 @@ async def test_clover_city_missing_parcel_resolves_through_world_actions_and_sur
     assert loaded_bond.trust == pytest.approx(0.1)
 
 
+async def test_clover_city_water_shortage_recovers_and_survives_mid_story_reload(tmp_path):
+    from bunnyland.core.components import ActionPointsComponent
+    from bunnyland.core.controllers import WebControllerComponent
+    from bunnyland.foundation.consumables.components import ConsumableComponent
+    from bunnyland.foundation.needs.mechanics import ThirstComponent
+    from bunnyland.foundation.social.mechanics import ObligationComponent, SocialBond
+    from bunnyland.foundation.storyteller.mechanics import IncidentComponent
+    from bunnyland.llm_agents import ToolCall, command_from_tool_call
+
+    plugins = bunnyland_plugins()
+    actor = WorldActor()
+    apply_plugins(plugins, actor)
+    world = await CLOVER_CITY_DEMO.generate(actor, "clover-water-story", GenOptions())
+    wick_id = world.characters["wick"]
+    saffron_id = world.characters["saffron"]
+    for character_id in (wick_id, saffron_id):
+        actor.world.get_entity(character_id).remove_component(SuspendedComponent)
+    points = actor.world.get_entity(wick_id).get_component(ActionPointsComponent)
+    replace_component(
+        actor.world.get_entity(wick_id), replace(points, current=50, maximum=50)
+    )
+    obligation_id = next(
+        entity.id
+        for entity in actor.world.query().with_all([ObligationComponent]).execute_entities()
+        if entity.get_component(ObligationComponent).source_event_id == "clover-story-1"
+    )
+    incident_id = next(
+        entity.id
+        for entity in actor.world.query().with_all([IncidentComponent]).execute_entities()
+        if entity.get_component(IncidentComponent).kind == "rooftop_water_shortage"
+    )
+
+    def bind(current_actor):
+        controller = spawn_entity(
+            current_actor.world, [WebControllerComponent(client_id="water-story-test")]
+        )
+        generation = current_actor.assign_controller(wick_id, controller.id)
+        return controller.id, generation
+
+    async def act(current_actor, controller_id, generation, name: str, **arguments):
+        command = command_from_tool_call(
+            ToolCall(name, arguments),
+            character_id=str(wick_id),
+            controller_id=str(controller_id),
+            controller_generation=generation,
+            submitted_at_epoch=current_actor.epoch,
+            definitions=current_actor.action_definitions(),
+        )
+        assert (await current_actor.submit(command)).accepted is True
+        await current_actor.tick(0)
+        receipt = current_actor.receipt_for(command.command_id)
+        assert receipt is not None
+        return receipt
+
+    controller_id, generation = bind(actor)
+    rejected_receipt = await act(
+        actor,
+        controller_id,
+        generation,
+        "take",
+        item_id=str(world.objects["pantry"]),
+    )
+    assert rejected_receipt.status.value == "rejected"
+    assert rejected_receipt.reason == "item cannot be picked up"
+    for direction in ("west", "north", "out", "east"):
+        assert (
+            await act(actor, controller_id, generation, "move", direction=direction)
+        ).status.value == "committed"
+    await act(
+        actor,
+        controller_id,
+        generation,
+        "take",
+        item_id=str(world.objects["water_jug"]),
+    )
+
+    path = tmp_path / "clover-water-mid-story.json"
+    save_world(actor, path, meta=WorldMeta(seed="clover-water-story"))
+    loaded, meta = load_world(path, registry=PluginRegistry(plugins))
+    assert meta.seed == "clover-water-story"
+    assert container_of(loaded.world.get_entity(world.objects["water_jug"])) == wick_id
+
+    controller_id, generation = bind(loaded)
+    for direction in ("west", "in", "west", "up"):
+        await act(loaded, controller_id, generation, "move", direction=direction)
+    await act(
+        loaded,
+        controller_id,
+        generation,
+        "drop",
+        item_id=str(world.objects["water_jug"]),
+    )
+    await act(
+        loaded,
+        controller_id,
+        generation,
+        "tell",
+        target_id=str(saffron_id),
+        text="Thank you for agreeing to share the emergency water fairly.",
+        intent="praise",
+    )
+    await act(
+        loaded,
+        controller_id,
+        generation,
+        "resolve_obligation",
+        obligation_id=str(obligation_id),
+        status="fulfilled",
+        note="Emergency water delivered and the rooftop ration agreed.",
+    )
+    for direction in ("down", "east", "southeast"):
+        await act(loaded, controller_id, generation, "move", direction=direction)
+    await act(
+        loaded,
+        controller_id,
+        generation,
+        "write",
+        target_id=str(world.objects["log"]),
+        text=(
+            "Water-01 resolved: rooftop water shortage replenished and the shared ration "
+            "agreed with Saffron."
+        ),
+    )
+
+    assert container_of(loaded.world.get_entity(world.objects["water_jug"])) == world.rooms[
+        "roof"
+    ]
+    assert loaded.world.get_entity(world.objects["water_jug"]).get_component(
+        ConsumableComponent
+    ).current_uses == 4
+    assert loaded.world.get_entity(world.objects["pantry"]).get_component(
+        ConsumableComponent
+    ).current_uses == 2
+    assert loaded.world.get_entity(saffron_id).get_component(
+        ThirstComponent
+    ).meter.value == pytest.approx(70.0)
+    assert loaded.world.get_entity(obligation_id).get_component(
+        ObligationComponent
+    ).status == "fulfilled"
+    assert loaded.world.get_entity(incident_id).get_component(
+        IncidentComponent
+    ).resolved_at_epoch is not None
+    saffron_bond = next(
+        edge
+        for edge, target_id in loaded.world.get_entity(saffron_id).get_relationships(SocialBond)
+        if target_id == wick_id
+    )
+    assert saffron_bond.trust >= 0.1
+    assert "Water-01 resolved" in loaded.world.get_entity(world.objects["log"]).get_component(
+        ReadableComponent
+    ).text
+
+
+async def test_clover_city_elevator_disruption_recovers_and_survives_mid_story_reload(
+    tmp_path,
+):
+    from bunnyland.core.components import ActionPointsComponent, ButtonComponent
+    from bunnyland.core.controllers import WebControllerComponent
+    from bunnyland.foundation.social.mechanics import ObligationComponent, SocialBond
+    from bunnyland.foundation.storyteller.mechanics import IncidentComponent
+    from bunnyland.llm_agents import ToolCall, command_from_tool_call
+    from bunnyland.simpacks.gardensim.mechanics import (
+        MachineBreakdownComponent,
+        MachineComponent,
+    )
+    from bunnyland.simpacks.lifesim.mechanics import HasRoutine, RoutineComponent
+
+    plugins = bunnyland_plugins()
+    actor = WorldActor()
+    apply_plugins(plugins, actor)
+    world = await CLOVER_CITY_DEMO.generate(actor, "clover-elevator-story", GenOptions())
+    jun_id = world.characters["jun"]
+    orla_id = world.characters["orla"]
+    for character_id in (jun_id, orla_id):
+        actor.world.get_entity(character_id).remove_component(SuspendedComponent)
+    points = actor.world.get_entity(jun_id).get_component(ActionPointsComponent)
+    replace_component(actor.world.get_entity(jun_id), replace(points, current=50, maximum=50))
+    obligation_id = next(
+        entity.id
+        for entity in actor.world.query().with_all([ObligationComponent]).execute_entities()
+        if entity.get_component(ObligationComponent).source_event_id == "clover-story-2"
+    )
+    incident_id = next(
+        entity.id
+        for entity in actor.world.query().with_all([IncidentComponent]).execute_entities()
+        if entity.get_component(IncidentComponent).kind == "elevator_noise_dispute"
+    )
+
+    def bind(current_actor):
+        controller = spawn_entity(
+            current_actor.world, [WebControllerComponent(client_id="elevator-story-test")]
+        )
+        generation = current_actor.assign_controller(jun_id, controller.id)
+        return controller.id, generation
+
+    async def act(current_actor, controller_id, generation, name: str, **arguments):
+        command = command_from_tool_call(
+            ToolCall(name, arguments),
+            character_id=str(jun_id),
+            controller_id=str(controller_id),
+            controller_generation=generation,
+            submitted_at_epoch=current_actor.epoch,
+            definitions=current_actor.action_definitions(),
+        )
+        assert (await current_actor.submit(command)).accepted is True
+        await current_actor.tick(0)
+        receipt = current_actor.receipt_for(command.command_id)
+        assert receipt is not None
+        return receipt
+
+    controller_id, generation = bind(actor)
+    for direction in ("up", "east", "north"):
+        await act(actor, controller_id, generation, "move", direction=direction)
+    rejected_receipt = await act(
+        actor,
+        controller_id,
+        generation,
+        "repair_machine",
+        machine_id=str(world.objects["panel"]),
+    )
+    assert rejected_receipt.status.value == "rejected"
+    assert rejected_receipt.reason == "matching repair tool is required"
+    for direction in ("south", "west", "down"):
+        await act(actor, controller_id, generation, "move", direction=direction)
+    await act(
+        actor,
+        controller_id,
+        generation,
+        "take",
+        item_id=str(world.objects["repair_kit"]),
+    )
+
+    path = tmp_path / "clover-elevator-mid-story.json"
+    save_world(actor, path, meta=WorldMeta(seed="clover-elevator-story"))
+    loaded, meta = load_world(path, registry=PluginRegistry(plugins))
+    assert meta.seed == "clover-elevator-story"
+    assert container_of(loaded.world.get_entity(world.objects["repair_kit"])) == jun_id
+    assert loaded.world.get_entity(world.objects["panel"]).has_component(
+        MachineBreakdownComponent
+    )
+
+    controller_id, generation = bind(loaded)
+    for direction in ("up", "east", "north"):
+        await act(loaded, controller_id, generation, "move", direction=direction)
+    await act(
+        loaded,
+        controller_id,
+        generation,
+        "repair_machine",
+        machine_id=str(world.objects["panel"]),
+        tool_id=str(world.objects["repair_kit"]),
+    )
+    for direction in ("south", "southeast"):
+        await act(loaded, controller_id, generation, "move", direction=direction)
+    await act(
+        loaded,
+        controller_id,
+        generation,
+        "tell",
+        target_id=str(orla_id),
+        text="I am sorry the repair delay made the music-room disagreement worse.",
+        intent="apology",
+    )
+    await act(
+        loaded,
+        controller_id,
+        generation,
+        "resolve_obligation",
+        obligation_id=str(obligation_id),
+        status="fulfilled",
+        note="Elevator repaired and the noise disagreement addressed with Orla.",
+    )
+    await act(
+        loaded,
+        controller_id,
+        generation,
+        "set_routine",
+        activity="inspect repaired elevator after restart",
+        interval_seconds=86400,
+        next_due_epoch=loaded.epoch + 3600,
+    )
+    for direction in ("northwest", "northwest"):
+        await act(loaded, controller_id, generation, "move", direction=direction)
+    await act(
+        loaded,
+        controller_id,
+        generation,
+        "use",
+        item_id=str(world.objects["piano"]),
+    )
+    for direction in ("southeast", "southeast"):
+        await act(loaded, controller_id, generation, "move", direction=direction)
+    await act(
+        loaded,
+        controller_id,
+        generation,
+        "write",
+        target_id=str(world.objects["log"]),
+        text=(
+            "Lift-01 resolved: elevator noise dispute closed after the relay repair, "
+            "quiet-hours agreement, and revised inspection routine."
+        ),
+    )
+
+    panel = loaded.world.get_entity(world.objects["panel"])
+    assert not panel.has_component(MachineBreakdownComponent)
+    assert panel.get_component(MachineComponent).quality >= 0.8
+    assert loaded.world.get_entity(world.objects["piano"]).get_component(
+        ButtonComponent
+    ).pressed is True
+    assert loaded.world.get_entity(obligation_id).get_component(
+        ObligationComponent
+    ).status == "fulfilled"
+    assert loaded.world.get_entity(incident_id).get_component(
+        IncidentComponent
+    ).resolved_at_epoch is not None
+    orla_bond = next(
+        edge
+        for edge, target_id in loaded.world.get_entity(orla_id).get_relationships(SocialBond)
+        if target_id == jun_id
+    )
+    assert orla_bond.trust >= 0.1
+    routine_activities = {
+        loaded.world.get_entity(routine_id).get_component(RoutineComponent).activity
+        for _edge, routine_id in loaded.world.get_entity(jun_id).get_relationships(HasRoutine)
+    }
+    assert "inspect repaired elevator after restart" in routine_activities
+    assert container_of(loaded.world.get_entity(world.objects["repair_kit"])) == jun_id
+    assert "Lift-01 resolved" in loaded.world.get_entity(world.objects["log"]).get_component(
+        ReadableComponent
+    ).text
+
+
 def test_validate_rejects_dangling_references():
     proposal = WorldProposal(
         seed="x",

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
 import json
 import subprocess
 import sys
@@ -31,7 +33,7 @@ from bunnyland.core import (
     spawn_entity,
 )
 from bunnyland.discord.claim import discord_controlled_character, list_character_names
-from bunnyland.persistence import WorldMeta, load_world, save_world
+from bunnyland.persistence import RecoveryManifest, WorldMeta, load_world, save_world
 from bunnyland.plugins import (
     ConfigContribution,
     Plugin,
@@ -100,6 +102,167 @@ def test_migrate_world_cli_rejects_in_place_conversion(tmp_path):
 
     with pytest.raises(SystemExit):
         main(["migrate-world", str(source), str(source)])
+
+
+def test_recovery_manifest_cli_pins_snapshot_memory_media_and_rollback(tmp_path):
+    snapshot = tmp_path / "world.json"
+    save_world(WorldActor(), snapshot, meta=WorldMeta(seed="recovery"))
+    media_manifest = tmp_path / "media.sha256"
+    media_manifest.write_text("abc  portrait.png\n", encoding="utf-8")
+    output = tmp_path / "recovery.json"
+
+    assert main(
+        [
+            "recovery-manifest",
+            str(snapshot),
+            str(media_manifest),
+            str(output),
+            "--release",
+            "bunnyland-ecs-agent-preview-2026-07",
+            "--pin",
+            "server=abc123",
+            "--pin",
+            "web=def456",
+            "--rollback-checkpoint",
+            "world.json.bak.1",
+        ]
+    ) == 0
+
+    manifest = RecoveryManifest.model_validate_json(output.read_text(encoding="utf-8"))
+    assert manifest.release_pins == {"server": "abc123", "web": "def456"}
+    assert manifest.rollback_checkpoint == "world.json.bak.1"
+    assert output.with_name("recovery.json.sha256").exists()
+
+
+def test_recovery_manifest_cli_rejects_malformed_pin(tmp_path):
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "recovery-manifest",
+                str(tmp_path / "world.json"),
+                str(tmp_path / "media.sha256"),
+                str(tmp_path / "recovery.json"),
+                "--release",
+                "preview",
+                "--pin",
+                "missing-commit",
+                "--rollback-checkpoint",
+                "world.json.bak.1",
+            ]
+        )
+
+
+def test_auth_cli_manages_passwords_and_token_lifecycle(tmp_path, monkeypatch, capsys):
+    database = str(tmp_path / "tokens.sqlite3")
+    monkeypatch.setattr(sys, "stdin", io.StringIO("correct horse\n"))
+    assert main(["auth", "hash-password", "--password-stdin"]) == 0
+    assert capsys.readouterr().out.startswith("$argon2")
+    prompts = iter(["prompted horse", "prompted horse"])
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: next(prompts))
+    assert main(["auth", "hash-password"]) == 0
+    assert capsys.readouterr().out.startswith("$argon2")
+
+    assert main(
+        [
+            "auth",
+            "provision-token",
+            "--db",
+            database,
+            "--subject",
+            "robot",
+            "--scope",
+            "world:admin",
+            "--expires-days",
+            "1",
+        ]
+    ) == 0
+    token = capsys.readouterr().out.strip()
+    token_id = token.split("_", 2)[1]
+
+    assert main(["auth", "list-tokens", "--db", database]) == 0
+    metadata = json.loads(capsys.readouterr().out)
+    assert metadata[0]["subject"] == "robot"
+    assert "digest" not in metadata[0]
+
+    assert main(["auth", "replace-token", "--db", database, "--token-id", token_id]) == 0
+    replacement = capsys.readouterr().out.strip()
+    assert replacement.startswith("blt_")
+    replacement_id = replacement.split("_", 2)[1]
+    assert main(["auth", "revoke", "--db", database, "--token-id", replacement_id]) == 0
+    assert json.loads(capsys.readouterr().out) == {"revoked": 1}
+    assert main(["auth", "revoke", "--db", database, "--subject", "robot"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"revoked": 0}
+
+    imported_token = "blt_0123456789abcdef_operator_secret_0123456789abcdef"
+    digest = hashlib.sha256(imported_token.encode()).hexdigest()
+    import_args = [
+        "auth",
+        "import-token-digest",
+        "--db",
+        database,
+        "--token-id",
+        "0123456789abcdef",
+        "--digest",
+        digest,
+        "--subject",
+        "operator",
+        "--scope",
+        "world:play",
+        "--expires-at",
+        "2000000000",
+    ]
+    assert main(import_args) == 0
+    assert json.loads(capsys.readouterr().out) == {"imported": True}
+    assert main(import_args) == 0
+    assert json.loads(capsys.readouterr().out) == {"imported": False}
+
+
+def test_auth_cli_rejects_invalid_operator_input(tmp_path, monkeypatch):
+    database = str(tmp_path / "tokens.sqlite3")
+    monkeypatch.setattr(sys, "stdin", io.StringIO("\n"))
+    with pytest.raises(SystemExit):
+        main(["auth", "hash-password", "--password-stdin"])
+
+    prompts = iter(["first", "second"])
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: next(prompts))
+    with pytest.raises(SystemExit):
+        main(["auth", "hash-password"])
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "auth",
+                "provision-token",
+                "--db",
+                database,
+                "--subject",
+                "robot",
+                "--scope",
+                "world:play",
+                "--expires-days",
+                "0",
+            ]
+        )
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "auth",
+                "import-token-digest",
+                "--db",
+                database,
+                "--token-id",
+                "bad",
+                "--digest",
+                "bad",
+                "--subject",
+                "robot",
+                "--scope",
+                "world:play",
+                "--expires-at",
+                "2000000000",
+            ]
+        )
+    with pytest.raises(SystemExit):
+        main(["auth", "replace-token", "--db", database, "--token-id", "missing"])
 
 
 def test_migrate_world_cli_writes_yaml_destination(tmp_path):

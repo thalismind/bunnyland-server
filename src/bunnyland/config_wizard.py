@@ -10,10 +10,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from random import choice
-from uuid import uuid4
 
 from .config import (
-    AuthConfig,
     BunnylandConfig,
     DeploymentConfig,
     DiscordConfig,
@@ -161,7 +159,6 @@ def _parse_themes_text(value: str) -> tuple[WebTheme, ...]:
 
 def default_wizard_config() -> BunnylandConfig:
     return BunnylandConfig(
-        auth=AuthConfig(admin_user="admin", admin_password=str(uuid4())),
         deployment=DeploymentConfig(
             domain="sandbox.example.com",
             data_dir="/var/lib/bunnyland",
@@ -171,7 +168,7 @@ def default_wizard_config() -> BunnylandConfig:
             api_host="0.0.0.0",
             api_port=8765,
             character_chat=True,
-            trust_x_real_ip=True,
+            forwarded_allow_ips="172.28.0.2",
         ),
         world=WorldConfig(
             generator="lifesim-demo",
@@ -218,19 +215,16 @@ FIELD_HELP_TEXT = {
     "tls": "Serve HTTPS with Let's Encrypt. Examples: enabled public, disabled local.",
     "cert-name": "Let's Encrypt certificate name. Examples: sandbox.example.com, bunnyland-prod.",
     "letsencrypt-dir": "Host Let's Encrypt cert dir. Examples: /etc/letsencrypt, /srv/letsencrypt.",
-    "auth-dir": "Host nginx htpasswd dir. Examples: /etc/nginx/bunnyland, /srv/auth.",
     "http-bind": "Host bind address for port 80. Examples: 0.0.0.0:80, 127.0.0.1:8080.",
     "https-bind": "Host bind address for port 443. Examples: 0.0.0.0:443, 127.0.0.1:8443.",
     "server-tag": "Container tag for bunnyland-server. Examples: main, v2026.07.05.",
     "web-tag": "Container tag for bunnyland-web. Examples: main, v2026.07.05.",
     "configure-firewall": "Add ufw rules. Examples: configure on VPS, leave behind proxy.",
-    "reuse-admin": "Reuse existing htpasswd. Examples: reuse existing, write new login.",
-    "admin-user": "World-editor basic-auth username. Examples: editor, admin.",
-    "admin-password": "World-editor basic-auth password. Examples: use a long generated password.",
-    "player-user": "Optional player basic-auth username. Examples: player, demo.",
-    "player-password": "Password for optional player login. Examples: generated password.",
-    "player2-user": "Optional second player basic-auth username. Examples: player2, guest.",
-    "player2-password": "Password for second player login. Examples: generated password.",
+    "auth-users-file": "Deployment-rendered Argon2 user file. Examples: /data/auth-users.yml.",
+    "token-db": "Private opaque-token database. Examples: /data/auth-tokens.sqlite3.",
+    "player-auth-required": "Prompt browser players to log in before auto-connect.",
+    "cors-origins": "Optional absolute browser CORS origins, comma-separated.",
+    "forwarded-allow-ips": "Exact trusted reverse-proxy address. Examples: 172.28.0.2.",
     "player-client-ids": (
         "Allow list of client IDs permitted to use player APIs, comma-separated. "
         "Examples: web, discord."
@@ -318,10 +312,6 @@ def prompt_for_config() -> BunnylandConfig:
         data_dir=_prompt_required("Host data directory", "/var/lib/bunnyland"),
         cert_email=_prompt("Let's Encrypt email"),
     )
-    auth = AuthConfig(
-        admin_user=_prompt_required("Admin username", "admin"),
-        admin_password=_prompt_required("Admin password", str(uuid4())),
-    )
     world = WorldConfig(
         starter_pack=_prompt_choice(
             "Starter pack (none/peaceful/fantastic/futuristic)",
@@ -334,6 +324,7 @@ def prompt_for_config() -> BunnylandConfig:
             _prompt_required("Custom favicon path") if _confirm("Use a custom favicon?") else ""
         ),
         home_domain=_prompt("Homepage domain served by this frontend container"),
+        player_auth_required=_confirm("Require browser player login?", True),
     )
     if web.home_domain:
         web = WebConfig(
@@ -341,6 +332,7 @@ def prompt_for_config() -> BunnylandConfig:
             home_domain=web.home_domain,
             home_dir=_prompt_required("Homepage files directory", "/opt/bunnyland/home"),
             home_cert_name=_prompt("Homepage certificate name", web.home_domain),
+            player_auth_required=web.player_auth_required,
         )
 
     live_services = _confirm("Set up live services with an LLM provider and Discord now?", True)
@@ -402,7 +394,6 @@ def prompt_for_config() -> BunnylandConfig:
 
     return BunnylandConfig(
         deployment=deployment,
-        auth=auth,
         world=world,
         web=web,
         llm=llm,
@@ -410,7 +401,7 @@ def prompt_for_config() -> BunnylandConfig:
         mcp=mcp,
         server=ServerConfig(
             character_chat=server_character_chat,
-            trust_x_real_ip=True,
+            forwarded_allow_ips="172.28.0.2",
         ),
         imagegen=imagegen,
     )
@@ -425,8 +416,8 @@ def review_lines(config: BunnylandConfig) -> list[str]:
         f"  Container runtime : {config.deployment.container_runtime or '(auto)'}",
         f"  Public domain     : {config.deployment.domain}",
         f"  Data directory    : {config.deployment.data_dir}",
-        f"  Admin username    : {config.auth.admin_user}",
-        f"  Admin password    : {'(set)' if config.auth.admin_password else '(missing)'}",
+        f"  User file         : {config.server.auth_users_file}",
+        f"  Token database    : {config.server.token_db}",
         f"  Starter pack      : {config.world.starter_pack or '(none)'}",
         f"  Live services     : {services}",
     ]
@@ -683,12 +674,6 @@ def build_textual_wizard_app(
                             id="letsencrypt-dir",
                             classes="advanced-field",
                         )
-                        yield field_label("Nginx auth directory", "auth-dir", advanced=True)
-                        yield Input(
-                            value=initial.deployment.nginx_auth_dir,
-                            id="auth-dir",
-                            classes="advanced-field",
-                        )
                         yield field_label("HTTP bind address", "http-bind", advanced=True)
                         yield Input(
                             value=initial.deployment.http_bind,
@@ -723,56 +708,35 @@ def build_textual_wizard_app(
                         )
                     with Vertical(id="page-access", classes="page"):
                         yield Label("Access", classes="page-title")
-                        yield field_label("Reuse existing admin htpasswd", "reuse-admin")
+                        yield field_label("Browser player login", "player-auth-required")
                         yield Select(
-                            [("reuse existing", "yes"), ("write new login", "no")],
-                            value=yes_no(initial.auth.reuse_admin),
-                            id="reuse-admin",
+                            [("required", "yes"), ("not prompted", "no")],
+                            value=yes_no(initial.web.player_auth_required),
+                            id="player-auth-required",
                             allow_blank=False,
                         )
-                        yield field_label("Admin username", "admin-user", required=True)
-                        yield Input(value=initial.auth.admin_user, id="admin-user")
-                        yield field_label("Admin password", "admin-password", required=True)
-                        with Horizontal(classes="password-row"):
-                            yield Input(
-                                value=initial.auth.admin_password,
-                                password=True,
-                                id="admin-password",
-                                classes="password-input",
-                            )
-                            yield Button(
-                                "Generate",
-                                id="generate-admin-password",
-                                classes="generate-password-button",
-                                tooltip="Generate a random UUID password",
-                            )
-                        yield field_label("Player username", "player-user")
-                        yield Input(value=initial.auth.player_user, id="player-user")
-                        yield field_label("Player password", "player-password")
+                        yield field_label("Argon2 user file", "auth-users-file", required=True)
                         yield Input(
-                            value=initial.auth.player_password,
-                            password=True,
-                            id="player-password",
+                            value=initial.server.auth_users_file,
+                            id="auth-users-file",
                         )
-                        yield field_label(
-                            "Second player username",
-                            "player2-user",
-                            advanced=True,
-                        )
+                        yield field_label("Token database", "token-db", required=True)
                         yield Input(
-                            value=initial.auth.player2_user,
-                            id="player2-user",
+                            value=initial.server.token_db,
+                            id="token-db",
+                        )
+                        yield field_label("Allowed CORS origins", "cors-origins", advanced=True)
+                        yield Input(
+                            value=", ".join(initial.server.cors_origins),
+                            id="cors-origins",
                             classes="advanced-field",
                         )
                         yield field_label(
-                            "Second player password",
-                            "player2-password",
-                            advanced=True,
+                            "Trusted proxy address", "forwarded-allow-ips", advanced=True
                         )
                         yield Input(
-                            value=initial.auth.player2_password,
-                            password=True,
-                            id="player2-password",
+                            value=initial.server.forwarded_allow_ips,
+                            id="forwarded-allow-ips",
                             classes="advanced-field",
                         )
                         yield field_label(
@@ -1265,11 +1229,12 @@ def build_textual_wizard_app(
                 self._update_review()
 
         def _required_fields_ready(self) -> bool:
-            if not self._input("#domain") or not self._input("#data-dir"):
-                return False
-            if self._enabled("#reuse-admin"):
-                return True
-            return bool(self._input("#admin-user") and self._input("#admin-password"))
+            return bool(
+                self._input("#domain")
+                and self._input("#data-dir")
+                and self._input("#auth-users-file")
+                and self._input("#token-db")
+            )
 
         def _update_save_state(self) -> None:
             self.query_one("#save", Button).disabled = not self._required_fields_ready()
@@ -1346,13 +1311,6 @@ def build_textual_wizard_app(
             try:
                 domain = self._input("#domain")
                 data_dir = self._input("#data-dir")
-                reuse_admin = self._enabled("#reuse-admin")
-                admin_user = self._input("#admin-user")
-                admin_password = self._input("#admin-password")
-                player_user = self._input("#player-user")
-                player_password = self._input("#player-password")
-                player2_user = self._input("#player2-user")
-                player2_password = self._input("#player2-password")
                 discord_url = self._input("#discord-url")
                 llm_enabled = self._enabled("#llm-enabled")
                 discord_enabled = self._enabled("#discord-enabled")
@@ -1362,20 +1320,8 @@ def build_textual_wizard_app(
                 if not domain or not data_dir:
                     self._fail("Domain and data directory are required.")
                     return None
-                if reuse_admin and (admin_user or admin_password):
-                    self._fail("Reuse admin cannot be combined with a new admin login.")
-                    return None
-                if not reuse_admin and (not admin_user or not admin_password):
-                    self._fail("Admin username and password are required.")
-                    return None
-                if bool(player_user) != bool(player_password):
-                    self._fail("Player username and password must be set together.")
-                    return None
-                if bool(player2_user) != bool(player2_password):
-                    self._fail("Second player username and password must be set together.")
-                    return None
-                if player_user and player_user == player2_user:
-                    self._fail("Player usernames must be different.")
+                if not self._input("#auth-users-file") or not self._input("#token-db"):
+                    self._fail("Authentication user file and token database are required.")
                     return None
                 if discord_url and not discord_url.startswith(("http://", "https://")):
                     self._fail("Discord URL must be http(s).")
@@ -1414,22 +1360,12 @@ def build_textual_wizard_app(
                     tls=self._enabled("#tls"),
                     cert_name=self._input("#cert-name"),
                     letsencrypt_dir=self._input("#letsencrypt-dir"),
-                    nginx_auth_dir=self._input("#auth-dir"),
                     http_bind=self._input("#http-bind"),
                     https_bind=self._input("#https-bind"),
                     server_tag=self._input("#server-tag"),
                     web_tag=self._input("#web-tag"),
                     configure_firewall=self._enabled("#configure-firewall"),
                     world_save=self._input("#world-save"),
-                )
-                auth = AuthConfig(
-                    reuse_admin=reuse_admin,
-                    admin_user=admin_user,
-                    admin_password=admin_password,
-                    player_user=player_user,
-                    player_password=player_password,
-                    player2_user=player2_user,
-                    player2_password=player2_password,
                 )
                 world = WorldConfig(
                     generator=self._select("#generator"),
@@ -1459,6 +1395,7 @@ def build_textual_wizard_app(
                     home_domain=self._input("#home-domain"),
                     home_dir=self._input("#home-dir"),
                     home_cert_name=self._input("#home-cert-name"),
+                    player_auth_required=self._enabled("#player-auth-required"),
                 )
                 llm = LlmConfig(
                     enabled=llm_enabled,
@@ -1486,10 +1423,13 @@ def build_textual_wizard_app(
                 server = ServerConfig(
                     api_host=self._input("#api-host"),
                     api_port=self._optional_int_input("#api-port"),
+                    auth_users_file=self._input("#auth-users-file"),
+                    token_db=self._input("#token-db"),
                     player_client_ids=_csv_values(self._input("#player-client-ids")),
                     admin_client_ids=_csv_values(self._input("#admin-client-ids")),
                     character_chat=character_chat,
-                    trust_x_real_ip=initial.server.trust_x_real_ip,
+                    cors_origins=_csv_values(self._input("#cors-origins")),
+                    forwarded_allow_ips=self._input("#forwarded-allow-ips"),
                 )
                 imagegen = ImageGenConfigBlock()
                 if imagegen_enabled:
@@ -1513,7 +1453,6 @@ def build_textual_wizard_app(
 
             return BunnylandConfig(
                 deployment=deployment,
-                auth=auth,
                 world=world,
                 web=web,
                 plugins=PluginConfig(
@@ -1560,11 +1499,6 @@ def build_textual_wizard_app(
         @on(Button.Pressed, "#advanced-toggle")
         def advanced_pressed(self, _event: Button.Pressed) -> None:
             self.action_toggle_advanced()
-
-        @on(Button.Pressed, "#generate-admin-password")
-        def generate_admin_password_pressed(self, _event: Button.Pressed) -> None:
-            self.query_one("#admin-password", Input).value = str(uuid4())
-            self._update_save_state()
 
         @on(Button.Pressed, "#random-world-prompt")
         def random_world_prompt_pressed(self, _event: Button.Pressed) -> None:

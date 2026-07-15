@@ -117,8 +117,8 @@ def test_chat_client_api_helpers_and_character_selection(monkeypatch):
 
     monkeypatch.setattr(chat.urllib.request, "urlopen", fake_urlopen)
 
-    assert chat.api_url(" http://server/ ", "/world") == "http://server/world"
-    assert chat.get_json("http://server", "/world/characters")["characters"][0]["name"] == (
+    assert chat.api_url(" http://server/ ", "/play/world") == "http://server/play/world"
+    assert chat.get_json("http://server", "/play/world/characters")["characters"][0]["name"] == (
         "Juniper"
     )
     assert chat.choose_character("http://server", "") == ("char-1", "Juniper")
@@ -176,7 +176,7 @@ def test_chat_client_main_interactive_round_trip(monkeypatch, tmp_path, capsys):
     posted = []
 
     def fake_get_json(_base, path):
-        if path == "/world/chat/status":
+        if path == "/play/world/chat/status":
             return {"enabled": True}
         return {"characters": [{"character_id": "char:1", "name": "Juniper"}]}
 
@@ -193,14 +193,14 @@ def test_chat_client_main_interactive_round_trip(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Chatting with Juniper" in out
     assert "Juniper: I am here. [look executed]" in out
-    assert posted[0][1] == "/world/character/char%3A1/chat"
+    assert posted[0][1] == "/play/world/character/char%3A1/chat"
 
 
 def test_chat_client_main_exits_on_eof(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
     def fake_get_json(_base, path):
-        if path == "/world/chat/status":
+        if path == "/play/world/chat/status":
             return {"enabled": True}
         return {"characters": [{"character_id": "char:1", "name": "Juniper"}]}
 

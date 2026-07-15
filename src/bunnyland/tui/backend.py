@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import random
+import stat
 import time
 import urllib.parse
 import webbrowser
@@ -55,6 +56,29 @@ logger = logging.getLogger("bunnyland.tui")
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "bunnyland"
 CLIENT_ID_PATH = CONFIG_DIR / "client-id"
+
+
+def _validate_remote_server_url(value: str) -> str:
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("remote server must be an absolute HTTP(S) URL")
+    if parsed.scheme == "http":
+        try:
+            import ipaddress
+
+            loopback = ipaddress.ip_address(parsed.hostname).is_loopback
+        except ValueError:
+            loopback = parsed.hostname == "localhost"
+        if not loopback:
+            raise ValueError("remote non-loopback servers require HTTPS")
+    return value.rstrip("/")
+
+
+def _validate_token_file_mode(path: Path) -> None:
+    if os.name != "posix" or not path.exists():
+        return
+    if stat.S_IMODE(path.stat().st_mode) & 0o077:
+        raise PermissionError(f"token file must not be group/world accessible: {path}")
 
 
 async def _call_update_callback(callback: Callable, value) -> None:
@@ -650,7 +674,7 @@ class RemoteBackend(Backend):
         password: str = "",
         token_file: str | Path | None = None,
     ) -> None:
-        self.base = base_url.rstrip("/")
+        self.base = _validate_remote_server_url(base_url)
         self.label = f"remote · {self.base}"
         self._client = None
         self.client_id = client_id or persistent_client_id()
@@ -659,6 +683,8 @@ class RemoteBackend(Backend):
         self.username = username
         self._password = password
         self.token_file = Path(token_file) if token_file else None
+        if self.token_file is not None:
+            _validate_token_file_mode(self.token_file)
         self._access_token = ""
         self._rotate_after: int | None = None
         self._rotation_task = None
@@ -719,7 +745,13 @@ class RemoteBackend(Backend):
         if self.token_file is None:
             return
         self.token_file.parent.mkdir(parents=True, exist_ok=True)
-        self.token_file.write_text(f"{self._access_token}\n", encoding="utf-8")
+        descriptor = os.open(
+            self.token_file,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as target:
+            target.write(f"{self._access_token}\n")
         self.token_file.chmod(0o600)
 
     async def _login(self) -> None:
@@ -764,18 +796,18 @@ class RemoteBackend(Backend):
                     await asyncio.sleep(30.0)
 
     async def fetch_snapshot(self) -> dict:
-        res = await self._client.get(f"{self.base}/world/snapshot")
+        res = await self._client.get(f"{self.base}/admin/world/snapshot")
         res.raise_for_status()
         return res.json()
 
     async def fetch_character_list(self) -> list[CharacterSummaryView]:
-        res = await self._client.get(f"{self.base}/world/characters")
+        res = await self._client.get(f"{self.base}/play/world/characters")
         res.raise_for_status()
         return list(CharacterListResponse.model_validate(res.json()).characters)
 
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         res = await self._client.get(
-            f"{self.base}/world/character/{character_id}",
+            f"{self.base}/play/world/character/{character_id}",
             **self._claim_request_kwargs(character_id, params=True),
         )
         res.raise_for_status()
@@ -787,13 +819,13 @@ class RemoteBackend(Backend):
             **kwargs.get("params", {}),
             "character_id": character_id,
         }
-        res = await self._client.get(f"{self.base}/world/room/{room_id}", **kwargs)
+        res = await self._client.get(f"{self.base}/play/world/room/{room_id}", **kwargs)
         res.raise_for_status()
         return res.json()
 
     async def fetch_queued_commands(self, character_id: str) -> dict:
         res = await self._client.get(
-            f"{self.base}/world/character/{character_id}/commands",
+            f"{self.base}/play/world/character/{character_id}/commands",
             **self._claim_request_kwargs(character_id, params=True),
         )
         res.raise_for_status()
@@ -813,7 +845,7 @@ class RemoteBackend(Backend):
             **self._claim_params(character_id),
         }
         res = await self._client.delete(
-            f"{self.base}/world/character/{character_id}/commands/{command_id}",
+            f"{self.base}/play/world/character/{character_id}/commands/{command_id}",
             **kwargs,
         )
         if not res.is_success:
@@ -827,7 +859,7 @@ class RemoteBackend(Backend):
             command = {**command, "claim_id": claim.claim_id}
         kwargs = self._claim_request_kwargs(character_id)
         kwargs["json"] = command
-        res = await self._client.post(f"{self.base}/world/commands", **kwargs)
+        res = await self._client.post(f"{self.base}/play/world/commands", **kwargs)
         try:
             body = res.json()
         except Exception:
@@ -845,7 +877,7 @@ class RemoteBackend(Backend):
         if not character_id:
             return []
         res = await self._client.get(
-            f"{self.base}/world/character/{character_id}/events/recent",
+            f"{self.base}/play/world/character/{character_id}/events/recent",
             **self._claim_request_kwargs(character_id, params=True),
         )
         res.raise_for_status()
@@ -872,7 +904,7 @@ class RemoteBackend(Backend):
             return
         parsed = urllib.parse.urlparse(self.base)
         encoded_character = urllib.parse.quote(character_id, safe="")
-        path = f"{parsed.path.rstrip('/')}/world/character/{encoded_character}/updates"
+        path = f"{parsed.path.rstrip('/')}/play/world/character/{encoded_character}/updates"
         url = urllib.parse.urlunparse(
             parsed._replace(
                 scheme="wss" if parsed.scheme == "https" else "ws",
@@ -930,7 +962,7 @@ class RemoteBackend(Backend):
 
     async def request_image(self, character_id: str) -> ImageRequestResult:
         res = await self._client.post(
-            f"{self.base}/world/character/{character_id}/scene-image",
+            f"{self.base}/play/world/character/{character_id}/scene-image",
             **self._claim_request_kwargs(character_id, params=True),
         )
         if res.status_code == 409:
@@ -971,7 +1003,7 @@ class RemoteBackend(Backend):
             kwargs["json"]["claim_id"] = stored.claim_id
         if headers:
             kwargs["headers"] = headers
-        res = await self._client.post(f"{self.base}/world/controllers/web/claim", **kwargs)
+        res = await self._client.post(f"{self.base}/play/world/controllers/web/claim", **kwargs)
         if not res.is_success:
             logger.warning(
                 "Remote web controller claim failed for %s: HTTP %s %s",
@@ -998,7 +1030,7 @@ class RemoteBackend(Backend):
         control: ControlClaim,
     ) -> ControlClaim | None:
         res = await self._client.post(
-            f"{self.base}/world/controllers/web/release-controller",
+            f"{self.base}/play/world/controllers/web/release-controller",
             headers={"X-Bunnyland-Claim-Secret": control.claim_secret},
             json={
                 "character_id": player_id,
@@ -1030,7 +1062,7 @@ class RemoteBackend(Backend):
 
     async def release_claim(self, player_id: str, control: ControlClaim) -> bool:
         res = await self._client.post(
-            f"{self.base}/world/controllers/web/release-claim",
+            f"{self.base}/play/world/controllers/web/release-claim",
             headers={"X-Bunnyland-Claim-Secret": control.claim_secret},
             json={
                 "character_id": player_id,

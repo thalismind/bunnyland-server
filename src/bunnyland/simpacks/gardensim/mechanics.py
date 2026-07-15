@@ -195,6 +195,7 @@ class MachineComponent(Component):
 class MachineBreakdownComponent(Component):
     reason: str = "wear"
     repaired_at_epoch: int | None = None
+    required_tool_kind: str = ""
 
 
 @pydantic_dataclass(frozen=True)
@@ -1920,6 +1921,23 @@ class RepairMachineHandler:
         if not machine.has_component(MachineComponent):
             return rejected("target is not a machine")
         machine_component = machine.get_component(MachineComponent)
+        if machine.has_component(MachineBreakdownComponent):
+            breakdown = machine.get_component(MachineBreakdownComponent)
+            if breakdown.required_tool_kind:
+                tool_id = parse_entity_id(command.payload.get("tool_id"))
+                if tool_id is None:
+                    return rejected("matching repair tool is required")
+                if not ctx.world.has_entity(tool_id):
+                    return rejected("repair tool does not exist")
+                tool = ctx.entity(tool_id)
+                if container_of(tool) != character_id:
+                    return rejected("repair tool must be in inventory")
+                if (
+                    not tool.has_component(IdentityComponent)
+                    or tool.get_component(IdentityComponent).kind
+                    != breakdown.required_tool_kind
+                ):
+                    return rejected("matching repair tool is required")
         operations = [
             SetComponent(
                 machine_id,

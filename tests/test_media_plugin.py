@@ -19,13 +19,13 @@ def test_media_service_supports_content_addressed_models_and_rejects_traversal(t
 
     assert path.read_bytes() == data
     assert service.put_content("models3d", data, "glb")[0] == name
-    assert service.url_for("models3d", name) == f"/media/models3d/{name}"
+    assert service.url_for("models3d", name) == f"/public/media/models3d/{name}"
     assert service.public_url_for("models3d", name, base_url="") == service.url_for(
         "models3d", name
     )
     assert (
         service.public_url_for("models3d", name, base_url="https://example.test/")
-        == f"https://example.test/media/models3d/{name}"
+        == f"https://example.test/public/media/models3d/{name}"
     )
     with pytest.raises(MediaError):
         service.path_for("../models", name)
@@ -48,9 +48,12 @@ def test_media_plugin_owns_compatible_immutable_route(tmp_path, monkeypatch):
     assert bunnyland_plugins()[0].id == "bunnyland.media"
     name, _path = actor.media_service.put_content("models3d", b"model", "glb")
     app = fastapi.FastAPI()
-    plugins[0].runtime.server_routers[0](app, actor)
+    contribution = plugins[0].runtime.http[0]
+    router = fastapi.APIRouter(prefix=f"/{contribution.zone.value}")
+    contribution.registrars[0](router, actor)
+    app.include_router(router)
     endpoint = next(
-        route.endpoint for route in app.routes if route.path == "/media/{namespace}/{name}"
+        route.endpoint for route in app.routes if route.path == "/public/media/{namespace}/{name}"
     )
 
     response = asyncio.run(endpoint("models3d", name))

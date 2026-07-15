@@ -45,16 +45,16 @@ server field is usually same-origin `/api`; locally it is commonly `http://127.0
 
 The page:
 
-- lists generators from `GET /admin/world/generators`;
+- lists installed generators through the admin API;
 - accepts a seed/prompt and room budget;
 - requires an explicit reset checkbox before replacing the live world;
 - can request a save after generation when the server was started with `--save`;
 - starts generation as a background job, then watches status and polls snapshots;
 - highlights entity ids that were not present in the previous snapshot.
 
-The reset endpoint clears the current world immediately and returns a job id. The
-generator then adds entities while the page watches `/world/snapshot`, websocket domain
-events, and `GET /admin/world/generation`. Completion is announced with
+The reset operation clears the current world immediately and returns a job id. The
+generator then adds entities while the page watches admin snapshots, websocket domain
+events, and generation status. Completion is announced with
 `WorldGenerationCompletedEvent`; failures are announced with `WorldGenerationFailedEvent`.
 
 ## Generate from the CLI at startup

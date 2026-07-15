@@ -647,10 +647,10 @@ def test_live_character_chat_endpoints_use_real_llm(provider):
         _character_agent(provider),
     )
     client = testclient.TestClient(
-        create_app(actor, character_chat=service, allow_unauthenticated=True)
+        create_app(actor, character_chat=service, allow_unauthenticated_embedding=True)
     )
 
-    status = client.get("/world/chat/status")
+    status = client.get("/play/world/chat/status")
     assert status.status_code == 200
     status_body = status.json()
     assert status_body["enabled"] is True
@@ -658,7 +658,7 @@ def test_live_character_chat_endpoints_use_real_llm(provider):
     assert {"remember", "take_note", "reflect", "forget"}.issubset(status_body["allowed_tools"])
 
     response = client.post(
-        f"/world/character/{character_id}/chat",
+        f"/play/world/character/{character_id}/chat",
         json={
             "client_id": f"live-{provider}",
             "message": (
@@ -701,11 +701,11 @@ def test_live_character_chat_take_note_prompt_calls_tool(provider):
         _character_agent(provider),
     )
     client = testclient.TestClient(
-        create_app(actor, character_chat=service, allow_unauthenticated=True)
+        create_app(actor, character_chat=service, allow_unauthenticated_embedding=True)
     )
 
     response = client.post(
-        f"/world/character/{character_id}/chat",
+        f"/play/world/character/{character_id}/chat",
         json={
             "client_id": f"live-note-{provider}",
             "message": (

@@ -52,7 +52,7 @@ def _app(actor, service):
         actor,
         meta=WorldMeta(seed="moss"),
         imagegen=service,
-        allow_unauthenticated=True,
+        allow_unauthenticated_embedding=True,
     )
 
 
@@ -101,11 +101,11 @@ async def test_event_image_requires_admin_scope(tmp_path):
     )
     async with _client(app) as client:
         denied = await client.post(
-            "/world/event/record-1/image",
+            "/admin/world/event/record-1/image",
             headers={"Authorization": f"Bearer {player}"},
         )
         allowed = await client.post(
-            "/world/event/record-1/image",
+            "/admin/world/event/record-1/image",
             headers={"Authorization": f"Bearer {operator}"},
         )
     assert denied.status_code == 403
@@ -155,14 +155,14 @@ async def test_image_job_status_unknown(tmp_path):
 async def test_endpoints_409_when_imagegen_disabled():
     scenario = build_scenario()
     app = create_app(
-        scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated=True
+        scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated_embedding=True
     )
     async with _client(app) as client:
         assert (
             await client.post("/admin/world/generate-image", headers=ADMIN, json={"entity_id": "x"})
         ).status_code == 409
-        assert (await client.post("/world/event/rec_1/image")).status_code == 409
-        assert (await client.get("/media/portraits/x.png")).status_code == 404
+        assert (await client.post("/admin/world/event/rec_1/image")).status_code == 409
+        assert (await client.get("/public/media/portraits/x.png")).status_code == 404
 
 
 async def test_admin_upload_character_images_without_imagegen(tmp_path, monkeypatch):
@@ -190,7 +190,7 @@ async def test_admin_upload_character_images_without_imagegen(tmp_path, monkeypa
         assert portrait.status_code == 200
         portrait_payload = portrait.json()
         assert portrait_payload["purpose"] == "portrait"
-        assert portrait_payload["url"].startswith("/media/portraits/")
+        assert portrait_payload["url"].startswith("/public/media/portraits/")
         component = scenario.actor.world.get_entity(scenario.character).get_component(
             PortraitImageComponent
         )
@@ -208,14 +208,14 @@ async def test_admin_upload_character_images_without_imagegen(tmp_path, monkeypa
         sprite_component = scenario.actor.world.get_entity(scenario.character).get_component(
             SpriteImageComponent
         )
-        assert sprite_component.url.startswith(f"/media/{SEGMENT_SPRITES}/")
+        assert sprite_component.url.startswith(f"/public/media/{SEGMENT_SPRITES}/")
 
 
 async def test_admin_upload_character_image_rejects_bad_inputs(tmp_path, monkeypatch):
     monkeypatch.setenv("BUNNYLAND_MEDIA_DIR", str(tmp_path))
     scenario = build_scenario()
     app = create_app(
-        scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated=True
+        scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated_embedding=True
     )
     async with _client(app) as client:
         bad_purpose = await client.post(
@@ -262,7 +262,9 @@ async def test_request_event_image_and_dedup(tmp_path):
     )
     service = _service(scenario.actor, tmp_path)
     async with _client(_app(scenario.actor, service)) as client:
-        first = await client.post(f"/world/event/{record.id}/image", json={"extra": "dramatic"})
+        first = await client.post(
+            f"/admin/world/event/{record.id}/image", json={"extra": "dramatic"}
+        )
     assert first.status_code == 200
     assert first.json()["purpose"] == "event"
     # Once it has an image, a second request reuses it (deduped).
@@ -287,7 +289,7 @@ async def test_scene_image_endpoint_success(tmp_path):
     scenario.actor.bus.subscribe(DomainEvent, events.append)
     service = _service(scenario.actor, tmp_path)
     async with _client(_app(scenario.actor, service)) as client:
-        response = await client.post(f"/world/character/{scenario.character}/scene-image")
+        response = await client.post(f"/play/world/character/{scenario.character}/scene-image")
         await service.wait_idle()
     assert response.status_code == 200
     assert response.json()["purpose"] == "event"
@@ -303,7 +305,7 @@ async def test_scene_image_endpoint_unknown_character(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
     async with _client(_app(scenario.actor, service)) as client:
-        assert (await client.post("/world/character/ghost_9/scene-image")).status_code == 404
+        assert (await client.post("/play/world/character/ghost_9/scene-image")).status_code == 404
 
 
 async def test_scene_image_endpoint_no_room(tmp_path):
@@ -314,16 +316,17 @@ async def test_scene_image_endpoint_no_room(tmp_path):
     )
     service = _service(scenario.actor, tmp_path)
     async with _client(_app(scenario.actor, service)) as client:
-        assert (await client.post(f"/world/character/{roomless.id}/scene-image")).status_code == 400
+        response = await client.post(f"/play/world/character/{roomless.id}/scene-image")
+        assert response.status_code == 400
 
 
 async def test_scene_image_endpoint_409_without_imagegen():
     scenario = build_scenario()
     app = create_app(
-        scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated=True
+        scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated_embedding=True
     )
     async with _client(app) as client:
-        response = await client.post(f"/world/character/{scenario.character}/scene-image")
+        response = await client.post(f"/play/world/character/{scenario.character}/scene-image")
         assert response.status_code == 409
 
 
@@ -370,16 +373,18 @@ async def test_remote_backend_request_image_paths():
 
     def handler(request):
         if request.url.path.endswith("/ok/scene-image"):
-            return httpx.Response(200, json={"status": "queued", "url": "/media/events/x.png"})
+            return httpx.Response(
+                200, json={"status": "queued", "url": "/public/media/events/x.png"}
+            )
         if request.url.path.endswith("/off/scene-image"):
             return httpx.Response(409, json={"detail": "disabled"})
         return httpx.Response(500, json={"detail": "boom"})
 
-    backend = RemoteBackend("http://server")
+    backend = RemoteBackend("https://server")
     backend._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
     ok = await backend.request_image("ok")
-    assert ok.ok is True and ok.url == "/media/events/x.png"
+    assert ok.ok is True and ok.url == "/public/media/events/x.png"
     off = await backend.request_image("off")
     assert off.ok is False and off.status == "unavailable"
     err = await backend.request_image("bad")
@@ -413,15 +418,17 @@ async def test_character_projection_includes_portrait(tmp_path):
     scenario = build_scenario()
     entity = scenario.actor.world.get_entity(scenario.character)
     entity.add_component(
-        PortraitImageComponent(url="/media/portraits/p.png", alpha_url="/media/alpha/p.png")
+        PortraitImageComponent(
+            url="/public/media/portraits/p.png", alpha_url="/public/media/alpha/p.png"
+        )
     )
     app = create_app(
-        scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated=True
+        scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated_embedding=True
     )
     async with _client(app) as client:
-        body = (await client.get(f"/world/character/{scenario.character}")).json()
-    assert body["portrait"]["url"] == "/media/portraits/p.png"
-    assert body["portrait"]["alpha_url"] == "/media/alpha/p.png"
+        body = (await client.get(f"/play/world/character/{scenario.character}")).json()
+    assert body["portrait"]["url"] == "/public/media/portraits/p.png"
+    assert body["portrait"]["alpha_url"] == "/public/media/alpha/p.png"
 
 
 async def test_room_projection_entity_portrait_default_empty(tmp_path):
@@ -438,13 +445,13 @@ async def test_room_projection_entity_portrait_default_empty(tmp_path):
         scenario.actor,
         meta=WorldMeta(seed="moss"),
         claim_secrets=secrets,
-        allow_unauthenticated=True,
+        allow_unauthenticated_embedding=True,
     )
     room = scenario.character_room()
     async with _client(app) as client:
         body = (
             await client.get(
-                f"/world/room/{room}",
+                f"/play/world/room/{room}",
                 params={
                     "character_id": str(scenario.character),
                     "claim_id": claim.claim_id,
@@ -466,14 +473,14 @@ async def test_media_route_serves_and_404(tmp_path):
     service = _service(scenario.actor, tmp_path)
     service.media.write(SEGMENT_PORTRAITS, "abc123.png", b"IMGDATA")
     async with _client(_app(scenario.actor, service)) as client:
-        ok = await client.get("/media/portraits/abc123.png")
+        ok = await client.get("/public/media/portraits/abc123.png")
         assert ok.status_code == 200
         assert ok.content == b"IMGDATA"
         assert ok.headers["content-type"].startswith("image/png")
 
-        assert (await client.get("/media/portraits/missing.png")).status_code == 404
+        assert (await client.get("/public/media/portraits/missing.png")).status_code == 404
         # Invalid (dotted) name is rejected by the store -> 404.
-        assert (await client.get("/media/portraits/..%2Fsecret.png")).status_code == 404
+        assert (await client.get("/public/media/portraits/..%2Fsecret.png")).status_code == 404
 
 
 # --- backfill loop -------------------------------------------------------------------
@@ -501,7 +508,7 @@ async def test_lifespan_starts_backfill_and_closes(tmp_path):
     async with app.router.lifespan_context(app):
         assert service._backfill is not None
         async with _client(app) as client:
-            assert (await client.get("/health")).status_code == 200
+            assert (await client.get("/public/health")).status_code == 200
     assert service._backfill is None
 
 

@@ -49,7 +49,10 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     define_action("cancel-machine", ("machine_id",), tool_name="cancel_machine"),
     define_action(
-        "repair-machine", ("machine_id",), tool_name="repair_machine", cost=EXTENDED_ACTION_COST
+        "repair-machine",
+        ("machine_id", "tool_id"),
+        tool_name="repair_machine",
+        cost=EXTENDED_ACTION_COST,
     ),
     define_action("feed-animal", ("animal_id", "feed_type"), tool_name="feed_animal"),
     define_action("pet-animal", ("animal_id",), tool_name="pet_animal"),

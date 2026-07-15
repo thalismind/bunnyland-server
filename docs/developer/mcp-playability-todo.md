@@ -78,7 +78,7 @@ returns an outcome hint. Items marked FOLLOW-UP remain.
    counts) for the admin and web graph clients — gated by the `world:admin` scope on both
    the HTTP route (`GET /world/overview`) and the MCP tool (`world_overview_admin`). The raw
    ECS dump is now admin-only on every surface: `world_snapshot_admin` (MCP tool),
-   `GET /world/snapshot`, and the `/world/updates` websocket all require a Bunnyland bearer
+   admin snapshots and the global world websocket all require a Bunnyland bearer
    token with `world:admin`, so a regular player cannot see the whole world through any
    door. The
    standard player clients (TUI, REPL) now read the per-room character/room projections

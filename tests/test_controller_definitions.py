@@ -310,7 +310,7 @@ def _client(scenario, tmp_path):
     app = create_app(
         scenario.actor,
         definitions_path=str(tmp_path / "defs.json"),
-        allow_unauthenticated=True,
+        allow_unauthenticated_embedding=True,
     )
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),

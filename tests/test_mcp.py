@@ -40,7 +40,13 @@ from bunnyland.mcp import (
     render_mcp_client_prompt,
 )
 from bunnyland.persistence import WorldMeta
-from bunnyland.plugins import bunnyland_plugins, select
+from bunnyland.plugins import (
+    McpContribution,
+    Plugin,
+    RuntimeContribution,
+    bunnyland_plugins,
+    select,
+)
 from bunnyland.plugins.ids import MCP, WORLDGEN
 from bunnyland.server.app import create_app
 from bunnyland.server.auth import WORLD_ADMIN_SCOPE, WORLD_PLAY_SCOPE, TokenPrincipal, TokenStore
@@ -942,6 +948,12 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
 
             return decorate
 
+        def prompt(self, *_args, **_kwargs):
+            def decorate(func):
+                return func
+
+            return decorate
+
         def get_context(self):
             return _authenticated_mcp_context()
 
@@ -1229,6 +1241,9 @@ async def test_mcp_registered_tools_wrap_runtime_errors(monkeypatch, scenario):
 
             return decorate
 
+        def get_context(self):
+            return _authenticated_mcp_context()
+
         def streamable_http_app(self):
             return SimpleNamespace()
 
@@ -1403,6 +1418,12 @@ def _install_fake_fastmcp(monkeypatch, *, registered_tools, low_server, get_cont
 
             return decorate
 
+        def prompt(self, *_args, **_kwargs):
+            def decorate(func):
+                return func
+
+            return decorate
+
         def get_context(self):
             return _authenticated_mcp_context() if get_context is None else get_context()
 
@@ -1419,6 +1440,172 @@ def _install_fake_fastmcp(monkeypatch, *, registered_tools, low_server, get_cont
     monkeypatch.setitem(sys.modules, "mcp.server", server_module)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
+
+
+def test_mcp_addon_capability_requires_explicit_policy(monkeypatch, scenario):
+    registered_tools = {}
+
+    class FakeLowServer:
+        def __init__(self):
+            self.get_capabilities = lambda _n, _e: SimpleNamespace(resources=None)
+
+        def subscribe_resource(self):
+            return lambda func: func
+
+        def unsubscribe_resource(self):
+            return lambda func: func
+
+    _install_fake_fastmcp(
+        monkeypatch,
+        registered_tools=registered_tools,
+        low_server=FakeLowServer(),
+    )
+
+    def missing_policy(registrar, _actor, **_context):
+        @registrar.tool()
+        def unsafe_tool():
+            return {"ok": True}
+
+    plugin = Plugin(
+        id="test.unsafe-mcp",
+        name="Unsafe MCP",
+        runtime=RuntimeContribution(
+            mcp=(McpContribution(registrars=(missing_policy,)),),
+        ),
+    )
+
+    async def unused(_request=None):
+        raise AssertionError("unused")
+
+    with pytest.raises(TypeError, match="scopes"):
+        create_bunnyland_mcp_app(
+            actor=scenario.actor,
+            meta=WorldMeta(seed="moss"),
+            loop=None,
+            patch_world=unused,
+            generate_world=unused,
+            generation_status=unused,
+            generate_room=unused,
+            generate_character=unused,
+            generate_item=unused,
+            generate_event=unused,
+            plugins=(plugin,),
+        )
+
+
+@pytest.mark.parametrize("scopes", [(), ("world:unknown",)])
+def test_mcp_addon_capability_rejects_empty_or_unknown_policy(monkeypatch, scenario, scopes):
+    registered_tools = {}
+
+    class FakeLowServer:
+        def __init__(self):
+            self.get_capabilities = lambda _n, _e: SimpleNamespace(resources=None)
+
+        def subscribe_resource(self):
+            return lambda func: func
+
+        def unsubscribe_resource(self):
+            return lambda func: func
+
+    _install_fake_fastmcp(
+        monkeypatch,
+        registered_tools=registered_tools,
+        low_server=FakeLowServer(),
+    )
+
+    def invalid_policy(registrar, _actor, **_context):
+        @registrar.tool(scopes=scopes)
+        def unsafe_tool():
+            return {"ok": True}
+
+    plugin = Plugin(
+        id="test.invalid-mcp-policy",
+        name="Invalid MCP Policy",
+        runtime=RuntimeContribution(
+            mcp=(McpContribution(registrars=(invalid_policy,)),),
+        ),
+    )
+
+    async def unused(_request=None):
+        raise AssertionError("unused")
+
+    with pytest.raises(ValueError, match="explicit play/admin access policy"):
+        create_bunnyland_mcp_app(
+            actor=scenario.actor,
+            meta=WorldMeta(seed="moss"),
+            loop=None,
+            patch_world=unused,
+            generate_world=unused,
+            generation_status=unused,
+            generate_room=unused,
+            generate_character=unused,
+            generate_item=unused,
+            generate_event=unused,
+            plugins=(plugin,),
+        )
+
+
+def test_mcp_addon_declares_tool_resource_and_prompt_policies(monkeypatch, scenario):
+    registered_tools = {}
+
+    class FakeLowServer:
+        def __init__(self):
+            self.get_capabilities = lambda _n, _e: SimpleNamespace(resources=None)
+
+        def subscribe_resource(self):
+            return lambda func: func
+
+        def unsubscribe_resource(self):
+            return lambda func: func
+
+    _install_fake_fastmcp(
+        monkeypatch,
+        registered_tools=registered_tools,
+        low_server=FakeLowServer(),
+    )
+
+    def declared_policies(registrar, _actor, **_context):
+        @registrar.tool(scopes=(WORLD_PLAY_SCOPE,))
+        def safe_tool():
+            return {"ok": True}
+
+        @registrar.resource("test://resource", scopes=(WORLD_PLAY_SCOPE,))
+        def safe_resource():
+            return {"ok": True}
+
+        @registrar.prompt(scopes=(WORLD_ADMIN_SCOPE,))
+        def safe_prompt():
+            return "safe"
+
+    plugin = Plugin(
+        id="test.declared-mcp-policy",
+        name="Declared MCP Policy",
+        runtime=RuntimeContribution(
+            mcp=(
+                McpContribution(registrars=()),
+                McpContribution(registrars=(declared_policies,)),
+            ),
+        ),
+    )
+
+    async def unused(_request=None):
+        raise AssertionError("unused")
+
+    app = create_bunnyland_mcp_app(
+        actor=scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        loop=None,
+        patch_world=unused,
+        generate_world=unused,
+        generation_status=unused,
+        generate_room=unused,
+        generate_character=unused,
+        generate_item=unused,
+        generate_event=unused,
+        plugins=(plugin,),
+    )
+    assert "safe_tool" in registered_tools
+    app.bunnyland_mcp_event_bridge.close()
 
 
 async def test_mcp_admin_tools_wrap_generator_failures_and_definition_tools(monkeypatch, scenario):
@@ -1734,7 +1921,7 @@ async def test_mcp_admin_fails_closed_when_request_is_absent(monkeypatch, scenar
         generate_event=boom,
     )
 
-    with pytest.raises(RuntimeError, match="world:admin scope required"):
+    with pytest.raises(RuntimeError, match="authenticated MCP request context required"):
         await registered_tools["patch_world_admin"](operations=[])
 
 
@@ -1776,7 +1963,7 @@ async def test_mcp_admin_fails_closed_when_request_context_is_absent(monkeypatch
         generate_event=boom,
     )
 
-    with pytest.raises(RuntimeError, match="world:admin scope required"):
+    with pytest.raises(RuntimeError, match="authenticated MCP request context required"):
         await registered_tools["patch_world_admin"](operations=[])
 
 
@@ -1791,6 +1978,9 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
     play_token, _principal = token_store.issue(
         "mcp-player", [WORLD_PLAY_SCOPE], automatic_rotation=False
     )
+    admin_token, _admin_principal = token_store.issue(
+        "mcp-admin", [WORLD_ADMIN_SCOPE], automatic_rotation=False
+    )
     app = create_app(scenario.actor, plugins=plugins, token_store=token_store)
     mcp_http_client = httpx.AsyncClient(
         headers={"Authorization": f"Bearer {play_token}"}
@@ -1804,6 +1994,16 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
                 break
             await asyncio.sleep(0.01)
         assert server.started
+
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as raw_client:
+            assert (await raw_client.post("/mcp/", json={})).status_code == 401
+            assert (
+                await raw_client.post(
+                    "/mcp/",
+                    headers={"Authorization": "Bearer malformed"},
+                    json={},
+                )
+            ).status_code == 401
 
         notifications = []
 
@@ -1921,6 +2121,23 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
                 assert scenario.actor.world.get_entity(scenario.character).has_component(
                     SuspendedComponent
                 )
+
+        admin_http_client = httpx.AsyncClient(
+            headers={"Authorization": f"Bearer {admin_token}"}
+        )
+        try:
+            async with streamable_http_client(
+                f"http://127.0.0.1:{port}/mcp/",
+                http_client=admin_http_client,
+            ) as (read_stream, write_stream, _get_session_id):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    characters = await session.call_tool("list_characters", {})
+                    overview = await session.call_tool("world_overview_admin", {})
+                    assert characters.isError is False
+                    assert overview.isError is False
+        finally:
+            await admin_http_client.aclose()
     finally:
         server.should_exit = True
         await server_task
@@ -1985,7 +2202,11 @@ def _capture_mcp_tools(
         def get_context(self):
             if resolved_request_headers is None:
                 return SimpleNamespace(session=object())
-            scopes = [WORLD_ADMIN_SCOPE] if request_scopes is None else request_scopes
+            scopes = (
+                [WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE]
+                if request_scopes is None
+                else request_scopes
+            )
             principal = TokenPrincipal(
                 token_id="test-token",
                 subject="test-admin",
@@ -2151,12 +2372,13 @@ def test_mcp_client_resources_require_and_accept_claim_headers(monkeypatch, scen
         request_headers=None,
         registered_resources=no_context_resources,
     )
-    asyncio.run(
-        no_context_tools["claim_character"](
-            client_id="client-without-context", character_name="Juniper"
+    with pytest.raises(RuntimeError, match="authenticated MCP request context required"):
+        asyncio.run(
+            no_context_tools["claim_character"](
+                client_id="client-without-context", character_name="Juniper"
+            )
         )
-    )
-    with pytest.raises(RuntimeError, match="invalid claim secret"):
+    with pytest.raises(RuntimeError, match="authenticated MCP request context required"):
         no_context_resources["bunnyland://clients/{client_id}/events"](
             "client-without-context"
         )

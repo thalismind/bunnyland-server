@@ -44,9 +44,10 @@ class RuntimeContribution(BaseModel):
     service_factories: tuple[Any, ...] = ()
     projection_factories: tuple[Any, ...] = ()
     integration_factories: tuple[Any, ...] = ()
-    #: HTTP router factories called by the FastAPI app factory after built-in middleware is
-    #: installed. A factory receives ``(app, actor, **context)`` and may include routers.
-    server_routers: tuple[Any, ...] = ()
+    #: Explicitly zoned HTTP contributions. Registrars receive only their zone router.
+    http: tuple[HttpContribution, ...] = ()
+    #: Cross-cutting MCP registrars. Each registered capability must declare its own policy.
+    mcp: tuple[McpContribution, ...] = ()
     perspective_queries: tuple[Any, ...] = ()
 
     def all_factories(self) -> tuple[Any, ...]:
@@ -118,6 +119,25 @@ class PluginPlacement(StrEnum):
     ADDON = "addon"
 
 
+class HttpZone(StrEnum):
+    PUBLIC = "public"
+    PLAY = "play"
+    ADMIN = "admin"
+
+
+class HttpContribution(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    zone: HttpZone
+    registrars: tuple[Any, ...]
+
+
+class McpContribution(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    registrars: tuple[Any, ...]
+
+
 class Plugin(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
@@ -154,6 +174,9 @@ __all__ = [
     "ContentContribution",
     "DependencyContribution",
     "EcsContribution",
+    "HttpContribution",
+    "HttpZone",
+    "McpContribution",
     "Plugin",
     "PluginPlacement",
     "PluginRuntimeContext",

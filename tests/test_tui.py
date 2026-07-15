@@ -1112,7 +1112,7 @@ async def test_remote_backend_cancel_command_returns_false_on_error():
         async def delete(self, url, params):
             return Response()
 
-    backend = RemoteBackend("http://server.example")
+    backend = RemoteBackend("https://server.example")
     backend._client = Client()
 
     assert await backend.cancel_command(PLAYER, "cmd-1", "controller:1", 3) is False
@@ -1132,7 +1132,7 @@ def test_terminal_backends_share_default_persistent_client_id(monkeypatch, tmp_p
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
     local = LocalBackend(generator="apartment-demo", autorun=False)
-    remote = RemoteBackend("http://server.example")
+    remote = RemoteBackend("https://server.example")
 
     assert local.client_id == remote.client_id
     assert (tmp_path / "bunnyland" / "client-id").read_text(encoding="utf-8").strip() == (
@@ -1250,7 +1250,7 @@ async def test_remote_backend_claims_web_controller():
             return Response()
 
     backend = RemoteBackend(
-        "http://server.example",
+        "https://server.example",
         client_id="remote-client",
         fallback_controller="llm",
         timeout_seconds=1200,
@@ -1262,7 +1262,7 @@ async def test_remote_backend_claims_web_controller():
     assert control == ("controller:web", 4)
     assert backend._client.requests == [
         (
-            "http://server.example/world/controllers/web/claim",
+            "https://server.example/play/world/controllers/web/claim",
             {
                 "character_id": PLAYER,
                 "client_id": "remote-client",
@@ -1284,7 +1284,7 @@ async def test_remote_backend_failed_claim_returns_none():
         async def post(self, url: str, json: dict):
             return Response()
 
-    backend = RemoteBackend("http://server.example", client_id="remote-client")
+    backend = RemoteBackend("https://server.example", client_id="remote-client")
     backend._client = Client()
 
     assert await backend.claim(PLAYER, World.parse(_snapshot())) is None
@@ -1316,7 +1316,7 @@ async def test_remote_backend_reclaim_uses_stored_claim_secret(monkeypatch, tmp_
             self.requests.append((url, kwargs))
             return Response()
 
-    backend = RemoteBackend("http://server.example", client_id="remote-client")
+    backend = RemoteBackend("https://server.example", client_id="remote-client")
     backend._client = Client()
 
     control = await backend.claim(PLAYER, World.parse(_snapshot()))
@@ -1324,7 +1324,7 @@ async def test_remote_backend_reclaim_uses_stored_claim_secret(monkeypatch, tmp_
     assert control == ControlClaim("controller:new", 3, "claim-1", "secret-1")
     assert backend._client.requests == [
         (
-            "http://server.example/world/controllers/web/claim",
+            "https://server.example/play/world/controllers/web/claim",
             {
                 "json": {
                     "character_id": PLAYER,
@@ -1365,7 +1365,7 @@ async def test_remote_backend_uses_claim_headers_and_params(monkeypatch, tmp_pat
 
         async def post(self, url: str, **kwargs):
             self.requests.append(("POST", url, kwargs))
-            if url.endswith("/world/commands"):
+            if url.endswith("/play/world/commands"):
                 return Response({"queued": True, "reason": ""})
             if url.endswith("/scene-image"):
                 return Response({"status": "queued", "url": "http://image"})
@@ -1375,7 +1375,7 @@ async def test_remote_backend_uses_claim_headers_and_params(monkeypatch, tmp_pat
             self.requests.append(("DELETE", url, kwargs))
             return Response({"cancelled": True})
 
-    backend = RemoteBackend("http://server.example", client_id="remote-client")
+    backend = RemoteBackend("https://server.example", client_id="remote-client")
     backend._client = Client()
     backend._claims[PLAYER] = ControlClaim(
         "controller:1",
@@ -1395,7 +1395,7 @@ async def test_remote_backend_uses_claim_headers_and_params(monkeypatch, tmp_pat
     assert backend._client.requests == [
         (
             "GET",
-            f"http://server.example/world/character/{PLAYER}",
+            f"https://server.example/play/world/character/{PLAYER}",
             {
                 "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
                 "params": {"claim_id": "claim-1"},
@@ -1403,7 +1403,7 @@ async def test_remote_backend_uses_claim_headers_and_params(monkeypatch, tmp_pat
         ),
         (
             "GET",
-            f"http://server.example/world/character/{PLAYER}/commands",
+            f"https://server.example/play/world/character/{PLAYER}/commands",
             {
                 "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
                 "params": {"claim_id": "claim-1"},
@@ -1411,7 +1411,7 @@ async def test_remote_backend_uses_claim_headers_and_params(monkeypatch, tmp_pat
         ),
         (
             "DELETE",
-            f"http://server.example/world/character/{PLAYER}/commands/cmd-1",
+            f"https://server.example/play/world/character/{PLAYER}/commands/cmd-1",
             {
                 "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
                 "params": {
@@ -1423,7 +1423,7 @@ async def test_remote_backend_uses_claim_headers_and_params(monkeypatch, tmp_pat
         ),
         (
             "POST",
-            "http://server.example/world/commands",
+            "https://server.example/play/world/commands",
             {
                 "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
                 "json": {
@@ -1435,7 +1435,7 @@ async def test_remote_backend_uses_claim_headers_and_params(monkeypatch, tmp_pat
         ),
         (
             "POST",
-            f"http://server.example/world/character/{PLAYER}/scene-image",
+            f"https://server.example/play/world/character/{PLAYER}/scene-image",
             {
                 "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
                 "params": {"claim_id": "claim-1"},
@@ -1457,7 +1457,7 @@ async def test_remote_backend_request_image_reports_unavailable_and_error():
         async def post(self, url: str, **kwargs):
             return self.responses.pop(0)
 
-    backend = RemoteBackend("http://server.example", client_id="remote-client")
+    backend = RemoteBackend("https://server.example", client_id="remote-client")
     backend._client = Client([Response(status_code=409), Response(status_code=500)])
 
     unavailable = await backend.request_image(PLAYER)
@@ -1492,7 +1492,7 @@ async def test_remote_backend_release_controller_and_claim_requests():
 
     control = ControlClaim("controller:1", 3, "claim-1", "secret-1")
     backend = RemoteBackend(
-        "http://server.example",
+        "https://server.example",
         client_id="remote-client",
         fallback_controller="llm",
         timeout_seconds=900,
@@ -1516,7 +1516,7 @@ async def test_remote_backend_release_controller_and_claim_requests():
     assert await backend.release_claim(PLAYER, released) is True
     assert backend._client.requests == [
         (
-            "http://server.example/world/controllers/web/release-controller",
+            "https://server.example/play/world/controllers/web/release-controller",
             {
                 "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
                 "json": {
@@ -1529,7 +1529,7 @@ async def test_remote_backend_release_controller_and_claim_requests():
             },
         ),
         (
-            "http://server.example/world/controllers/web/release-claim",
+            "https://server.example/play/world/controllers/web/release-claim",
             {
                 "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
                 "json": {
@@ -1541,7 +1541,7 @@ async def test_remote_backend_release_controller_and_claim_requests():
         ),
     ]
 
-    failed = RemoteBackend("http://server.example", client_id="remote-client")
+    failed = RemoteBackend("https://server.example", client_id="remote-client")
     failed._client = Client([Response(is_success=False), Response(is_success=False)])
     assert await failed.release_controller(PLAYER, control) is None
     assert await failed.release_claim(PLAYER, control) is False
@@ -1562,14 +1562,14 @@ async def test_remote_backend_recent_events_reads_endpoint():
             self.urls.append(url)
             return Response()
 
-    backend = RemoteBackend("http://server.example")
+    backend = RemoteBackend("https://server.example")
     backend._client = Client()
 
     events = await backend.recent_events("character:1")
 
     assert events == [{"type": "event", "data": {"event_type": "PingEvent"}}]
     assert backend._client.urls == [
-        "http://server.example/world/character/character:1/events/recent"
+        "https://server.example/play/world/character/character:1/events/recent"
     ]
 
 
@@ -1635,7 +1635,7 @@ async def test_remote_backend_watches_authenticated_player_updates(monkeypatch):
 
     assert backend.supports_live_updates() is True
     assert sockets[0].url == (
-        "wss://player:password@server.example/api/world/character/character%3A1/updates"
+        "wss://player:password@server.example/api/play/world/character/character%3A1/updates"
     )
     assert "top-secret" not in sockets[0].url
     assert json.loads(sockets[0].sent[0]) == {
@@ -1654,13 +1654,13 @@ async def test_live_updates_are_optional_for_local_and_missing_dependency(monkey
         is None
     )
     monkeypatch.setitem(sys.modules, "websockets", None)
-    backend = RemoteBackend("http://server.example")
+    backend = RemoteBackend("https://server.example")
     states = []
 
     assert backend.supports_live_updates() is False
     await backend.watch_updates("character:1", None, lambda _frame: None, states.append)
     assert states == ["fallback"]
-    assert await RemoteBackend("http://server.example").recent_events() == []
+    assert await RemoteBackend("https://server.example").recent_events() == []
 
 
 async def test_remote_backend_login_persistence_refresh_rotation_and_close(tmp_path, monkeypatch):
@@ -1699,7 +1699,7 @@ async def test_remote_backend_login_persistence_refresh_rotation_and_close(tmp_p
     monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(AsyncClient=lambda **_kw: client))
     token_file = tmp_path / "credentials" / "token"
     backend = RemoteBackend(
-        "http://server/api",
+        "https://server/api",
         username="player",
         password="password",
         token_file=token_file,
@@ -1720,7 +1720,7 @@ async def test_remote_backend_login_persistence_refresh_rotation_and_close(tmp_p
     await backend.close()
     assert client.closed is True
 
-    existing = RemoteBackend("http://server/api", token_file=token_file)
+    existing = RemoteBackend("https://server/api", token_file=token_file)
     second_client = Client()
     monkeypatch.setitem(
         sys.modules, "httpx", SimpleNamespace(AsyncClient=lambda **_kw: second_client)
@@ -1730,8 +1730,24 @@ async def test_remote_backend_login_persistence_refresh_rotation_and_close(tmp_p
     await existing.close()
 
 
+def test_remote_backend_rejects_insecure_servers_and_token_files(tmp_path) -> None:
+    from bunnyland.tui.backend import RemoteBackend
+
+    with pytest.raises(ValueError, match="absolute HTTP"):
+        RemoteBackend("server.example")
+    with pytest.raises(ValueError, match="require HTTPS"):
+        RemoteBackend("http://server.example")
+    assert RemoteBackend("http://localhost:8765").base == "http://localhost:8765"
+
+    token_file = tmp_path / "token"
+    token_file.write_text("secret\n")
+    token_file.chmod(0o640)
+    with pytest.raises(PermissionError, match="group/world"):
+        RemoteBackend("https://server.example", token_file=token_file)
+
+
 async def test_remote_backend_rotation_loop_recovers_from_failure(monkeypatch, caplog):
-    backend = RemoteBackend("http://server/api")
+    backend = RemoteBackend("https://server/api")
     backend._rotate_after = 0
 
     async def fail_rotation():
@@ -1753,7 +1769,7 @@ async def test_remote_backend_rotation_loop_recovers_from_failure(monkeypatch, c
 
 
 async def test_remote_backend_in_memory_token_and_idle_rotation_loop(monkeypatch):
-    backend = RemoteBackend("http://server/api")
+    backend = RemoteBackend("https://server/api")
     backend._set_access_token("memory-only")
     backend._persist_access_token()
     assert backend._access_token == "memory-only"
@@ -1794,13 +1810,13 @@ async def test_remote_backend_live_updates_reconnect_after_transport_failure(mon
     monkeypatch.setitem(sys.modules, "websockets", SimpleNamespace(connect=connect))
     monkeypatch.setattr(asyncio, "sleep", stop_after_delay)
     monkeypatch.setattr("bunnyland.tui.backend.random.uniform", lambda _low, _high: 1.0)
-    backend = RemoteBackend("http://server.example")
+    backend = RemoteBackend("https://server.example")
 
     with pytest.raises(asyncio.CancelledError):
         await backend.watch_updates("character:1", None, lambda _frame: None, states.append)
 
     assert calls == [
-        "ws://server.example/world/character/character%3A1/updates",
+        "wss://server.example/play/world/character/character%3A1/updates",
         1.0,
     ]
     assert states == ["connecting", "fallback"]
@@ -1869,7 +1885,7 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
         return client
 
     monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(AsyncClient=async_client))
-    backend = RemoteBackend("http://server.example/")
+    backend = RemoteBackend("https://server.example/")
 
     await backend.start()
     snapshot = await backend.fetch_snapshot()
@@ -1890,26 +1906,26 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
     assert cancelled is True
     assert clients[0].closed is True
     assert clients[0].requests == [
-        ("GET", "http://server.example/world/snapshot", None),
-        ("GET", "http://server.example/world/characters", None),
-        ("GET", f"http://server.example/world/character/{PLAYER}", None),
+        ("GET", "https://server.example/admin/world/snapshot", None),
+        ("GET", "https://server.example/play/world/characters", None),
+        ("GET", f"https://server.example/play/world/character/{PLAYER}", None),
         (
             "GET",
-            f"http://server.example/world/room/{PARLOR}",
+            f"https://server.example/play/world/room/{PARLOR}",
             {"params": {"character_id": PLAYER}},
         ),
-        ("GET", f"http://server.example/world/character/{PLAYER}/commands", None),
-        ("POST", "http://server.example/world/commands", {"command_type": "wait"}),
+        ("GET", f"https://server.example/play/world/character/{PLAYER}/commands", None),
+        ("POST", "https://server.example/play/world/commands", {"command_type": "wait"}),
         (
             "DELETE",
-            f"http://server.example/world/character/{PLAYER}/commands/cmd-1",
+            f"https://server.example/play/world/character/{PLAYER}/commands/cmd-1",
             {"controller_id": "controller:1", "controller_generation": 3},
         ),
     ]
 
 
 async def test_remote_backend_close_without_client_is_noop():
-    backend = RemoteBackend("http://server.example")
+    backend = RemoteBackend("https://server.example")
 
     await backend.close()
 
@@ -1936,12 +1952,12 @@ async def test_remote_backend_submit_reports_rejection_reason():
         async def post(self, url, json):
             return self.response
 
-    accepted = RemoteBackend("http://server.example")
+    accepted = RemoteBackend("https://server.example")
     accepted._client = Client(Response(payload={"queued": True, "reason": ""}))
     result = await accepted.submit({"command_type": "wait"})
     assert result.accepted is True and result.reason == ""
 
-    rejected = RemoteBackend("http://server.example")
+    rejected = RemoteBackend("https://server.example")
     rejected._client = Client(
         Response(payload={"queued": False, "reason": "missing required argument: text"})
     )
@@ -1950,7 +1966,7 @@ async def test_remote_backend_submit_reports_rejection_reason():
     assert result.reason == "missing required argument: text"
 
     # A non-2xx response with an unparseable body still yields a usable reason.
-    errored = RemoteBackend("http://server.example")
+    errored = RemoteBackend("https://server.example")
     errored._client = Client(Response(is_success=False, raises=True))
     result = await errored.submit({"command_type": "say"})
     assert result.accepted is False
@@ -2193,12 +2209,12 @@ async def test_image_activity_surfaces_scene_images_and_failures():
         }
 
     # Priming records the current image without emitting a line.
-    assert app._image_activity([completed(5, "/media/events/a.png")], prime=True) == []
-    assert app._event_image_url == "/media/events/a.png"
+    assert app._image_activity([completed(5, "/public/media/events/a.png")], prime=True) == []
+    assert app._event_image_url == "/public/media/events/a.png"
     # A newer image emits a "scene image ready" line; the same url does not repeat.
-    lines = app._image_activity([completed(7, "/media/events/b.png")], prime=False)
+    lines = app._image_activity([completed(7, "/public/media/events/b.png")], prime=False)
     assert any("scene image ready" in line.plain and "b.png" in line.plain for line in lines)
-    assert app._image_activity([completed(7, "/media/events/b.png")], prime=False) == []
+    assert app._image_activity([completed(7, "/public/media/events/b.png")], prime=False) == []
 
     def failed(epoch, reason=None):
         event = {"world_epoch": epoch, "purpose": "event"}
@@ -2225,7 +2241,11 @@ async def test_refresh_appends_scene_image_activity():
         backend.events = [
             {
                 "event_type": "ImageGenerationCompletedEvent",
-                "event": {"world_epoch": 99, "purpose": "event", "url": "/media/events/z.png"},
+                "event": {
+                    "world_epoch": 99,
+                    "purpose": "event",
+                    "url": "/public/media/events/z.png",
+                },
             }
         ]
         await app.refresh_world()
@@ -3849,7 +3869,7 @@ def test_main_runs_remote_backend(monkeypatch):
         tui_app.main(
             [
                 "--server",
-                "http://example.test",
+                "https://example.test",
                 "--claim-fallback",
                 "llm",
                 "--claim-timeout-minutes",
@@ -3859,7 +3879,7 @@ def test_main_runs_remote_backend(monkeypatch):
         == 0
     )
     assert [app.backend for app in runs] == backends
-    assert backends[0].server == "http://example.test"
+    assert backends[0].server == "https://example.test"
     assert backends[0].fallback_controller == "llm"
     assert backends[0].timeout_seconds == 600
     assert apps[0].show_generator_selector is False
@@ -3884,7 +3904,7 @@ def test_main_reads_remote_password(monkeypatch, password_stdin):
     monkeypatch.setattr(tui_app, "BunnylandTUI", AppStub)
     monkeypatch.setattr("getpass.getpass", lambda _prompt: "prompt password")
     monkeypatch.setattr(sys, "stdin", io.StringIO("stdin password\n"))
-    argv = ["--server", "http://example.test", "--username", "player"]
+    argv = ["--server", "https://example.test", "--username", "player"]
     if password_stdin:
         argv.append("--password-stdin")
     assert tui_app.main(argv) == 0

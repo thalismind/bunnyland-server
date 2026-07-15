@@ -8,7 +8,7 @@ coverage_artifact_dir="${BUNNYLAND_COVERAGE_ARTIFACT_DIR:-artifacts/coverage}"
 coverage_junit="$coverage_artifact_dir/pytest.xml"
 mkdir -p "$coverage_artifact_dir"
 
-uv run -m pytest \
+uv run --all-extras -m pytest \
   --cov=bunnyland \
   --cov-report=term-missing \
   --cov-report=html \
@@ -16,7 +16,7 @@ uv run -m pytest \
   --junit-xml="$coverage_junit" \
   "$@"
 
-uv run python - "$coverage_junit" <<'PY'
+uv run --all-extras python - "$coverage_junit" <<'PY'
 from __future__ import annotations
 
 import sys

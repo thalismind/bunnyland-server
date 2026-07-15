@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from conftest import build_scenario
 from test_discord import _bot_for_scenario, _DiscordObject, _install_fake_discord
 
@@ -82,6 +83,9 @@ async def test_camera_reaction_full_flow(tmp_path):
     assert ACK_EMOJI in message.reactions  # acknowledged
     await service.wait_idle()  # worker runs, completion handler delivers
     assert message.replied_files and message.replied_files[0] is not None
+
+    with pytest.raises(ValueError, match="outside the public media surface"):
+        await bot._post_image(message, "/admin/world/snapshot")
     assert DELIVER_EMOJI in message.reactions
     await service.aclose()
 
@@ -221,7 +225,7 @@ async def test_deliver_image_unknown_record_is_noop(tmp_path):
     event = ImageGenerationCompletedEvent(
         entity_id="ghost_1",
         purpose="event",
-        url="/media/events/x.png",
+        url="/public/media/events/x.png",
         created_at=datetime.now(UTC),
         **base,
     )
@@ -265,5 +269,5 @@ def test_scene_record_is_created(tmp_path):
 
 
 def test_event_image_component_round_trips():
-    component = EventImageComponent(url="/media/events/x.png", source_event_id="evt")
-    assert component.url == "/media/events/x.png"
+    component = EventImageComponent(url="/public/media/events/x.png", source_event_id="evt")
+    assert component.url == "/public/media/events/x.png"

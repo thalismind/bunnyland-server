@@ -203,7 +203,7 @@ async def test_live_scene_end_to_end(tmp_path):
     await service.wait_idle()
     record = world.get_entity(parse_entity_id(job.entity_id))
     image = record.get_component(EventImageComponent)
-    assert image.url.startswith("/media/events/")
+    assert image.url.startswith("/public/media/events/")
     name = image.url.split("/")[-1]
     assert MediaStore(tmp_path).read(SEGMENT_EVENTS, name).startswith(_PNG_MAGIC)
     await service.aclose()

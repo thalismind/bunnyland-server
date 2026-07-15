@@ -110,6 +110,75 @@ class _CloverParcelAgent:
         return _clover_parcel_call(context)
 
 
+class _SequenceChooser:
+    def __init__(self, calls: tuple[ToolCall, ...]) -> None:
+        self.calls = calls
+        self.index = 0
+
+    def __call__(self, context: PromptContext) -> ToolCall | None:
+        del context
+        if self.index >= len(self.calls):
+            return None
+        call = self.calls[self.index]
+        self.index += 1
+        return call
+
+
+class _SequenceAgent:
+    def __init__(self, calls: tuple[ToolCall, ...]) -> None:
+        self.chooser = _SequenceChooser(calls)
+
+    async def decide(
+        self,
+        prompt: str,
+        context: PromptContext,
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+        tools: list[dict] | None = None,
+    ) -> ToolCall | None:
+        del prompt, character_id, model, provider, tools
+        return self.chooser(context)
+
+
+def _story_controller_cases(
+    name: str, script: tuple[ToolCall, ...]
+) -> tuple[ControllerBenchmarkCase, ...]:
+    register_script(name, script)
+    register_behavior_tree(BehaviorTree(name, Action(_SequenceChooser(script))))
+    return (
+        ControllerBenchmarkCase(
+            name="scripted",
+            family="scripted",
+            controller_factory=lambda: ScriptedControllerComponent(script_name=name),
+            agent_factory=lambda: ScriptedAgent(()),
+        ),
+        ControllerBenchmarkCase(
+            name="behavior-tree",
+            family="behavior_tree",
+            controller_factory=lambda: BehaviorControllerComponent(behavior_name=name),
+            agent_factory=lambda: ScriptedAgent(()),
+        ),
+        ControllerBenchmarkCase(
+            name="goal-directed",
+            family="goal_directed",
+            controller_factory=lambda: LLMControllerComponent(
+                profile_name=name, model="deterministic"
+            ),
+            agent_factory=lambda: _SequenceAgent(script),
+        ),
+        ControllerBenchmarkCase(
+            name="llm-contract",
+            family="llm",
+            controller_factory=lambda: LLMControllerComponent(
+                profile_name=name, model="deterministic"
+            ),
+            agent_factory=lambda: ScriptedAgent(script),
+        ),
+    )
+
+
 async def test_supported_controllers_share_fixed_snapshot_receipt_benchmark(tmp_path):
     scenario = build_scenario()
     scenario.actor.world.get_entity(scenario.character).add_component(
@@ -380,6 +449,369 @@ async def test_clover_parcel_story_reproduces_across_controller_families(tmp_pat
             for decision in result.decisions
             if decision.command_id is not None
         )
+
+
+async def test_clover_water_shortage_reproduces_with_rejection_recovery(tmp_path):
+    from bunnyland.core import (
+        ActionPointsComponent,
+        ReadableComponent,
+        SuspendedComponent,
+        WorldActor,
+        container_of,
+    )
+    from bunnyland.core.ecs import replace_component
+    from bunnyland.foundation.consumables.components import ConsumableComponent
+    from bunnyland.foundation.needs.mechanics import ThirstComponent
+    from bunnyland.foundation.persona.mechanics import GoalComponent
+    from bunnyland.foundation.social.mechanics import ObligationComponent, SocialBond
+    from bunnyland.foundation.storyteller.mechanics import IncidentComponent
+    from bunnyland.plugins import apply_plugins
+    from bunnyland.worldgen import GenOptions
+    from bunnyland.worldgen.examples import CLOVER_CITY_DEMO
+
+    plugins = bunnyland_plugins()
+    actor = WorldActor()
+    apply_plugins(plugins, actor)
+    world = await CLOVER_CITY_DEMO.generate(actor, "clover-water-benchmark", GenOptions())
+    wick_id = world.characters["wick"]
+    saffron_id = world.characters["saffron"]
+    for character_id in (wick_id, saffron_id):
+        actor.world.get_entity(character_id).remove_component(SuspendedComponent)
+    wick = actor.world.get_entity(wick_id)
+    points = wick.get_component(ActionPointsComponent)
+    replace_component(wick, replace(points, current=50, maximum=50))
+    wick.add_component(
+        GoalComponent(active_goals=("resolve the rooftop water shortage fairly",))
+    )
+    obligation = next(
+        entity
+        for entity in actor.world.query().with_all([ObligationComponent]).execute_entities()
+        if entity.get_component(ObligationComponent).source_event_id == "clover-story-1"
+    )
+    incident = next(
+        entity
+        for entity in actor.world.query().with_all([IncidentComponent]).execute_entities()
+        if entity.get_component(IncidentComponent).kind == "rooftop_water_shortage"
+    )
+    snapshot = tmp_path / "clover-water-benchmark.json"
+    save_world(actor, snapshot, meta=WorldMeta(seed="clover-water-benchmark", plugins=()))
+
+    script = (
+        ToolCall("take", {"item_id": str(world.objects["pantry"])}),
+        ToolCall("move", {"direction": "west"}),
+        ToolCall("move", {"direction": "north"}),
+        ToolCall("move", {"direction": "out"}),
+        ToolCall("move", {"direction": "east"}),
+        ToolCall("take", {"item_id": str(world.objects["water_jug"])}),
+        ToolCall("move", {"direction": "west"}),
+        ToolCall("move", {"direction": "in"}),
+        ToolCall("move", {"direction": "west"}),
+        ToolCall("move", {"direction": "up"}),
+        ToolCall("drop", {"item_id": str(world.objects["water_jug"])}),
+        ToolCall(
+            "tell",
+            {
+                "target_id": str(saffron_id),
+                "text": "Thank you for agreeing to share the emergency water fairly.",
+                "intent": "praise",
+            },
+        ),
+        ToolCall(
+            "resolve_obligation",
+            {
+                "obligation_id": str(obligation.id),
+                "status": "fulfilled",
+                "note": "Emergency water delivered and the rooftop ration agreed.",
+            },
+        ),
+        ToolCall("move", {"direction": "down"}),
+        ToolCall("move", {"direction": "east"}),
+        ToolCall("move", {"direction": "southeast"}),
+        ToolCall(
+            "write",
+            {
+                "target_id": str(world.objects["log"]),
+                "text": (
+                    "Water-01 resolved: rooftop water shortage replenished and the shared "
+                    "ration agreed with Saffron."
+                ),
+            },
+        ),
+    )
+
+    def relationship_changed(candidate) -> bool:
+        return any(
+            target_id == wick_id and edge.trust >= 0.1
+            for edge, target_id in candidate.world.get_entity(saffron_id).get_relationships(
+                SocialBond
+            )
+        )
+
+    probes = (
+        ControllerBenchmarkProbe(
+            "water_replenished",
+            lambda candidate: container_of(
+                candidate.world.get_entity(world.objects["water_jug"])
+            )
+            == world.rooms["roof"]
+            and candidate.world.get_entity(world.objects["water_jug"])
+            .get_component(ConsumableComponent)
+            .current_uses
+            == 4,
+        ),
+        ControllerBenchmarkProbe(
+            "pressure_persisted",
+            lambda candidate: candidate.world.get_entity(world.objects["pantry"])
+            .get_component(ConsumableComponent)
+            .current_uses
+            == 2
+            and candidate.world.get_entity(saffron_id)
+            .get_component(ThirstComponent)
+            .meter.value
+            >= 70,
+        ),
+        ControllerBenchmarkProbe(
+            "obligation_fulfilled",
+            lambda candidate: candidate.world.get_entity(obligation.id)
+            .get_component(ObligationComponent)
+            .status
+            == "fulfilled",
+        ),
+        ControllerBenchmarkProbe("relationship_changed", relationship_changed),
+        ControllerBenchmarkProbe(
+            "incident_resolved",
+            lambda candidate: candidate.world.get_entity(incident.id)
+            .get_component(IncidentComponent)
+            .resolved_at_epoch
+            is not None,
+        ),
+        ControllerBenchmarkProbe(
+            "aftermath_recorded",
+            lambda candidate: "water-01 resolved"
+            in candidate.world.get_entity(world.objects["log"])
+            .get_component(ReadableComponent)
+            .text.lower(),
+        ),
+    )
+    cases = _story_controller_cases("clover-water-shortage", script)
+
+    results = await run_fixed_snapshot_controller_benchmark(
+        snapshot,
+        registry=PluginRegistry(plugins),
+        character_id=str(wick_id),
+        cases=cases,
+        probes=probes,
+        turns=len(script),
+    )
+
+    assert len({result.snapshot_sha256 for result in results}) == 1
+    for result in results:
+        assert result.attempted_actions == len(script)
+        assert result.structurally_valid_actions == len(script)
+        assert result.committed_commands == len(script) - 1
+        assert result.rejected_commands == 1
+        assert result.recovered_rejections == 1
+        assert result.trace_complete is True
+        assert result.outcome_pass_rate == 1.0
+
+
+async def test_clover_elevator_disruption_reproduces_with_rejection_recovery(tmp_path):
+    from bunnyland.core import (
+        ActionPointsComponent,
+        ButtonComponent,
+        ReadableComponent,
+        SuspendedComponent,
+        WorldActor,
+        container_of,
+    )
+    from bunnyland.core.ecs import replace_component
+    from bunnyland.foundation.persona.mechanics import GoalComponent
+    from bunnyland.foundation.social.mechanics import ObligationComponent, SocialBond
+    from bunnyland.foundation.storyteller.mechanics import IncidentComponent
+    from bunnyland.plugins import apply_plugins
+    from bunnyland.simpacks.gardensim.mechanics import (
+        MachineBreakdownComponent,
+        MachineComponent,
+    )
+    from bunnyland.simpacks.lifesim.mechanics import HasRoutine, RoutineComponent
+    from bunnyland.worldgen import GenOptions
+    from bunnyland.worldgen.examples import CLOVER_CITY_DEMO
+
+    plugins = bunnyland_plugins()
+    actor = WorldActor()
+    apply_plugins(plugins, actor)
+    world = await CLOVER_CITY_DEMO.generate(actor, "clover-elevator-benchmark", GenOptions())
+    jun_id = world.characters["jun"]
+    orla_id = world.characters["orla"]
+    for character_id in (jun_id, orla_id):
+        actor.world.get_entity(character_id).remove_component(SuspendedComponent)
+    jun = actor.world.get_entity(jun_id)
+    points = jun.get_component(ActionPointsComponent)
+    replace_component(jun, replace(points, current=50, maximum=50))
+    jun.add_component(
+        GoalComponent(active_goals=("repair the elevator and resolve the noise dispute",))
+    )
+    obligation = next(
+        entity
+        for entity in actor.world.query().with_all([ObligationComponent]).execute_entities()
+        if entity.get_component(ObligationComponent).source_event_id == "clover-story-2"
+    )
+    incident = next(
+        entity
+        for entity in actor.world.query().with_all([IncidentComponent]).execute_entities()
+        if entity.get_component(IncidentComponent).kind == "elevator_noise_dispute"
+    )
+    snapshot = tmp_path / "clover-elevator-benchmark.json"
+    save_world(actor, snapshot, meta=WorldMeta(seed="clover-elevator-benchmark", plugins=()))
+
+    script = (
+        ToolCall("move", {"direction": "up"}),
+        ToolCall("move", {"direction": "east"}),
+        ToolCall("move", {"direction": "north"}),
+        ToolCall("repair_machine", {"machine_id": str(world.objects["panel"])}),
+        ToolCall("move", {"direction": "south"}),
+        ToolCall("move", {"direction": "west"}),
+        ToolCall("move", {"direction": "down"}),
+        ToolCall("take", {"item_id": str(world.objects["repair_kit"])}),
+        ToolCall("move", {"direction": "up"}),
+        ToolCall("move", {"direction": "east"}),
+        ToolCall("move", {"direction": "north"}),
+        ToolCall(
+            "repair_machine",
+            {
+                "machine_id": str(world.objects["panel"]),
+                "tool_id": str(world.objects["repair_kit"]),
+            },
+        ),
+        ToolCall("move", {"direction": "south"}),
+        ToolCall("move", {"direction": "southeast"}),
+        ToolCall(
+            "tell",
+            {
+                "target_id": str(orla_id),
+                "text": "I am sorry the repair delay made the music-room disagreement worse.",
+                "intent": "apology",
+            },
+        ),
+        ToolCall(
+            "resolve_obligation",
+            {
+                "obligation_id": str(obligation.id),
+                "status": "fulfilled",
+                "note": "Elevator repaired and the noise disagreement addressed with Orla.",
+            },
+        ),
+        ToolCall(
+            "set_routine",
+            {
+                "activity": "inspect repaired elevator after restart",
+                "interval_seconds": 86400,
+                "next_due_epoch": actor.epoch + 3600,
+            },
+        ),
+        ToolCall("move", {"direction": "northwest"}),
+        ToolCall("move", {"direction": "northwest"}),
+        ToolCall("use", {"item_id": str(world.objects["piano"])}),
+        ToolCall("move", {"direction": "southeast"}),
+        ToolCall("move", {"direction": "southeast"}),
+        ToolCall(
+            "write",
+            {
+                "target_id": str(world.objects["log"]),
+                "text": (
+                    "Lift-01 resolved: elevator noise dispute closed after the relay repair, "
+                    "quiet-hours agreement, and revised inspection routine."
+                ),
+            },
+        ),
+    )
+
+    def relationship_changed(candidate) -> bool:
+        return any(
+            target_id == jun_id and edge.trust >= 0.1
+            for edge, target_id in candidate.world.get_entity(orla_id).get_relationships(
+                SocialBond
+            )
+        )
+
+    probes = (
+        ControllerBenchmarkProbe(
+            "repair_tool_retained",
+            lambda candidate: container_of(
+                candidate.world.get_entity(world.objects["repair_kit"])
+            )
+            == jun_id,
+        ),
+        ControllerBenchmarkProbe(
+            "elevator_repaired",
+            lambda candidate: not candidate.world.get_entity(world.objects["panel"])
+            .has_component(MachineBreakdownComponent)
+            and candidate.world.get_entity(world.objects["panel"])
+            .get_component(MachineComponent)
+            .quality
+            >= 0.8,
+        ),
+        ControllerBenchmarkProbe(
+            "noise_stopped",
+            lambda candidate: candidate.world.get_entity(world.objects["piano"])
+            .get_component(ButtonComponent)
+            .pressed,
+        ),
+        ControllerBenchmarkProbe(
+            "obligation_fulfilled",
+            lambda candidate: candidate.world.get_entity(obligation.id)
+            .get_component(ObligationComponent)
+            .status
+            == "fulfilled",
+        ),
+        ControllerBenchmarkProbe("relationship_changed", relationship_changed),
+        ControllerBenchmarkProbe(
+            "routine_revised",
+            lambda candidate: any(
+                candidate.world.get_entity(routine_id)
+                .get_component(RoutineComponent)
+                .activity
+                == "inspect repaired elevator after restart"
+                for _edge, routine_id in candidate.world.get_entity(jun_id).get_relationships(
+                    HasRoutine
+                )
+            ),
+        ),
+        ControllerBenchmarkProbe(
+            "incident_resolved",
+            lambda candidate: candidate.world.get_entity(incident.id)
+            .get_component(IncidentComponent)
+            .resolved_at_epoch
+            is not None,
+        ),
+        ControllerBenchmarkProbe(
+            "aftermath_recorded",
+            lambda candidate: "lift-01 resolved"
+            in candidate.world.get_entity(world.objects["log"])
+            .get_component(ReadableComponent)
+            .text.lower(),
+        ),
+    )
+    cases = _story_controller_cases("clover-elevator-disruption", script)
+
+    results = await run_fixed_snapshot_controller_benchmark(
+        snapshot,
+        registry=PluginRegistry(plugins),
+        character_id=str(jun_id),
+        cases=cases,
+        probes=probes,
+        turns=len(script),
+    )
+
+    assert len({result.snapshot_sha256 for result in results}) == 1
+    for result in results:
+        assert result.attempted_actions == len(script)
+        assert result.structurally_valid_actions == len(script)
+        assert result.committed_commands == len(script) - 1
+        assert result.rejected_commands == 1
+        assert result.recovered_rejections == 1
+        assert result.trace_complete is True
+        assert result.outcome_pass_rate == 1.0
 
 
 async def test_fixed_snapshot_benchmark_validates_turns_and_character(tmp_path):

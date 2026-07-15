@@ -51,7 +51,7 @@ from ..llm_agents.specs import BehaviorTreeSpec, ScriptSpec
 from ..plugins.ids import MCP
 from ..prompts import PromptBuilder, render_prompt
 from ..server.admin import save_configured_world
-from ..server.auth import WORLD_ADMIN_SCOPE, TokenPrincipal
+from ..server.auth import WORLD_ADMIN_SCOPE, WORLD_PLAY_SCOPE, TokenPrincipal
 from ..server.client_ids import (
     ADMIN_CLIENT_IDS_ENV,
     CLIENT_ID_HEADER,
@@ -712,6 +712,7 @@ def create_bunnyland_mcp_app(
     persona_providers: Sequence[Any] = (),
     worldgen_options: GenOptions | None = None,
     claim_secrets: ClaimSecretRegistry | None = None,
+    plugins: Sequence[Plugin] = (),
 ):
     """Create the ASGI MCP app.
 
@@ -798,25 +799,91 @@ def create_bunnyland_mcp_app(
         return (principal if isinstance(principal, TokenPrincipal) else None), request
 
     def _request_claim_header(name: str) -> str | None:
-        request = _request()
-        if request is None:
-            return None
-        headers = getattr(request, "headers", {}) or {}
+        headers = getattr(_request(), "headers", {}) or {}
         return headers.get(name)
 
-    def admin() -> None:
-        try:
-            principal, request = _request_auth()
-            if request is None or principal is None or WORLD_ADMIN_SCOPE not in principal.scopes:
-                raise PermissionError("world:admin scope required")
+    def _require_request_scopes(required_scopes: tuple[str, ...]) -> None:
+        principal, request = _request_auth()
+        if request is None or principal is None:
+            raise ToolError("authenticated MCP request context required")
+        missing = [scope for scope in required_scopes if scope not in principal.scopes]
+        if missing:
+            raise ToolError(f"{', '.join(missing)} scope required")
+        if WORLD_ADMIN_SCOPE in required_scopes:
             headers = getattr(request, "headers", {}) or {}
-            require_allowed_client_id(
-                headers.get(CLIENT_ID_HEADER), allowed_admin_client_ids, "admin"
+            try:
+                require_allowed_client_id(
+                    headers.get(CLIENT_ID_HEADER), allowed_admin_client_ids, "admin"
+                )
+            except PermissionError as exc:
+                raise ToolError(str(exc)) from exc
+
+    def _authorized_capability(required_scopes: tuple[str, ...], fn):
+        if not required_scopes or any(
+            scope not in {WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE} for scope in required_scopes
+        ):
+            raise ValueError("MCP capabilities require an explicit play/admin access policy")
+        if inspect.iscoroutinefunction(fn):
+
+            @functools.wraps(fn)
+            async def async_wrapper(*args, **kwargs):
+                _require_request_scopes(required_scopes)
+                return await fn(*args, **kwargs)
+
+            return async_wrapper
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            _require_request_scopes(required_scopes)
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    def _tool(required_scopes: tuple[str, ...]):
+        def register(fn):
+            return mcp.tool()(_authorized_capability(required_scopes, fn))
+
+        return register
+
+    def _resource(*args, required_scopes: tuple[str, ...], **kwargs):
+        def register(fn):
+            return mcp.resource(*args, **kwargs)(
+                _authorized_capability(required_scopes, fn)
             )
-        except PermissionError as exc:
-            raise ToolError(str(exc)) from exc
+
+        return register
+
+    play_tool = _tool((WORLD_PLAY_SCOPE,))
+    admin_tool = _tool((WORLD_ADMIN_SCOPE,))
+
+    def play_resource(*args, **kwargs):
+        return _resource(*args, required_scopes=(WORLD_PLAY_SCOPE,), **kwargs)
+
+    def admin_resource(*args, **kwargs):
+        return _resource(*args, required_scopes=(WORLD_ADMIN_SCOPE,), **kwargs)
+
+    class PolicyRegistrar:
+        """Capability registrar that makes an access policy mandatory at the call site."""
+
+        def tool(self, *, scopes: Sequence[str]):
+            return _tool(tuple(scopes))
+
+        def resource(self, *args, scopes: Sequence[str], **kwargs):
+            return _resource(*args, required_scopes=tuple(scopes), **kwargs)
+
+        def prompt(self, *args, scopes: Sequence[str], **kwargs):
+            def register(fn):
+                return mcp.prompt(*args, **kwargs)(
+                    _authorized_capability(tuple(scopes), fn)
+                )
+
+            return register
+
+    def admin() -> None:
+        _require_request_scopes((WORLD_ADMIN_SCOPE,))
 
     def player(client_id: str | None) -> str | None:
+        _require_request_scopes((WORLD_PLAY_SCOPE,))
         try:
             return require_allowed_client_id(client_id, allowed_player_client_ids, "player")
         except PermissionError as exc:
@@ -839,7 +906,7 @@ def create_bunnyland_mcp_app(
             claim_secret=claim_secret,
         )
 
-    @mcp.resource(
+    @admin_resource(
         EVENTS_RESOURCE_URI,
         name="recent_world_events",
         description="Recent Bunnyland domain events.",
@@ -848,7 +915,7 @@ def create_bunnyland_mcp_app(
     def recent_world_events_resource() -> str:
         return json.dumps({"ok": True, "events": event_bridge.recent_messages()})
 
-    @mcp.resource(
+    @play_resource(
         "bunnyland://clients/{client_id}/events",
         name="client_events",
         description="Recent Bunnyland domain events for an MCP-controlled client character.",
@@ -879,7 +946,7 @@ def create_bunnyland_mcp_app(
             }
         )
 
-    @mcp.resource(
+    @play_resource(
         "bunnyland://clients/{client_id}/prompt",
         name="client_prompt",
         description="Current Bunnyland prompt text for an MCP-controlled client character.",
@@ -897,13 +964,13 @@ def create_bunnyland_mcp_app(
             persona_providers=persona_providers,
         )["prompt"]
 
-    @mcp.tool()
+    @play_tool
     def list_characters() -> dict[str, Any]:
         """List claimable and controlled characters in the current world."""
 
         return {"ok": True, "characters": list_mcp_characters(actor)}
 
-    @mcp.tool()
+    @admin_tool
     @_traced_tool
     def world_snapshot_admin() -> dict[str, Any]:
         """Return the full raw ECS world snapshot (large; admin/debug and persistence).
@@ -917,7 +984,7 @@ def create_bunnyland_mcp_app(
         admin()
         return serialize_world(actor, meta)
 
-    @mcp.tool()
+    @admin_tool
     @_traced_tool
     def world_overview_admin() -> dict[str, Any]:
         """Return a slim, admin-only map of the whole room network (admin scope required).
@@ -930,7 +997,7 @@ def create_bunnyland_mcp_app(
         admin()
         return serialize_world_overview(actor).model_dump()
 
-    @mcp.tool()
+    @admin_tool
     @_traced_tool
     async def save_world_admin() -> dict[str, Any]:
         """Save the current world to the configured persistent JSON/YAML file.
@@ -949,7 +1016,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
         return response.model_dump(mode="json")
 
-    @mcp.tool()
+    @play_tool
     def runtime_status() -> dict[str, Any]:
         """Return current runtime status and the tick cadence for the game loop.
 
@@ -977,7 +1044,7 @@ def create_bunnyland_mcp_app(
             ),
         }
 
-    @mcp.tool()
+    @play_tool
     @_traced_tool
     def client_prompt(
         client_id: str,
@@ -1000,7 +1067,7 @@ def create_bunnyland_mcp_app(
         except RuntimeError as exc:
             raise ToolError(str(exc)) from exc
 
-    @mcp.tool()
+    @play_tool
     @_traced_tool
     def character_view(
         client_id: str,
@@ -1036,7 +1103,7 @@ def create_bunnyland_mcp_app(
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
-    @mcp.tool()
+    @play_tool
     @_traced_tool
     def query_world(
         client_id: str,
@@ -1070,7 +1137,7 @@ def create_bunnyland_mcp_app(
         except (PermissionError, RuntimeError, ValueError, TimeoutError) as exc:
             raise ToolError(str(exc)) from exc
 
-    @mcp.tool()
+    @play_tool
     def search_actions(query: str = "", limit: int = 30, mode: str = "substring") -> dict[str, Any]:
         """Search the action catalogue -- the MCP equivalent of the clients' action box.
 
@@ -1091,7 +1158,7 @@ def create_bunnyland_mcp_app(
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
-    @mcp.tool()
+    @play_tool
     def list_actions() -> dict[str, Any]:
         """Return the entire available action catalogue (every verb and its argument schema).
 
@@ -1101,7 +1168,7 @@ def create_bunnyland_mcp_app(
 
         return serialize_action_search(actor, query="", limit=0).model_dump()
 
-    @mcp.tool()
+    @play_tool
     @_traced_tool
     def examine(
         client_id: str,
@@ -1134,7 +1201,7 @@ def create_bunnyland_mcp_app(
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
-    @mcp.tool()
+    @play_tool
     @_traced_tool
     def room_view(room_id: str) -> dict[str, Any]:
         """Return a structured view of one room: entities, exits, and sprites."""
@@ -1144,7 +1211,7 @@ def create_bunnyland_mcp_app(
         except ValueError as exc:
             raise ToolError(str(exc)) from exc
 
-    @mcp.tool()
+    @play_tool
     def character_commands(
         client_id: str,
         character_id: str | None = None,
@@ -1171,7 +1238,7 @@ def create_bunnyland_mcp_app(
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
-    @mcp.tool()
+    @play_tool
     def component_schema(types: list[str] | None = None) -> dict[str, Any]:
         """Return JSON schemas for ECS component types, so a client can learn what the
 
@@ -1191,7 +1258,7 @@ def create_bunnyland_mcp_app(
             "components": {name: item.model_dump() for name, item in components.items()},
         }
 
-    @mcp.tool()
+    @play_tool
     def perceived_events(
         client_id: str,
         claim_id: str | None = None,
@@ -1214,7 +1281,7 @@ def create_bunnyland_mcp_app(
         )
         return event_bridge.perceived_for_client(client_id, since=since, limit=limit)
 
-    @mcp.tool()
+    @play_tool
     async def claim_character(
         client_id: str,
         claim_id: str | None = None,
@@ -1254,7 +1321,7 @@ def create_bunnyland_mcp_app(
         except RuntimeError as exc:
             raise ToolError(str(exc)) from exc
 
-    @mcp.tool()
+    @play_tool
     async def release_character(
         client_id: str,
         claim_id: str | None = None,
@@ -1283,7 +1350,7 @@ def create_bunnyland_mcp_app(
         except RuntimeError as exc:
             raise ToolError(str(exc)) from exc
 
-    @mcp.tool()
+    @play_tool
     async def release_claim(
         client_id: str,
         claim_id: str | None = None,
@@ -1304,7 +1371,7 @@ def create_bunnyland_mcp_app(
         except RuntimeError as exc:
             raise ToolError(str(exc)) from exc
 
-    @mcp.tool()
+    @play_tool
     @_traced_tool
     async def send_command(
         client_id: str,
@@ -1385,7 +1452,7 @@ def create_bunnyland_mcp_app(
             ),
         }
 
-    @mcp.tool()
+    @admin_tool
     @_traced_tool
     async def patch_world_admin(
         operations: list[dict[str, Any]],
@@ -1401,7 +1468,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
         return response.model_dump(mode="json")
 
-    @mcp.tool()
+    @admin_tool
     def list_controller_definitions_admin() -> dict[str, Any]:
         """List registered scripts, behavior trees, and the authorable leaf library.
 
@@ -1413,7 +1480,7 @@ def create_bunnyland_mcp_app(
             raise ToolError("controller definition editing is not configured")
         return list_controller_definitions().model_dump(mode="json")
 
-    @mcp.tool()
+    @admin_tool
     async def register_script_admin(
         name: str,
         calls: list[dict[str, Any]],
@@ -1437,7 +1504,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
         return response.model_dump(mode="json")
 
-    @mcp.tool()
+    @admin_tool
     async def register_behavior_admin(
         name: str,
         root: dict[str, Any],
@@ -1462,7 +1529,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
         return response.model_dump(mode="json")
 
-    @mcp.tool()
+    @admin_tool
     @_traced_tool
     async def generate_world_admin(
         seed: str | None = None,
@@ -1488,14 +1555,14 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
         return response.model_dump(mode="json")
 
-    @mcp.tool()
+    @admin_tool
     async def world_generation_status_admin() -> dict[str, Any]:
         """Return the current async world generation job status. Requires world:admin scope."""
 
         admin()
         return (await generation_status()).model_dump(mode="json")
 
-    @mcp.tool()
+    @admin_tool
     @_traced_tool
     async def generate_room_patch_admin(
         door_entity_id: str,
@@ -1517,7 +1584,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
         return response.model_dump(mode="json")
 
-    @mcp.tool()
+    @admin_tool
     @_traced_tool
     async def generate_character_patch_admin(
         room_entity_id: str,
@@ -1534,7 +1601,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
         return response.model_dump(mode="json")
 
-    @mcp.tool()
+    @admin_tool
     @_traced_tool
     async def generate_item_patch_admin(
         container_entity_id: str,
@@ -1554,7 +1621,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
         return response.model_dump(mode="json")
 
-    @mcp.tool()
+    @admin_tool
     @_traced_tool
     async def generate_event_patch_admin(
         room_entity_id: str,
@@ -1571,7 +1638,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
         return response.model_dump(mode="json")
 
-    @mcp.tool()
+    @admin_tool
     async def generate_image_admin(
         entity_id: str,
         purpose: str = "portrait",
@@ -1604,7 +1671,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
         return response.model_dump(mode="json")
 
-    @mcp.tool()
+    @play_tool
     @_traced_tool
     async def request_scene_image(
         client_id: str,
@@ -1635,6 +1702,21 @@ def create_bunnyland_mcp_app(
         if response is None:
             raise ToolError("character has no room to illustrate")
         return response.model_dump(mode="json")
+
+    policy_registrar = PolicyRegistrar()
+    try:
+        for plugin in plugins:
+            for contribution in plugin.runtime.mcp:
+                for registrar in contribution.registrars:
+                    registrar(
+                        policy_registrar,
+                        actor,
+                        event_bridge=event_bridge,
+                        claim_secrets=claim_secrets,
+                    )
+    except Exception:
+        event_bridge.close()
+        raise
 
     del worldgen_options
     mcp_app = mcp.streamable_http_app()

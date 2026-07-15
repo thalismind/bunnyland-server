@@ -91,7 +91,7 @@ def post_json(base: str, path: str, payload: dict) -> dict:
 
 
 def choose_character(base: str, wanted: str) -> tuple[str, str]:
-    data = get_json(base, "/world/characters")
+    data = get_json(base, "/play/world/characters")
     characters = data.get("characters") or []
     if not characters:
         raise RuntimeError("no characters are available")
@@ -135,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     client_id = persistent_client_id()
-    status = get_json(args.server, "/world/chat/status")
+    status = get_json(args.server, "/play/world/chat/status")
     if not status.get("enabled"):
         raise SystemExit("Character chat is not enabled on this server.")
     character_id, name = choose_character(args.server, args.character)
@@ -154,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
                 break
             response = post_json(
                 args.server,
-                f"/world/character/{urllib.parse.quote(character_id, safe='')}/chat",
+                f"/play/world/character/{urllib.parse.quote(character_id, safe='')}/chat",
                 request_payload(client_id, state, message),
             )
             reply = response.get("reply") or ""

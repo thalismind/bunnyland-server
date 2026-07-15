@@ -123,7 +123,8 @@ class ServerConfig:
     character_chat: bool = False
     http_rate_limit_requests: int = 0
     http_rate_limit_window_seconds: float = 1.0
-    trust_x_real_ip: bool = False
+    cors_origins: tuple[str, ...] = ()
+    forwarded_allow_ips: str = "127.0.0.1"
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,7 @@ class WebConfig:
     home_domain: str = ""
     home_dir: str = ""
     home_cert_name: str = ""
+    player_auth_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -160,17 +162,6 @@ class ImageGenConfigBlock:
 
 
 @dataclass(frozen=True)
-class AuthConfig:
-    reuse_admin: bool = False
-    admin_user: str = ""
-    admin_password: str = ""
-    player_user: str = ""
-    player_password: str = ""
-    player2_user: str = ""
-    player2_password: str = ""
-
-
-@dataclass(frozen=True)
 class DeploymentConfig:
     domain: str = ""
     data_dir: str = ""
@@ -181,7 +172,6 @@ class DeploymentConfig:
     cert_email: str = ""
     cert_name: str = ""
     letsencrypt_dir: str = "/etc/letsencrypt"
-    nginx_auth_dir: str = "/etc/nginx/bunnyland"
     http_bind: str = "0.0.0.0:80"
     https_bind: str = "0.0.0.0:443"
     configure_firewall: bool = True
@@ -200,11 +190,27 @@ class BunnylandConfig:
     web: WebConfig = Field(default_factory=WebConfig)
     deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
     imagegen: ImageGenConfigBlock = Field(default_factory=ImageGenConfigBlock)
-    auth: AuthConfig = Field(default_factory=AuthConfig)
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any] | None) -> BunnylandConfig:
-        return _CONFIG_ADAPTER.validate_python(dict(data or {}))
+        mapped = dict(data or {})
+        obsolete: list[str] = []
+        if "auth" in mapped:
+            obsolete.append("auth")
+        for section, names in {
+            "server": {"admin_token", "trust_x_real_ip"},
+            "deployment": {"nginx_auth_dir"},
+        }.items():
+            values = mapped.get(section)
+            if isinstance(values, Mapping):
+                obsolete.extend(f"{section}.{name}" for name in names if name in values)
+        if obsolete:
+            joined = ", ".join(sorted(obsolete))
+            raise ValueError(
+                f"obsolete authentication configuration: {joined}; configure "
+                "server.auth_users_file/token_db and WebConfig.player_auth_required instead"
+            )
+        return _CONFIG_ADAPTER.validate_python(mapped)
 
     @classmethod
     def load(cls, path: str | Path) -> BunnylandConfig:
@@ -229,7 +235,7 @@ class BunnylandConfig:
         web_config: dict[str, Any] = {
             "serverUrl": "/api/",
             "autoConnect": True,
-            "playerAuthRequired": bool(self.auth.player_user),
+            "playerAuthRequired": self.web.player_auth_required,
         }
         if self.discord.public_url:
             web_config["discordUrl"] = self.discord.public_url
@@ -302,7 +308,8 @@ class BunnylandConfig:
             "token_db": server.token_db,
             "player_client_id": list(server.player_client_ids) or None,
             "admin_client_id": list(server.admin_client_ids) or None,
-            "trust_x_real_ip": server.trust_x_real_ip,
+            "cors_origin": list(server.cors_origins) or None,
+            "forwarded_allow_ips": server.forwarded_allow_ips,
             "ollama_host": llm.ollama_host,
             "ollama_api_key": llm.ollama_api_key,
             "openrouter_api_key": llm.openrouter_api_key,
@@ -316,7 +323,6 @@ class BunnylandConfig:
     def to_env(self, *, dry_run: bool = False) -> dict[str, str]:
         env: dict[str, str] = {}
         deployment = self.deployment
-        auth = self.auth
         world = self.world
         llm = self.llm
         discord = self.discord
@@ -327,13 +333,6 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_CONTAINER_RUNTIME", deployment.container_runtime)
         _set_if(env, "BUNNYLAND_DOMAIN", deployment.domain)
         _set_if(env, "BUNNYLAND_DATA_DIR", deployment.data_dir)
-        _set_if(env, "BUNNYLAND_REUSE_ADMIN", auth.reuse_admin)
-        _set_if(env, "BUNNYLAND_ADMIN_USER", auth.admin_user)
-        _set_if(env, "BUNNYLAND_ADMIN_PASSWORD", auth.admin_password)
-        _set_if(env, "BUNNYLAND_PLAYER_USER", auth.player_user)
-        _set_if(env, "BUNNYLAND_PLAYER_PASSWORD", auth.player_password)
-        _set_if(env, "BUNNYLAND_PLAYER2_USER", auth.player2_user)
-        _set_if(env, "BUNNYLAND_PLAYER2_PASSWORD", auth.player2_password)
         _set_if(env, "BUNNYLAND_WORLD_SAVE", deployment.world_save or world.load)
         _set_if(env, "BUNNYLAND_FAVICON_FILE", web.favicon_file)
         _set_if(env, "BUNNYLAND_HOME_DOMAIN", web.home_domain)
@@ -341,7 +340,6 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_HOME_CERT_NAME", web.home_cert_name)
         _set_if(env, "BUNNYLAND_CERT_NAME", deployment.cert_name)
         _set_if(env, "BUNNYLAND_LETSENCRYPT_DIR", deployment.letsencrypt_dir)
-        _set_if(env, "BUNNYLAND_NGINX_AUTH_DIR", deployment.nginx_auth_dir)
         _set_if(env, "BUNNYLAND_HTTP_BIND", deployment.http_bind)
         _set_if(env, "BUNNYLAND_HTTPS_BIND", deployment.https_bind)
         _set_if(env, "BUNNYLAND_SERVER_TAG", deployment.server_tag)
@@ -368,7 +366,9 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_TOKEN_DB", server.token_db)
         _set_if(env, "BUNNYLAND_PLAYER_CLIENT_IDS", _csv(server.player_client_ids))
         _set_if(env, "BUNNYLAND_ADMIN_CLIENT_IDS", _csv(server.admin_client_ids))
-        _set_if(env, "BUNNYLAND_TRUST_X_REAL_IP", server.trust_x_real_ip)
+        _set_if(env, "BUNNYLAND_CORS_ORIGINS", _csv(server.cors_origins))
+        _set_if(env, "BUNNYLAND_FORWARDED_ALLOW_IPS", server.forwarded_allow_ips)
+        _set_if(env, "BUNNYLAND_PLAYER_AUTH_REQUIRED", web.player_auth_required)
         _set_if(env, "BUNNYLAND_HTTP_RATE_LIMIT_REQUESTS", server.http_rate_limit_requests)
         _set_if(
             env,
@@ -415,7 +415,6 @@ _CONFIG_ADAPTER = TypeAdapter(BunnylandConfig)
 
 __all__ = [
     "AddonConfig",
-    "AuthConfig",
     "BunnylandConfig",
     "DeploymentConfig",
     "DiscordConfig",

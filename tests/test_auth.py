@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import stat
 import threading
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -13,7 +15,7 @@ from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, SecurityScopes
 from starlette.requests import Request
 
-from bunnyland.server.app import create_app
+from bunnyland.server.app import HSTS_VALUE, create_app
 from bunnyland.server.auth import (
     HUMAN_ROTATE_AFTER_SECONDS,
     ROTATION_GRACE_SECONDS,
@@ -48,6 +50,18 @@ def test_token_store_uses_digests_and_persists_revocation(tmp_path) -> None:
     assert reopened.revoke_token(principal.token_id, now=102)
     assert reopened.verify(token, now=102) is None
     reopened.close()
+
+
+def test_token_store_locks_main_wal_and_shm_permissions(tmp_path) -> None:
+    path = tmp_path / "tokens.sqlite3"
+    store = TokenStore(path)
+    store.issue("player", [WORLD_PLAY_SCOPE], automatic_rotation=False)
+
+    files = [path, Path(f"{path}-wal"), Path(f"{path}-shm")]
+    assert all(candidate.exists() for candidate in files)
+    assert {stat.S_IMODE(candidate.stat().st_mode) for candidate in files} == {0o600}
+    store.close()
+    store._lock_permissions()
 
 
 def test_token_store_imports_pre_generated_digest_idempotently(tmp_path) -> None:
@@ -235,11 +249,135 @@ def test_user_store_tolerates_bad_inventory_and_hashes(tmp_path, monkeypatch) ->
     assert UserCredentialStore(path).authenticate("valid", "y") is None
     path.write_text("users:\n  - nope\n  - username: ''\n    password_hash: bad\n")
     assert UserCredentialStore(path).authenticate("", "y") is None
+    path.write_text("users: !unsupported value\n")
+    assert UserCredentialStore(path).authenticate("x", "y") is None
 
     monkeypatch.setitem(__import__("sys").modules, "pwdlib", None)
     path.write_text("users:\n  user:\n    password_hash: bad\n")
     with pytest.raises(RuntimeError, match="pwdlib"):
         UserCredentialStore(path).authenticate("user", "y")
+
+
+@pytest.mark.parametrize(
+    "contents, message",
+    [
+        (
+            "users:\n  player:\n    password_hash: first\n"
+            "  player:\n    password_hash: second\n",
+            "duplicate YAML keys",
+        ),
+        (
+            "users:\n  - username: player\n    password_hash: one\n    scopes: [world:play]\n"
+            "  - username: player\n    password_hash: two\n    scopes: [world:play]\n",
+            "duplicate authentication username",
+        ),
+        (
+            "users:\n  player:\n    password_hash: not-argon2\n"
+            "    scopes: [world:play]\n",
+            "invalid Argon2 password hash",
+        ),
+        (
+            "users:\n  player:\n    password_hash: not-argon2\n"
+            "    scopes: [world:unknown]\n",
+            "world:play or world:admin",
+        ),
+        (
+            "users:\n  player:\n    password_hash: not-argon2\n"
+            "    scopes: []\n",
+            "scopes for 'player' must not be empty",
+        ),
+        (
+            "users:\n  player:\n    password_hash: not-argon2\n"
+            "    enabled: 'yes'\n    scopes: [world:play]\n",
+            "enabled for 'player' must be a boolean",
+        ),
+    ],
+)
+def test_user_store_startup_validation_rejects_invalid_inventory(
+    tmp_path, contents, message
+) -> None:
+    path = tmp_path / "users.yml"
+    path.write_text(contents)
+
+    with pytest.raises(ValueError, match=message):
+        UserCredentialStore(path).validate()
+
+
+@pytest.mark.parametrize(
+    "contents, message",
+    [
+        ("users: !unsupported value\n", "not readable YAML"),
+        ("users: nope\n", "users list or mapping"),
+        ("users:\n  player: nope\n", "entries must be mappings"),
+        ("users:\n  - nope\n", "entries must be mappings"),
+        (
+            "users:\n  - username: player\n    scopes: [world:play]\n",
+            "non-empty username and password_hash",
+        ),
+        (
+            "users:\n  player:\n    password_hash: not-argon2\n    scopes: nope\n",
+            "scopes for 'player' must be a list",
+        ),
+        ("users: []\n", "at least one user"),
+        (
+            "users:\n  player:\n    password_hash: '$argon2id$broken'\n"
+            "    scopes: [world:play]\n",
+            "invalid Argon2 password hash",
+        ),
+    ],
+)
+def test_user_store_startup_validation_rejects_structural_errors(
+    tmp_path, contents, message
+) -> None:
+    path = tmp_path / "users.yml"
+    path.write_text(contents)
+
+    with pytest.raises(ValueError, match=message):
+        UserCredentialStore(path).validate()
+
+
+def test_user_store_startup_validation_requires_readable_file_and_argon2(
+    tmp_path, monkeypatch
+) -> None:
+    with pytest.raises(ValueError, match="not readable YAML"):
+        UserCredentialStore(tmp_path / "missing.yml").validate()
+
+    path = tmp_path / "users.yml"
+    path.write_text(
+        "users:\n  player:\n    password_hash: '$argon2id$placeholder'\n"
+        "    scopes: [world:play]\n"
+    )
+    monkeypatch.setitem(__import__("sys").modules, "pwdlib", None)
+    with pytest.raises(RuntimeError, match="pwdlib"):
+        UserCredentialStore(path).validate()
+
+
+def test_user_store_startup_validation_requires_argon2_backend(tmp_path, monkeypatch) -> None:
+    import pwdlib
+
+    path = tmp_path / "users.yml"
+    path.write_text(
+        "users:\n  player:\n    password_hash: '$argon2id$placeholder'\n"
+        "    scopes: [world:play]\n"
+    )
+
+    def unavailable():
+        raise RuntimeError("argon2 unavailable")
+
+    monkeypatch.setattr(pwdlib.PasswordHash, "recommended", unavailable)
+    with pytest.raises(RuntimeError, match=r"pwdlib\[argon2\]"):
+        UserCredentialStore(path).validate()
+
+
+def test_user_store_startup_validation_accepts_valid_argon2_inventory(tmp_path) -> None:
+    path = tmp_path / "users.yml"
+    path.write_text(
+        "users:\n  player:\n"
+        f"    password_hash: {hash_password('valid password')!r}\n"
+        "    scopes: [world:play]\n"
+    )
+
+    UserCredentialStore(path).validate()
 
 
 def _request(headers: list[tuple[bytes, bytes]] = ()) -> Request:
@@ -310,10 +448,10 @@ async def test_http_login_cookie_header_conflicts_and_scope_boundaries(tmp_path)
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="https://testserver") as client:
-        missing = await client.get("/world/characters")
+        missing = await client.get("/play/world/characters")
         assert missing.status_code == 401
         assert missing.headers["www-authenticate"] == "Bearer"
-        assert (await client.get("/world/schema")).status_code == 200
+        assert (await client.get("/play/world/schema")).status_code == 401
 
         login = await client.post(
             "/auth/login",
@@ -324,8 +462,8 @@ async def test_http_login_cookie_header_conflicts_and_scope_boundaries(tmp_path)
         assert "Secure" in login.headers["set-cookie"]
         assert "HttpOnly" in login.headers["set-cookie"]
         assert "SameSite=strict" in login.headers["set-cookie"]
-        assert (await client.get("/world/characters")).status_code == 200
-        assert (await client.get("/world/snapshot")).status_code == 403
+        assert (await client.get("/play/world/characters")).status_code == 200
+        assert (await client.get("/admin/world/snapshot")).status_code == 403
 
         body_login = await client.post(
             "/auth/login",
@@ -335,7 +473,7 @@ async def test_http_login_cookie_header_conflicts_and_scope_boundaries(tmp_path)
         assert operator_token.startswith("blt_")
         assert (
             await client.get(
-                "/world/snapshot",
+                "/admin/world/snapshot",
                 headers={"Authorization": f"Bearer {operator_token}"},
                 cookies={},
             )
@@ -344,7 +482,7 @@ async def test_http_login_cookie_header_conflicts_and_scope_boundaries(tmp_path)
         client.cookies.clear()
         assert (
             await client.get(
-                "/world/snapshot", headers={"Authorization": f"Bearer {operator_token}"}
+                "/admin/world/snapshot", headers={"Authorization": f"Bearer {operator_token}"}
             )
         ).status_code == 200
 
@@ -438,11 +576,11 @@ async def test_auth_metadata_rotation_delivery_and_failure_rate_limit(tmp_path) 
 
         for _ in range(20):
             invalid = await client.get(
-                "/world/characters", headers={"Authorization": "Bearer invalid"}
+                "/play/world/characters", headers={"Authorization": "Bearer invalid"}
             )
             assert invalid.status_code == 401
         limited = await client.get(
-            "/world/characters", headers={"Authorization": "Bearer invalid"}
+            "/play/world/characters", headers={"Authorization": "Bearer invalid"}
         )
         assert limited.status_code == 429
         assert int(limited.headers["retry-after"]) >= 1
@@ -468,7 +606,6 @@ async def test_login_limits_ip_spraying_and_distributed_username_attempts(tmp_pa
         build_scenario().actor,
         token_store=tokens,
         user_credentials=RejectingCredentials(),
-        trust_x_real_ip=True,
     )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="https://testserver"
@@ -483,20 +620,24 @@ async def test_login_limits_ip_spraying_and_distributed_username_attempts(tmp_pa
         build_scenario().actor,
         token_store=tokens,
         user_credentials=RejectingCredentials(),
-        trust_x_real_ip=True,
     )
+    for index in range(20):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=(f"192.0.2.{index + 20}", 1234)),
+            base_url="https://testserver",
+        ) as client:
+            assert (await login(client, " TARGET ", "ignored")).status_code == 401
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="https://testserver"
+        transport=httpx.ASGITransport(app=app, client=("192.0.2.100", 1234)),
+        base_url="https://testserver",
     ) as client:
-        for index in range(5):
-            username = " TARGET " if index % 2 else "target"
-            assert (await login(client, username, f"192.0.2.{index + 20}")).status_code == 401
-        assert (await login(client, "Target", "192.0.2.30")).status_code == 429
+        assert (await login(client, " target ", "ignored")).status_code == 401
+        assert (await login(client, " TARGET ", "ignored")).status_code == 429
     tokens.close()
 
 
 @pytest.mark.asyncio
-async def test_proxy_trust_and_token_failure_buckets_use_resolved_ip(tmp_path) -> None:
+async def test_raw_proxy_headers_do_not_change_auth_failure_buckets(tmp_path) -> None:
     class RejectingCredentials:
         def authenticate(self, username: str, password: str):
             del username, password
@@ -507,7 +648,6 @@ async def test_proxy_trust_and_token_failure_buckets_use_resolved_ip(tmp_path) -
         build_scenario().actor,
         token_store=tokens,
         user_credentials=RejectingCredentials(),
-        trust_x_real_ip=False,
     )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=untrusted, client=("198.51.100.5", 1234)),
@@ -528,42 +668,6 @@ async def test_proxy_trust_and_token_failure_buckets_use_resolved_ip(tmp_path) -
         assert limited.status_code == 429
     tokens.close()
 
-    tokens = TokenStore(tmp_path / "trusted.sqlite3")
-    trusted = create_app(
-        build_scenario().actor,
-        token_store=tokens,
-        user_credentials=RejectingCredentials(),
-        trust_x_real_ip=True,
-    )
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=trusted), base_url="https://testserver"
-    ) as client:
-        for _ in range(20):
-            response = await client.get(
-                "/world/characters",
-                headers={"Authorization": "Bearer invalid", "X-Real-IP": "192.0.2.40"},
-            )
-            assert response.status_code == 401
-        assert (
-            await client.get(
-                "/world/characters",
-                headers={"Authorization": "Bearer invalid", "X-Real-IP": "192.0.2.40"},
-            )
-        ).status_code == 429
-        assert (
-            await client.get(
-                "/world/characters",
-                headers={"Authorization": "Bearer invalid", "X-Real-IP": "192.0.2.41"},
-            )
-        ).status_code == 401
-        assert (
-            await client.get(
-                "/world/characters",
-                headers={"Authorization": "Bearer invalid", "X-Real-IP": "not-an-ip"},
-            )
-        ).status_code == 401
-    tokens.close()
-
 
 @pytest.mark.asyncio
 async def test_auth_cors_never_allows_cross_origin_credentials(tmp_path) -> None:
@@ -572,20 +676,73 @@ async def test_auth_cors_never_allows_cross_origin_credentials(tmp_path) -> None
         build_scenario().actor,
         token_store=tokens,
         user_credentials=_credentials(tmp_path),
+        cors_origins=["https://web.example"],
     )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="https://testserver"
     ) as client:
         preflight = await client.options(
-            "/world/characters",
+            "/play/world/characters",
+            headers={
+                "Origin": "https://web.example",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert preflight.status_code == 200
+        assert preflight.headers["access-control-allow-origin"] == "https://web.example"
+        assert "access-control-allow-credentials" not in preflight.headers
+        disallowed = await client.options(
+            "/play/world/characters",
             headers={
                 "Origin": "https://other.example",
                 "Access-Control-Request-Method": "GET",
             },
         )
-    assert preflight.status_code == 200
-    assert preflight.headers["access-control-allow-origin"] == "*"
-    assert "access-control-allow-credentials" not in preflight.headers
+        assert disallowed.status_code == 400
+        assert "access-control-allow-origin" not in disallowed.headers
+    tokens.close()
+
+
+@pytest.mark.parametrize(
+    "origin",
+    ["*", "null", "sandbox.example", "ftp://sandbox.example", "https://user@host"],
+)
+def test_auth_rejects_unsafe_cors_origins(origin) -> None:
+    with pytest.raises(ValueError, match="invalid CORS origin"):
+        create_app(build_scenario().actor, cors_origins=[origin])
+
+
+def test_auth_deduplicates_cors_origins() -> None:
+    create_app(
+        build_scenario().actor,
+        cors_origins=["https://web.example", "https://web.example/"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_hsts_covers_public_auth_failure_and_rate_limit_responses(tmp_path) -> None:
+    tokens = TokenStore(tmp_path / "tokens.sqlite3")
+    token, _principal = tokens.issue(
+        "player", [WORLD_PLAY_SCOPE], automatic_rotation=False
+    )
+    app = create_app(build_scenario().actor, token_store=tokens, rate_limit_requests=1)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://testserver"
+    ) as client:
+        health = await client.get("/public/health")
+        unauthorized = await client.get("/play/world/characters")
+        assert health.headers["strict-transport-security"] == HSTS_VALUE
+        assert unauthorized.status_code == 401
+        assert unauthorized.headers["strict-transport-security"] == HSTS_VALUE
+        headers = {"Authorization": f"Bearer {token}"}
+        assert (await client.get("/play/world/characters", headers=headers)).status_code == 200
+        limited = await client.get("/play/world/characters", headers=headers)
+        assert limited.status_code == 429
+        assert limited.headers["strict-transport-security"] == HSTS_VALUE
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        assert "strict-transport-security" not in (await client.get("/public/health")).headers
     tokens.close()
 
 
@@ -594,10 +751,10 @@ async def test_auth_routes_reject_when_authentication_is_not_configured() -> Non
     app = create_app(build_scenario().actor)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="https://testserver") as client:
-        assert (await client.get("/auth/me")).status_code == 503
-        assert (await client.get("/world/characters")).status_code == 503
-        assert (await client.get("/world/snapshot")).status_code == 503
-        assert (await client.get("/world/schema")).status_code == 200
+        assert (await client.get("/auth/me")).status_code == 401
+        assert (await client.get("/play/world/characters")).status_code == 401
+        assert (await client.get("/admin/world/snapshot")).status_code == 401
+        assert (await client.get("/play/world/schema")).status_code == 401
         login = await client.post(
             "/auth/login",
             json={"username": "player", "password": "password", "delivery": "body"},
@@ -632,7 +789,7 @@ def test_websockets_authenticate_in_first_frame_with_scopes(tmp_path) -> None:
     )
     client = testclient.TestClient(app)
 
-    character_path = f"/world/character/{scenario.character}/updates"
+    character_path = f"/play/world/character/{scenario.character}/updates"
     with client.websocket_connect(character_path) as socket:
         socket.send_json(
             {
@@ -653,16 +810,86 @@ def test_websockets_authenticate_in_first_frame_with_scopes(tmp_path) -> None:
             socket.receive_json()
         assert rejected.value.code == 1008
 
-    with client.websocket_connect("/world/updates") as socket:
+    with client.websocket_connect("/admin/world/updates") as socket:
         socket.send_json({"type": "authenticate", "data": {"token": player_token}})
         with pytest.raises(websocket_error) as rejected:
             socket.receive_json()
         assert rejected.value.code == 1008
 
-    with client.websocket_connect("/world/updates") as socket:
+    with client.websocket_connect("/admin/world/updates") as socket:
         socket.send_json({"type": "authenticate", "data": {"token": operator_token}})
         assert socket.receive_json()["type"] == "snapshot"
 
+    tokens.close()
+
+
+def test_websocket_origins_are_same_origin_or_absent(tmp_path) -> None:
+    testclient = pytest.importorskip("fastapi.testclient")
+    websocket_error = pytest.importorskip("starlette.websockets").WebSocketDisconnect
+    tokens = TokenStore(tmp_path / "tokens.sqlite3")
+    token, _principal = tokens.issue(
+        "admin", [WORLD_ADMIN_SCOPE], automatic_rotation=False
+    )
+    client = testclient.TestClient(
+        create_app(build_scenario().actor, token_store=tokens)
+    )
+
+    with pytest.raises(websocket_error) as rejected:
+        with client.websocket_connect(
+            "/admin/world/updates",
+            headers={"Origin": "https://evil.example"},
+        ):
+            pass
+    assert rejected.value.code == 1008
+
+    with pytest.raises(websocket_error) as rejected:
+        with client.websocket_connect(
+            "/admin/world/updates",
+            headers={"Origin": "null"},
+        ):
+            pass
+    assert rejected.value.code == 1008
+
+    with pytest.raises(websocket_error) as rejected:
+        with client.websocket_connect(
+            "/play/world/character/1/updates",
+            headers={"Origin": "https://evil.example"},
+        ):
+            pass
+    assert rejected.value.code == 1008
+
+    with client.websocket_connect(
+        "/admin/world/updates",
+        headers={"Origin": "http://testserver"},
+    ) as socket:
+        socket.send_json({"type": "authenticate", "data": {"token": token}})
+        assert socket.receive_json()["type"] == "snapshot"
+
+    with client.websocket_connect("/admin/world/updates") as socket:
+        socket.send_json({"type": "authenticate", "data": {"token": token}})
+        assert socket.receive_json()["type"] == "snapshot"
+    tokens.close()
+
+
+def test_websocket_cookie_and_matching_header_frame_authentication(tmp_path) -> None:
+    testclient = pytest.importorskip("fastapi.testclient")
+    tokens = TokenStore(tmp_path / "tokens.sqlite3")
+    token, _principal = tokens.issue(
+        "admin", [WORLD_ADMIN_SCOPE], automatic_rotation=False
+    )
+    client = testclient.TestClient(create_app(build_scenario().actor, token_store=tokens))
+
+    client.cookies.set("bunnyland_token", token)
+    with client.websocket_connect("/admin/world/updates") as socket:
+        socket.send_json({"type": "authenticate", "data": {}})
+        assert socket.receive_json()["type"] == "snapshot"
+    client.cookies.clear()
+
+    with client.websocket_connect(
+        "/admin/world/updates", headers={"Authorization": f"Bearer {token}"}
+    ) as socket:
+        socket.send_json({"type": "authenticate", "data": {"token": token}})
+        assert socket.receive_json()["type"] == "snapshot"
     tokens.close()
 
 
@@ -687,26 +914,26 @@ def test_websocket_authentication_rejection_and_header_paths(tmp_path, monkeypat
         {"type": "wrong", "data": {}},
         {"type": "authenticate", "data": {"token": 42}},
     ):
-        with client.websocket_connect("/world/updates") as socket:
+        with client.websocket_connect("/admin/world/updates") as socket:
             socket.send_json(frame)
             with pytest.raises(websocket_error) as rejected:
                 socket.receive_json()
             assert rejected.value.code == 1008
 
     with client.websocket_connect(
-        "/world/updates", headers={"Authorization": f"Bearer {operator_token}"}
+        "/admin/world/updates", headers={"Authorization": f"Bearer {operator_token}"}
     ) as socket:
         socket.send_json({"type": "authenticate", "data": {"token": other_admin}})
         with pytest.raises(websocket_error):
             socket.receive_json()
 
     with client.websocket_connect(
-        "/world/updates", headers={"Authorization": f"Bearer {operator_token}"}
+        "/admin/world/updates", headers={"Authorization": f"Bearer {operator_token}"}
     ) as socket:
         socket.send_json({"type": "authenticate", "data": {}})
         assert socket.receive_json()["type"] == "snapshot"
 
-    character_path = f"/world/character/{scenario.character}/updates"
+    character_path = f"/play/world/character/{scenario.character}/updates"
     with client.websocket_connect(character_path) as socket:
         socket.send_json(
             {
@@ -751,7 +978,7 @@ def test_websocket_authentication_rejection_and_header_paths(tmp_path, monkeypat
         return original_verify(token, **kwargs) if verifications == 1 else None
 
     monkeypatch.setattr(tokens, "verify", expires_after_auth)
-    with client.websocket_connect("/world/updates") as socket:
+    with client.websocket_connect("/admin/world/updates") as socket:
         socket.send_json({"type": "authenticate", "data": {"token": operator_token}})
         assert socket.receive_json()["type"] == "snapshot"
         with pytest.raises(websocket_error):
@@ -774,7 +1001,7 @@ def test_websockets_fail_closed_without_configured_authentication() -> None:
     testclient = pytest.importorskip("fastapi.testclient")
     client = testclient.TestClient(create_app(build_scenario().actor))
     websocket_error = pytest.importorskip("starlette.websockets").WebSocketDisconnect
-    for path in ("/world/updates", "/world/character/1/updates"):
+    for path in ("/admin/world/updates", "/play/world/character/1/updates"):
         with pytest.raises(websocket_error) as rejected, client.websocket_connect(path):
             pass
         assert rejected.value.code == 1013
@@ -783,9 +1010,20 @@ def test_websockets_fail_closed_without_configured_authentication() -> None:
 def test_explicit_unauthenticated_embedding_supports_http_and_websocket() -> None:
     testclient = pytest.importorskip("fastapi.testclient")
     client = testclient.TestClient(
-        create_app(build_scenario().actor, allow_unauthenticated=True)
+        create_app(build_scenario().actor, allow_unauthenticated_embedding=True)
     )
-    assert client.get("/world/characters").status_code == 200
+    assert client.get("/play/world/characters").status_code == 200
     assert client.get("/auth/me").status_code == 503
-    with client.websocket_connect("/world/updates") as socket:
+    with client.websocket_connect("/admin/world/updates") as socket:
         assert socket.receive_json()["type"] == "snapshot"
+
+
+def test_unauthenticated_embedding_rejects_mixed_authentication_stores(tmp_path) -> None:
+    tokens = TokenStore(tmp_path / "tokens.sqlite3")
+    with pytest.raises(ValueError, match="cannot be combined"):
+        create_app(
+            build_scenario().actor,
+            token_store=tokens,
+            allow_unauthenticated_embedding=True,
+        )
+    tokens.close()

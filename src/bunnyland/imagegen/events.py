@@ -1,6 +1,6 @@
 """Domain events for image generation (spec 27).
 
-These ride the normal event bus, so the server's existing ``/world/updates`` websocket
+These ride the normal event bus, so the server's admin world websocket
 broadcasts them with no extra wiring: a client sees a completion event and refreshes the
 affected entity or record to pick up the new image reference.
 """

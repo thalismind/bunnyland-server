@@ -43,25 +43,14 @@ bunnyland server through the optional HTTP/websocket API:
 uv run --extra server bunnyland serve --ticks 0 --api-host 127.0.0.1 --api-port 8765
 ```
 
-The API exposes:
+The API separates anonymous readiness, session lifecycle, player interaction, and
+administrative operation into explicit authorization zones. Player WebSockets carry only
+perspective-safe updates; the admin stream carries global snapshots and events. Both
+authenticate in their first frame. MCP uses the same bearer principals and scope vocabulary.
 
-- `GET /health` for liveness and current world epoch.
-- `GET /world/snapshot` for the initial ECS snapshot and world metadata.
-- `GET /world/events/recent` for the admin-authenticated global event history.
-- `GET /world/character/{id}/events/recent` for a claim-authenticated, visibility-filtered
-  player fallback feed.
-- `POST /world/commands` to submit a command envelope into the world actor.
-- `WS /world/updates` for an initial snapshot followed by typed domain events.
-- `WS /world/character/{id}/updates` for claim-authenticated player invalidations and visible
-  events; clients send the claim id and secret in the first frame, never in the URL.
-- `GET /admin/runtime`, `POST /admin/pause`, and `POST /admin/resume` for
-  server-level tick control.
-- `GET /admin/world/generators`, `POST /admin/world/generate`, and
-  `GET /admin/world/generation` for listing enabled generators, starting async world
-  replacement, and checking generation status.
-
-FastAPI requires `world:play` by default and `world:admin` for these routes. Keep the API
-behind TLS, but do not add a second proxy authentication scheme.
+See the generated OpenAPI document for concrete HTTP operations and payloads, and
+[Authorization Surfaces](../developer/authorization-surfaces.md) for transport and addon
+policy. Keep the API behind TLS, but do not add a second proxy authentication scheme.
 
 ## Optional MCP endpoint
 
@@ -164,7 +153,8 @@ uv run bunnyland serve --config bunnyland.yml
 | `--token-db` | `data/auth-tokens.sqlite3` | Private SQLite opaque-token and revocation store. |
 | `--player-client-id` | env        | Allow one player `client_id`; repeat or pass comma-separated values. Defaults to `BUNNYLAND_PLAYER_CLIENT_IDS`; unset allows any player client ID. |
 | `--admin-client-id` | env         | Allow one admin `client_id`; repeat or pass comma-separated values. Defaults to `BUNNYLAND_ADMIN_CLIENT_IDS`; unset allows any client ID after `world:admin` authentication. |
-| `--trust-x-real-ip` | off         | Trust nginx-overwritten `X-Real-IP` for abuse-limit keys. Enable only when direct API access is blocked. |
+| `--cors-origin` | (none) | Permit one absolute browser origin; repeat as needed. Wildcard and `null` origins are invalid. |
+| `--forwarded-allow-ips` | `127.0.0.1` | Exact trusted reverse-proxy address passed to Uvicorn. |
 | `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](./). |
 | `--starter-pack` | (none)         | Enable a startup preset: `peaceful`, `fantastic`, or `futuristic`. |
 | `--verbose`      | off            | Log each decision and world-generation step at INFO.           |
@@ -189,9 +179,9 @@ claims and claim-secret-backed player requests must match the player list. Admin
 WebSocket, and MCP requests must match the admin list via `X-Bunnyland-Client-Id`.
 Client IDs are optional policy filters, never authentication credentials.
 
-Player commands (`POST /world/commands`) and the MCP `send_command` tool reject the control
+Player commands and the MCP `send_command` tool reject the control
 verbs (`take-control`, `release-to-llm`, `suspend`, `resume`); controller changes go through
-the dedicated `/world/controllers/web/*` endpoints (or the MCP claim/release tools), which
+the dedicated play-zoned controller operations (or the MCP claim/release tools), which
 validate that the caller owns the claim.
 
 ## The time model

@@ -32,7 +32,14 @@ from .engine import GameLoop
 from .llm_agents import DEFAULT_MODEL, ControllerDispatch, ScriptedAgent
 from .memory import install_memory
 from .migrations import migrate_snapshot
-from .persistence import WorldMeta, load_world, save_world
+from .persistence import (
+    WorldMeta,
+    build_recovery_manifest,
+    load_world,
+    read_world_meta,
+    save_world,
+    write_recovery_manifest,
+)
 from .persistence_yaml import YAMLPersistenceDriver
 from .plugins import (
     PluginError,
@@ -709,7 +716,8 @@ async def _run_api_runtime(
                     token_db_path=getattr(args, "token_db", "data/auth-tokens.sqlite3"),
                 player_client_ids=getattr(args, "player_client_id", None),
                 admin_client_ids=getattr(args, "admin_client_id", None),
-                trust_x_real_ip=getattr(args, "trust_x_real_ip", False),
+                cors_origins=getattr(args, "cors_origin", None),
+                forwarded_allow_ips=getattr(args, "forwarded_allow_ips", "127.0.0.1"),
                 imagegen=imagegen,
                 character_chat=character_chat,
                 claim_secrets=claim_secrets,
@@ -791,7 +799,8 @@ _CONFIG_ARG_FLAGS: dict[str, tuple[str, ...]] = {
     "token_db": ("--token-db",),
     "player_client_id": ("--player-client-id",),
     "admin_client_id": ("--admin-client-id",),
-    "trust_x_real_ip": ("--trust-x-real-ip", "--no-trust-x-real-ip"),
+    "cors_origin": ("--cors-origin",),
+    "forwarded_allow_ips": ("--forwarded-allow-ips",),
 }
 
 
@@ -904,6 +913,27 @@ def main(argv: list[str] | None = None) -> int:
     )
     migrate_world.add_argument("source", help="source world; never modified")
     migrate_world.add_argument("dest", help="destination JSON or YAML world")
+
+    recovery_manifest = sub.add_parser(
+        "recovery-manifest",
+        help="create a checksummed release recovery manifest for a saved world",
+    )
+    recovery_manifest.add_argument("snapshot", help="checksummed JSON or YAML world snapshot")
+    recovery_manifest.add_argument("media_manifest", help="media checksum manifest")
+    recovery_manifest.add_argument("output", help="recovery manifest JSON path")
+    recovery_manifest.add_argument("--release", required=True, help="release manifest name")
+    recovery_manifest.add_argument(
+        "--pin",
+        action="append",
+        required=True,
+        metavar="REPOSITORY=COMMIT",
+        help="pinned repository commit; repeat for every release repository",
+    )
+    recovery_manifest.add_argument(
+        "--rollback-checkpoint",
+        required=True,
+        help="verified rollback snapshot or checkpoint identifier",
+    )
 
     auth = sub.add_parser("auth", help="manage Bunnyland users and opaque access tokens")
     auth_sub = auth.add_subparsers(dest="auth_command", required=True)
@@ -1179,11 +1209,15 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     serve.add_argument(
-        "--trust-x-real-ip",
-        action=argparse.BooleanOptionalAction,
-        default=os.environ.get("BUNNYLAND_TRUST_X_REAL_IP", "").strip().lower()
-        in {"1", "true", "yes"},
-        help="trust nginx-overwritten X-Real-IP for application abuse limits",
+        "--cors-origin",
+        action="append",
+        default=None,
+        help="allow one absolute browser CORS origin; repeat as needed",
+    )
+    serve.add_argument(
+        "--forwarded-allow-ips",
+        default=os.environ.get("BUNNYLAND_FORWARDED_ALLOW_IPS", "127.0.0.1"),
+        help="exact trusted reverse-proxy address passed to Uvicorn",
     )
 
     tui = sub.add_parser("tui", help="open the terminal client (needs the tui extra)")
@@ -1250,6 +1284,26 @@ def main(argv: list[str] | None = None) -> int:
         else:
             dest.write_text(json.dumps(migrated, indent=2) + "\n")
         print(f"Migrated {source} -> {dest} (schema v4).")
+        return 0
+
+    if args.command == "recovery-manifest":
+        pins: dict[str, str] = {}
+        for value in args.pin:
+            repository, separator, commit = value.partition("=")
+            if not separator or not repository.strip() or not commit.strip():
+                parser.error("--pin must use REPOSITORY=COMMIT")
+            pins[repository.strip()] = commit.strip()
+        snapshot = Path(args.snapshot)
+        manifest = build_recovery_manifest(
+            snapshot,
+            meta=read_world_meta(snapshot),
+            release=args.release,
+            release_pins=pins,
+            media_manifest_path=args.media_manifest,
+            rollback_checkpoint=args.rollback_checkpoint,
+        )
+        write_recovery_manifest(args.output, manifest)
+        print(f"Wrote recovery manifest to {args.output!r} for world {manifest.world_id}.")
         return 0
 
     if args.command == "auth":

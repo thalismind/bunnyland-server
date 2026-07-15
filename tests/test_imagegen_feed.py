@@ -10,7 +10,9 @@ from bunnyland.imagegen.feed import latest_image_completion, latest_image_failur
 from bunnyland.server.serialization import serialize_event
 
 
-def _completed(*, epoch: int, url: str = "/media/events/a.png", purpose: str = "event") -> dict:
+def _completed(
+    *, epoch: int, url: str = "/public/media/events/a.png", purpose: str = "event"
+) -> dict:
     return serialize_event(
         ImageGenerationCompletedEvent(
             event_id=f"e{epoch}",
@@ -44,24 +46,24 @@ def test_no_messages_returns_none():
 
 def test_completion_extracted_and_newest_by_epoch():
     messages = [
-        _completed(epoch=3, url="/media/events/old.png"),
-        _completed(epoch=7, url="/media/events/new.png"),
+        _completed(epoch=3, url="/public/media/events/old.png"),
+        _completed(epoch=7, url="/public/media/events/new.png"),
     ]
     result = latest_image_completion(messages)
     assert result is not None
-    assert result["url"] == "/media/events/new.png"
+    assert result["url"] == "/public/media/events/new.png"
     assert result["world_epoch"] == 7
 
 
 def test_out_of_order_keeps_highest_epoch():
     # A later message with a lower epoch must not replace the newest.
     messages = [
-        _completed(epoch=7, url="/media/events/new.png"),
-        _completed(epoch=3, url="/media/events/old.png"),
+        _completed(epoch=7, url="/public/media/events/new.png"),
+        _completed(epoch=3, url="/public/media/events/old.png"),
     ]
     result = latest_image_completion(messages)
     assert result is not None
-    assert result["url"] == "/media/events/new.png"
+    assert result["url"] == "/public/media/events/new.png"
 
 
 def test_websocket_wrapper_shape_is_accepted():

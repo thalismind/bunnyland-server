@@ -13,6 +13,7 @@ from relics import Component, Edge, Entity, EntityId, World
 from ...core.commands import SubmittedCommand
 from ...core.components import (
     AdminComponent,
+    ButtonComponent,
     CharacterComponent,
     DeadComponent,
     GenerationIntentComponent,
@@ -335,6 +336,13 @@ def _incident_reported(world: World, incident: Entity, entity: Entity) -> bool:
     return {"resolved", *kind_words} <= report_words
 
 
+def _button_activated(world: World, incident: Entity, entity: Entity) -> bool:
+    del world, incident
+    return entity.has_component(ButtonComponent) and entity.get_component(
+        ButtonComponent
+    ).pressed
+
+
 DEFAULT_RESOLUTION_RULES = (
     IncidentResolutionRule(id="loot-claimed", kind="loot", resolved=_loot_claimed),
     IncidentResolutionRule(id="monster-neutralized", kind="monster", resolved=_monster_neutralized),
@@ -347,6 +355,11 @@ DEFAULT_RESOLUTION_RULES = (
         id="incident-reported",
         kind="reported",
         resolved=_incident_reported,
+    ),
+    IncidentResolutionRule(
+        id="button-activated",
+        kind="activated",
+        resolved=_button_activated,
     ),
 )
 

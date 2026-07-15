@@ -13,11 +13,12 @@ build on life-sim needs, which every character already gets from ``instantiate``
 from __future__ import annotations
 
 from bunnyland.foundation.meters.mechanics import Meter, with_value
-from bunnyland.foundation.needs.mechanics import HungerComponent
+from bunnyland.foundation.needs.mechanics import HungerComponent, ThirstComponent
 from bunnyland.foundation.persona.mechanics import GoalComponent
 from bunnyland.foundation.tutorial.mechanics import HungryCourierControllerComponent
 
 from ..core.components import (
+    ButtonComponent,
     DescriptionComponent,
     ReadableComponent,
     SuspendedComponent,
@@ -405,9 +406,16 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
     del options
     from bunnyland.core.components import IdentityComponent, PortableComponent
     from bunnyland.core.edges import ContainmentMode, Contains
-    from bunnyland.foundation.consumables.components import ConsumableComponent
+    from bunnyland.foundation.consumables.components import (
+        ConsumableComponent,
+        DrinkableComponent,
+    )
     from bunnyland.foundation.social.mechanics import SocialBond, create_obligation
     from bunnyland.foundation.storyteller.mechanics import IncidentComponent, IncidentSpawned
+    from bunnyland.simpacks.gardensim.mechanics import (
+        MachineBreakdownComponent,
+        MachineComponent,
+    )
     from bunnyland.simpacks.lifesim.mechanics import CareerComponent, HasRoutine, RoutineComponent
 
     room_specs = [
@@ -486,10 +494,43 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
             ObjectSpec(key="key", room_key="stairwell", name="dropped key", kind="key"),
             ObjectSpec(key="sock", room_key="laundry", name="lost sock basket", portable=False),
             ObjectSpec(key="planters", room_key="courtyard", name="planter boxes"),
-            ObjectSpec(key="rain", room_key="roof", name="rain barrel", kind="water"),
-            ObjectSpec(key="pantry", room_key="kitchen", name="community pantry", kind="food"),
+            ObjectSpec(
+                key="rain",
+                room_key="roof",
+                name="rain barrel",
+                kind="water",
+                portable=False,
+                renewable=False,
+            ),
+            ObjectSpec(
+                key="pantry",
+                room_key="kitchen",
+                name="community pantry",
+                kind="food",
+                portable=False,
+            ),
             ObjectSpec(key="parts", room_key="workshop", name="spare parts"),
-            ObjectSpec(key="snacks", room_key="store", name="snack shelf", kind="food"),
+            ObjectSpec(
+                key="repair_kit",
+                room_key="workshop",
+                name="elevator repair kit",
+                kind="repair_tool",
+            ),
+            ObjectSpec(
+                key="water_jug",
+                room_key="store",
+                name="emergency water jug",
+                kind="water",
+                hydration=15.0,
+                renewable=False,
+            ),
+            ObjectSpec(
+                key="snacks",
+                room_key="store",
+                name="snack shelf",
+                kind="food",
+                portable=False,
+            ),
             ObjectSpec(key="clipboard", room_key="clinic", name="appointment clipboard"),
             ObjectSpec(key="piano", room_key="music", name="old piano", portable=False),
             ObjectSpec(key="log", room_key="security", name="incident log", kind="paper"),
@@ -544,6 +585,49 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
             actor,
             world.objects["pantry"],
             ConsumableComponent(current_uses=2, max_uses=8),
+        )
+        _augment(
+            actor,
+            world.objects["rain"],
+            ConsumableComponent(current_uses=1, max_uses=8),
+        )
+        _augment(
+            actor,
+            world.objects["water_jug"],
+            DrinkableComponent(hydration=15.0),
+            ConsumableComponent(current_uses=4, max_uses=4),
+        )
+        _augment(
+            actor,
+            world.objects["panel"],
+            MachineComponent(machine_type="elevator control", quality=0.2),
+            MachineBreakdownComponent(
+                reason="intermittent relay fault",
+                required_tool_kind="repair_tool",
+            ),
+        )
+        _augment(
+            actor,
+            world.objects["piano"],
+            ButtonComponent(active=True, toggle=True, pressed=False),
+            ReadableComponent(
+                title="Music Room Noise Notice",
+                text=(
+                    "OPEN noise complaint: rehearsal continues while the elevator relay "
+                    "is unstable."
+                ),
+            ),
+        )
+        saffron = actor.world.get_entity(world.characters["saffron"])
+        thirst = saffron.get_component(ThirstComponent)
+        _augment(
+            actor,
+            saffron.id,
+            ThirstComponent(
+                meter=with_value(thirst.meter, 70.0),
+                hydration_loss_rate=thirst.hydration_loss_rate,
+                last_drank_epoch=thirst.last_drank_epoch,
+            ),
         )
         parcel = spawn_entity(
             actor.world,
@@ -616,6 +700,20 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
                 incident.add_relationship(
                     IncidentSpawned(kind="reported"), world.objects["log"]
                 )
+            elif kind == "rooftop_water_shortage":
+                incident.add_relationship(
+                    IncidentSpawned(kind="returned"), world.objects["water_jug"]
+                )
+                incident.add_relationship(
+                    IncidentSpawned(kind="reported"), world.objects["log"]
+                )
+            else:
+                incident.add_relationship(
+                    IncidentSpawned(kind="activated"), world.objects["piano"]
+                )
+                incident.add_relationship(
+                    IncidentSpawned(kind="reported"), world.objects["log"]
+                )
         for index, character_id in enumerate(world.characters.values()):
             character = actor.world.get_entity(character_id)
             _augment(actor, character_id, CareerComponent(title="resident", hourly_pay=0))
@@ -624,6 +722,10 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
                 (14, "shared chore"),
                 (20, "evening social"),
             ):
+                if character_id == world.characters["jun"] and activity == "shared chore":
+                    activity = "inspect unreliable elevator after music-room noise"
+                if character_id == world.characters["orla"] and activity == "shared chore":
+                    activity = "review elevator and music-room disagreement"
                 routine = spawn_entity(
                     actor.world,
                     [RoutineComponent(activity=activity, next_due_epoch=(hour + index) * 3600)],

@@ -66,10 +66,14 @@ services:
       BUNNYLAND_ADMIN_CLIENT_IDS: ${BUNNYLAND_ADMIN_CLIENT_IDS:-}
       BUNNYLAND_HTTP_RATE_LIMIT_REQUESTS: ${BUNNYLAND_HTTP_RATE_LIMIT_REQUESTS:-120}
       BUNNYLAND_HTTP_RATE_LIMIT_WINDOW_SECONDS: ${BUNNYLAND_HTTP_RATE_LIMIT_WINDOW_SECONDS:-1}
-      BUNNYLAND_TRUST_X_REAL_IP: ${BUNNYLAND_TRUST_X_REAL_IP:-1}
+      BUNNYLAND_CORS_ORIGINS: ${BUNNYLAND_CORS_ORIGINS:-}
+      BUNNYLAND_FORWARDED_ALLOW_IPS: ${BUNNYLAND_FRONTEND_IP:-172.28.0.2}
       BUNNYLAND_DISCORD_COOLDOWN_SECONDS: ${BUNNYLAND_DISCORD_COOLDOWN_SECONDS:-1}
     expose:
       - "8765"
+    networks:
+      private:
+        ipv4_address: ${BUNNYLAND_SERVER_IP:-172.28.0.3}
     restart: unless-stopped
 
   frontend:
@@ -87,4 +91,13 @@ services:
       BUNNYLAND_EDGE_RETRY_AFTER: ${BUNNYLAND_EDGE_RETRY_AFTER:-1}
     expose:
       - "80"
+    networks:
+      private:
+        ipv4_address: ${BUNNYLAND_FRONTEND_IP:-172.28.0.2}
     restart: unless-stopped
+
+networks:
+  private:
+    ipam:
+      config:
+        - subnet: ${BUNNYLAND_COMPOSE_SUBNET:-172.28.0.0/24}

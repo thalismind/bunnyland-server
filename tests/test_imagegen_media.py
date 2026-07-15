@@ -45,11 +45,11 @@ def test_write_read_roundtrip(tmp_path):
 def test_url_helpers(tmp_path):
     store = MediaStore(tmp_path)
     name = "abc123.png"
-    assert store.url_for(SEGMENT_PORTRAITS, name) == "/media/portraits/abc123.png"
+    assert store.url_for(SEGMENT_PORTRAITS, name) == "/public/media/portraits/abc123.png"
     relative = store.public_url_for(SEGMENT_PORTRAITS, name, base_url="")
-    assert relative == "/media/portraits/abc123.png"
+    assert relative == "/public/media/portraits/abc123.png"
     absolute = store.public_url_for(SEGMENT_PORTRAITS, name, base_url="https://play.example/")
-    assert absolute == "https://play.example/media/portraits/abc123.png"
+    assert absolute == "https://play.example/public/media/portraits/abc123.png"
 
 
 def test_extension_for():
@@ -103,7 +103,7 @@ def test_portrait_component_defaults():
 
 
 def test_event_component_fields():
-    component = EventImageComponent(url="/media/events/x.png", source_event_id="evt-1")
+    component = EventImageComponent(url="/public/media/events/x.png", source_event_id="evt-1")
     assert component.source_event_id == "evt-1"
 
 
@@ -126,9 +126,9 @@ def test_events_construct():
     started = ImageGenerationStartedEvent(entity_id="char_1", purpose="portrait", **_base())
     assert started.entity_id == "char_1"
     completed = ImageGenerationCompletedEvent(
-        entity_id="char_1", purpose="portrait", url="/media/portraits/x.png", **_base()
+        entity_id="char_1", purpose="portrait", url="/public/media/portraits/x.png", **_base()
     )
-    assert completed.url == "/media/portraits/x.png"
+    assert completed.url == "/public/media/portraits/x.png"
     failed = ImageGenerationFailedEvent(
         entity_id="char_1", purpose="portrait", reason="boom", **_base()
     )

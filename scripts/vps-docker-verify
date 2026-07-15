@@ -149,32 +149,32 @@ if "discordUrl" not in config:
     fail("frontend config: discordUrl key missing (config.json was not rendered)")
 ok("frontend config: same-origin /api/")
 
-health = json.loads(expect_status("REST health", "GET", "/api/health", 200).decode())
+health = json.loads(expect_status("REST health", "GET", "/api/public/health", 200).decode())
 if health.get("ok") is not True:
     fail(f"REST health: expected ok=true, got {health!r}")
 
 # Health is public, but the player API requires a scoped bearer token.
-expect_status("world characters require player auth", "GET", "/api/world/characters", 401)
+expect_status("world characters require player auth", "GET", "/api/play/world/characters", 401)
 expect_status(
     "world characters reject bad player credentials",
     "GET",
-    "/api/world/characters",
+    "/api/play/world/characters",
     401,
     token="invalid",
 )
 lobby = json.loads(expect_status(
-    "world characters player", "GET", "/api/world/characters", 200, token=play_token
+    "world characters player", "GET", "/api/play/world/characters", 200, token=play_token
 ).decode())
 ok(f"world characters player: {len(lobby.get('characters', []))} claimable")
 
 # The raw snapshot is admin-scoped.
 expect_status(
-    "world snapshot requires admin", "GET", "/api/world/snapshot", admin_unauth_status
+    "world snapshot requires admin", "GET", "/api/admin/world/snapshot", admin_unauth_status
 )
 if verify_admin_data:
     snapshot = json.loads(
         expect_status(
-            "world snapshot (admin)", "GET", "/api/world/snapshot", 200, token=operator_token
+            "world snapshot (admin)", "GET", "/api/admin/world/snapshot", 200, token=operator_token
         ).decode()
     )
     metadata = snapshot.get("metadata") or {}
@@ -187,7 +187,7 @@ if verify_admin_data:
 expect_status(
     "admin rejects bad credentials",
     "POST",
-    "/api/admin/pause",
+    "/api/admin/world/pause",
     admin_unauth_status,
     token=play_token,
 )
@@ -195,7 +195,7 @@ expect_status(
 pause_body = expect_status(
     "admin accepts good credentials",
     "POST",
-    "/api/admin/pause",
+    "/api/admin/world/pause",
     admin_auth_status,
     token=operator_token,
 )
@@ -207,7 +207,7 @@ if admin_auth_status == 200:
 resume_body = expect_status(
     "admin resume",
     "POST",
-    "/api/admin/resume",
+    "/api/admin/world/resume",
     admin_auth_status,
     token=operator_token,
 )
@@ -221,7 +221,7 @@ def websocket_handshake(token: str | None = None) -> tuple[str, bytes | None]:
     None unless the server completed the upgrade (HTTP 101)."""
     key = base64.b64encode(os.urandom(16)).decode()
     lines = [
-        "GET /api/world/updates HTTP/1.1",
+        "GET /api/admin/world/updates HTTP/1.1",
         f"Host: {domain}",
         "Upgrade: websocket",
         "Connection: Upgrade",

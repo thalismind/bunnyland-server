@@ -138,6 +138,10 @@ class HealthResponse(BaseModel):
     features: FeatureStatusResponse = Field(default_factory=FeatureStatusResponse)
 
 
+class ReadinessResponse(BaseModel):
+    ok: bool = True
+
+
 class QueuedCommandView(BaseModel):
     command_id: str
     character_id: str

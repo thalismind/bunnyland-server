@@ -85,7 +85,7 @@ class MediaService:
 
     def url_for(self, namespace: str, name: str) -> str:
         self.path_for(namespace, name)
-        return f"/media/{namespace}/{name}"
+        return f"/public/media/{namespace}/{name}"
 
     def public_url_for(self, namespace: str, name: str, *, base_url: str) -> str:
         relative = self.url_for(namespace, name)
