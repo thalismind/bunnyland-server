@@ -46,6 +46,7 @@ async def capture(args: argparse.Namespace) -> None:
         client_id=args.client_id,
         fallback_controller=args.claim_fallback,
         timeout_seconds=args.claim_timeout_seconds,
+        token_file=args.token_file,
     )
     app = BunnylandTUI(backend, show_intro=False)
     async with app.run_test(size=(args.columns, args.rows)) as pilot:
@@ -67,6 +68,7 @@ def main() -> int:
     parser.add_argument("--columns", type=int, default=160)
     parser.add_argument("--rows", type=int, default=48)
     parser.add_argument("--client-id", default="itch-screenshot-terminal-tui")
+    parser.add_argument("--token-file")
     parser.add_argument("--claim-fallback", choices=("suspend", "llm"), default="suspend")
     parser.add_argument("--claim-timeout-seconds", type=int, default=1800)
     parser.add_argument("--open-target-action", action="store_true")
