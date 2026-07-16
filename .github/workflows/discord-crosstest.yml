@@ -63,7 +63,7 @@ jobs:
 
       - name: Upload Discord crosstest artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: discord-crosstest
           path: artifacts/discord-crosstest
