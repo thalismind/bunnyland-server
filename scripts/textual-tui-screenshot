@@ -18,11 +18,22 @@ def has_target_argument(action: dict) -> bool:
     return any(argument.get("target_group") for argument in action.get("arguments") or [])
 
 
-async def select_first_player(app: BunnylandTUI) -> None:
+async def select_player(app: BunnylandTUI, character_id: str | None) -> None:
     select = app.query_one("#player", Select)
     if not app.character_list:
         raise RuntimeError("server returned no claimable characters")
-    select.value = app.character_list[0].character_id
+    selected_id = character_id or app.character_list[0].character_id
+    if not any(character.character_id == selected_id for character in app.character_list):
+        raise RuntimeError(f"server did not return requested character: {selected_id}")
+    select.value = selected_id
+
+
+async def wait_for_player(app: BunnylandTUI, pilot, character_id: str) -> None:
+    deadline = asyncio.get_running_loop().time() + 30
+    while app.player_id != character_id or app.control is None or not app.action_views:
+        if asyncio.get_running_loop().time() >= deadline:
+            raise RuntimeError(f"timed out claiming requested character: {character_id}")
+        await pilot.pause(0.1)
 
 
 async def open_target_action(app: BunnylandTUI) -> None:
@@ -51,8 +62,9 @@ async def capture(args: argparse.Namespace) -> None:
     app = BunnylandTUI(backend, show_intro=False)
     async with app.run_test(size=(args.columns, args.rows)) as pilot:
         await pilot.pause(args.settle_seconds)
-        await select_first_player(app)
-        await pilot.pause(args.settle_seconds)
+        await select_player(app, args.character_id)
+        selected_id = args.character_id or app.character_list[0].character_id
+        await wait_for_player(app, pilot, selected_id)
         if args.open_target_action:
             await open_target_action(app)
             await pilot.pause(args.settle_seconds)
@@ -68,6 +80,7 @@ def main() -> int:
     parser.add_argument("--columns", type=int, default=160)
     parser.add_argument("--rows", type=int, default=48)
     parser.add_argument("--client-id", default="itch-screenshot-terminal-tui")
+    parser.add_argument("--character-id")
     parser.add_argument("--token-file")
     parser.add_argument("--claim-fallback", choices=("suspend", "llm"), default="suspend")
     parser.add_argument("--claim-timeout-seconds", type=int, default=1800)
