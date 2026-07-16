@@ -158,6 +158,8 @@ metric/span reference and the Tempo setup.
   persistence, perspective, and streaming boundaries for the controlled preview.
 - **[Authorization surfaces](docs/developer/authorization-surfaces.md)** — shared scope,
   transport, addon, and testing conventions for HTTP, WebSocket, and MCP.
+- **[Technical results](docs/developer/technical-results.md)** — dated controller-contract,
+  provider, load, stream, restore, and release-validation evidence.
 - **[Running a server](docs/admin/running-a-server.md)** — install, the `serve` loop, the time
   model, and connecting Ollama or OpenRouter.
 - **[Generating worlds](docs/admin/generating-worlds.md)** — choosing generators, using the
