@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload playtest traces
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: discord-playtest-traces
           path: artifacts/playtests
@@ -61,7 +61,7 @@ jobs:
 
       - name: Upload coverage reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-reports
           path: |
@@ -72,7 +72,7 @@ jobs:
 
       - name: Upload performance smoke report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: performance-smoke
           path: artifacts/performance/smoke
@@ -122,7 +122,7 @@ jobs:
           test -s SHA256SUMS
 
       - name: Upload Python distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-distributions-${{ github.sha }}
           path: dist/
@@ -147,7 +147,7 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Download exact validated distributions
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: python-distributions-${{ github.sha }}
           path: dist
@@ -170,11 +170,11 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -182,7 +182,7 @@ jobs:
 
       - name: Extract server container metadata
         id: server-meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/bunnyland-server
           tags: |
@@ -191,7 +191,7 @@ jobs:
 
       - name: Extract TUI container metadata
         id: tui-meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/bunnyland-tui
           tags: |
@@ -200,7 +200,7 @@ jobs:
 
       - name: Extract REPL container metadata
         id: repl-meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/bunnyland-repl
           tags: |
@@ -208,7 +208,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and publish base server container
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           build-args: |
@@ -227,7 +227,7 @@ jobs:
             type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-server:buildcache,mode=max,ignore-error=true
 
       - name: Build and publish TUI container
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           build-args: |
@@ -248,7 +248,7 @@ jobs:
             type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-tui:buildcache,mode=max,ignore-error=true
 
       - name: Build and publish REPL container
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           build-args: |
