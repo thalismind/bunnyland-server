@@ -33,6 +33,13 @@ rejection paths. Rough is fine.
 How would we prove it works? Which layer (unit handler, prompt-fragment, plugin,
 e2e, playtest)? New mechanics need tests, so it helps to think about this early.
 
+## Performance and compatibility
+
+How should the work scale with world size? Call out full-world scans, relationship
+degree, serialization, persistence, or component-index behavior that could affect
+gameplay latency. Bunnyland is still pre-release: prefer a direct migration over a
+compatibility alias or shim.
+
 ## Alternatives considered
 
 Anything you ruled out, and why.
