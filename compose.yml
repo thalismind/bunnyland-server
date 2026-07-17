@@ -3,9 +3,10 @@ name: bunnyland
 services:
   server:
     image: ghcr.io/thalismind/bunnyland-server:${BUNNYLAND_SERVER_TAG:-main}
-    command:
+    entrypoint:
       - /bin/sh
       - -ec
+    command:
       - |
         set -- bunnyland serve
         llm_provider="$${BUNNYLAND_LLM_PROVIDER:-ollama}"

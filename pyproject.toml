@@ -29,8 +29,6 @@ repl = ["textual>=0.60", "httpx>=0.27", "websockets>=12"]
 
 [project.scripts]
 bunnyland = "bunnyland.cli:main"
-bunnyland-tui = "bunnyland.tui:main"
-bunnyland-repl = "bunnyland.repl:main"
 
 [project.entry-points."bunnyland.plugins"]
 "bunnyland.barbariansim" = "bunnyland.simpacks.barbariansim.plugin:plugin"

@@ -130,7 +130,7 @@ echo "Prepared ${count} distinct characters and scoped credentials."
   -v "${data_dir}:/data" \
   -v "${users_file}:/run/secrets/bunnyland-users.yml:ro" \
   "$image" \
-  bunnyland serve \
+  serve \
     --load /data/worlds/stream-load.json \
     --load-paused \
     --ticks 0 \

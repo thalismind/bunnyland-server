@@ -44,19 +44,19 @@ The terminal clients can either host a local world in their own process or conne
 running Bunnyland server:
 
 ```bash
-uv run --all-extras bunnyland-tui --generator apartment-demo
-uv run --all-extras bunnyland-repl --generator apartment-demo
+uv run --all-extras bunnyland tui --generator apartment-demo
+uv run --all-extras bunnyland repl --generator apartment-demo
 
-uv run --all-extras bunnyland-tui --server http://localhost:8765
-uv run --all-extras bunnyland-repl --server http://localhost:8765
+uv run --all-extras bunnyland tui --server http://localhost:8765
+uv run --all-extras bunnyland repl --server http://localhost:8765
 ```
 
 Use `--list-generators` in either terminal client to see grouped demo worlds and
 algorithmic generators:
 
 ```bash
-uv run --all-extras bunnyland-tui --list-generators
-uv run --all-extras bunnyland-repl --list-generators
+uv run --all-extras bunnyland tui --list-generators
+uv run --all-extras bunnyland repl --list-generators
 ```
 
 The web clients connect to a running HTTP server from the browser. See

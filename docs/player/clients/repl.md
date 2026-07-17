@@ -13,19 +13,19 @@ are playing, the connection, your action/focus points, and the world clock.
 Host a local world:
 
 ```bash
-uv run --all-extras bunnyland-repl
+uv run --all-extras bunnyland repl
 ```
 
 Connect to a running server:
 
 ```bash
-uv run --all-extras bunnyland-repl --server http://localhost:8765
+uv run --all-extras bunnyland repl --server http://localhost:8765
 ```
 
 List the demo worlds and generators you can pass to `--generator`:
 
 ```bash
-uv run --all-extras bunnyland-repl --list-generators
+uv run --all-extras bunnyland repl --list-generators
 ```
 
 Useful options mirror the TUI: `--seed`, `--generator`, `--claim-fallback`, and

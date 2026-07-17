@@ -905,6 +905,18 @@ async def _serve(args) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
+
+    # Terminal clients own their complete argument surfaces. Dispatch before the
+    # server parser so their parsers and the ``bunnyland`` subcommands stay identical.
+    if raw_argv and raw_argv[0] == "tui":
+        from .tui import main as tui_main
+
+        return tui_main(raw_argv[1:])
+    if raw_argv and raw_argv[0] == "repl":
+        from .repl import main as repl_main
+
+        return repl_main(raw_argv[1:])
+
     parser = argparse.ArgumentParser(prog="bunnyland")
     sub = parser.add_subparsers(dest="command")
 
@@ -1220,28 +1232,8 @@ def main(argv: list[str] | None = None) -> int:
         help="exact trusted reverse-proxy address passed to Uvicorn",
     )
 
-    tui = sub.add_parser("tui", help="open the terminal client (needs the tui extra)")
-    tui.add_argument("--server", help="connect to a running server (e.g. http://localhost:8765)")
-    tui.add_argument("--username", default="", help="login username for a remote server")
-    tui.add_argument("--password-stdin", action="store_true")
-    tui.add_argument("--token-file", default=None)
-    tui.add_argument("--seed", default="a quiet marsh", help="seed for a locally hosted world")
-    tui.add_argument(
-        "--generator", default="apartment-demo", help="generator for a locally hosted world"
-    )
-    tui.add_argument(
-        "--claim-fallback",
-        choices=("suspend", "llm"),
-        default=None,
-        help="controller fallback when the TUI claim times out",
-    )
-    tui.add_argument(
-        "--claim-timeout-minutes",
-        type=int,
-        default=None,
-        help="claim timeout override in minutes, between 5 and 60",
-    )
-    tui.add_argument("--no-icons", action="store_true", help="hide action and activity icons")
+    sub.add_parser("tui", add_help=False, help="open the terminal client (needs the tui extra)")
+    sub.add_parser("repl", add_help=False, help="open the terminal REPL (needs the repl extra)")
 
     chat = sub.add_parser("chat", help="chat with an LLM-controlled character")
     chat.add_argument("--server", default="http://127.0.0.1:8765")
@@ -1377,28 +1369,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.character:
             chat_args.extend(["--character", args.character])
         return chat_main(chat_args)
-
-    if args.command == "tui":
-        from .tui import main as tui_main
-
-        tui_args = (
-            ["--server", args.server]
-            if args.server
-            else ["--seed", args.seed, "--generator", args.generator]
-        )
-        if args.claim_fallback:
-            tui_args.extend(["--claim-fallback", args.claim_fallback])
-        if args.username:
-            tui_args.extend(["--username", args.username])
-        if args.password_stdin:
-            tui_args.append("--password-stdin")
-        if args.token_file:
-            tui_args.extend(["--token-file", args.token_file])
-        if args.claim_timeout_minutes is not None:
-            tui_args.extend(["--claim-timeout-minutes", str(args.claim_timeout_minutes)])
-        if args.no_icons:
-            tui_args.append("--no-icons")
-        return tui_main(tui_args)
 
     if args.command == "config-wizard":
         from .config_wizard import main as config_wizard_main

@@ -1172,7 +1172,7 @@ def test_cli_chat_command_omits_blank_character(monkeypatch):
     assert calls["argv"] == ["--server", "http://localhost:8765"]
 
 
-def test_cli_tui_command_forwards_remote_options(monkeypatch):
+def test_cli_tui_command_delegates_complete_argument_surface(monkeypatch):
     import bunnyland.tui as tui
 
     calls = {}
@@ -1186,53 +1186,29 @@ def test_cli_tui_command_forwards_remote_options(monkeypatch):
     result = main(
         [
             "tui",
-            "--server",
-            "http://localhost:8765",
-            "--claim-fallback",
-            "llm",
-            "--claim-timeout-minutes",
-            "12",
-            "--username",
-            "player",
-            "--password-stdin",
-            "--token-file",
-            "/tmp/bunnyland-token",
-            "--no-icons",
+            "--list-generators",
         ]
     )
 
     assert result == 17
-    assert calls["argv"] == [
-        "--server",
-        "http://localhost:8765",
-        "--claim-fallback",
-        "llm",
-        "--username",
-        "player",
-        "--password-stdin",
-        "--token-file",
-        "/tmp/bunnyland-token",
-        "--claim-timeout-minutes",
-        "12",
-        "--no-icons",
-    ]
+    assert calls["argv"] == ["--list-generators"]
 
 
-def test_cli_tui_command_forwards_local_options(monkeypatch):
-    import bunnyland.tui as tui
+def test_cli_repl_command_delegates_complete_argument_surface(monkeypatch):
+    import bunnyland.repl as repl
 
     calls = {}
 
-    def fake_tui_main(argv):
+    def fake_repl_main(argv):
         calls["argv"] = argv
-        return 0
+        return 23
 
-    monkeypatch.setattr(tui, "main", fake_tui_main)
+    monkeypatch.setattr(repl, "main", fake_repl_main)
 
-    result = main(["tui", "--seed", "misty den", "--generator", "empty"])
+    result = main(["repl", "--server", "https://play.example", "--no-icons"])
 
-    assert result == 0
-    assert calls["argv"] == ["--seed", "misty den", "--generator", "empty"]
+    assert result == 23
+    assert calls["argv"] == ["--server", "https://play.example", "--no-icons"]
 
 
 def test_cli_without_command_prints_help(capsys):
@@ -1241,6 +1217,8 @@ def test_cli_without_command_prints_help(capsys):
     output = capsys.readouterr().out
     assert result == 0
     assert "usage: bunnyland" in output
+    assert "tui" in output
+    assert "repl" in output
 
 
 def test_cli_verbose_configures_logging_before_serving(monkeypatch):

@@ -112,8 +112,8 @@ jobs:
           "${{ runner.temp }}/wheel-smoke/bin/python" -c \
             'import bunnyland; from bunnyland.plugins import discover_plugins; assert discover_plugins()'
           "${{ runner.temp }}/wheel-smoke/bin/bunnyland" --help
-          "${{ runner.temp }}/wheel-smoke/bin/bunnyland-tui" --help
-          "${{ runner.temp }}/wheel-smoke/bin/bunnyland-repl" --help
+          "${{ runner.temp }}/wheel-smoke/bin/bunnyland" tui --help
+          "${{ runner.temp }}/wheel-smoke/bin/bunnyland" repl --help
 
       - name: Record distribution hashes
         run: |
@@ -180,7 +180,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract server container metadata
+      - name: Extract container metadata
         id: server-meta
         uses: docker/metadata-action@v6
         with:
@@ -189,31 +189,12 @@ jobs:
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Extract TUI container metadata
-        id: tui-meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/bunnyland-tui
-          tags: |
-            type=ref,event=branch
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Extract REPL container metadata
-        id: repl-meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/bunnyland-repl
-          tags: |
-            type=ref,event=branch
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and publish base server container
+      - name: Build and publish Bunnyland container
         uses: docker/build-push-action@v7
         with:
           context: .
           build-args: |
             BUNNYLAND_GIT_HASH=${{ github.sha }}
-          target: server
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.server-meta.outputs.tags }}
           labels: ${{ steps.server-meta.outputs.labels }}
@@ -225,48 +206,6 @@ jobs:
           cache-to: |
             type=gha,scope=bunnyland-server,mode=max
             type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-server:buildcache,mode=max,ignore-error=true
-
-      - name: Build and publish TUI container
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          build-args: |
-            BUNNYLAND_GIT_HASH=${{ github.sha }}
-          target: tui
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.tui-meta.outputs.tags }}
-          labels: ${{ steps.tui-meta.outputs.labels }}
-          cache-from: |
-            type=gha,scope=bunnyland-server
-            type=gha,scope=bunnyland-tui
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-server:buildcache
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-server:main
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-server:latest
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-tui:buildcache
-          cache-to: |
-            type=gha,scope=bunnyland-tui,mode=max
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-tui:buildcache,mode=max,ignore-error=true
-
-      - name: Build and publish REPL container
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          build-args: |
-            BUNNYLAND_GIT_HASH=${{ github.sha }}
-          target: repl
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.repl-meta.outputs.tags }}
-          labels: ${{ steps.repl-meta.outputs.labels }}
-          cache-from: |
-            type=gha,scope=bunnyland-server
-            type=gha,scope=bunnyland-repl
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-server:buildcache
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-server:main
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-server:latest
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-repl:buildcache
-          cache-to: |
-            type=gha,scope=bunnyland-repl,mode=max
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-repl:buildcache,mode=max,ignore-error=true
 
   vps-setup:
     name: VPS Docker setup smoke test

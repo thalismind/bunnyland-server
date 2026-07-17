@@ -11,19 +11,19 @@ or connect to a running server over HTTP.
 Host a local world:
 
 ```bash
-uv run --all-extras bunnyland-tui
+uv run --all-extras bunnyland tui
 ```
 
 Connect to a running server:
 
 ```bash
-uv run --all-extras bunnyland-tui --server http://localhost:8765
+uv run --all-extras bunnyland tui --server http://localhost:8765
 ```
 
 List available demo worlds and generators:
 
 ```bash
-uv run --all-extras bunnyland-tui --list-generators
+uv run --all-extras bunnyland tui --list-generators
 ```
 
 Useful local options include `--seed`, `--generator`, `--claim-fallback`, and
@@ -99,7 +99,7 @@ character's queue.
 ## Example session
 
 ```text
-$ uv run --all-extras bunnyland-tui --generator apartment-demo
+$ uv run --all-extras bunnyland tui --generator apartment-demo
 ```
 
 1. Pick a character from the player menu.

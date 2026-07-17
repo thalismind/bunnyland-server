@@ -19,9 +19,16 @@ trap cleanup EXIT
 mkdir -p "${data_dir}/worlds"
 chmod 0700 "$work_dir" "$data_dir"
 
+help_output="$("$runtime" run --rm "$image")"
+grep -Fq 'serve' <<<"$help_output"
+grep -Fq 'tui' <<<"$help_output"
+grep -Fq 'repl' <<<"$help_output"
+"$runtime" run --rm "$image" tui --list-generators >/dev/null
+"$runtime" run --rm "$image" repl --list-generators >/dev/null
+
 hash_password() {
   printf '%s\n' "$1" | "$runtime" run --rm -i "$image" \
-    bunnyland auth hash-password --password-stdin
+    auth hash-password --password-stdin
 }
 
 player_hash="$(hash_password 'player-smoke-password')"
@@ -44,7 +51,7 @@ start_server() {
     -v "${data_dir}:/data" \
     -v "${users_file}:/run/secrets/bunnyland-users.yml:ro" \
     "$image" \
-    bunnyland serve \
+    serve \
       --generator lifesim-demo \
       --ticks 0 \
       --api-host 0.0.0.0 \

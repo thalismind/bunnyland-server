@@ -52,12 +52,23 @@ Hosted VPS setup is managed by the `bunnyland-vps` Ansible playbook. The retired
 bearer-token verification, encrypted backup, and rollback requirements. For a direct local
 server, follow [Running a server](docs/admin/running-a-server.md).
 
-CI builds and publishes `ghcr.io/thalismind/bunnyland-server`,
-`ghcr.io/thalismind/bunnyland-tui`, and `ghcr.io/thalismind/bunnyland-repl` on pushes to
-`main`, with branch tags and `latest` for the default branch. The server image includes
-all optional extras; the TUI and REPL images inherit from it and change only the default
-client entrypoint. The web repo publishes `ghcr.io/thalismind/bunnyland-web` with the same
-tag scheme.
+CI publishes one `ghcr.io/thalismind/bunnyland-server` image on pushes to `main`, with
+branch tags and `latest` for the default branch. It includes all optional extras and uses
+the same `bunnyland` command as a native installation. Running it without a subcommand
+prints help instead of creating a world:
+
+```bash
+docker run --rm ghcr.io/thalismind/bunnyland-server
+docker run --rm -p 8765:8765 ghcr.io/thalismind/bunnyland-server serve \
+  --generator lifesim-demo --ticks 0 --api-host 0.0.0.0 --api-port 8765
+docker run --rm -it ghcr.io/thalismind/bunnyland-server tui \
+  --server https://your-bunnyland.example
+docker run --rm -it ghcr.io/thalismind/bunnyland-server repl \
+  --server https://your-bunnyland.example
+```
+
+Use `-it` for the terminal clients. The web repo publishes
+`ghcr.io/thalismind/bunnyland-web` with the same tag scheme.
 
 ## Observability
 
@@ -294,8 +305,8 @@ observe it.
 | Web toon †                        | Playable  | | ✓ | | ✓ (sprites)     | | ✓ |
 | Discord bot                       | Playable  | ✓ ‡ | | | | ✓ | |
 | MCP endpoint                      | Playable  | | ✓ | ✓ | | | |
-| Terminal TUI (`uv run --all-extras bunnyland-tui`)   | Playable  | ✓ | ✓ | | | ✓ | ✓ |
-| Terminal REPL (`uv run --all-extras bunnyland-repl`) | Playable  | ✓ | ✓ | | | ✓ | ✓ |
+| Terminal TUI (`uv run --all-extras bunnyland tui`)   | Playable  | ✓ | ✓ | | | ✓ | ✓ |
+| Terminal REPL (`uv run --all-extras bunnyland repl`) | Playable  | ✓ | ✓ | | | ✓ | ✓ |
 
 † Implemented in the frontend/web repo; capabilities summarized here.
 ‡ The Discord bot hosts the world in its own process.
@@ -308,6 +319,6 @@ observe it.
 | `discord`  | the Discord player front-end             | `uv sync --extra discord`    |
 | `mcp`      | HTTP MCP endpoint for agentic clients    | `uv sync --extra mcp`        |
 | `chroma`   | ChromaDB vector memory store             | `uv sync --extra chroma`     |
-| `tui`      | the Textual terminal client (`bunnyland-tui`) | `uv sync --extra tui`   |
-| `repl`     | the Textual REPL client (`bunnyland-repl`), local or over HTTP | `uv sync --extra repl` |
+| `tui`      | the Textual terminal client (`bunnyland tui`) | `uv sync --extra tui`   |
+| `repl`     | the Textual REPL client (`bunnyland repl`), local or over HTTP | `uv sync --extra repl` |
 | `otel`     | OpenTelemetry metrics/traces export (off by default; set `BUNNYLAND_OTEL_ENABLED`) | `uv sync --extra otel` |

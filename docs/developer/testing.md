@@ -75,8 +75,8 @@ needed to compare runs honestly.
 
 CI runs packaging only after the test job succeeds. It builds both a wheel and source
 distribution, validates them with Twine, installs the wheel with all runtime extras into a
-clean virtual environment, discovers plugin entry points, and smoke-tests `bunnyland`,
-`bunnyland-tui`, and `bunnyland-repl`. It records `dist/SHA256SUMS` and uploads the exact
+clean virtual environment, discovers plugin entry points, and smoke-tests the `bunnyland`
+CLI plus its `tui` and `repl` subcommands. It records `dist/SHA256SUMS` and uploads the exact
 artifacts as `python-distributions-${GITHUB_SHA}` for 14 days. Container builds depend on
 both the test and package jobs.
 
