@@ -519,11 +519,13 @@ def test_mcp_release_validation_and_llm_fallback(monkeypatch):
             claim_secret="wrong",
         )
     with pytest.raises(RuntimeError, match="invalid claim secret"):
-        render_mcp_client_prompt(
-            actor,
-            client_id="client-a",
-            claim_id=claimed["claim_id"],
-            claim_secret="wrong",
+        asyncio.run(
+            render_mcp_client_prompt(
+                actor,
+                client_id="client-a",
+                claim_id=claimed["claim_id"],
+                claim_secret="wrong",
+            )
         )
 
     unknown = spawn_entity(actor.world)
@@ -594,7 +596,9 @@ def test_mcp_release_to_existing_controller_and_claim_release():
         fallback_controller=str(existing.id),
         **_claim_args(claimed),
     )
-    prompt = render_mcp_client_prompt(actor, client_id="client-a", **_claim_args(claimed))
+    prompt = asyncio.run(
+        render_mcp_client_prompt(actor, client_id="client-a", **_claim_args(claimed))
+    )
     claim_released = release_mcp_claim(actor, client_id="client-a", **_claim_args(claimed))
 
     assert released["controller_id"] == str(existing.id)
@@ -734,7 +738,7 @@ def test_mcp_release_to_existing_llm_keeps_active_character_active():
 
 def test_mcp_prompt_errors(scenario):
     with pytest.raises(RuntimeError, match="client is not controlling a character yet"):
-        render_mcp_client_prompt(scenario.actor, client_id="client-a")
+        asyncio.run(render_mcp_client_prompt(scenario.actor, client_id="client-a"))
 
 
 async def test_mcp_event_bridge_filters_and_notifies_client_resources(scenario):
@@ -896,12 +900,14 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     with pytest.raises(RuntimeError, match="invalid claim secret"):
         registered_resources["bunnyland://clients/{client_id}/events"]("client-a")
     with pytest.raises(RuntimeError, match="invalid claim secret"):
-        registered_resources["bunnyland://clients/{client_id}/prompt"]("client-a")
+        asyncio.run(
+            registered_resources["bunnyland://clients/{client_id}/prompt"]("client-a")
+        )
     assert registered_low_server["unsubscribe_resource"].__name__ == "unsubscribe_resource"
     asyncio.run(registered_low_server["unsubscribe_resource"](AnyUrl(EVENTS_RESOURCE_URI)))
 
     with pytest.raises(RuntimeError, match="client is not controlling"):
-        registered_tools["client_prompt"](client_id="missing")
+        asyncio.run(registered_tools["client_prompt"](client_id="missing"))
 
     patch_world_admin = registered_tools["patch_world_admin"]
     assert list(inspect.signature(patch_world_admin).parameters) == ["operations"]
@@ -1073,7 +1079,9 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     )
     assert claimed["character_id"] == str(scenario.character)
 
-    prompt = registered_tools["client_prompt"](client_id="client-a", **_claim_args(claimed))
+    prompt = await registered_tools["client_prompt"](
+        client_id="client-a", **_claim_args(claimed)
+    )
     assert prompt["character_id"] == str(scenario.character)
     assert "You are Juniper" in prompt["prompt"]
 
@@ -1284,7 +1292,7 @@ async def test_mcp_registered_tools_wrap_runtime_errors(monkeypatch, scenario):
     )
 
     with pytest.raises(FakeToolError, match="client is not controlling") as prompt_error:
-        registered_tools["client_prompt"](client_id="missing")
+        await registered_tools["client_prompt"](client_id="missing")
     assert isinstance(prompt_error.value.__cause__, RuntimeError)
 
     with pytest.raises(FakeToolError, match="client_id is required") as claim_error:
@@ -2381,7 +2389,7 @@ def test_mcp_client_resources_require_and_accept_claim_headers(monkeypatch, scen
     headers["X-Bunnyland-Claim-Id"] = claimed["claim_id"]
     headers["X-Bunnyland-Claim-Secret"] = claimed["claim_secret"]
     events = json.loads(resources["bunnyland://clients/{client_id}/events"]("client-a"))
-    prompt = resources["bunnyland://clients/{client_id}/prompt"]("client-a")
+    prompt = asyncio.run(resources["bunnyland://clients/{client_id}/prompt"]("client-a"))
     assert events["ok"] is True
     assert events["client_id"] == "client-a"
     assert "You are Juniper" in prompt

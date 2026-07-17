@@ -19,12 +19,21 @@ from .facts import (
     PromptFact,
     PromptFactLike,
 )
+from .filters import (
+    PromptFilterContext,
+    PromptFilterDefinition,
+    PromptFilterRuntime,
+    apply_prompt_filters,
+)
 
 __all__ = [
     "ComponentPromptContext",
     "DETAILED_DETAIL_CUTOFF",
     "PromptFact",
     "PromptFactLike",
+    "PromptFilterContext",
+    "PromptFilterDefinition",
+    "PromptFilterRuntime",
     "PerspectiveName",
     "PerspectivePhrase",
     "PromptAccess",
@@ -32,5 +41,6 @@ __all__ = [
     "PromptContext",
     "PromptPerspective",
     "STANDARD_DETAIL_CUTOFF",
+    "apply_prompt_filters",
     "render_prompt",
 ]

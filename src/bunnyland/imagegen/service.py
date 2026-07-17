@@ -30,6 +30,7 @@ from ..core.ecs import parse_entity_id, replace_component
 from ..core.events import EventVisibility, event_base
 from ..core.world_actor import WorldActor
 from .client import ComfyClient
+from .comfyui import ComfyUIImageGenerator
 from .components import (
     EventImageComponent,
     ImageRequestComponent,
@@ -41,6 +42,7 @@ from .events import (
     ImageGenerationFailedEvent,
     ImageGenerationStartedEvent,
 )
+from .generators import ImageGenerator, ImageGeneratorProfile, ImageGeneratorRequest
 from .media import (
     SEGMENT_ALPHA,
     SEGMENT_ENTITIES,
@@ -50,7 +52,7 @@ from .media import (
     MediaStore,
 )
 from .prompt import ImagePromptRequest, PromptEnhancer, PromptExampleSource
-from .spec import GeneratedPrompt, ImagePurpose, PromptStyle, WorkflowTemplate, substitute
+from .spec import GeneratedPrompt, ImagePurpose, PromptStyle
 from .store import WorkflowTemplateStore
 from .subject import subject_for_entity, subject_for_event
 
@@ -75,6 +77,8 @@ class ImageGenJob:
     job_id: str
     entity_id: str
     purpose: ImagePurpose
+    generator: str = "comfyui"
+    profile_name: str = ""
     template_name: str = ""
     requested_by: str = ""
     target_id: str = ""
@@ -97,15 +101,16 @@ def _set_component(entity: Entity, component) -> None:
 
 
 class ImageGenService:
-    """Queues and runs image generation jobs against a ComfyUI server."""
+    """Queues and routes image generation jobs to purpose-selected generators."""
 
     def __init__(
         self,
         actor: WorldActor,
         config: ImageGenConfig,
         *,
-        client: ComfyClient,
-        templates: WorkflowTemplateStore,
+        generators: dict[ImagePurpose, ImageGenerator] | None = None,
+        client: ComfyClient | None = None,
+        templates: WorkflowTemplateStore | None = None,
         enhancer: PromptEnhancer,
         examples: PromptExampleSource,
         media: MediaStore,
@@ -113,6 +118,14 @@ class ImageGenService:
     ) -> None:
         self._actor = actor
         self._config = config
+        # Keep the legacy constructor usable for downstream integrations while routing it
+        # through the same uniformly awaited generator contract.
+        if generators is None:
+            if client is None or templates is None:
+                raise TypeError("ImageGenService requires generators or a ComfyUI client/templates")
+            comfy = ComfyUIImageGenerator(client, templates)
+            generators = {purpose: comfy for purpose in ImagePurpose}
+        self._generators = dict(generators)
         self._client = client
         self._templates = templates
         self._enhancer = enhancer
@@ -158,10 +171,13 @@ class ImageGenService:
     ) -> ImageGenJob:
         """Queue a job (or reuse an existing image). Returns immediately."""
         parsed = parse_entity_id(entity_id)
+        generator = self._generators[purpose]
         job = ImageGenJob(
             job_id=uuid4().hex,
             entity_id=entity_id,
             purpose=purpose,
+            generator=generator.name,
+            profile_name=template_name,
             template_name=template_name,
             requested_by=requested_by,
             target_id=target_id,
@@ -276,26 +292,40 @@ class ImageGenService:
                 if parsed is None or not self._actor.world.has_entity(parsed):
                     raise ImageGenError("entity no longer exists")
                 entity = self._actor.world.get_entity(parsed)
-                template = self._template_for(job)
+                generator = self._generators[job.purpose]
+                profile = generator.resolve_profile(job.purpose, job.profile_name)
+                job.profile_name = profile.name
+                job.template_name = profile.name
                 subject = self._subject_for(entity, job.purpose)
             job.status = "running"
             seed = _seed_for(job.entity_id)
-            prompt = await self._enhance(subject, template, job.purpose, extra)
-            graph = substitute(template, prompt=prompt.prompt, seed=seed, negative=prompt.negative)
-            data = await self._client.generate(graph, output_node_id=template.output_node_id)
+            prompt = await self._enhance(subject, profile, job.purpose, extra)
+            data = await generator.generate(
+                ImageGeneratorRequest(
+                    purpose=job.purpose,
+                    prompt=prompt.prompt,
+                    negative=prompt.negative or profile.default_negative,
+                    seed=seed,
+                    width=profile.width,
+                    height=profile.height,
+                    profile_name=profile.name,
+                )
+            )
             do_alpha = self._alpha is not None and (
                 alpha_requested or job.purpose is ImagePurpose.SPRITE
             )
             url, alpha_url = await self._store_image(job.purpose, data, do_alpha)
             async with self._actor._lock:
                 entity = self._actor.world.get_entity(parsed)
-                self._attach(entity, job.purpose, url, alpha_url, prompt, seed, template)
+                self._attach(
+                    entity, job.purpose, url, alpha_url, prompt, seed, profile, generator.name
+                )
                 _clear_request(entity)
             job.status = "succeeded"
             job.url = url
             job.alpha_url = alpha_url
             self._failed.discard(job.entity_id)
-            await self._publish_completed(job, template.name)
+            await self._publish_completed(job, profile.name)
         except Exception as exc:  # noqa: BLE001 - any failure becomes a failed job + event
             logger.warning("image generation failed for %s: %s", job.entity_id, exc)
             job.status = "failed"
@@ -329,27 +359,16 @@ class ImageGenService:
         self._media.write(segment, name, data)
         return self._media.url_for(segment, name)
 
-    def _template_for(self, job: ImageGenJob) -> WorkflowTemplate:
-        if job.template_name:
-            template = self._templates.get(job.template_name)
-            if template is None:
-                raise ImageGenError(f"unknown workflow template {job.template_name!r}")
-            return template
-        template = self._templates.for_purpose(job.purpose)
-        if template is None:
-            raise ImageGenError(f"no workflow template for purpose {job.purpose.value!r}")
-        return template
-
     def _subject_for(self, entity: Entity, purpose: ImagePurpose) -> str:
         if purpose is ImagePurpose.EVENT:
             return subject_for_event(self._actor.world, entity)
         return subject_for_entity(entity)
 
     async def _enhance(
-        self, subject: str, template: WorkflowTemplate, purpose: ImagePurpose, extra: str
+        self, subject: str, profile: ImageGeneratorProfile, purpose: ImagePurpose, extra: str
     ) -> GeneratedPrompt:
         # An admin-configured prompt style overrides the template's own style.
-        style = template.prompt_style
+        style = profile.prompt_style
         if self._config.prompt_style:
             style = PromptStyle(self._config.prompt_style)
         examples = self._examples.examples_for(style, purpose, subject)
@@ -357,7 +376,7 @@ class ImageGenService:
             subject=subject,
             style=style,
             purpose=purpose,
-            media=template.media,
+            media=profile.media,
             extra=extra,
         )
         return await self._enhancer.enhance(request, examples=examples)
@@ -370,11 +389,22 @@ class ImageGenService:
         alpha_url: str,
         prompt: GeneratedPrompt,
         seed: int,
-        template: WorkflowTemplate,
+        profile: ImageGeneratorProfile,
+        generator: str,
     ) -> None:
         epoch = self._actor.epoch
         if purpose is ImagePurpose.SPRITE:
-            _set_component(entity, SpriteImageComponent(url=url))
+            _set_component(
+                entity,
+                SpriteImageComponent(
+                    url=url,
+                    generator=generator,
+                    profile=profile.name,
+                    prompt=prompt.prompt,
+                    seed=seed,
+                    generated_at_epoch=epoch,
+                ),
+            )
             return
         if purpose is ImagePurpose.EVENT:
             # EVENT jobs always target a history-record entity (subject assembly requires it).
@@ -386,7 +416,8 @@ class ImageGenService:
                     alpha_url=alpha_url,
                     prompt=prompt.prompt,
                     seed=seed,
-                    template=template.name,
+                    template=profile.name,
+                    generator=generator,
                     source_event_id=record.source_event_id,
                     generated_at_epoch=epoch,
                 ),
@@ -399,7 +430,8 @@ class ImageGenService:
                 alpha_url=alpha_url,
                 prompt=prompt.prompt,
                 seed=seed,
-                template=template.name,
+                template=profile.name,
+                generator=generator,
                 generated_at_epoch=epoch,
             ),
         )
@@ -410,6 +442,7 @@ class ImageGenService:
                 **self._event_base(job),
                 entity_id=job.entity_id,
                 purpose=job.purpose.value,
+                generator=job.generator,
                 template=job.template_name,
             )
         )
@@ -422,6 +455,7 @@ class ImageGenService:
                 purpose=job.purpose.value,
                 url=job.url,
                 alpha_url=job.alpha_url,
+                generator=job.generator,
                 template=template_name,
             )
         )
@@ -432,6 +466,7 @@ class ImageGenService:
                 **self._event_base(job),
                 entity_id=job.entity_id,
                 purpose=job.purpose.value,
+                generator=job.generator,
                 reason=job.error or "unknown error",
             )
         )

@@ -41,6 +41,7 @@ from ..core.ecs import container_of, contents, parse_entity_id, reachable_ids
 from ..core.edges import ControlledBy, ExitTo
 from ..core.world_actor import WorldActor
 from ..prompts.builder import PromptBuilder, render_prompt
+from ..prompts.filters import PromptFilterRuntime, apply_prompt_filters
 from .agent import CharacterAgent, ScriptedAgent
 from .behavior_tree import BehaviorTree, BehaviorTreeAgent, resolve_behavior_tree
 from .scripts import resolve_script
@@ -356,12 +357,17 @@ class ControllerDispatch:
         builder: PromptBuilder,
         agent: CharacterAgent,
         *,
+        prompt_filter_runtime: PromptFilterRuntime | None = None,
         behavior_resolver: Callable[[str], BehaviorTree] = resolve_behavior_tree,
         script_resolver: Callable[[str], tuple[ToolCall, ...]] = resolve_script,
     ) -> None:
         self.actor = actor
         self.builder = builder
         self.agent = agent
+        self.prompt_filter_runtime = prompt_filter_runtime or PromptFilterRuntime.from_actor(
+            actor, llm=agent
+        )
+        actor.prompt_filter_runtime = self.prompt_filter_runtime
         self._behavior_resolver = behavior_resolver
         self._script_resolver = script_resolver
         # character_id -> a "did you mean..." note to surface on its next prompt, so an
@@ -640,6 +646,17 @@ class ControllerDispatch:
                     telemetry.record_duration(telemetry.record_llm_decision, metric_attrs),
                     telemetry.span("agent.decide", span_attrs) as dspan,
                 ):
+                    with telemetry.span("agent.prompt.filter", {"character.id": cid}):
+                        prompt = await apply_prompt_filters(
+                            prompt,
+                            runtime=self.prompt_filter_runtime,
+                            character=self.actor.world.get_entity(character_id),
+                            context=context,
+                            epoch=input_epoch,
+                        )
+                    if telemetry.enabled():
+                        dspan.set_attribute("decision.prompt", telemetry.attr_text(prompt))
+                        dspan.set_attribute("decision.prompt_chars", len(prompt))
                     call = await agent.decide(
                         prompt,
                         context,

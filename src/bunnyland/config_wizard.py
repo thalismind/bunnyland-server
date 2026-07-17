@@ -286,7 +286,13 @@ FIELD_HELP_TEXT = {
     "plugin-search": "Filter the plugin checklist. Examples: memory, lifesim.",
     "plugin-suggestions": "Install addon packages to make their entry-point plugins available.",
     "mcp-enabled": "Enable HTTP MCP endpoint. Examples: enabled for admin agents.",
-    "imagegen-enabled": "Enable ComfyUI image generation. Examples: enabled with ComfyUI.",
+    "imagegen-enabled": "Enable pluggable image generation.",
+    "image-generator": "Default image generator. Examples: comfyui, in-memory, openrouter.",
+    "image-generator-portrait": "Optional portrait generator override.",
+    "image-generator-entity": "Optional entity generator override.",
+    "image-generator-sprite": "Optional sprite generator override.",
+    "image-generator-event": "Optional event generator override.",
+    "image-openrouter-model": "OpenRouter image model required when OpenRouter is selected.",
     "comfy-url": "ComfyUI server URL reachable by the server container. Examples: http://comfy:8188.",
     "comfy-websocket": "Use ComfyUI websocket progress. Examples: enabled normal ComfyUI.",
     "comfy-poll-seconds": "Polling interval when websocket is disabled. Examples: 1, 2.5.",
@@ -427,8 +433,13 @@ def review_lines(config: BunnylandConfig) -> list[str]:
         lines.append("  MCP endpoint      : enabled")
     if config.server.character_chat:
         lines.append("  Character chat    : enabled")
-    if config.imagegen.server_url:
-        lines.append(f"  Image generation  : {config.imagegen.server_url}")
+    if config.imagegen.server_url or config.imagegen.generator != "comfyui":
+        detail = (
+            config.imagegen.server_url
+            if config.imagegen.generator == "comfyui"
+            else config.imagegen.generator
+        )
+        lines.append(f"  Image generation  : {detail}")
     if config.plugins.enabled is None:
         lines.append("  Plugins           : default set")
     else:
@@ -1138,9 +1149,37 @@ def build_textual_wizard_app(
                         yield field_label("Image generation", "imagegen-enabled")
                         yield Select(
                             [("enabled", "yes"), ("disabled", "no")],
-                            value=yes_no(bool(initial.imagegen.server_url)),
+                            value=yes_no(
+                                bool(initial.imagegen.server_url)
+                                or initial.imagegen.generator != "comfyui"
+                            ),
                             id="imagegen-enabled",
                             allow_blank=False,
+                        )
+                        yield field_label("Default generator", "image-generator")
+                        yield Select(
+                            [
+                                ("ComfyUI", "comfyui"),
+                                ("In-memory", "in-memory"),
+                                ("OpenRouter", "openrouter"),
+                            ],
+                            value=initial.imagegen.generator,
+                            id="image-generator",
+                            allow_blank=False,
+                        )
+                        for purpose in ("portrait", "entity", "sprite", "event"):
+                            yield field_label(
+                                f"{purpose.title()} generator override",
+                                f"image-generator-{purpose}",
+                            )
+                            yield Input(
+                                value=initial.imagegen.generators.get(purpose, ""),
+                                id=f"image-generator-{purpose}",
+                            )
+                        yield field_label("OpenRouter image model", "image-openrouter-model")
+                        yield Input(
+                            value=initial.imagegen.openrouter_image_model,
+                            id="image-openrouter-model",
                         )
                         yield field_label("ComfyUI server URL", "comfy-url")
                         yield Input(value=initial.imagegen.server_url, id="comfy-url")
@@ -1347,8 +1386,36 @@ def build_textual_wizard_app(
                 if discord_enabled and not self._input("#discord-token"):
                     self._fail("Discord bot token is required when Discord is enabled.")
                     return None
-                if imagegen_enabled and not self._input("#comfy-url"):
+                image_generator = self._select("#image-generator")
+                image_generator_overrides = {
+                    purpose: self._input(f"#image-generator-{purpose}")
+                    for purpose in ("portrait", "entity", "sprite", "event")
+                    if self._input(f"#image-generator-{purpose}")
+                }
+                selected_image_generators = {
+                    image_generator,
+                    *image_generator_overrides.values(),
+                }
+                if (
+                    imagegen_enabled
+                    and "comfyui" in selected_image_generators
+                    and not self._input("#comfy-url")
+                ):
                     self._fail("ComfyUI server URL is required for image generation.")
+                    return None
+                if (
+                    imagegen_enabled
+                    and "openrouter" in selected_image_generators
+                    and not self._input("#image-openrouter-model")
+                ):
+                    self._fail("OpenRouter image model is required for image generation.")
+                    return None
+                if (
+                    imagegen_enabled
+                    and "openrouter" in selected_image_generators
+                    and not self._input("#openrouter-api-key")
+                ):
+                    self._fail("OpenRouter API key is required for image generation.")
                     return None
                 themes = _parse_themes_text(self._input("#web-themes"))
 
@@ -1435,6 +1502,9 @@ def build_textual_wizard_app(
                 if imagegen_enabled:
                     imagegen = ImageGenConfigBlock(
                         server_url=self._input("#comfy-url"),
+                        generator=image_generator,
+                        generators=image_generator_overrides,
+                        openrouter_image_model=self._input("#image-openrouter-model"),
                         use_websocket=self._enabled("#comfy-websocket"),
                         poll_interval_seconds=self._float("#comfy-poll-seconds"),
                         timeout_seconds=self._float("#comfy-timeout-seconds"),

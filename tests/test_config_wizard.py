@@ -232,6 +232,11 @@ def test_bunnyland_config_renders_setup_env() -> None:
             cors_origins=("https://sandbox.example.com",),
             forwarded_allow_ips="172.28.0.2",
         ),
+        imagegen=ImageGenConfigBlock(
+            generator="in-memory",
+            generators={"portrait": "openrouter", "event": "in-memory"},
+            openrouter_image_model="example/image",
+        ),
     )
 
     env = config.to_env(dry_run=True)
@@ -248,6 +253,10 @@ def test_bunnyland_config_renders_setup_env() -> None:
     assert env["BUNNYLAND_HTTP_RATE_LIMIT_WINDOW_SECONDS"] == "2.5"
     assert env["BUNNYLAND_CORS_ORIGINS"] == "https://sandbox.example.com"
     assert env["BUNNYLAND_FORWARDED_ALLOW_IPS"] == "172.28.0.2"
+    assert env["BUNNYLAND_IMAGE_GENERATOR"] == "in-memory"
+    assert env["BUNNYLAND_IMAGE_GENERATOR_PORTRAIT"] == "openrouter"
+    assert env["BUNNYLAND_IMAGE_GENERATOR_EVENT"] == "in-memory"
+    assert env["BUNNYLAND_IMAGE_OPENROUTER_MODEL"] == "example/image"
     assert "BUNNYLAND_TRUST_X_REAL_IP" not in env
     assert env["BUNNYLAND_SETUP_DRY_RUN"] == "1"
 
@@ -816,6 +825,23 @@ async def test_textual_config_wizard_validation_branches() -> None:
     await assert_review_error(
         "ComfyUI server URL",
         lambda app: app.query_one("#imagegen-enabled", Select).__setattr__("value", "yes"),
+    )
+    await assert_review_error(
+        "OpenRouter image model",
+        lambda app: (
+            app.query_one("#imagegen-enabled", Select).__setattr__("value", "yes"),
+            app.query_one("#image-generator", Select).__setattr__("value", "openrouter"),
+        ),
+    )
+    await assert_review_error(
+        "OpenRouter API key",
+        lambda app: (
+            app.query_one("#imagegen-enabled", Select).__setattr__("value", "yes"),
+            app.query_one("#image-generator", Select).__setattr__("value", "openrouter"),
+            app.query_one("#image-openrouter-model", Input).__setattr__(
+                "value", "example/image"
+            ),
+        ),
     )
     await assert_review_error(
         "invalid literal",

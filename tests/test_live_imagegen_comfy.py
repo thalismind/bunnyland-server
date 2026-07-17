@@ -1,6 +1,6 @@
 """Optional live ComfyUI image-generation tests.
 
-Skipped by default. Enable with ``BUNNYLAND_LIVE_GENERATION=1`` and ``COMFYUI_SERVER_URL``
+Skipped by default. Enable with ``BUNNYLAND_LIVE_IMAGEGEN_COMFY=1`` and ``COMFYUI_SERVER_URL``
 pointing at a reachable ComfyUI server. These submit real workflows and fetch real images,
 so they are slow and excluded from the default gate (like the live LLM tests).
 
@@ -37,23 +37,24 @@ from bunnyland.imagegen.store import (
     default_templates,
 )
 
-pytestmark = pytest.mark.live_generation
+pytestmark = pytest.mark.live_imagegen_comfy
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
 def _live_config() -> ImageGenConfig:
-    if os.environ.get("BUNNYLAND_LIVE_GENERATION") != "1":
-        pytest.skip("set BUNNYLAND_LIVE_GENERATION=1 to run live generation tests")
+    if os.environ.get("BUNNYLAND_LIVE_IMAGEGEN_COMFY") != "1":
+        pytest.skip("set BUNNYLAND_LIVE_IMAGEGEN_COMFY=1 to run live ComfyUI tests")
     config = ImageGenConfig.from_env()
     if config is None:
         pytest.skip("set COMFYUI_SERVER_URL to run live generation tests")
-    # Generous timeout for a real diffusion run.
+    # Model-family first loads (especially Klein) can exceed five minutes on an otherwise
+    # healthy server, so keep the live gate above the production request default.
     return ImageGenConfig(
         server_url=config.server_url,
         use_websocket=config.use_websocket,
         poll_interval_seconds=2.0,
-        timeout_seconds=300.0,
+        timeout_seconds=600.0,
     )
 
 

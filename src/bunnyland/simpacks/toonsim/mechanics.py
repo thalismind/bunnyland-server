@@ -88,6 +88,11 @@ class SpriteImageComponent(Component):
 
     url: str = ""
     data: str = ""
+    generator: str = "comfyui"
+    profile: str = ""
+    prompt: str = ""
+    seed: int = 0
+    generated_at_epoch: int = 0
 
 
 @pydantic_dataclass(frozen=True)

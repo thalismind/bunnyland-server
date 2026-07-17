@@ -15,6 +15,7 @@ class ImageGenerationStartedEvent(DomainEvent):
 
     entity_id: str
     purpose: str
+    generator: str = "comfyui"
     template: str = ""
 
 
@@ -25,6 +26,7 @@ class ImageGenerationCompletedEvent(DomainEvent):
     purpose: str
     url: str
     alpha_url: str = ""
+    generator: str = "comfyui"
     template: str = ""
 
 
@@ -33,6 +35,7 @@ class ImageGenerationFailedEvent(DomainEvent):
 
     entity_id: str
     purpose: str
+    generator: str = "comfyui"
     reason: str
 
 

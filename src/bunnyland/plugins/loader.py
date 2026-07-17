@@ -111,9 +111,21 @@ def collect_persona_fragments(plugins: Sequence[Plugin]) -> list:
     return list(collect_content_items(plugins, "persona_fragments"))
 
 
+def collect_prompt_filters(plugins: Sequence[Plugin]) -> list:
+    """Gather async post-render prompt filter definitions in plugin order."""
+    return list(collect_content_items(plugins, "prompt_filters"))
+
+
 def collect_prompt_enhancers(plugins: Sequence[Plugin]) -> list:
     """Gather image-prompt enhancers contributed by the given plugins (spec 27)."""
     return list(collect_content_items(plugins, "prompt_enhancers"))
+
+
+def collect_image_generators(plugins, config, plugin_config=None):
+    """Instantiate plugin-contributed image generators with their owner configuration."""
+    from ..imagegen.generators import collect_image_generators as collect
+
+    return collect(plugins, config, plugin_config)
 
 
 def _instantiate(item):
@@ -231,7 +243,9 @@ __all__ = [
     "apply_plugin",
     "apply_plugins",
     "collect_persona_fragments",
+    "collect_image_generators",
     "collect_prompt_enhancers",
+    "collect_prompt_filters",
     "collect_prompt_fragments",
     "discover_plugins",
     "resolve_order",

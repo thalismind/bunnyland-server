@@ -1,16 +1,37 @@
-# Image generation (ComfyUI)
+# Image generation
 
-Bunnyland can illustrate a world by generating pictures with a [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
-server: character portraits, single-object renders, toon sprites, and on-request scene
-images for world events. The simulation never blocks on this — generation runs on a
-background worker, one job at a time — and the engine only ever stores a small URL
-reference, never image bytes.
+Bunnyland can illustrate a world with ComfyUI, OpenRouter, or a plugin generator: character
+portraits, single-object renders, toon sprites, and on-request scene images for world events.
+The simulation never blocks on this — generation runs on a background worker, one job at a
+time — and the engine only ever stores a small URL reference, never image bytes.
 
-Image generation is **off** until you point Bunnyland at a ComfyUI server.
+Image generation is **off** until `COMFYUI_SERVER_URL` is set or a generator is explicitly
+selected. Existing ComfyUI-only configuration remains valid and selects `comfyui`.
 
 ## Turning it on
 
-Set `COMFYUI_SERVER_URL` (the rest are optional):
+Choose one server-wide fallback. Any purpose can override it independently:
+
+```bash
+BUNNYLAND_IMAGE_GENERATOR=in-memory       # comfyui | in-memory | openrouter | plugin name
+BUNNYLAND_IMAGE_GENERATOR_PORTRAIT=openrouter
+BUNNYLAND_IMAGE_GENERATOR_ENTITY=in-memory
+BUNNYLAND_IMAGE_GENERATOR_SPRITE=comfyui
+BUNNYLAND_IMAGE_GENERATOR_EVENT=openrouter
+```
+
+The equivalent YAML is:
+
+```yaml
+imagegen:
+  generator: in-memory
+  generators:
+    portrait: openrouter
+    sprite: comfyui
+  openrouter_image_model: google/gemini-3.1-flash-lite-image
+```
+
+For ComfyUI, set `COMFYUI_SERVER_URL` (the rest are optional):
 
 ```bash
 COMFYUI_SERVER_URL=http://localhost:8188   # WHERE your ComfyUI server is
@@ -41,6 +62,27 @@ The `imagegen` extra provides the dependencies (`httpx`, `websockets`, `Pillow`)
 uv sync --extra imagegen
 ```
 
+`in-memory` produces deterministic abstract PNG artwork with no network service. It is useful
+for offline demos and integration tests.
+
+OpenRouter uses the official SDK's async chat image-output modality. It requires an explicit
+model and API key so a deployment cannot accidentally select an unsuitable or expensive model:
+
+```bash
+BUNNYLAND_IMAGE_GENERATOR=openrouter
+BUNNYLAND_IMAGE_OPENROUTER_MODEL=google/gemini-3.1-flash-lite-image
+OPENROUTER_API_KEY=sk-or-...
+```
+
+Install both optional dependency groups for OpenRouter image generation:
+
+```bash
+uv sync --extra imagegen --extra llm
+```
+
+Provider failures fail the job and are reported to clients. Bunnyland never silently switches
+to a different generator.
+
 ## What gets generated, and when
 
 - **Portraits** — every character always gets a portrait. A throttled backfill loop fills
@@ -55,7 +97,7 @@ uv sync --extra imagegen
 Generated images **persist**: the reference is saved with the world, and nothing is
 regenerated once an entity or event has an image.
 
-## Choosing a model family
+## Choosing a ComfyUI model family
 
 A *workflow family* is a set of ComfyUI graphs (one per purpose: `portrait`, `entity`,
 `sprite`, `event`) built around one base model. Pick the family with `BUNNYLAND_IMAGE_WORKFLOWS`
@@ -151,6 +193,25 @@ GET  /admin/world/generate-image/{job_id}
 ```
 
 Generated files are served read-only at `GET /media/{kind}/{name}`.
+
+## Live provider validation
+
+Live image and LLM suites are independent and are not part of the default test gate:
+
+```bash
+BUNNYLAND_LIVE_IMAGEGEN_COMFY=1 \
+  uv run -m pytest -m live_imagegen_comfy
+
+BUNNYLAND_LIVE_IMAGEGEN_OPENROUTER=1 \
+  BUNNYLAND_LIVE_OPENROUTER_IMAGE_MODEL=google/gemini-3.1-flash-lite-image \
+  uv run -m pytest -m live_imagegen_openrouter
+
+BUNNYLAND_LIVE_LLM=1 \
+  uv run -m pytest -m live_llm
+```
+
+The ComfyUI suite also needs `COMFYUI_SERVER_URL`. The OpenRouter suite also needs
+`OPENROUTER_API_KEY` and always requires its separate live model variable.
 
 ## Coming soon
 

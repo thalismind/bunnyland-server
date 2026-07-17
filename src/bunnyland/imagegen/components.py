@@ -23,6 +23,7 @@ class PortraitImageComponent(Component):
     prompt: str = ""
     seed: int = 0
     template: str = ""
+    generator: str = "comfyui"
     generated_at_epoch: int = 0
 
 
@@ -35,6 +36,7 @@ class EventImageComponent(Component):
     prompt: str = ""
     seed: int = 0
     template: str = ""
+    generator: str = "comfyui"
     source_event_id: str = ""
     generated_at_epoch: int = 0
 

@@ -607,7 +607,7 @@ def release_mcp_claim(
     }
 
 
-def render_mcp_client_prompt(
+async def render_mcp_client_prompt(
     actor: WorldActor,
     *,
     claim_secrets: ClaimSecretRegistry | None = None,
@@ -616,6 +616,7 @@ def render_mcp_client_prompt(
     claim_secret: str | None = None,
     fragment_providers: Sequence[Any] = (),
     persona_providers: Sequence[Any] = (),
+    prompt_filter_runtime=None,
 ) -> dict[str, Any]:
     claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
     character_id, _controller_id, generation = _controlled_or_requested_character(
@@ -633,13 +634,25 @@ def render_mcp_client_prompt(
         include_entity_ids=True,
     )
     context = builder.build(character_id, epoch=actor.epoch)
+    from ..prompts.filters import PromptFilterRuntime, apply_prompt_filters
+
+    runtime = prompt_filter_runtime or getattr(actor, "prompt_filter_runtime", None)
+    if runtime is None:
+        runtime = PromptFilterRuntime.from_actor(actor)
+    prompt = await apply_prompt_filters(
+        render_prompt(context),
+        runtime=runtime,
+        character=actor.world.get_entity(character_id),
+        context=context,
+        epoch=actor.epoch,
+    )
     return {
         "ok": True,
         "client_id": client_id,
         "character_id": str(character_id),
         "controller_generation": generation,
         "world_epoch": actor.epoch,
-        "prompt": render_prompt(context),
+        "prompt": prompt,
     }
 
 
@@ -966,16 +979,18 @@ def create_bunnyland_mcp_app(
         description="Current Bunnyland prompt text for an MCP-controlled client character.",
         mime_type="text/plain",
     )
-    def client_prompt_resource(client_id: str) -> str:
+    async def client_prompt_resource(client_id: str) -> str:
         player(client_id)
-        return render_mcp_client_prompt(
-            actor,
-            claim_secrets=claim_secrets,
-            client_id=client_id,
-            claim_id=_request_claim_header("X-Bunnyland-Claim-Id"),
-            claim_secret=_request_claim_header("X-Bunnyland-Claim-Secret"),
-            fragment_providers=fragment_providers,
-            persona_providers=persona_providers,
+        return (
+            await render_mcp_client_prompt(
+                actor,
+                claim_secrets=claim_secrets,
+                client_id=client_id,
+                claim_id=_request_claim_header("X-Bunnyland-Claim-Id"),
+                claim_secret=_request_claim_header("X-Bunnyland-Claim-Secret"),
+                fragment_providers=fragment_providers,
+                persona_providers=persona_providers,
+            )
         )["prompt"]
 
     @play_tool
@@ -1060,7 +1075,7 @@ def create_bunnyland_mcp_app(
 
     @play_tool
     @_traced_tool
-    def client_prompt(
+    async def client_prompt(
         client_id: str,
         claim_id: str | None = None,
         claim_secret: str | None = None,
@@ -1069,7 +1084,7 @@ def create_bunnyland_mcp_app(
 
         try:
             player(client_id)
-            return render_mcp_client_prompt(
+            return await render_mcp_client_prompt(
                 actor,
                 claim_secrets=claim_secrets,
                 client_id=client_id,

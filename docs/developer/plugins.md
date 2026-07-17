@@ -80,3 +80,94 @@ plugin = Plugin(
 
 An unmet or misspelled capability stays unmet, which makes generation failures explicit and
 keeps separately installed addons from accidentally claiming each other's content.
+
+## Prompt filters
+
+Plugins can contribute asynchronous post-render text filters through
+`ContentContribution.prompt_filters`. A filter definition has a stable ID, a plugin-owned
+typed component, and one async handler. Filter configuration is persisted on ordinary ECS
+entities; a character is linked to each active filter entity by `PromptFilterBinding`.
+The binding's `order` controls sequential execution, and separate entities allow several
+instances of the same filter type.
+
+```python
+from pydantic.dataclasses import dataclass
+from relics import Component
+
+from bunnyland.plugins import ContentContribution, EcsContribution, Plugin
+from bunnyland.prompts import PromptFilterDefinition
+
+
+@dataclass(frozen=True)
+class EchoFilterComponent(Component):
+    repeats: int = 1
+
+
+async def echo_filter(text, context, component):
+    return text + (" echo" * component.repeats)
+
+
+plugin = Plugin(
+    id="example.echo",
+    name="Echo",
+    ecs=EcsContribution(components=(EchoFilterComponent,)),
+    content=ContentContribution(
+        prompt_filters=(
+            PromptFilterDefinition(
+                id="example.echo.repeat",
+                component_type=EchoFilterComponent,
+                handler=echo_filter,
+            ),
+        ),
+    ),
+)
+```
+
+Handlers receive the preceding text plus read-only access to the character, filter entity,
+world, structured prompt context, epoch, and configured memory/LLM services. Failures are
+logged and leave the preceding text unchanged. Because the stack is ordered, an obscuring
+filter should follow any prose-rewriting filter that must not reconstruct hidden details.
+The built-in storyteller component also accepts a short persisted `instruction` string for
+voice and style, while its factual and operational preservation rules remain mandatory.
+
+## Image generators
+
+Plugins can contribute a named image generator factory through
+`ContentContribution.image_generators`. The factory receives the global `ImageGenConfig` and
+the contributing plugin's already validated YAML config. Its generator resolves a profile for
+the requested purpose and implements one uniformly async `generate` method returning PNG bytes.
+Provider workflow graphs and credentials stay inside the implementation; API requests never
+carry them.
+
+```python
+from bunnyland.imagegen import ImageGeneratorProfile, ImagePurpose
+from bunnyland.plugins import ContentContribution, Plugin
+
+
+class AcmeGenerator:
+    name = "acme"
+
+    def resolve_profile(self, purpose, profile_name=""):
+        return ImageGeneratorProfile(name=profile_name or purpose.value, purpose=purpose)
+
+    async def generate(self, request):
+        return await acme_png(request.prompt, request.seed, request.width, request.height)
+
+
+class AcmeFactory:
+    name = "acme"
+
+    def __call__(self, image_config, plugin_config):
+        return AcmeGenerator()
+
+
+plugin = Plugin(
+    id="example.acme-images",
+    name="Acme Images",
+    content=ContentContribution(image_generators=(AcmeFactory(),)),
+)
+```
+
+Generator names are global. Duplicate registrations, configured unknown names, and unsupported
+profiles fail during startup or the job respectively; providers are never used as implicit
+fallbacks for one another.

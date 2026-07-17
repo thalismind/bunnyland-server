@@ -63,6 +63,7 @@ from .plugins.ids import (
     MCP,
     MEDIA,
     NUKESIM,
+    PROMPT_FILTERS,
     VOIDSIM,
     WORLDGEN,
 )
@@ -148,8 +149,8 @@ def select_plugins(
 ) -> list:
     """Discover installed plugins and select which are enabled."""
     plugins = list(bunnyland_plugins())
-    if enabled_ids is not None and MEDIA not in enabled_ids:
-        enabled_ids = [MEDIA, *enabled_ids]
+    if enabled_ids is not None:
+        enabled_ids = _dedupe_plugin_ids([MEDIA, PROMPT_FILTERS, *enabled_ids])
     if starter_pack:
         pack_ids = STARTER_PACKS.get(starter_pack)
         if pack_ids is None:
@@ -730,8 +731,8 @@ async def _run_api_runtime(
         raise SystemExit(str(exc)) from exc
 
 
-def _build_imagegen_service(actor, plugins, config_block=None):
-    """Build the image generation service when ``COMFYUI_SERVER_URL`` is configured."""
+def _build_imagegen_service(actor, plugins, config_block=None, plugin_config=None):
+    """Build image generation when a provider is selected or ComfyUI is configured."""
     from .imagegen.config import ImageGenConfig
     from .imagegen.wiring import build_image_service
 
@@ -740,6 +741,11 @@ def _build_imagegen_service(actor, plugins, config_block=None):
     else:
         config = ImageGenConfig(
             server_url=config_block.server_url.rstrip("/"),
+            generator=config_block.generator,
+            generators=dict(config_block.generators),
+            openrouter_image_model=config_block.openrouter_image_model,
+            openrouter_api_key=os.environ.get("OPENROUTER_API_KEY", "").strip(),
+            openrouter_server_url=os.environ.get("OPENROUTER_SERVER_URL", "").strip(),
             use_websocket=config_block.use_websocket,
             poll_interval_seconds=config_block.poll_interval_seconds,
             timeout_seconds=config_block.timeout_seconds,
@@ -754,8 +760,16 @@ def _build_imagegen_service(actor, plugins, config_block=None):
         )
     if config is None:
         return None
-    print(f"Image generation enabled via ComfyUI at {config.server_url}.")
-    return build_image_service(actor, config, plugins=plugins)
+    names = sorted(
+        {
+            config.generator_for(purpose)
+            for purpose in ("portrait", "entity", "sprite", "event")
+        }
+    )
+    print(f"Image generation enabled via {', '.join(names)}.")
+    if plugin_config is None:
+        return build_image_service(actor, config, plugins=plugins)
+    return build_image_service(actor, config, plugins=plugins, plugin_config=plugin_config)
 
 
 _CONFIG_ARG_FLAGS: dict[str, tuple[str, ...]] = {
@@ -851,7 +865,12 @@ async def _serve(args) -> None:
     )
     telemetry.register_world_gauges(actor)
     _configure_actor_backends(actor, args, lifesim_natural_aging)
-    imagegen = _build_imagegen_service(actor, plugins, getattr(args, "imagegen_config", None))
+    imagegen = _build_imagegen_service(
+        actor,
+        plugins,
+        getattr(args, "imagegen_config", None),
+        plugin_context.plugin_config,
+    )
     agent = _build_serve_agent(args, credentials, models)
     autosave = _make_autosave(actor, args, meta)
     builder = PromptBuilder(

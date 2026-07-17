@@ -589,6 +589,7 @@ def create_app(
             status=job.status,
             entity_id=job.entity_id,
             purpose=job.purpose.value,
+            generator=job.generator,
             url=job.url,
             alpha_url=job.alpha_url,
             error=job.error,

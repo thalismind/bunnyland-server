@@ -70,6 +70,7 @@ from bunnyland.plugins.ids import (
     NUKESIM,
     PERSONA,
     POLICY,
+    PROMPT_FILTERS,
     SOCIAL,
     STORYTELLER,
     TOONSIM,
@@ -93,6 +94,7 @@ def test_builtin_plugins_declared():
         HISTORY,
         SOCIAL,
         POLICY,
+        PROMPT_FILTERS,
         PERSONA,
         GARDENSIM,
         DRAGONSIM,
@@ -114,10 +116,122 @@ def test_builtin_plugins_declared():
 
 def test_select_defaults_to_default_enabled():
     plugins = bunnyland_plugins()
-    assert len(select(plugins, None)) == 24
+    assert len(select(plugins, None)) == 25
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
     assert CHECKPOINTS not in {p.id for p in select(plugins, None)}
     assert [p.id for p in select(plugins, [CHECKPOINTS])] == [CHECKPOINTS]
+
+
+def test_prompt_filter_plugin_registers_typed_async_definitions():
+    from bunnyland.foundation.prompt_filters.plugin import bunnyland_plugins as filter_plugins
+
+    plugin = next(plugin for plugin in bunnyland_plugins() if plugin.id == PROMPT_FILTERS)
+    registry = PluginRegistry((plugin,))
+
+    assert set(registry.prompt_filters) == {
+        "bunnyland.prompt_filters.corrupted",
+        "bunnyland.prompt_filters.recall",
+        "bunnyland.prompt_filters.redacted",
+        "bunnyland.prompt_filters.storyteller",
+    }
+    assert all(
+        definition.component_type in plugin.ecs.components
+        for _owner, definition in registry.prompt_filters.values()
+    )
+    assert filter_plugins() == [plugin]
+
+
+def test_prompt_filter_registration_rejects_invalid_contracts():
+    from pydantic.dataclasses import dataclass
+    from relics import Component
+
+    from bunnyland.prompts import PromptFilterDefinition
+
+    @dataclass(frozen=True)
+    class FilterComponent(Component):
+        value: str = ""
+
+    async def valid(text, context, component):
+        del context, component
+        return text
+
+    def sync(text, context, component):
+        del context, component
+        return text
+
+    def definition(filter_id, handler=valid):
+        return PromptFilterDefinition(filter_id, FilterComponent, handler)
+
+    with pytest.raises(PluginError, match="must be namespaced"):
+        PluginRegistry(
+            (
+                Plugin(
+                    id="example.filters",
+                    name="Filters",
+                    ecs=EcsContribution(components=(FilterComponent,)),
+                    content=ContentContribution(
+                        prompt_filters=(definition("wrong.filter"),)
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(PluginError, match="not exported"):
+        PluginRegistry(
+            (
+                Plugin(
+                    id="example.filters",
+                    name="Filters",
+                    content=ContentContribution(
+                        prompt_filters=(definition("example.filters.valid"),)
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(PluginError, match="handler must be async"):
+        PluginRegistry(
+            (
+                Plugin(
+                    id="example.filters",
+                    name="Filters",
+                    ecs=EcsContribution(components=(FilterComponent,)),
+                    content=ContentContribution(
+                        prompt_filters=(definition("example.filters.sync", sync),)
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(PluginError, match="duplicate prompt filter name"):
+        PluginRegistry(
+            (
+                Plugin(
+                    id="example.filters",
+                    name="Filters",
+                    ecs=EcsContribution(components=(FilterComponent,)),
+                    content=ContentContribution(
+                        prompt_filters=(
+                            definition("example.filters.same"),
+                            definition("example.filters.same"),
+                        )
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(PluginError, match="prompt filter component"):
+        PluginRegistry(
+            (
+                Plugin(
+                    id="example.filters",
+                    name="Filters",
+                    ecs=EcsContribution(components=(FilterComponent,)),
+                    content=ContentContribution(
+                        prompt_filters=(
+                            definition("example.filters.one"),
+                            definition("example.filters.two"),
+                        )
+                    ),
+                ),
+            )
+        )
 
 
 def test_collect_prompt_fragments_gathers_providers():
@@ -127,6 +241,14 @@ def test_collect_prompt_fragments_gathers_providers():
     # needs, environment, and sim packs contribute generic prompt state.
     assert len(providers) >= 3
     assert all(callable(p) for p in providers)
+
+
+def test_collect_prompt_filters_gathers_definitions():
+    from bunnyland.foundation.prompt_filters.mechanics import BUILTIN_PROMPT_FILTERS
+    from bunnyland.plugins import collect_prompt_filters
+
+    plugin = next(plugin for plugin in bunnyland_plugins() if plugin.id == PROMPT_FILTERS)
+    assert collect_prompt_filters((plugin,)) == list(BUILTIN_PROMPT_FILTERS)
 
 
 def test_collect_persona_fragments_gathers_stable_persona_providers():

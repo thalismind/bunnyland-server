@@ -22,6 +22,7 @@ from ..llm_agents.agent import ChatAgentReply
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.tools import ToolCall, command_from_tool_call, reference_arg_keys
 from ..prompts.builder import PromptBuilder, render_prompt
+from ..prompts.filters import PromptFilterRuntime, apply_prompt_filters
 from .models import (
     CharacterChatActionResult,
     CharacterChatPendingResponse,
@@ -65,11 +66,18 @@ class CharacterChatService:
         builder: PromptBuilder,
         agent,
         *,
+        prompt_filter_runtime: PromptFilterRuntime | None = None,
         result_timeout_seconds: float = ACTION_RESULT_TIMEOUT_SECONDS,
     ) -> None:
         self.actor = actor
         self.builder = builder
         self.agent = agent
+        self.prompt_filter_runtime = prompt_filter_runtime or getattr(
+            actor, "prompt_filter_runtime", None
+        )
+        if self.prompt_filter_runtime is None:
+            self.prompt_filter_runtime = PromptFilterRuntime.from_actor(actor, llm=agent)
+            actor.prompt_filter_runtime = self.prompt_filter_runtime
         self.result_timeout_seconds = max(0.0, result_timeout_seconds)
         self._pending: dict[tuple[str, str, str], PendingChatAction] = {}
         self._completed_actions: dict[str, CharacterChatActionResult] = {}
@@ -111,6 +119,13 @@ class CharacterChatService:
         with _chat_span("character.chat.prompt", {"character.id": character_id}) as span:
             context = self.builder.build(parsed, epoch=self.actor.epoch)
             prompt = render_prompt(context)
+            prompt = await apply_prompt_filters(
+                prompt,
+                runtime=self.prompt_filter_runtime,
+                character=character,
+                context=context,
+                epoch=self.actor.epoch,
+            )
             messages = self._messages(prompt, request)
             span.set_attribute("chat.prompt", _trace_text(prompt))
             span.set_attribute("chat.prompt_chars", len(prompt))

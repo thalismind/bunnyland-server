@@ -706,6 +706,7 @@ class WorldImageGenerationResponse(BaseModel):
     status: str
     entity_id: str
     purpose: str
+    generator: str = "comfyui"
     url: str = ""
     alpha_url: str = ""
     error: str | None = None

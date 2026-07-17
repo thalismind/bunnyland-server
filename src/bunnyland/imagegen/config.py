@@ -1,16 +1,15 @@
-"""Configuration for ComfyUI image generation (spec 27).
+"""Configuration for pluggable image generation (spec 27).
 
-The whole feature is opt-in: image generation is only available when ``COMFYUI_SERVER_URL``
-is set, so :func:`ImageGenConfig.from_env` returns ``None`` when it is absent and the server
-runs exactly as before. Secrets (the LLM api key) live here only at runtime and are never
-serialized into snapshots or saves.
+The whole feature is opt-in: existing ``COMFYUI_SERVER_URL`` configuration enables ComfyUI,
+while an explicit generator selection enables another built-in or a plugin provider. Secrets
+live here only at runtime and are never serialized into snapshots or saves.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..llm_agents.agent import DEFAULT_MODEL
 
@@ -33,7 +32,13 @@ def _env_float(environ: Mapping[str, str], name: str, default: float) -> float:
 class ImageGenConfig:
     """Connection and behavior settings for the image generation subsystem."""
 
-    server_url: str
+    server_url: str = ""
+    #: Server-wide generator and optional per-purpose overrides.
+    generator: str = "comfyui"
+    generators: dict[str, str] = field(default_factory=dict)
+    openrouter_image_model: str = ""
+    openrouter_api_key: str = ""
+    openrouter_server_url: str = ""
     use_websocket: bool = True
     poll_interval_seconds: float = 1.0
     timeout_seconds: float = 120.0
@@ -58,10 +63,27 @@ class ImageGenConfig:
         """Build a config from environment variables, or ``None`` when imagegen is disabled."""
         environ = os.environ if environ is None else environ
         server_url = environ.get("COMFYUI_SERVER_URL", "").strip()
-        if not server_url:
+        selected = environ.get("BUNNYLAND_IMAGE_GENERATOR", "").strip()
+        overrides = {
+            purpose: value
+            for purpose in ("portrait", "entity", "sprite", "event")
+            if (
+                value := environ.get(
+                    f"BUNNYLAND_IMAGE_GENERATOR_{purpose.upper()}", ""
+                ).strip()
+            )
+        }
+        if not server_url and not selected and not overrides:
             return None
         return cls(
             server_url=server_url.rstrip("/"),
+            generator=selected or "comfyui",
+            generators=overrides,
+            openrouter_image_model=environ.get(
+                "BUNNYLAND_IMAGE_OPENROUTER_MODEL", ""
+            ).strip(),
+            openrouter_api_key=environ.get("OPENROUTER_API_KEY", "").strip(),
+            openrouter_server_url=environ.get("OPENROUTER_SERVER_URL", "").strip(),
             use_websocket=_env_bool(environ, "COMFYUI_USE_WEBSOCKET", True),
             poll_interval_seconds=_env_float(environ, "COMFYUI_POLL_INTERVAL_SECONDS", 1.0),
             timeout_seconds=_env_float(environ, "COMFYUI_TIMEOUT_SECONDS", 120.0),
@@ -76,6 +98,10 @@ class ImageGenConfig:
             host=environ.get("OLLAMA_HOST", "").strip(),
             api_key=environ.get("OLLAMA_CLOUD_API_KEY", "").strip(),
         )
+
+    def generator_for(self, purpose: str) -> str:
+        """Return the configured generator name for one purpose."""
+        return self.generators.get(purpose, "").strip() or self.generator
 
 
 __all__ = ["ImageGenConfig"]

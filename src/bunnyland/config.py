@@ -148,6 +148,9 @@ class WebConfig:
 @dataclass(frozen=True)
 class ImageGenConfigBlock:
     server_url: str = ""
+    generator: str = "comfyui"
+    generators: dict[str, str] = Field(default_factory=dict)
+    openrouter_image_model: str = ""
     use_websocket: bool = True
     poll_interval_seconds: float = 1.0
     timeout_seconds: float = 120.0
@@ -315,7 +318,13 @@ class BunnylandConfig:
             "openrouter_api_key": llm.openrouter_api_key,
             "openrouter_server_url": llm.openrouter_server_url,
             "discord_token": discord.token,
-            "imagegen_config": imagegen if imagegen.server_url else None,
+            "imagegen_config": imagegen
+            if (
+                imagegen.server_url
+                or imagegen.generator != "comfyui"
+                or any(imagegen.generators.values())
+            )
+            else None,
             "plugin_config": dict(self.plugins.config),
             "addon_config": dict(self.addons.config),
         }
@@ -394,6 +403,24 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS", _csv(discord.allowed_bot_user_ids))
         _set_if(env, "BUNNYLAND_DISCORD_COOLDOWN_SECONDS", discord.cooldown_seconds)
         _set_if(env, "COMFYUI_SERVER_URL", imagegen.server_url)
+        imagegen_enabled = (
+            bool(imagegen.server_url)
+            or imagegen.generator != "comfyui"
+            or any(imagegen.generators.values())
+        )
+        if imagegen_enabled:
+            _set_if(env, "BUNNYLAND_IMAGE_GENERATOR", imagegen.generator)
+            for purpose in ("portrait", "entity", "sprite", "event"):
+                _set_if(
+                    env,
+                    f"BUNNYLAND_IMAGE_GENERATOR_{purpose.upper()}",
+                    imagegen.generators.get(purpose, ""),
+                )
+            _set_if(
+                env,
+                "BUNNYLAND_IMAGE_OPENROUTER_MODEL",
+                imagegen.openrouter_image_model,
+            )
         _set_if(env, "COMFYUI_USE_WEBSOCKET", imagegen.use_websocket)
         _set_if(env, "COMFYUI_POLL_INTERVAL_SECONDS", imagegen.poll_interval_seconds)
         _set_if(env, "COMFYUI_TIMEOUT_SECONDS", imagegen.timeout_seconds)

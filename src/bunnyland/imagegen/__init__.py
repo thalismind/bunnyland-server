@@ -1,10 +1,9 @@
-"""ComfyUI image generation (spec 27).
+"""Pluggable image generation (spec 27).
 
-Turns entities and events into pictures via a ComfyUI server: an LLM enhancer writes a
-prompt, a workflow template is filled in, the job runs on ComfyUI, and the result is stored
-on disk and referenced from the ECS. Network-touching pieces (the client, the LLM enhancer,
-the alpha post-process) lazily import their optional dependencies, so importing this package
-never requires the ``imagegen`` extra.
+Turns entities and events into pictures through a purpose-selected generator, then stores the
+result on disk and references it from the ECS. Network-touching pieces and raster processing
+lazily import their optional dependencies, so importing this package never requires the
+``imagegen`` or ``llm`` extras.
 """
 
 from __future__ import annotations
@@ -38,7 +37,16 @@ from .events import (
     ImageGenerationStartedEvent,
 )
 from .feed import latest_image_completion, latest_image_failure
+from .generators import (
+    ImageGenerator,
+    ImageGeneratorFactory,
+    ImageGeneratorProfile,
+    ImageGeneratorRequest,
+    collect_image_generators,
+)
+from .in_memory import InMemoryImageGenerator
 from .media import MediaError, MediaStore
+from .openrouter import OpenRouterImageGenerator
 from .postprocess import remove_edge_background
 from .prompt import (
     CatalogExampleSource,
@@ -88,17 +96,23 @@ __all__ = [
     "ImageGenError",
     "ImageGenJob",
     "ImageGenService",
+    "ImageGenerator",
+    "ImageGeneratorFactory",
+    "ImageGeneratorProfile",
+    "ImageGeneratorRequest",
     "ImageGenerationCompletedEvent",
     "ImageGenerationFailedEvent",
     "ImageGenerationStartedEvent",
     "ImagePromptRequest",
     "ImagePurpose",
     "ImageRequestComponent",
+    "InMemoryImageGenerator",
     "LLMPromptEnhancer",
     "MediaError",
     "MediaKind",
     "MediaStore",
     "PortraitImageComponent",
+    "OpenRouterImageGenerator",
     "PromptEnhancer",
     "PromptExampleSource",
     "PromptStyle",
@@ -111,6 +125,7 @@ __all__ = [
     "available_families",
     "build_comfy_client",
     "build_image_service",
+    "collect_image_generators",
     "default_templates",
     "latest_image_completion",
     "latest_image_failure",

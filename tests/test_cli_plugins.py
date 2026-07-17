@@ -55,6 +55,7 @@ from bunnyland.plugins.ids import (
     MCP,
     MEDIA,
     NUKESIM,
+    PROMPT_FILTERS,
     VOIDSIM,
     WORLDGEN,
 )
@@ -401,6 +402,7 @@ def test_select_plugins_combines_starter_pack_with_explicit_plugins():
 
     assert [plugin.id for plugin in selected] == [
         MEDIA,
+        PROMPT_FILTERS,
         CORE_VERBS,
         WORLDGEN,
         LIFESIM,
@@ -431,14 +433,14 @@ def test_select_plugins_ignores_extra_plugin_already_enabled_by_default():
 def test_select_plugins_adds_extra_plugin_to_explicit_selection():
     selected = select_plugins([WORLDGEN], extra_enabled_ids=(MCP,))
 
-    assert [plugin.id for plugin in selected] == [MEDIA, WORLDGEN, MCP]
+    assert [plugin.id for plugin in selected] == [MEDIA, PROMPT_FILTERS, WORLDGEN, MCP]
 
 
 def test_build_actor_applies_requested_plugins():
     actor, applied = build_actor([WORLDGEN])
 
     assert actor is not None
-    assert [plugin.id for plugin in applied] == [MEDIA, WORLDGEN]
+    assert [plugin.id for plugin in applied] == [MEDIA, PROMPT_FILTERS, WORLDGEN]
 
 
 def test_cli_starter_pack_records_loaded_plugins(tmp_path):
@@ -607,10 +609,11 @@ def test_cli_builds_imagegen_service_from_yaml_config(monkeypatch):
 
     calls = {}
 
-    def fake_build_image_service(actor, config, *, plugins):
+    def fake_build_image_service(actor, config, *, plugins, plugin_config):
         calls["actor"] = actor
         calls["config"] = config
         calls["plugins"] = plugins
+        calls["plugin_config"] = plugin_config
         return "service"
 
     monkeypatch.setattr(wiring, "build_image_service", fake_build_image_service)
@@ -623,12 +626,14 @@ def test_cli_builds_imagegen_service_from_yaml_config(monkeypatch):
             server_url="http://comfy.local/",
             public_base_url="https://cdn.example.com/",
         ),
+        {"example.images": {"palette": "warm"}},
     )
 
     assert service == "service"
     assert calls["actor"] is actor
     assert calls["config"].server_url == "http://comfy.local"
     assert calls["config"].public_base_url == "https://cdn.example.com"
+    assert calls["plugin_config"] == {"example.images": {"palette": "warm"}}
 
 
 def test_cli_autosaves_during_game_loop(tmp_path, capsys):

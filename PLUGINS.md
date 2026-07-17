@@ -25,9 +25,11 @@ bunnyland serve --module bunnyland_3d --module bunnyland_rl ...
 - `bunnyland.social`: social bonds and relationship state.
 - `bunnyland.policy`: world and character boundaries.
 - `bunnyland.persona`: goals, traits, and promptable personality state.
+- `bunnyland.prompt_filters`: persisted, stackable async prompt redaction, corruption,
+  memory recall, and storyteller prose filtering.
 - `bunnyland.storyteller`: paced incidents and cross-pack event pressure.
 - `bunnyland.toonsim`: sprite/rendering metadata for 2D clients.
-- `bunnyland.imagegen`: image generation request and storage hooks.
+- `bunnyland.imagegen`: provider-neutral image generation request, routing, and storage hooks.
 - `bunnyland.mcp`: MCP-facing runtime integration.
 
 ## Builtin Sim Packs
@@ -99,6 +101,9 @@ consequences, prompt fragments, worldgen hooks, and player/AI verbs). Each is ho
   a sanity dread meter and banishing rituals and wards.
 - **`bunnyland.wildsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-wildsim):
   wilderness survival — scent trails, cold/warmth exposure, campfires, and foraging.
+- **`bunnyland.hollowsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-hollowsim):
+  graphic cave-survival horror — finite portable light, deterministic mutant and cultist
+  hunters, fortified shelters, rescue escorts, artifact recovery, and night survival.
 - **`bunnyland.petsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-petsim):
   companion creatures — following, taming, bonding and loyalty, tricks, and danger reactions.
 - **`bunnyland.bardsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-bardsim):

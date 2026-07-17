@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from inspect import getmembers, isclass
+from inspect import getmembers, isclass, iscoroutinefunction
 from types import MappingProxyType
 from typing import Any
 
@@ -51,6 +51,8 @@ class PluginRegistry:
         self._projections: dict[tuple[str, str], Any] = {}
         self._incidents: dict[tuple[str, str], Any] = {}
         self._incident_resolution_rules: dict[tuple[str, str], Any] = {}
+        self._prompt_filters: dict[str, tuple[str, Any]] = {}
+        self._prompt_filter_components: dict[type, tuple[str, Any]] = {}
         self._integrations: dict[tuple[str, str], Any] = {}
         self._normalizers: list[tuple[str, Any]] = []
         from ..core.generation import CoreGenerationEnricher
@@ -124,6 +126,10 @@ class PluginRegistry:
     @property
     def incident_resolution_rules(self):
         return MappingProxyType(self._incident_resolution_rules)
+
+    @property
+    def prompt_filters(self):
+        return MappingProxyType(self._prompt_filters)
 
     @property
     def services(self):
@@ -248,6 +254,41 @@ class PluginRegistry:
                 rule,
                 "incident resolution rule",
             )
+        for definition in plugin.content.prompt_filters:
+            if not definition.id.startswith(f"{plugin.id}."):
+                from .loader import PluginError
+
+                raise PluginError(
+                    f"prompt filter {definition.id!r} must be namespaced by {plugin.id!r}"
+                )
+            if definition.component_type not in plugin.ecs.components:
+                from .loader import PluginError
+
+                raise PluginError(
+                    f"prompt filter {definition.id!r} uses component "
+                    f"{definition.component_type.__name__!r} that is not exported by "
+                    f"{plugin.id!r}"
+                )
+            if not iscoroutinefunction(definition.handler):
+                from .loader import PluginError
+
+                raise PluginError(f"prompt filter {definition.id!r} handler must be async")
+            self._global(
+                self._prompt_filters,
+                definition.id,
+                plugin.id,
+                definition,
+                "prompt filter",
+            )
+            previous = self._prompt_filter_components.get(definition.component_type)
+            if previous is not None:
+                from .loader import PluginError
+
+                raise PluginError(
+                    f"prompt filter component {definition.component_type.__name__!r} is "
+                    f"exported by both {previous[0]!r} and {plugin.id!r}"
+                )
+            self._prompt_filter_components[definition.component_type] = (plugin.id, definition)
         for integration in plugin.runtime.integration_factories:
             self._scoped(self._integrations, plugin.id, integration, "integration")
         self._normalizers.extend(

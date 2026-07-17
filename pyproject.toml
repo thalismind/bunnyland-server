@@ -52,6 +52,7 @@ bunnyland = "bunnyland.cli:main"
 "bunnyland.nukesim" = "bunnyland.simpacks.nukesim.plugin:plugin"
 "bunnyland.persona" = "bunnyland.foundation.persona.plugin:plugin"
 "bunnyland.policy" = "bunnyland.foundation.policy.plugin:plugin"
+"bunnyland.prompt_filters" = "bunnyland.foundation.prompt_filters.plugin:plugin"
 "bunnyland.social" = "bunnyland.foundation.social.plugin:plugin"
 "bunnyland.storyteller" = "bunnyland.foundation.storyteller.plugin:plugin"
 "bunnyland.toonsim" = "bunnyland.simpacks.toonsim.plugin:plugin"
@@ -87,7 +88,8 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "live_llm: optional live LLM integration tests; skipped unless BUNNYLAND_LIVE_LLM=1 and provider credentials are set",
-    "live_generation: optional live ComfyUI image-generation tests; skipped unless BUNNYLAND_LIVE_GENERATION=1 and COMFYUI_SERVER_URL is set",
+    "live_imagegen_comfy: optional live ComfyUI tests; requires BUNNYLAND_LIVE_IMAGEGEN_COMFY=1 and COMFYUI_SERVER_URL",
+    "live_imagegen_openrouter: optional live OpenRouter image tests; requires BUNNYLAND_LIVE_IMAGEGEN_OPENROUTER=1, credentials, and an explicit model",
     "otel: telemetry tests; skipped unless the 'otel' extra (opentelemetry-sdk) is installed",
 ]
 

@@ -73,8 +73,12 @@ class ContentContribution(BaseModel):
     prompt_fragments: tuple[Any, ...] = ()
     #: Stable persona fragment providers for identity, role, bonds, and boundaries.
     persona_fragments: tuple[Any, ...] = ()
+    #: Async post-render text filters contributed by plugins.
+    prompt_filters: tuple[Any, ...] = ()
     #: Image-prompt enhancers (``PromptEnhancer`` instances) for image generation (spec 27).
     prompt_enhancers: tuple[Any, ...] = ()
+    #: Named image-generator factories. Factories receive global and owner plugin config.
+    image_generators: tuple[Any, ...] = ()
     #: Namespaced capabilities this plugin can satisfy during generation.
     generation_capabilities: tuple[str, ...] = ()
     #: Pure request normalizers run before generation enrichers.
