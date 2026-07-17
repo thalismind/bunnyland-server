@@ -9,8 +9,9 @@ __pycache__/
 .coverage.*
 coverage.xml
 htmlcov/
-artifacts/coverage/
-artifacts/performance/
+artifacts/*
+!artifacts/experiments/
+!artifacts/experiments/**
 
 # venv / uv
 .venv/
