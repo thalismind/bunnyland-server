@@ -1383,6 +1383,7 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
 
     paths = {route.path for route in app.routes}
     assert "/public/health" in paths
+    assert "/public/features" in paths
     assert "/admin/world/snapshot" in paths
     assert "/play/world/characters" in paths
     assert "/play/world/character/{id}" in paths
@@ -1798,6 +1799,7 @@ def test_health_reports_configured_feature_flags(scenario, monkeypatch):
     client = TestClient(app)
 
     health = client.get("/play/world/status")
+    public_features = client.get("/public/features")
 
     assert health.status_code == 200
     assert health.json()["features"] == {
@@ -1806,6 +1808,8 @@ def test_health_reports_configured_feature_flags(scenario, monkeypatch):
         "character_sheets": True,
         "image_generation": True,
     }
+    assert public_features.status_code == 200
+    assert public_features.json() == health.json()["features"]
 
 
 def test_fastapi_character_list_returns_claim_lobby_without_state(scenario):

@@ -765,17 +765,24 @@ def create_app(
     async def health() -> ReadinessResponse:
         return ReadinessResponse()
 
+    def _feature_status() -> FeatureStatusResponse:
+        return FeatureStatusResponse(
+            mcp=mcp_enabled(plugins),
+            character_chat=character_chat is not None,
+            character_sheets=True,
+            image_generation=imagegen is not None,
+        )
+
+    @app.get("/public/features", response_model=FeatureStatusResponse)
+    async def public_features() -> FeatureStatusResponse:
+        return _feature_status()
+
     @app.get("/play/world/status", response_model=HealthResponse)
     async def world_status() -> HealthResponse:
         return HealthResponse(
             world_epoch=actor.epoch,
             git_hash=_git_hash(),
-            features=FeatureStatusResponse(
-                mcp=mcp_enabled(plugins),
-                character_chat=character_chat is not None,
-                character_sheets=True,
-                image_generation=imagegen is not None,
-            ),
+            features=_feature_status(),
         )
 
     @app.get("/admin/world/snapshot")

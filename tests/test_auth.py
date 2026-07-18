@@ -747,6 +747,19 @@ async def test_hsts_covers_public_auth_failure_and_rate_limit_responses(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_public_features_do_not_require_authentication(tmp_path) -> None:
+    tokens = TokenStore(tmp_path / "tokens.sqlite3")
+    app = create_app(build_scenario().actor, token_store=tokens)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://testserver"
+    ) as client:
+        features = await client.get("/public/features")
+        assert features.status_code == 200
+        assert features.json()["character_sheets"] is True
+    tokens.close()
+
+
+@pytest.mark.asyncio
 async def test_auth_routes_reject_when_authentication_is_not_configured() -> None:
     app = create_app(build_scenario().actor)
     transport = httpx.ASGITransport(app=app)
