@@ -1232,21 +1232,29 @@ def test_control_claim_tuple_compatibility_and_mismatch():
     assert tui_app._control_claim(("controller:1",)) is None
 
 
-async def test_remote_backend_claims_web_controller():
+async def test_remote_backend_claims_web_controller(monkeypatch, tmp_path):
+    monkeypatch.setattr(tui_backend, "CONFIG_DIR", tmp_path / "config")
+
     class Response:
         is_success = True
         status_code = 200
         text = ""
+        headers = {"X-Bunnyland-Claim-Secret": "secret-1"}
 
         def json(self):
-            return {"controller_id": "controller:web", "controller_generation": 4}
+            return {
+                "id": "claim-1",
+                "controller_id": "controller:web",
+                "controller_generation": 4,
+                "control": "active",
+            }
 
     class Client:
         def __init__(self) -> None:
             self.requests: list[tuple[str, dict]] = []
 
-        async def post(self, url: str, json: dict):
-            self.requests.append((url, json))
+        async def post(self, url: str, **kwargs):
+            self.requests.append((url, kwargs))
             return Response()
 
     backend = RemoteBackend(
@@ -1262,26 +1270,29 @@ async def test_remote_backend_claims_web_controller():
     assert control == ("controller:web", 4)
     assert backend._client.requests == [
         (
-            "https://server.example/play/world/controllers/web/claim",
+            "https://server.example/play/claims",
             {
-                "character_id": PLAYER,
-                "client_id": "remote-client",
-                "label": "tui",
-                "fallback_controller": "llm",
-                "timeout_seconds": 1200,
+                "json": {
+                    "character_id": PLAYER,
+                    "label": "tui",
+                    "fallback_controller": "llm",
+                    "timeout_seconds": 1200,
+                },
             },
         )
     ]
 
 
-async def test_remote_backend_failed_claim_returns_none():
+async def test_remote_backend_failed_claim_returns_none(monkeypatch, tmp_path):
+    monkeypatch.setattr(tui_backend, "CONFIG_DIR", tmp_path / "config")
+
     class Response:
         is_success = False
         status_code = 503
         text = "nope"
 
     class Client:
-        async def post(self, url: str, json: dict):
+        async def post(self, url: str, **_kwargs):
             return Response()
 
     backend = RemoteBackend("https://server.example", client_id="remote-client")
@@ -1299,20 +1310,21 @@ async def test_remote_backend_reclaim_uses_stored_claim_secret(monkeypatch, tmp_
         is_success = True
         status_code = 200
         text = ""
+        headers = {"X-Bunnyland-Claim-Secret": "secret-1"}
 
         def json(self):
             return {
                 "controller_id": "controller:new",
                 "controller_generation": 3,
-                "claim_id": "claim-1",
-                "claim_secret": "secret-1",
+                "id": "claim-1",
+                "control": "active",
             }
 
     class Client:
         def __init__(self) -> None:
             self.requests: list[tuple[str, dict]] = []
 
-        async def post(self, url: str, **kwargs):
+        async def put(self, url: str, **kwargs):
             self.requests.append((url, kwargs))
             return Response()
 
@@ -1324,16 +1336,8 @@ async def test_remote_backend_reclaim_uses_stored_claim_secret(monkeypatch, tmp_
     assert control == ControlClaim("controller:new", 3, "claim-1", "secret-1")
     assert backend._client.requests == [
         (
-            "https://server.example/play/world/controllers/web/claim",
+            "https://server.example/play/claims/claim-1",
             {
-                "json": {
-                    "character_id": PLAYER,
-                    "client_id": "remote-client",
-                    "label": "tui",
-                    "fallback_controller": None,
-                    "timeout_seconds": None,
-                    "claim_id": "claim-1",
-                },
                 "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
             },
         )
@@ -1361,19 +1365,19 @@ async def test_remote_backend_uses_claim_headers_and_params(monkeypatch, tmp_pat
 
         async def get(self, url: str, **kwargs):
             self.requests.append(("GET", url, kwargs))
-            return Response({"world_epoch": 7})
+            return Response({"world_epoch": 7, "character": {}, "commands": [], "scene": {}})
 
         async def post(self, url: str, **kwargs):
             self.requests.append(("POST", url, kwargs))
-            if url.endswith("/play/world/commands"):
-                return Response({"queued": True, "reason": ""})
-            if url.endswith("/scene-image"):
-                return Response({"status": "queued", "url": "http://image"})
+            if url.endswith("/commands"):
+                return Response({"status": "queued", "reason": ""})
+            if url.endswith("/jobs"):
+                return Response({"status": "queued", "result": {"url": "http://image"}})
             return Response()
 
         async def delete(self, url: str, **kwargs):
             self.requests.append(("DELETE", url, kwargs))
-            return Response({"cancelled": True})
+            return Response({"status": "cancelled"})
 
     backend = RemoteBackend("https://server.example", client_id="remote-client")
     backend._client = Client()
@@ -1395,50 +1399,33 @@ async def test_remote_backend_uses_claim_headers_and_params(monkeypatch, tmp_pat
     assert backend._client.requests == [
         (
             "GET",
-            f"https://server.example/play/world/character/{PLAYER}",
-            {
-                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
-                "params": {"claim_id": "claim-1"},
-            },
+            "https://server.example/play/claims/claim-1/projection",
+            {"headers": {"X-Bunnyland-Claim-Secret": "secret-1"}},
         ),
         (
             "GET",
-            f"https://server.example/play/world/character/{PLAYER}/commands",
-            {
-                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
-                "params": {"claim_id": "claim-1"},
-            },
+            "https://server.example/play/claims/claim-1/projection",
+            {"headers": {"X-Bunnyland-Claim-Secret": "secret-1"}},
         ),
         (
             "DELETE",
-            f"https://server.example/play/world/character/{PLAYER}/commands/cmd-1",
+            "https://server.example/play/claims/claim-1/commands/cmd-1",
+            {"headers": {"X-Bunnyland-Claim-Secret": "secret-1"}},
+        ),
+        (
+            "POST",
+            "https://server.example/play/claims/claim-1/commands",
             {
                 "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
-                "params": {
-                    "controller_id": "controller:1",
-                    "controller_generation": 3,
-                    "claim_id": "claim-1",
-                },
+                "json": {"command_type": "wait"},
             },
         ),
         (
             "POST",
-            "https://server.example/play/world/commands",
+            "https://server.example/play/claims/claim-1/jobs",
             {
                 "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
-                "json": {
-                    "character_id": PLAYER,
-                    "command_type": "wait",
-                    "claim_id": "claim-1",
-                },
-            },
-        ),
-        (
-            "POST",
-            f"https://server.example/play/world/character/{PLAYER}/scene-image",
-            {
-                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
-                "params": {"claim_id": "claim-1"},
+                "json": {"kind": "scene_image"},
             },
         ),
     ]
@@ -1459,6 +1446,7 @@ async def test_remote_backend_request_image_reports_unavailable_and_error():
 
     backend = RemoteBackend("https://server.example", client_id="remote-client")
     backend._client = Client([Response(status_code=409), Response(status_code=500)])
+    backend._claims[PLAYER] = ControlClaim("controller:1", 1, "claim-1", "secret-1")
 
     unavailable = await backend.request_image(PLAYER)
     errored = await backend.request_image(PLAYER)
@@ -1486,6 +1474,14 @@ async def test_remote_backend_release_controller_and_claim_requests():
             self.responses = list(responses)
             self.requests: list[tuple[str, dict]] = []
 
+        async def patch(self, url: str, **kwargs):
+            self.requests.append(("PATCH", url, kwargs))
+            return self.responses.pop(0)
+
+        async def delete(self, url: str, **kwargs):
+            self.requests.append(("DELETE", url, kwargs))
+            return self.responses.pop(0)
+
         async def post(self, url: str, **kwargs):
             self.requests.append((url, kwargs))
             return self.responses.pop(0)
@@ -1503,8 +1499,7 @@ async def test_remote_backend_release_controller_and_claim_requests():
                 payload={
                     "controller_id": "controller:2",
                     "controller_generation": 4,
-                    "claim_id": "claim-1",
-                    "claim_secret": "secret-1",
+                    "id": "claim-1",
                 }
             ),
             Response(payload={"ok": True}),
@@ -1516,28 +1511,17 @@ async def test_remote_backend_release_controller_and_claim_requests():
     assert await backend.release_claim(PLAYER, released) is True
     assert backend._client.requests == [
         (
-            "https://server.example/play/world/controllers/web/release-controller",
+            "PATCH",
+            "https://server.example/play/claims/claim-1",
             {
                 "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
-                "json": {
-                    "character_id": PLAYER,
-                    "client_id": "remote-client",
-                    "claim_id": "claim-1",
-                    "fallback_controller": "llm",
-                    "timeout_seconds": 900,
-                },
+                "json": {"kind": "control", "desired": "fallback"},
             },
         ),
         (
-            "https://server.example/play/world/controllers/web/release-claim",
-            {
-                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
-                "json": {
-                    "character_id": PLAYER,
-                    "client_id": "remote-client",
-                    "claim_id": "claim-1",
-                },
-            },
+            "DELETE",
+            "https://server.example/play/claims/claim-1",
+            {"headers": {"X-Bunnyland-Claim-Secret": "secret-1"}},
         ),
     ]
 
@@ -1564,12 +1548,15 @@ async def test_remote_backend_recent_events_reads_endpoint():
 
     backend = RemoteBackend("https://server.example")
     backend._client = Client()
+    backend._claims["character:1"] = ControlClaim(
+        "controller:1", 1, "claim-1", "secret-1"
+    )
 
     events = await backend.recent_events("character:1")
 
     assert events == [{"type": "event", "data": {"event_type": "PingEvent"}}]
     assert backend._client.urls == [
-        "https://server.example/play/world/character/character:1/events/recent"
+        "https://server.example/play/claims/claim-1/events"
     ]
 
 
@@ -1635,12 +1622,16 @@ async def test_remote_backend_watches_authenticated_player_updates(monkeypatch):
 
     assert backend.supports_live_updates() is True
     assert sockets[0].url == (
-        "wss://player:password@server.example/api/play/world/character/character%3A1/updates"
+        "wss://player:password@server.example/api/play/claims/claim-1/stream"
     )
     assert "top-secret" not in sockets[0].url
     assert json.loads(sockets[0].sent[0]) == {
         "type": "authenticate",
-        "data": {"token": None, "claim_id": "claim-1", "claim_secret": "top-secret"},
+        "data": {
+            "token": None,
+            "client_id": backend.client_id,
+            "claim_secret": "top-secret",
+        },
     }
     assert states == ["connecting", "live"]
     assert [frame["type"] for frame in frames] == ["ready", "event"]
@@ -1683,8 +1674,12 @@ async def test_remote_backend_login_persistence_refresh_rotation_and_close(tmp_p
             self.rotate_conflict = False
 
         async def post(self, url, **_kwargs):
-            if url.endswith("/auth/login"):
+            if url.endswith("/auth/session"):
                 return Response({"token": "login-token", "rotate_after": 123})
+            raise AssertionError(url)
+
+        async def patch(self, url, **_kwargs):
+            assert url.endswith("/auth/session")
             if self.rotate_conflict:
                 return Response({}, 409)
             return Response({"token": "rotated-token", "rotate_after": 456})
@@ -1811,12 +1806,15 @@ async def test_remote_backend_live_updates_reconnect_after_transport_failure(mon
     monkeypatch.setattr(asyncio, "sleep", stop_after_delay)
     monkeypatch.setattr("bunnyland.tui.backend.random.uniform", lambda _low, _high: 1.0)
     backend = RemoteBackend("https://server.example")
+    control = ControlClaim("controller:1", 1, "claim-1", "secret-1")
 
     with pytest.raises(asyncio.CancelledError):
-        await backend.watch_updates("character:1", None, lambda _frame: None, states.append)
+        await backend.watch_updates(
+            "character:1", control, lambda _frame: None, states.append
+        )
 
     assert calls == [
-        "wss://server.example/play/world/character/character%3A1/updates",
+        "wss://server.example/play/claims/claim-1/stream",
         1.0,
     ]
     assert states == ["connecting", "fallback"]
@@ -1859,20 +1857,27 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
     class Client:
         def __init__(self, *, timeout):
             self.timeout = timeout
+            self.headers = {}
             self.closed = False
             self.requests: list[tuple[str, str, dict | None]] = []
 
         async def get(self, url: str, **kwargs):
             self.requests.append(("GET", url, kwargs or None))
+            if url.endswith("/play/characters"):
+                return Response(payload={"world_epoch": 7, "characters": []})
+            if url.endswith("/projection"):
+                return Response(
+                    payload={"world_epoch": 7, "character": {}, "scene": {}, "commands": []}
+                )
             return Response(payload={"world_epoch": 7})
 
-        async def post(self, url: str, json: dict):
-            self.requests.append(("POST", url, json))
+        async def post(self, url: str, **kwargs):
+            self.requests.append(("POST", url, kwargs))
             return Response(is_success=False)
 
-        async def delete(self, url: str, params: dict):
-            self.requests.append(("DELETE", url, params))
-            return Response(payload={"cancelled": True})
+        async def delete(self, url: str, **kwargs):
+            self.requests.append(("DELETE", url, kwargs))
+            return Response(payload={"status": "cancelled"})
 
         async def aclose(self):
             self.closed = True
@@ -1888,38 +1893,54 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
     backend = RemoteBackend("https://server.example/")
 
     await backend.start()
+    backend._claims[PLAYER] = ControlClaim("controller:1", 3, "claim-1", "secret-1")
     snapshot = await backend.fetch_snapshot()
     character_list = await backend.fetch_character_list()
     character = await backend.fetch_character_projection(PLAYER)
     room = await backend.fetch_room_projection(PARLOR, PLAYER)
     queued = await backend.fetch_queued_commands(PLAYER)
-    submitted = await backend.submit({"command_type": "wait"})
+    submitted = await backend.submit({"character_id": PLAYER, "command_type": "wait"})
     cancelled = await backend.cancel_command(PLAYER, "cmd-1", "controller:1", 3)
     await backend.close()
 
     assert snapshot == {"world_epoch": 7}
     assert character_list == []  # validated CharacterListResponse with no characters
-    assert character == {"world_epoch": 7}
-    assert room == {"world_epoch": 7}
-    assert queued == {"world_epoch": 7}
+    assert character == {"world_epoch": 7, "sheet": {}, "actions": []}
+    assert room == {}
+    assert queued == {"character_id": PLAYER, "world_epoch": 7, "commands": []}
     assert submitted.accepted is False
     assert cancelled is True
     assert clients[0].closed is True
     assert clients[0].requests == [
         ("GET", "https://server.example/admin/world/snapshot", None),
-        ("GET", "https://server.example/play/world/characters", None),
-        ("GET", f"https://server.example/play/world/character/{PLAYER}", None),
+        ("GET", "https://server.example/play/characters", None),
         (
             "GET",
-            f"https://server.example/play/world/room/{PARLOR}",
-            {"params": {"character_id": PLAYER}},
+            "https://server.example/play/claims/claim-1/projection",
+            {"headers": {"X-Bunnyland-Claim-Secret": "secret-1"}},
         ),
-        ("GET", f"https://server.example/play/world/character/{PLAYER}/commands", None),
-        ("POST", "https://server.example/play/world/commands", {"command_type": "wait"}),
+        (
+            "GET",
+            "https://server.example/play/claims/claim-1/projection",
+            {"headers": {"X-Bunnyland-Claim-Secret": "secret-1"}},
+        ),
+        (
+            "GET",
+            "https://server.example/play/claims/claim-1/projection",
+            {"headers": {"X-Bunnyland-Claim-Secret": "secret-1"}},
+        ),
+        (
+            "POST",
+            "https://server.example/play/claims/claim-1/commands",
+            {
+                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
+                "json": {"command_type": "wait"},
+            },
+        ),
         (
             "DELETE",
-            f"https://server.example/play/world/character/{PLAYER}/commands/cmd-1",
-            {"controller_id": "controller:1", "controller_generation": 3},
+            "https://server.example/play/claims/claim-1/commands/cmd-1",
+            {"headers": {"X-Bunnyland-Claim-Secret": "secret-1"}},
         ),
     ]
 
@@ -1949,26 +1970,29 @@ async def test_remote_backend_submit_reports_rejection_reason():
         def __init__(self, response):
             self.response = response
 
-        async def post(self, url, json):
+        async def post(self, url, **_kwargs):
             return self.response
 
     accepted = RemoteBackend("https://server.example")
-    accepted._client = Client(Response(payload={"queued": True, "reason": ""}))
-    result = await accepted.submit({"command_type": "wait"})
+    accepted._client = Client(Response(payload={"status": "queued", "reason": ""}))
+    accepted._claims[PLAYER] = ControlClaim("controller:1", 1, "claim-1", "secret-1")
+    result = await accepted.submit({"character_id": PLAYER, "command_type": "wait"})
     assert result.accepted is True and result.reason == ""
 
     rejected = RemoteBackend("https://server.example")
     rejected._client = Client(
-        Response(payload={"queued": False, "reason": "missing required argument: text"})
+        Response(payload={"status": "rejected", "reason": "missing required argument: text"})
     )
-    result = await rejected.submit({"command_type": "say"})
+    rejected._claims[PLAYER] = ControlClaim("controller:1", 1, "claim-1", "secret-1")
+    result = await rejected.submit({"character_id": PLAYER, "command_type": "say"})
     assert result.accepted is False
     assert result.reason == "missing required argument: text"
 
     # A non-2xx response with an unparseable body still yields a usable reason.
     errored = RemoteBackend("https://server.example")
     errored._client = Client(Response(is_success=False, raises=True))
-    result = await errored.submit({"command_type": "say"})
+    errored._claims[PLAYER] = ControlClaim("controller:1", 1, "claim-1", "secret-1")
+    result = await errored.submit({"character_id": PLAYER, "command_type": "say"})
     assert result.accepted is False
     assert "422" in result.reason
 

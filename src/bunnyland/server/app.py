@@ -8,10 +8,12 @@ import os
 import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -166,6 +168,27 @@ from .serialization import (
     serialize_world_overview,
 )
 from .subscriptions import EventStream
+from .v1_models import (
+    CatalogResource,
+    CharacterCollection,
+    CharacterResource,
+    CheckpointRequest,
+    ClaimCommandRequest,
+    ClaimCreateRequest,
+    ClaimProjectionResource,
+    ClaimQueryRequest,
+    ClaimResource,
+    ClaimUpdateRequest,
+    CommandResource,
+    ControllerAssignment,
+    ControllerDefinitionRequest,
+    EventCollection,
+    GenerationJobRequest,
+    JobResource,
+    PlayerJobRequest,
+    ProblemDetails,
+    RuntimePatchRequest,
+)
 from .worldgen import (
     generate_character_patch,
     generate_event_patch,
@@ -206,12 +229,15 @@ try:
         WebSocket,
         WebSocketDisconnect,
     )
+    from fastapi.exceptions import RequestValidationError
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
     from starlette.routing import Match
 except ImportError:
     APIRouter = FastAPI = Header = HTTPException = Request = Response = Security = None  # type: ignore[assignment, misc]
     WebSocket = WebSocketDisconnect = CORSMiddleware = JSONResponse = None  # type: ignore[assignment, misc]
+    RequestValidationError = StarletteHTTPException = None  # type: ignore[assignment, misc]
     Match = None  # type: ignore[assignment, misc]
 
 
@@ -249,14 +275,12 @@ def classify_authorization_surface(path: str) -> AuthorizationSurface | None:
     """Return the single declared authorization surface for an application path."""
 
     normalized = path.rstrip("/") or "/"
-    if normalized == "/auth/login":
-        return AuthorizationSurface.AUTH_LOGIN
     for prefix, surface in (
-        ("/public", AuthorizationSurface.PUBLIC),
-        ("/auth", AuthorizationSurface.AUTH),
-        ("/play", AuthorizationSurface.PLAY),
-        ("/admin", AuthorizationSurface.ADMIN),
-        ("/mcp", AuthorizationSurface.MCP),
+        ("/v1/public", AuthorizationSurface.PUBLIC),
+        ("/v1/auth", AuthorizationSurface.AUTH),
+        ("/v1/play", AuthorizationSurface.PLAY),
+        ("/v1/admin", AuthorizationSurface.ADMIN),
+        ("/v1/mcp", AuthorizationSurface.MCP),
     ):
         if normalized == prefix or normalized.startswith(f"{prefix}/"):
             return surface
@@ -485,11 +509,72 @@ def create_app(
     app = FastAPI(
         title=title,
         lifespan=lifespan,
-        docs_url="/admin/docs",
-        redoc_url="/admin/redoc",
-        openapi_url="/admin/openapi.json",
-        swagger_ui_oauth2_redirect_url="/admin/docs/oauth2-redirect",
+        docs_url="/v1/admin/docs",
+        redoc_url="/v1/admin/redoc",
+        openapi_url="/v1/admin/openapi.json",
+        swagger_ui_oauth2_redirect_url="/v1/admin/docs/oauth2-redirect",
     )
+
+    def _problem_response(
+        request: Request,
+        status_code: int,
+        detail,
+        *,
+        headers: dict[str, str] | None = None,
+        code: str | None = None,
+    ):
+        titles = {
+            400: "Bad Request",
+            401: "Unauthorized",
+            403: "Forbidden",
+            404: "Not Found",
+            409: "Conflict",
+            413: "Content Too Large",
+            422: "Unprocessable Content",
+            429: "Too Many Requests",
+            500: "Internal Server Error",
+            503: "Service Unavailable",
+        }
+        codes = {
+            400: "invalid_request",
+            401: "authentication_required",
+            403: "forbidden",
+            404: "not_found",
+            409: "conflict",
+            413: "content_too_large",
+            422: "validation_error",
+            429: "rate_limited",
+            500: "internal_error",
+            503: "unavailable",
+        }
+        problem_code = code or codes.get(status_code, "request_failed")
+        problem = ProblemDetails(
+            type=f"https://bunnyland.dev/problems/{problem_code}",
+            title=titles.get(status_code, "Request Failed"),
+            status=status_code,
+            detail=detail if isinstance(detail, str) else str(detail),
+            instance=request.url.path,
+            code=problem_code,
+        )
+        return JSONResponse(
+            status_code=status_code,
+            content=problem.model_dump(mode="json"),
+            media_type="application/problem+json",
+            headers=headers or {},
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_problem(request: Request, exc: StarletteHTTPException):
+        return _problem_response(
+            request,
+            exc.status_code,
+            exc.detail,
+            headers=getattr(exc, "headers", None),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_problem(request: Request, exc: RequestValidationError):
+        return _problem_response(request, 422, exc.errors(), code="validation_error")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=trusted_origins,
@@ -540,6 +625,9 @@ def create_app(
     )
     generator_registry = collect_generators(plugins or ())
     generation_job = None
+    player_jobs: dict[str, JobResource] = {}
+    player_job_claims: dict[str, str] = {}
+    generation_jobs: dict[str, JobResource] = {}
     memory_store = memory_store or getattr(actor, "memory_store", None)
     media_store = (
         (getattr(imagegen, "media", None) if imagegen is not None else None)
@@ -886,13 +974,14 @@ def create_app(
 
     @app.middleware("http")
     async def _enforce_request_rate_limit(request: Request, call_next):
-        if request.method == "OPTIONS" or request.url.path == "/public/health":
+        if request.method == "OPTIONS" or request.url.path == "/v1/public/health":
             return await call_next(request)
         allowed, retry_after = rate_limiter.check(_client_host(request))
         if not allowed:
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "request rate limit exceeded"},
+            return _problem_response(
+                request,
+                429,
+                "request rate limit exceeded",
                 headers={"Retry-After": str(retry_after)},
             )
         return await call_next(request)
@@ -910,33 +999,58 @@ def create_app(
         if request.method == "OPTIONS" or not _request_matches_route(request):
             return await call_next(request)
         surface = classify_authorization_surface(path)
-        if surface in {AuthorizationSurface.PUBLIC, AuthorizationSurface.AUTH_LOGIN}:
+        if surface is AuthorizationSurface.PUBLIC or (
+            path == "/v1/auth/session" and request.method == "POST"
+        ):
             return await call_next(request)
         surface = cast(AuthorizationSurface, surface)
         if authenticator is None:
             if allow_unauthenticated_embedding:
-                return await call_next(request)
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "bearer token required"},
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        required_scope = SURFACE_SCOPES[surface]
-        try:
-            authenticator.authenticate_request(request, required_scopes=(required_scope,))
-            if surface is AuthorizationSurface.ADMIN:
-                _require_allowed_admin_client_id(request.headers.get(CLIENT_ID_HEADER.lower()))
-        except HTTPException as exc:
-            allowed, retry_after = token_failure_rate_limiter.check(_client_host(request))
-            if not allowed:
-                return JSONResponse(
-                    status_code=429,
-                    content={"detail": "token verification rate limit exceeded"},
-                    headers={"Retry-After": str(retry_after)},
+                pass
+            else:
+                return _problem_response(
+                    request,
+                    401,
+                    "bearer token required",
+                    headers={"WWW-Authenticate": "Bearer"},
                 )
-            return JSONResponse(
-                status_code=exc.status_code,
-                content={"detail": exc.detail},
+        else:
+            required_scope = SURFACE_SCOPES[surface]
+            try:
+                authenticator.authenticate_request(request, required_scopes=(required_scope,))
+            except HTTPException as exc:
+                allowed, retry_after = token_failure_rate_limiter.check(_client_host(request))
+                if not allowed:
+                    return _problem_response(
+                        request,
+                        429,
+                        "token verification rate limit exceeded",
+                        headers={"Retry-After": str(retry_after)},
+                    )
+                return _problem_response(
+                    request,
+                    exc.status_code,
+                    exc.detail,
+                    headers=exc.headers or {},
+                )
+        client_id = _client_id_header_value(request.headers.get(CLIENT_ID_HEADER.lower()))
+        if client_id is None:
+            return _problem_response(
+                request,
+                403,
+                f"{CLIENT_ID_HEADER} header is required",
+                code="client_id_required",
+            )
+        try:
+            if surface is AuthorizationSurface.ADMIN:
+                _require_allowed_admin_client_id(client_id)
+            else:
+                _require_allowed_player_client_id(client_id)
+        except HTTPException as exc:
+            return _problem_response(
+                request,
+                exc.status_code,
+                exc.detail,
                 headers=exc.headers or {},
             )
         return await call_next(request)
@@ -956,7 +1070,11 @@ def create_app(
     ]
     for plugin in router_plugins:
         for contribution in plugin.runtime.http:
-            prefix = f"/{contribution.zone.value}"
+            prefix = (
+                "/v1/public"
+                if plugin.id == "bunnyland.media"
+                else f"/v1/{contribution.zone.value}/extensions/{plugin.id}"
+            )
             router = APIRouter(prefix=prefix)
             for registrar in contribution.registrars:
                 registrar(
@@ -2262,7 +2380,785 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    @app.websocket("/admin/world/updates")
+    # Formal v1 routers -----------------------------------------------------
+    #
+    # The preview handlers above remain useful private adapters while the domain services
+    # are extracted.  Only these routers are retained in the returned application, so there
+    # are no compatibility aliases at runtime.
+    public_v1 = APIRouter(prefix="/v1/public", tags=["public"])
+    auth_v1 = APIRouter(prefix="/v1/auth", tags=["auth"])
+    play_v1 = APIRouter(prefix="/v1/play", tags=["play"])
+    admin_v1 = APIRouter(prefix="/v1/admin", tags=["admin"])
+
+    def _world_fields() -> dict[str, str | int]:
+        return {"world_id": str(actor.world_id), "world_epoch": actor.epoch}
+
+    def _job_status_v1(status: str) -> Literal["queued", "running", "succeeded", "failed"]:
+        normalized = status.strip().lower()
+        if normalized in {"queued", "running", "succeeded", "failed"}:
+            return cast(Literal["queued", "running", "succeeded", "failed"], normalized)
+        if normalized in {"complete", "completed", "duplicate", "skipped"}:
+            return "succeeded"
+        return "failed"
+
+    def _problem_for_job_v1(detail: str) -> ProblemDetails:
+        return ProblemDetails(
+            title="Job failed",
+            status=500,
+            detail=detail or "job failed",
+            code="job_failed",
+        )
+
+    def _without_preview_fields(value) -> dict:
+        data = value.model_dump(mode="json") if hasattr(value, "model_dump") else dict(value)
+        data.pop("ok", None)
+        data.pop("schema_version", None)
+        return data
+
+    def _refresh_image_job_v1(job: JobResource) -> JobResource:
+        if imagegen is None or job.kind not in {"image", "scene_image"}:
+            return job
+        current = imagegen.job(job.id)
+        if current is None:
+            return job
+        status = _job_status_v1(str(current.status))
+        return job.model_copy(
+            update={
+                "world_epoch": actor.epoch,
+                "status": status,
+                "updated_at": datetime.now(UTC),
+                "result": _without_preview_fields(_image_response(current)),
+                "failure": (
+                    _problem_for_job_v1(str(current.error or "image generation failed"))
+                    if status == "failed"
+                    else None
+                ),
+            }
+        )
+
+    async def _refresh_generation_job_v1(job: JobResource) -> JobResource:
+        if job.kind == "image":
+            return _refresh_image_job_v1(job)
+        if job.kind != "world" or generation_job is None or generation_job.job_id != job.id:
+            return job
+        current = await _world_generation_status_response()
+        status = _job_status_v1(current.status)
+        return job.model_copy(
+            update={
+                "world_epoch": actor.epoch,
+                "status": status,
+                "updated_at": datetime.now(UTC),
+                "result": _without_preview_fields(current),
+                "failure": (
+                    _problem_for_job_v1(str(current.error or "world generation failed"))
+                    if status == "failed"
+                    else None
+                ),
+            }
+        )
+
+    def _claim_context_v1(
+        claim_id: str,
+        claim_secret: str | None,
+        client_id: str | None,
+    ):
+        normalized_client_id = _client_id_header_value(client_id)
+        if normalized_client_id is None:
+            raise HTTPException(status_code=403, detail=f"{CLIENT_ID_HEADER} header is required")
+        _require_allowed_player_client_id(normalized_client_id)
+        for controller in actor.world.query().with_all([ClaimedComponent]).execute_entities():
+            claim = controller.get_component(ClaimedComponent)
+            if claim.claim_id != claim_id:
+                continue
+            if not claim_client_matches(claim, normalized_client_id):
+                raise HTTPException(status_code=403, detail="claim belongs to another client")
+            try:
+                ensure_claim_secret(
+                    claim_secrets,
+                    claim,
+                    claim_id=claim_id,
+                    claim_secret=claim_secret,
+                )
+            except PermissionError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+            character = _character_entity(claim.character_id)
+            active = current_controller(actor, character)
+            if active is None or active[0].id != controller.id:
+                raise HTTPException(status_code=409, detail="claim controller is not active")
+            return character, controller, active[1], claim
+        raise HTTPException(status_code=404, detail="claim does not exist")
+
+    def _claim_resource_v1(character, controller, edge, claim) -> ClaimResource:
+        timeout = (
+            controller.get_component(ClaimTimeoutComponent)
+            if controller.has_component(ClaimTimeoutComponent)
+            else ClaimTimeoutComponent()
+        )
+        return ClaimResource(
+            **_world_fields(),
+            id=claim.claim_id,
+            character_id=str(character.id),
+            client_id=claim.client_id,
+            controller_id=str(controller.id),
+            controller_generation=edge.generation,
+            control="active" if controller.has_component(WebControllerComponent) else "fallback",
+            fallback_controller=timeout.fallback_controller,
+            timeout_seconds=timeout.timeout_seconds,
+        )
+
+    @public_v1.get("/health", status_code=204, response_class=Response)
+    async def v1_health() -> Response:
+        return Response(status_code=204)
+
+    @public_v1.get("/features", response_model=FeatureStatusResponse)
+    async def v1_features() -> FeatureStatusResponse:
+        return _feature_status()
+
+    @auth_v1.post("/session", response_model=TokenResponse)
+    async def v1_create_session(
+        login: LoginRequest,
+        request: Request,
+        response: Response,
+    ) -> TokenResponse:
+        return await auth_login(login, request, response)
+
+    @auth_v1.get("/session", response_model=AuthMeResponse)
+    async def v1_get_session(request: Request) -> AuthMeResponse:
+        principal = request.state.auth_principal
+        return AuthMeResponse(
+            subject=principal.subject,
+            scopes=sorted(principal.scopes),
+            expires_at=principal.expires_at,
+            rotate_after=principal.rotate_after,
+            rotation_eligible=principal.can_rotate(),
+        )
+
+    @auth_v1.patch("/session", response_model=TokenResponse)
+    async def v1_rotate_session(request: Request, response: Response) -> TokenResponse:
+        return await auth_rotate(request, response, request.state.auth_principal)
+
+    @auth_v1.delete("/session", status_code=204, response_class=Response)
+    async def v1_delete_session(request: Request, response: Response) -> Response:
+        await auth_logout(request, response, request.state.auth_principal)
+        response.status_code = 204
+        response.body = b""
+        return response
+
+    @play_v1.get("/characters", response_model=CharacterCollection)
+    async def v1_characters() -> CharacterCollection:
+        lobby = serialize_character_list(actor)
+        return CharacterCollection(
+            **_world_fields(),
+            characters=[
+                CharacterResource(
+                    id=item.character_id,
+                    name=item.name,
+                    kind=item.kind,
+                    suspended=item.suspended,
+                )
+                for item in lobby.characters
+            ],
+        )
+
+    @play_v1.get("/catalog", response_model=CatalogResource)
+    async def v1_catalog() -> CatalogResource:
+        schema = world_schema(actor)
+        return CatalogResource(
+            **_world_fields(),
+            components={
+                key: value.model_dump(mode="json")
+                for key, value in schema.components.items()
+            },
+            edges={key: value.model_dump(mode="json") for key, value in schema.edges.items()},
+            content=load_content_library().model_dump(mode="json"),
+            queries=[definition.name for definition in actor.perspective_queries.definitions()],
+            capabilities=_feature_status().model_dump(mode="json"),
+        )
+
+    @play_v1.post("/claims", response_model=ClaimResource, status_code=201)
+    async def v1_create_claim(
+        body: ClaimCreateRequest,
+        response: Response,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> ClaimResource:
+        request = WebControllerClaimRequest(
+            character_id=body.character_id,
+            client_id=client_id or "",
+            claim_id=None,
+            label=body.label,
+            fallback_controller=body.fallback_controller,
+            fallback_reason=body.fallback_reason,
+            llm_profile_name=body.llm_profile_name,
+            llm_model=body.llm_model,
+            llm_provider=body.llm_provider,
+            timeout_seconds=body.timeout_seconds,
+        )
+        _with_claim_secret(request, claim_secret)
+        claimed = await _claim_web_controller_request(request)
+        response.headers["Location"] = f"/v1/play/claims/{claimed.claim_id}"
+        response.headers["X-Bunnyland-Claim-Secret"] = claimed.claim_secret
+        character, controller, edge, claim = _claim_context_v1(
+            claimed.claim_id, claimed.claim_secret, client_id
+        )
+        return _claim_resource_v1(character, controller, edge, claim)
+
+    @play_v1.put("/claims/{claim_id}", response_model=ClaimResource)
+    async def v1_reclaim_claim(
+        claim_id: str,
+        response: Response,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> ClaimResource:
+        character, controller, _edge, claim = _claim_context_v1(
+            claim_id, claim_secret, client_id
+        )
+        timeout = (
+            controller.get_component(ClaimTimeoutComponent)
+            if controller.has_component(ClaimTimeoutComponent)
+            else ClaimTimeoutComponent()
+        )
+        request = WebControllerClaimRequest(
+            character_id=str(character.id),
+            client_id=claim.client_id,
+            claim_id=claim_id,
+            label=claim.label or "web",
+            fallback_controller=timeout.fallback_controller,
+            fallback_reason=timeout.fallback_reason,
+            llm_profile_name=timeout.llm_profile_name,
+            llm_model=timeout.llm_model,
+            llm_provider=timeout.llm_provider,
+            timeout_seconds=timeout.timeout_seconds or None,
+        )
+        _with_claim_secret(request, claim_secret)
+        claimed = await _claim_web_controller_request(request)
+        response.headers["X-Bunnyland-Claim-Secret"] = claimed.claim_secret
+        context = _claim_context_v1(claim_id, claimed.claim_secret, client_id)
+        return _claim_resource_v1(*context)
+
+    @play_v1.patch("/claims/{claim_id}", response_model=ClaimResource)
+    async def v1_patch_claim(
+        claim_id: str,
+        body: ClaimUpdateRequest,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> ClaimResource:
+        character, controller, _edge, claim = _claim_context_v1(
+            claim_id, claim_secret, client_id
+        )
+        request = WebControllerFallbackRequest(
+            character_id=str(character.id),
+            client_id=claim.client_id,
+            claim_id=claim_id,
+        )
+        _with_claim_secret(request, claim_secret)
+        if body.kind == "fallback":
+            request = WebControllerFallbackRequest(
+                character_id=str(character.id),
+                client_id=claim.client_id,
+                claim_id=claim_id,
+                fallback_controller=body.fallback_controller,
+                fallback_reason=body.fallback_reason,
+                llm_profile_name=body.llm_profile_name,
+                llm_model=body.llm_model,
+                llm_provider=body.llm_provider,
+                timeout_seconds=body.timeout_seconds,
+            )
+            _with_claim_secret(request, claim_secret)
+            await _web_controller_fallback_request(request)
+        elif body.desired == "fallback":
+            await _release_web_controller_to_fallback_request(request)
+        elif not controller.has_component(WebControllerComponent):
+            reclaim = WebControllerClaimRequest(
+                character_id=str(character.id),
+                client_id=claim.client_id,
+                claim_id=claim_id,
+                label=claim.label or "web",
+            )
+            _with_claim_secret(reclaim, claim_secret)
+            await _claim_web_controller_request(reclaim)
+        return _claim_resource_v1(*_claim_context_v1(claim_id, claim_secret, client_id))
+
+    @play_v1.delete("/claims/{claim_id}", status_code=204, response_class=Response)
+    async def v1_delete_claim(
+        claim_id: str,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> Response:
+        character, _controller, _edge, claim = _claim_context_v1(
+            claim_id, claim_secret, client_id
+        )
+        request = WebControllerFallbackRequest(
+            character_id=str(character.id), client_id=claim.client_id, claim_id=claim_id
+        )
+        _with_claim_secret(request, claim_secret)
+        await _release_web_claim_request(request)
+        return Response(status_code=204)
+
+    @play_v1.get("/claims/{claim_id}/projection", response_model=ClaimProjectionResource)
+    async def v1_claim_projection(
+        claim_id: str,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> ClaimProjectionResource:
+        character, controller, edge, claim = _claim_context_v1(
+            claim_id, claim_secret, client_id
+        )
+        projection = serialize_character_projection(actor, str(character.id))
+        room_id = projection.room.id
+        scene = serialize_room_projection(actor, room_id).model_dump(mode="json") if room_id else {}
+        scene.pop("ok", None)
+        scene.pop("schema_version", None)
+        queued = serialize_character_queued_commands(
+            actor, str(character.id), **_runtime_timing()
+        )
+        character_data = _without_preview_fields(projection)
+        sheet = character_data.pop("sheet", {})
+        actions = projection.actions
+        character_data.pop("actions", None)
+        return ClaimProjectionResource(
+            **_world_fields(),
+            claim=_claim_resource_v1(character, controller, edge, claim),
+            character=character_data,
+            scene=scene,
+            commands=[item.model_dump(mode="json") for item in queued.commands],
+            sheet=sheet,
+            actions=actions,
+        )
+
+    @play_v1.post(
+        "/claims/{claim_id}/commands",
+        response_model=CommandResource,
+        status_code=202,
+    )
+    async def v1_submit_command(
+        claim_id: str,
+        body: ClaimCommandRequest,
+        response: Response,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> CommandResource:
+        character, controller, edge, _claim = _claim_context_v1(
+            claim_id, claim_secret, client_id
+        )
+        request = CommandRequest(
+            character_id=str(character.id),
+            controller_id=str(controller.id),
+            controller_generation=edge.generation,
+            claim_id=claim_id,
+            command_type=body.command_type,
+            payload=body.payload,
+            cost=body.cost,
+            lane=body.lane,
+            on_insufficient_points=body.on_insufficient_points,
+            expires_at_epoch=body.expires_at_epoch,
+            expected_epoch=body.expected_epoch,
+            command_id=body.id,
+        )
+        _with_claim_secret(request, claim_secret)
+        result = await _submit_command_request(request)
+        response.headers["Location"] = (
+            f"/v1/play/claims/{claim_id}/commands/{result.command_id}"
+        )
+        return CommandResource(
+            **_world_fields(),
+            id=result.command_id,
+            status="queued" if result.queued else "rejected",
+            reason=result.reason,
+        )
+
+    @play_v1.delete(
+        "/claims/{claim_id}/commands/{command_id}",
+        response_model=CommandResource,
+    )
+    async def v1_cancel_command(
+        claim_id: str,
+        command_id: str,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> CommandResource:
+        character, controller, edge, _claim = _claim_context_v1(
+            claim_id, claim_secret, client_id
+        )
+        result = await _cancel_command_request(
+            str(character.id),
+            command_id,
+            str(controller.id),
+            edge.generation,
+            claim_id,
+            claim_secret,
+        )
+        return CommandResource(
+            **_world_fields(),
+            id=command_id,
+            status="cancelled" if result.cancelled else "rejected",
+            reason=result.reason,
+        )
+
+    @play_v1.post("/claims/{claim_id}/queries", response_model=PerspectiveQueryResult)
+    async def v1_query_claim(
+        claim_id: str,
+        body: ClaimQueryRequest,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> PerspectiveQueryResult:
+        character, _controller, _edge, _claim = _claim_context_v1(
+            claim_id, claim_secret, client_id
+        )
+        try:
+            return actor.perspective_queries.execute(
+                actor,
+                body.query,
+                body.arguments,
+                actor_id=str(character.id),
+                access="claim",
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (RuntimeError, TimeoutError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @play_v1.get("/claims/{claim_id}/events", response_model=EventCollection)
+    async def v1_claim_events(
+        claim_id: str,
+        since: int | None = None,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> EventCollection:
+        character, _controller, _edge, _claim = _claim_context_v1(
+            claim_id, claim_secret, client_id
+        )
+        if since is None:
+            return EventCollection(
+                **_world_fields(),
+                events=recent_player_updates(actor, str(character.id), stream.recent_messages()),
+            )
+        events, complete, available_after = stream.changes_since(str(character.id), since)
+        return EventCollection(
+            **_world_fields(),
+            events=events,
+            complete=complete,
+            available_after_epoch=available_after,
+        )
+
+    @play_v1.post("/claims/{claim_id}/jobs", response_model=JobResource, status_code=202)
+    async def v1_submit_player_job(
+        claim_id: str,
+        body: PlayerJobRequest,
+        response: Response,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> JobResource:
+        character, _controller, _edge, _claim = _claim_context_v1(
+            claim_id, claim_secret, client_id
+        )
+        created = datetime.now(UTC)
+        if body.kind == "chat":
+            if character_chat is None:
+                raise HTTPException(status_code=409, detail="character chat is not enabled")
+            chat_request = CharacterChatRequest(
+                client_id=client_id or "",
+                claim_id=claim_id,
+                message=body.message,
+                history_summary=body.history_summary,
+                history=body.history,
+            )
+            _with_claim_secret(chat_request, claim_secret)
+            result = await world_character_chat(
+                str(character.id), chat_request, claim_secret, client_id
+            )
+            job_id = uuid4().hex
+            job = JobResource(
+                **_world_fields(),
+                id=job_id,
+                kind=body.kind,
+                status="succeeded",
+                created_at=created,
+                updated_at=datetime.now(UTC),
+                result=_without_preview_fields(result),
+            )
+        else:
+            image = await _scene_image_request(str(character.id))
+            if image is None:
+                raise HTTPException(status_code=400, detail="character has no room to illustrate")
+            job = JobResource(
+                **_world_fields(),
+                id=image.job_id,
+                kind=body.kind,
+                status=_job_status_v1(image.status),
+                created_at=created,
+                updated_at=datetime.now(UTC),
+                result=_without_preview_fields(image),
+            )
+        player_jobs[job.id] = job
+        player_job_claims[job.id] = claim_id
+        response.headers["Location"] = f"/v1/play/claims/{claim_id}/jobs/{job.id}"
+        return job
+
+    @play_v1.get("/claims/{claim_id}/jobs", response_model=list[JobResource])
+    async def v1_list_player_jobs(
+        claim_id: str,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> list[JobResource]:
+        _claim_context_v1(claim_id, claim_secret, client_id)
+        for job_id, job in list(player_jobs.items()):
+            if player_job_claims.get(job_id) != claim_id:
+                continue
+            player_jobs[job_id] = _refresh_image_job_v1(job)
+        return [
+            job
+            for job_id, job in player_jobs.items()
+            if player_job_claims.get(job_id) == claim_id
+        ]
+
+    @play_v1.get("/claims/{claim_id}/jobs/{job_id}", response_model=JobResource)
+    async def v1_get_player_job(
+        claim_id: str,
+        job_id: str,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> JobResource:
+        _claim_context_v1(claim_id, claim_secret, client_id)
+        job = player_jobs.get(job_id)
+        if job is None or player_job_claims.get(job_id) != claim_id:
+            raise HTTPException(status_code=404, detail="job does not exist")
+        refreshed = _refresh_image_job_v1(job)
+        player_jobs[job_id] = refreshed
+        return refreshed
+
+    @admin_v1.get("/world")
+    async def v1_admin_world() -> dict:
+        return {**_world_fields(), **_without_preview_fields(serialize_world_overview(actor))}
+
+    @admin_v1.patch("/world")
+    async def v1_patch_world(body: WorldPatchRequest) -> dict:
+        return {**_world_fields(), **_without_preview_fields(await _patch_world_request(body))}
+
+    @admin_v1.get("/world/snapshot")
+    async def v1_world_snapshot() -> dict:
+        snapshot = serialize_world(actor, meta)
+        return {**snapshot, **_world_fields()}
+
+    @admin_v1.get("/world/runtime")
+    async def v1_runtime() -> dict:
+        return {**_world_fields(), **_without_preview_fields(_runtime_response())}
+
+    @admin_v1.patch("/world/runtime")
+    async def v1_patch_runtime(body: RuntimePatchRequest) -> dict:
+        if loop is None:
+            raise HTTPException(status_code=409, detail="server runtime is not attached")
+        publish = loop.pause() if body.paused else loop.resume()
+        if publish is not None:
+            await publish
+        return {**_world_fields(), **_without_preview_fields(_runtime_response())}
+
+    @admin_v1.post("/world/checkpoints", status_code=201)
+    async def v1_checkpoint(body: CheckpointRequest | None = None) -> dict:
+        del body
+        return {**_world_fields(), **_without_preview_fields(await save_world_now())}
+
+    @admin_v1.get("/world/events", response_model=EventCollection)
+    async def v1_world_events() -> EventCollection:
+        return EventCollection(**_world_fields(), events=stream.recent_messages())
+
+    @admin_v1.get("/characters/{character_id}")
+    async def v1_admin_character(character_id: str) -> dict:
+        return {
+            **_world_fields(),
+            **_without_preview_fields(serialize_dm_projection(actor, character_id)),
+        }
+
+    @admin_v1.put("/characters/{character_id}/controller")
+    async def v1_assign_controller(character_id: str, body: ControllerAssignment) -> dict:
+        result = await _assign_controller_request(
+            ControllerAssignmentRequest(
+                character_id=character_id, controller_id=body.controller_id
+            )
+        )
+        return {**_world_fields(), **_without_preview_fields(result)}
+
+    @admin_v1.get("/controller-definitions")
+    async def v1_controller_definitions() -> dict:
+        return _without_preview_fields(_controller_definitions_response())
+
+    @admin_v1.put("/controller-definitions/{kind}/{name}")
+    async def v1_put_controller_definition(
+        kind: str, name: str, body: ControllerDefinitionRequest
+    ) -> dict:
+        data = {**body.definition, "name": name}
+        if kind == "script":
+            result = await _register_script_request(ScriptSpec.model_validate(data))
+        elif kind == "behavior":
+            result = await _register_behavior_request(BehaviorTreeSpec.model_validate(data))
+        else:
+            raise HTTPException(status_code=400, detail="kind must be script or behavior")
+        return _without_preview_fields(result)
+
+    @admin_v1.get("/world/generators")
+    async def v1_generators() -> dict:
+        return _without_preview_fields(_list_world_generators_response())
+
+    @admin_v1.post("/world/generation-jobs", response_model=JobResource, status_code=202)
+    async def v1_submit_generation_job(
+        body: GenerationJobRequest, response: Response
+    ) -> JobResource:
+        created = datetime.now(UTC)
+        request_data = body.model_dump(exclude={"kind"})
+        if body.kind == "world":
+            result = await _generate_world_request(
+                WorldGenerateRequest.model_validate(request_data)
+            )
+        elif body.kind == "room":
+            result = await _generate_room_request(
+                WorldRoomGenerationRequest.model_validate(request_data)
+            )
+        elif body.kind == "character":
+            result = await _generate_character_request(
+                WorldCharacterGenerationRequest.model_validate(request_data)
+            )
+        elif body.kind == "item":
+            result = await _generate_item_request(
+                WorldItemGenerationRequest.model_validate(request_data)
+            )
+        elif body.kind == "event":
+            result = await _generate_event_request(
+                WorldEventGenerationRequest.model_validate(request_data)
+            )
+        else:
+            result = await _generate_image_request(
+                WorldImageGenerationRequest.model_validate(request_data)
+            )
+        result_data = _without_preview_fields(result)
+        job_id = str(result_data.get("job_id") or uuid4().hex)
+        status = _job_status_v1(str(result_data.get("status") or "succeeded"))
+        job = JobResource(
+            **_world_fields(),
+            id=job_id,
+            kind=body.kind,
+            status=status,
+            created_at=created,
+            updated_at=datetime.now(UTC),
+            result=result_data,
+        )
+        generation_jobs[job.id] = job
+        response.headers["Location"] = f"/v1/admin/world/generation-jobs/{job.id}"
+        refreshed = await _refresh_generation_job_v1(job)
+        generation_jobs[job_id] = refreshed
+        return refreshed
+
+    @admin_v1.get("/world/generation-jobs/{job_id}", response_model=JobResource)
+    async def v1_generation_job(job_id: str) -> JobResource:
+        job = generation_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="generation job does not exist")
+        refreshed = await _refresh_generation_job_v1(job)
+        generation_jobs[job_id] = refreshed
+        return refreshed
+
+    @admin_v1.get("/memory/collections")
+    async def v1_memory_collections() -> dict:
+        response = _memory_characters_response()
+        collections = sorted(
+            {
+                collection
+                for character in response.characters
+                for collection in [character.private_collection, *character.shared_collections]
+            }
+        )
+        return {
+            **_world_fields(),
+            "collections": collections,
+            "characters": [item.model_dump(mode="json") for item in response.characters],
+        }
+
+    @admin_v1.get("/memory/collections/{collection}/documents")
+    async def v1_memory_documents(collection: str) -> dict:
+        return _without_preview_fields(_memory_documents_response(collection))
+
+    @admin_v1.post("/memory/collections/{collection}/documents", status_code=201)
+    async def v1_create_memory_document(
+        collection: str, body: MemoryDocumentUpdateRequest, response: Response
+    ) -> dict:
+        result = _memory_create_response(collection, body)
+        response.headers["Location"] = (
+            f"/v1/admin/memory/collections/{collection}/documents/{result.document.id}"
+        )
+        return _without_preview_fields(result)
+
+    @admin_v1.get("/memory/collections/{collection}/documents/{document_id}")
+    async def v1_memory_document(collection: str, document_id: str) -> dict:
+        result = _memory_documents_response(collection)
+        document = next((item for item in result.documents if item.id == document_id), None)
+        if document is None:
+            raise HTTPException(status_code=404, detail="memory document not found")
+        return {**_world_fields(), "collection": collection, "document": document.model_dump()}
+
+    @admin_v1.put("/memory/collections/{collection}/documents/{document_id}")
+    @admin_v1.patch("/memory/collections/{collection}/documents/{document_id}")
+    async def v1_update_memory_document(
+        collection: str, document_id: str, body: MemoryDocumentUpdateRequest
+    ) -> dict:
+        return _without_preview_fields(_memory_update_response(collection, document_id, body))
+
+    @admin_v1.delete(
+        "/memory/collections/{collection}/documents/{document_id}",
+        status_code=204,
+        response_class=Response,
+    )
+    async def v1_delete_memory_document(collection: str, document_id: str) -> Response:
+        _delete_memory_document(collection, document_id)
+        return Response(status_code=204)
+
+    @admin_v1.put("/media/{target_kind}/{target_id}/{purpose}")
+    async def v1_upload_media(
+        target_kind: str, target_id: str, purpose: str, request: Request
+    ) -> dict:
+        if target_kind != "character" or purpose not in {"portrait", "sprite"}:
+            raise HTTPException(status_code=400, detail="unsupported media upload target")
+        form = await request.form()
+        upload = form.get("file")
+        if upload is None or not hasattr(upload, "read"):
+            raise HTTPException(status_code=400, detail="multipart file field is required")
+        content_type = str(getattr(upload, "content_type", "")).lower()
+        extension = UPLOAD_IMAGE_TYPES.get(content_type)
+        if extension is None:
+            raise HTTPException(status_code=400, detail="upload must be a PNG, JPEG, or WebP image")
+        data = await upload.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="upload body is empty")
+        if len(data) > MAX_UPLOAD_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="upload image is too large")
+        async with actor._lock:
+            character = _character_entity(target_id)
+            segment = SEGMENT_PORTRAITS if purpose == "portrait" else SEGMENT_SPRITES
+            name = media_store.new_name(extension)
+            media_store.write(segment, name, data)
+            url = media_store.url_for(segment, name)
+            if purpose == "portrait":
+                replace_component(
+                    character,
+                    PortraitImageComponent(
+                        url=url, prompt="uploaded", generated_at_epoch=actor.epoch
+                    ),
+                )
+            else:
+                replace_component(character, SpriteImageComponent(url=url))
+        return {
+            **_world_fields(),
+            "target_kind": target_kind,
+            "target_id": target_id,
+            "purpose": purpose,
+            "url": url,
+            "content_type": content_type,
+        }
+
+    for router in (public_v1, auth_v1, play_v1, admin_v1):
+        app.include_router(router)
+
+    @app.websocket("/v1/admin/world/stream")
     async def world_updates(websocket: WebSocket) -> None:
         if not websocket_origin_is_trusted(websocket):
             await websocket.close(code=1008)
@@ -2270,28 +3166,32 @@ def create_app(
         if authenticator is None and not allow_unauthenticated_embedding:
             await websocket.close(code=1013)
             return
-        access_token = None
-        if authenticator is not None:
-            await websocket.accept()
-            try:
-                auth = await asyncio.wait_for(
-                    websocket.receive_json(), timeout=PLAYER_WEBSOCKET_AUTH_SECONDS
-                )
-                data = auth.get("data") if isinstance(auth, dict) else None
-                if (
-                    not isinstance(auth, dict)
-                    or auth.get("type") != "authenticate"
-                    or not isinstance(data, dict)
-                ):
-                    raise ValueError("invalid authentication frame")
+        await websocket.accept()
+        try:
+            auth = await asyncio.wait_for(
+                websocket.receive_json(), timeout=PLAYER_WEBSOCKET_AUTH_SECONDS
+            )
+            data = auth.get("data") if isinstance(auth, dict) else None
+            if (
+                not isinstance(auth, dict)
+                or auth.get("type") != "authenticate"
+                or not isinstance(data, dict)
+            ):
+                raise ValueError("invalid authentication frame")
+            client_id = _client_id_header_value(
+                data.get("client_id") or websocket.headers.get(CLIENT_ID_HEADER)
+            )
+            if client_id is None:
+                raise HTTPException(status_code=403, detail="client identity is required")
+            _require_allowed_admin_client_id(client_id)
+            access_token = None
+            if authenticator is not None:
                 access_token = _authenticate_websocket_frame(
                     websocket, data, AuthorizationSurface.ADMIN
                 )
-            except (HTTPException, TimeoutError, ValueError, TypeError, WebSocketDisconnect):
-                await websocket.close(code=1008)
-                return
-        else:
-            await websocket.accept()
+        except (HTTPException, TimeoutError, ValueError, TypeError, WebSocketDisconnect):
+            await websocket.close(code=1008)
+            return
         subscription = stream.subscribe()
         try:
             projection_started = time.perf_counter()
@@ -2312,8 +3212,8 @@ def create_app(
         finally:
             subscription.close()
 
-    @app.websocket("/play/world/character/{character_id}/updates")
-    async def world_character_updates(websocket: WebSocket, character_id: str) -> None:
+    @app.websocket("/v1/play/claims/{claim_id}/stream")
+    async def world_character_updates(websocket: WebSocket, claim_id: str) -> None:
         # Claim secrets deliberately travel only in the first WebSocket frame.  Accepting
         # first avoids putting player state in handshake failures and keeps credentials out
         # of URLs, proxy logs, and telemetry attributes.
@@ -2337,46 +3237,34 @@ def create_app(
             not isinstance(auth, dict)
             or auth.get("type") != "authenticate"
             or not isinstance(data, dict)
-            or "claim_id" not in data
             or "claim_secret" not in data
-            or not isinstance(data.get("claim_id"), (str, type(None)))
             or not isinstance(data.get("claim_secret"), (str, type(None)))
         ):
             await websocket.close(code=1008)
             return
-        claim_id = data["claim_id"]
         claim_secret = data["claim_secret"]
+        client_id = _client_id_header_value(
+            data.get("client_id") or websocket.headers.get(CLIENT_ID_HEADER)
+        )
         access_token = None
         try:
+            if client_id is None:
+                raise HTTPException(status_code=403, detail="client identity is required")
             access_token = _authenticate_websocket_frame(
                 websocket, data, AuthorizationSurface.PLAY
             )
-            claim_context = _require_claim_secret(
-                character_id,
-                claim_id=claim_id,
-                claim_secret=claim_secret,
-            )
-            if claim_context is None and (claim_id is not None or claim_secret is not None):
-                raise HTTPException(
-                    status_code=403,
-                    detail="unclaimed character requires null credentials",
-                )
+            claim_context = _claim_context_v1(claim_id, claim_secret, client_id)
         except HTTPException:
             await websocket.close(code=1008)
             return
-        require_claimed = claim_context is not None
+        character_id = str(claim_context[0].id)
         subscription = stream.subscribe()
 
         async def send_frame(frame: dict) -> bool:
             try:
                 if access_token is not None and token_store.verify(access_token) is None:
                     raise HTTPException(status_code=401, detail="invalid bearer token")
-                _require_claim_secret(
-                    character_id,
-                    claim_id=claim_id,
-                    claim_secret=claim_secret,
-                    require_claimed=require_claimed,
-                )
+                _claim_context_v1(claim_id, claim_secret, client_id)
             except HTTPException:
                 await websocket.close(code=1008)
                 return False
@@ -2404,6 +3292,20 @@ def create_app(
         finally:
             subscription.close()
 
+    async def _mcp_chat_request(
+        character_id: str,
+        request: CharacterChatRequest,
+        claim_secret: str | None,
+    ) -> dict:
+        _with_claim_secret(request, claim_secret)
+        response = await world_character_chat(
+            character_id,
+            request,
+            claim_secret,
+            request.client_id,
+        )
+        return _without_preview_fields(response)
+
     if mcp_enabled(plugins):
         mcp_app = create_bunnyland_mcp_app(
             actor=actor,
@@ -2421,6 +3323,11 @@ def create_app(
             generate_event=_generate_event_request,
             generate_image=_generate_image_request,
             scene_image=_scene_image_request if imagegen is not None else None,
+            chat=_mcp_chat_request if character_chat is not None else None,
+            assign_controller=_assign_controller_request,
+            list_generators=lambda: _without_preview_fields(
+                _list_world_generators_response()
+            ),
             register_script=_register_script_request,
             register_behavior=_register_behavior_request,
             list_controller_definitions=_controller_definitions_response,
@@ -2440,6 +3347,11 @@ def create_app(
             name="mcp",
         )
 
+    app.router.routes[:] = [
+        route
+        for route in app.router.routes
+        if str(getattr(route, "path", "")).startswith("/v1/")
+    ]
     route_surface_matrix(app)
     return app
 

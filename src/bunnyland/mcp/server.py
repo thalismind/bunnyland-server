@@ -60,6 +60,8 @@ from ..server.client_ids import (
     require_allowed_client_id,
 )
 from ..server.models import (
+    CharacterChatRequest,
+    ControllerAssignmentRequest,
     WorldCharacterGenerationRequest,
     WorldEventGenerationRequest,
     WorldGenerateRequest,
@@ -105,7 +107,7 @@ def _now_unix() -> int:
     return int(time())
 
 
-MCP_MOUNT_PATH = "/mcp"
+MCP_MOUNT_PATH = "/v1/mcp"
 EVENTS_RESOURCE_URI = "bunnyland://events/recent"
 _DEFAULT_CLAIM_SECRETS = ClaimSecretRegistry()
 
@@ -716,6 +718,13 @@ def create_bunnyland_mcp_app(
     generate_image: Callable[[WorldImageGenerationRequest], Awaitable[WorldImageGenerationResponse]]
     | None = None,
     scene_image: Callable[[str], Awaitable[WorldImageGenerationResponse | None]] | None = None,
+    chat: Callable[
+        [str, CharacterChatRequest, str | None], Awaitable[dict[str, Any]]
+    ]
+    | None = None,
+    assign_controller: Callable[[ControllerAssignmentRequest], Awaitable[WorldPatchResponse]]
+    | None = None,
+    list_generators: Callable[[], dict[str, Any]] | None = None,
     register_script: Callable[[ScriptSpec], Awaitable[ControllerDefinitionListResponse]]
     | None = None,
     register_behavior: Callable[[BehaviorTreeSpec], Awaitable[ControllerDefinitionListResponse]]
@@ -880,6 +889,16 @@ def create_bunnyland_mcp_app(
 
         return register
 
+    def _prompt(*args, required_scopes: tuple[str, ...], **kwargs):
+        def register(fn):
+            authorized = _authorized_capability(required_scopes, fn)
+            prompt_registrar = getattr(mcp, "prompt", None)
+            if prompt_registrar is None:
+                return authorized
+            return prompt_registrar(*args, **kwargs)(authorized)
+
+        return register
+
     play_tool = _tool((WORLD_PLAY_SCOPE,))
     admin_tool = _tool((WORLD_ADMIN_SCOPE,))
 
@@ -889,20 +908,49 @@ def create_bunnyland_mcp_app(
     def admin_resource(*args, **kwargs):
         return _resource(*args, required_scopes=(WORLD_ADMIN_SCOPE,), **kwargs)
 
+    def play_prompt(*args, **kwargs):
+        return _prompt(*args, required_scopes=(WORLD_PLAY_SCOPE,), **kwargs)
+
     class PolicyRegistrar:
         """Capability registrar that makes an access policy mandatory at the call site."""
 
-        def tool(self, *, scopes: Sequence[str]):
-            return _tool(tuple(scopes))
+        def __init__(self, plugin_id: str) -> None:
+            self.plugin_id = plugin_id
+            self.prefix = "".join(
+                character if character.isalnum() else "_" for character in plugin_id
+            )
 
-        def resource(self, *args, scopes: Sequence[str], **kwargs):
-            return _resource(*args, required_scopes=tuple(scopes), **kwargs)
+        def _name(self, name: str) -> str:
+            return f"{self.prefix}__{name}"
+
+        def tool(self, *, scopes: Sequence[str]):
+            def register(fn):
+                authorized = _authorized_capability(tuple(scopes), fn)
+                authorized.__name__ = self._name(fn.__name__)
+                return mcp.tool()(authorized)
+
+            return register
+
+        def resource(self, uri: str, *, scopes: Sequence[str], **kwargs):
+            namespaced_uri = (
+                f"bunnyland://v1/extensions/{quote(self.plugin_id, safe='')}/"
+                f"{quote(uri, safe='')}"
+            )
+            if "name" in kwargs:
+                kwargs["name"] = self._name(str(kwargs["name"]))
+            return _resource(
+                namespaced_uri,
+                required_scopes=tuple(scopes),
+                **kwargs,
+            )
 
         def prompt(self, *args, scopes: Sequence[str], **kwargs):
             def register(fn):
-                return mcp.prompt(*args, **kwargs)(
-                    _authorized_capability(tuple(scopes), fn)
-                )
+                authorized = _authorized_capability(tuple(scopes), fn)
+                authorized.__name__ = self._name(fn.__name__)
+                if "name" in kwargs:
+                    kwargs["name"] = self._name(str(kwargs["name"]))
+                return mcp.prompt(*args, **kwargs)(authorized)
 
             return register
 
@@ -911,10 +959,22 @@ def create_bunnyland_mcp_app(
 
     def player(client_id: str | None) -> str | None:
         _require_request_scopes((WORLD_PLAY_SCOPE,))
+        request_client_id = _request_claim_header(CLIENT_ID_HEADER)
+        if request_client_id and client_id and request_client_id != client_id:
+            raise ToolError("client_id must match the authenticated request header")
+        client_id = request_client_id or client_id
         try:
             return require_allowed_client_id(client_id, allowed_player_client_ids, "player")
         except PermissionError as exc:
             raise ToolError(str(exc)) from exc
+
+    def request_claim_secret(provided: str | None) -> str | None:
+        header_secret = _request_claim_header("X-Bunnyland-Claim-Secret")
+        if provided and provided != header_secret:
+            if _request_claim_header(CLIENT_ID_HEADER):
+                raise ToolError("claim secret must be supplied in X-Bunnyland-Claim-Secret")
+            return provided
+        return header_secret
 
     def controlled_or_requested_player(
         client_id: str,
@@ -924,6 +984,7 @@ def create_bunnyland_mcp_app(
         claim_secret: str | None = None,
     ) -> tuple[EntityId, EntityId, int]:
         player(client_id)
+        claim_secret = request_claim_secret(claim_secret)
         return _controlled_or_requested_character(
             actor,
             claim_secrets,
@@ -933,21 +994,9 @@ def create_bunnyland_mcp_app(
             claim_secret=claim_secret,
         )
 
-    @admin_resource(
-        EVENTS_RESOURCE_URI,
-        name="recent_world_events",
-        description="Recent Bunnyland domain events.",
-        mime_type="application/json",
-    )
     def recent_world_events_resource() -> str:
         return json.dumps({"ok": True, "events": event_bridge.recent_messages()})
 
-    @play_resource(
-        "bunnyland://clients/{client_id}/events",
-        name="client_events",
-        description="Recent Bunnyland domain events for an MCP-controlled client character.",
-        mime_type="application/json",
-    )
     def client_events_resource(client_id: str) -> str:
         player(client_id)
         found = claimed_character_for(
@@ -973,12 +1022,6 @@ def create_bunnyland_mcp_app(
             }
         )
 
-    @play_resource(
-        "bunnyland://clients/{client_id}/prompt",
-        name="client_prompt",
-        description="Current Bunnyland prompt text for an MCP-controlled client character.",
-        mime_type="text/plain",
-    )
     async def client_prompt_resource(client_id: str) -> str:
         player(client_id)
         return (
@@ -993,21 +1036,137 @@ def create_bunnyland_mcp_app(
             )
         )["prompt"]
 
+    @play_resource(
+        "bunnyland://v1/features",
+        name="features",
+        description="Enabled Bunnyland interface capabilities.",
+        mime_type="application/json",
+    )
+    def features_resource() -> str:
+        return json.dumps(
+            {
+                "mcp": True,
+                "character_chat": chat is not None,
+                "image_generation": scene_image is not None,
+            }
+        )
+
+    @play_resource(
+        "bunnyland://v1/catalog",
+        name="catalog",
+        description="Component schemas, registered perspective queries, and play actions.",
+        mime_type="application/json",
+    )
+    def catalog_resource() -> str:
+        schema = world_schema(actor)
+        return json.dumps(
+            {
+                "world_id": str(actor.world_id),
+                "world_epoch": actor.epoch,
+                "components": {
+                    name: item.model_dump(mode="json")
+                    for name, item in schema.components.items()
+                },
+                "edges": {
+                    name: item.model_dump(mode="json") for name, item in schema.edges.items()
+                },
+                "queries": [
+                    definition.name for definition in actor.perspective_queries.definitions()
+                ],
+                "actions": serialize_action_search(actor, query="", limit=0)
+                .model_dump(mode="json")
+                .get("actions", []),
+            }
+        )
+
+    @play_resource(
+        "bunnyland://v1/characters",
+        name="character_lobby",
+        description="Claimable and currently controlled character lobby.",
+        mime_type="application/json",
+    )
+    def character_lobby_resource() -> str:
+        return json.dumps(
+            {
+                "world_id": str(actor.world_id),
+                "world_epoch": actor.epoch,
+                "characters": list_mcp_characters(actor),
+            }
+        )
+
+    @admin_resource(
+        "bunnyland://v1/admin/world",
+        name="admin_world",
+        description="Administrative world overview.",
+        mime_type="application/json",
+    )
+    def admin_world_resource() -> str:
+        return json.dumps(serialize_world_overview(actor).model_dump(mode="json"))
+
+    @admin_resource(
+        "bunnyland://v1/admin/runtime",
+        name="admin_runtime",
+        description="Administrative world runtime state.",
+        mime_type="application/json",
+    )
+    def admin_runtime_resource() -> str:
+        return json.dumps(admin_runtime_status())
+
+    @admin_resource(
+        "bunnyland://v1/admin/generators",
+        name="admin_generators",
+        description="Registered world generators.",
+        mime_type="application/json",
+    )
+    def admin_generators_resource() -> str:
+        return json.dumps(list_generators() if list_generators is not None else {"generators": []})
+
+    @admin_resource(
+        "bunnyland://v1/admin/controller-definitions",
+        name="admin_controller_definitions",
+        description="Registered controller definitions and authoring libraries.",
+        mime_type="application/json",
+    )
+    def admin_controller_definitions_resource() -> str:
+        if list_controller_definitions is None:
+            return json.dumps({"scripts": [], "behaviors": []})
+        return json.dumps(list_controller_definitions().model_dump(mode="json"))
+
+    @admin_resource(
+        "bunnyland://v1/admin/generation-jobs/current",
+        name="admin_generation_job",
+        description="Current world-generation job state.",
+        mime_type="application/json",
+    )
+    async def admin_generation_job_resource() -> str:
+        return json.dumps((await generation_status()).model_dump(mode="json"))
+
+    @play_prompt(
+        name="play_bunnyland",
+        description="Explain the normal claim, look, action, command, and observation loop.",
+    )
+    def play_bunnyland_prompt() -> str:
+        return (
+            "List and claim a character, then call play_look. Use play_search_actions and "
+            "play_action_help before play_send_command. Observe results with "
+            "play_recent_events or play_what_changed; release control or the claim when done."
+        )
+
     @play_tool
-    def list_characters() -> dict[str, Any]:
+    def play_list_characters() -> dict[str, Any]:
         """List claimable and controlled characters in the current world."""
 
         return {"ok": True, "characters": list_mcp_characters(actor)}
 
     @admin_tool
     @_traced_tool
-    def world_snapshot_admin() -> dict[str, Any]:
+    def admin_world_snapshot() -> dict[str, Any]:
         """Return the full raw ECS world snapshot (large; admin/debug and persistence).
 
         This is the heavy dump of every entity and component, so it is admin-only: seeing
         the whole world at once would be cheating. For normal use prefer the scoped
-        projections: ``character_view``/``room_view`` for a play-facing slice and
-        ``world_overview_admin`` for the room-network map.
+        projections: ``play_get_projection``/``play_look`` for a play-facing slice and
+        ``admin_world_overview`` for the room-network map.
         """
 
         admin()
@@ -1015,7 +1174,7 @@ def create_bunnyland_mcp_app(
 
     @admin_tool
     @_traced_tool
-    def world_overview_admin() -> dict[str, Any]:
+    def admin_world_overview() -> dict[str, Any]:
         """Return a slim, admin-only map of the whole room network (admin scope required).
 
         Rooms with ids, titles, exits, and occupant/item counts -- the privileged graph the
@@ -1028,7 +1187,7 @@ def create_bunnyland_mcp_app(
 
     @admin_tool
     @_traced_tool
-    async def save_world_admin() -> dict[str, Any]:
+    async def admin_save_world() -> dict[str, Any]:
         """Save the current world to the configured persistent JSON/YAML file.
 
         Requires an authenticated MCP request with world:admin scope. The server needs a save path
@@ -1045,8 +1204,8 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
         return response.model_dump(mode="json")
 
-    @play_tool
-    def runtime_status() -> dict[str, Any]:
+    @admin_tool
+    def admin_runtime_status() -> dict[str, Any]:
         """Return current runtime status and the tick cadence for the game loop.
 
         ``tick_seconds`` is the real time between ticks -- i.e. roughly how long to wait
@@ -1073,9 +1232,30 @@ def create_bunnyland_mcp_app(
             ),
         }
 
-    @play_tool
+    @admin_tool
+    async def admin_pause_world() -> dict[str, Any]:
+        """Pause the attached world runtime and return its new state."""
+
+        if loop is None:
+            raise ToolError("server runtime is not attached")
+        publish = loop.pause()
+        if publish is not None:
+            await publish
+        return admin_runtime_status()
+
+    @admin_tool
+    async def admin_resume_world() -> dict[str, Any]:
+        """Resume the attached world runtime and return its new state."""
+
+        if loop is None:
+            raise ToolError("server runtime is not attached")
+        publish = loop.resume()
+        if publish is not None:
+            await publish
+        return admin_runtime_status()
+
     @_traced_tool
-    async def client_prompt(
+    async def _client_prompt_tool(
         client_id: str,
         claim_id: str | None = None,
         claim_secret: str | None = None,
@@ -1098,7 +1278,7 @@ def create_bunnyland_mcp_app(
 
     @play_tool
     @_traced_tool
-    def character_view(
+    def play_get_projection(
         client_id: str,
         character_id: str | None = None,
         claim_id: str | None = None,
@@ -1106,12 +1286,12 @@ def create_bunnyland_mcp_app(
     ) -> dict[str, Any]:
         """Return a structured, play-facing view for the client's character.
 
-        Unlike ``client_prompt`` (narrative text), this returns machine-readable data: the
-        room and its entities, inventory, action/focus points, and ``target_groups``
-        resolving every targetable entity id. The full action catalogue is omitted here to
-        keep the view small (progressive disclosure); use ``search_actions``/``list_actions``
-        to find a verb and its argument schema, then read each argument's entity id from
-        ``target_groups[argument.target_group]`` and call ``send_command``.
+        This returns machine-readable room and character state, inventory, action/focus
+        points, and ``target_groups`` resolving every targetable entity id. The full action
+        catalogue is omitted here to keep the view small (progressive disclosure); use
+        ``play_search_actions`` to find a verb and its argument schema, then read each
+        argument's entity id from ``target_groups[argument.target_group]`` and call
+        ``play_send_command``.
         """
 
         try:
@@ -1125,7 +1305,7 @@ def create_bunnyland_mcp_app(
             actions = data.pop("actions", [])
             data["action_count"] = len(actions)
             data["actions_hint"] = (
-                "Action catalogue omitted; call search_actions(query) or list_actions(), "
+                "Action catalogue omitted; call play_search_actions(query), "
                 "then resolve ids from target_groups."
             )
             return data
@@ -1134,7 +1314,44 @@ def create_bunnyland_mcp_app(
 
     @play_tool
     @_traced_tool
-    def query_world(
+    def play_look(
+        client_id: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+    ) -> dict[str, Any]:
+        """Summarize the controlled character's immediate situation and useful next steps."""
+
+        try:
+            character, _controller, _generation = controlled_or_requested_player(
+                client_id,
+                None,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
+            )
+            projection = serialize_character_projection(actor, str(character))
+            available = [action for action in projection.actions if action.available]
+            return {
+                "summary": (
+                    f"{projection.character_name} is in "
+                    f"{projection.room.title or 'an unknown place'} with "
+                    f"{len(projection.room.entities)} visible entities."
+                ),
+                "world_epoch": projection.world_epoch,
+                "character_id": projection.character_id,
+                "room": projection.room.model_dump(mode="json"),
+                "points": projection.points.model_dump(mode="json"),
+                "suggested_actions": [action.command_type for action in available[:8]],
+                "next_actions": [
+                    "Call play_examine for an interesting visible entity.",
+                    "Call play_search_actions, then play_action_help before acting.",
+                ],
+            }
+        except (RuntimeError, ValueError) as exc:
+            raise ToolError(str(exc)) from exc
+
+    @play_tool
+    @_traced_tool
+    def play_query_world(
         client_id: str,
         query: str,
         arguments: dict[str, Any] | None = None,
@@ -1167,7 +1384,9 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
 
     @play_tool
-    def search_actions(query: str = "", limit: int = 30, mode: str = "substring") -> dict[str, Any]:
+    def play_search_actions(
+        query: str = "", limit: int = 30, mode: str = "substring"
+    ) -> dict[str, Any]:
         """Search the action catalogue -- the MCP equivalent of the clients' action box.
 
         Matches ``query`` against each action's command_type, title, and tool name,
@@ -1188,7 +1407,65 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
 
     @play_tool
-    def list_actions() -> dict[str, Any]:
+    def play_action_help(
+        client_id: str,
+        action: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+    ) -> dict[str, Any]:
+        """Explain one action's availability, targets, requirements, cost, and blockers."""
+
+        try:
+            character, _controller, _generation = controlled_or_requested_player(
+                client_id,
+                None,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
+            )
+            projection = serialize_character_projection(actor, str(character))
+            selected = next(
+                (
+                    candidate
+                    for candidate in projection.actions
+                    if action in {candidate.command_type, candidate.tool_name}
+                ),
+                None,
+            )
+            if selected is None:
+                raise ToolError(
+                    f"unknown action {action!r}; call play_search_actions to find one"
+                )
+            targets = {
+                argument.key: [
+                    target.model_dump(mode="json")
+                    for target in projection.target_groups.get(argument.target_group or "", [])
+                ]
+                for argument in selected.arguments
+                if argument.target_group
+            }
+            return {
+                "summary": (
+                    f"{selected.title} is "
+                    f"{'available' if selected.available else 'not currently available'}."
+                ),
+                "action": selected.model_dump(mode="json"),
+                "valid_targets": targets,
+                "requirements": {
+                    "meets_requirements": selected.meets_requirements,
+                    "has_required_target": selected.has_required_target,
+                },
+                "cost": selected.cost.model_dump(mode="json"),
+                "why_not": selected.unavailable_reason or None,
+                "next_actions": (
+                    ["Call play_send_command with this command_type and a valid target."]
+                    if selected.available
+                    else ["Address why_not, then call play_action_help again."]
+                ),
+            }
+        except (RuntimeError, ValueError) as exc:
+            raise ToolError(str(exc)) from exc
+
+    def _list_actions_legacy() -> dict[str, Any]:
         """Return the entire available action catalogue (every verb and its argument schema).
 
         This is large; prefer ``search_actions(query)`` for normal use. Useful when a client
@@ -1199,7 +1476,7 @@ def create_bunnyland_mcp_app(
 
     @play_tool
     @_traced_tool
-    def examine(
+    def play_examine(
         client_id: str,
         entity_id: str | None = None,
         claim_id: str | None = None,
@@ -1230,9 +1507,8 @@ def create_bunnyland_mcp_app(
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
-    @play_tool
     @_traced_tool
-    def room_view(room_id: str) -> dict[str, Any]:
+    def _room_view_legacy(room_id: str) -> dict[str, Any]:
         """Return a structured view of one room: entities, exits, and sprites."""
 
         try:
@@ -1241,7 +1517,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
 
     @play_tool
-    def character_commands(
+    def play_pending_commands(
         client_id: str,
         character_id: str | None = None,
         claim_id: str | None = None,
@@ -1267,8 +1543,7 @@ def create_bunnyland_mcp_app(
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
-    @play_tool
-    def component_schema(types: list[str] | None = None) -> dict[str, Any]:
+    def _component_schema_legacy(types: list[str] | None = None) -> dict[str, Any]:
         """Return JSON schemas for ECS component types, so a client can learn what the
 
         components on perceived entities mean (e.g. ``FoodComponent``). Pass ``types`` to
@@ -1288,7 +1563,7 @@ def create_bunnyland_mcp_app(
         }
 
     @play_tool
-    def perceived_events(
+    def play_recent_events(
         client_id: str,
         claim_id: str | None = None,
         claim_secret: str | None = None,
@@ -1311,7 +1586,40 @@ def create_bunnyland_mcp_app(
         return event_bridge.perceived_for_client(client_id, since=since, limit=limit)
 
     @play_tool
-    async def claim_character(
+    def play_what_changed(
+        client_id: str,
+        since_epoch: int,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+    ) -> dict[str, Any]:
+        """Summarize authoritative visible changes after one world-epoch watermark."""
+
+        try:
+            character, _controller, _generation = controlled_or_requested_player(
+                client_id,
+                None,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
+            )
+            result = actor.perspective_queries.execute(
+                actor,
+                "what_changed_since",
+                {"epoch": since_epoch},
+                actor_id=str(character),
+                access="claim",
+            ).model_dump(mode="json")
+            events = result.get("result", {}).get("events", [])
+            result["summary"] = f"{len(events)} visible change(s) since epoch {since_epoch}."
+            result["next_actions"] = [
+                "Call play_look to refresh the current situation.",
+                "Use the returned world_epoch as the next watermark.",
+            ]
+            return result
+        except (PermissionError, RuntimeError, ValueError, TimeoutError) as exc:
+            raise ToolError(str(exc)) from exc
+
+    @play_tool
+    async def play_claim_character(
         client_id: str,
         claim_id: str | None = None,
         claim_secret: str | None = None,
@@ -1325,6 +1633,7 @@ def create_bunnyland_mcp_app(
         try:
             async with actor._lock:
                 player(client_id)
+                claim_secret = request_claim_secret(claim_secret)
                 claimed = assign_mcp_controller(
                     actor,
                     claim_secrets=claim_secrets,
@@ -1351,7 +1660,41 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
 
     @play_tool
-    async def release_character(
+    async def play_reclaim_character(
+        client_id: str,
+        claim_id: str,
+        claim_secret: str,
+    ) -> dict[str, Any]:
+        """Resume active MCP control for the character already owned by this claim."""
+
+        try:
+            async with actor._lock:
+                player(client_id)
+                claim_secret = request_claim_secret(claim_secret)
+                found = claimed_character_for(actor, client_id=client_id)
+                if found is None:
+                    raise RuntimeError("client does not own a character claim")
+                claim = found[3]
+                ensure_claim_secret(
+                    claim_secrets,
+                    claim,
+                    claim_id=claim_id,
+                    claim_secret=claim_secret,
+                )
+                return assign_mcp_controller(
+                    actor,
+                    claim_secrets=claim_secrets,
+                    client_id=client_id,
+                    claim_id=claim_id,
+                    claim_secret=claim_secret,
+                    character_id=claim.character_id,
+                    label=claim.label,
+                )
+        except (PermissionError, RuntimeError) as exc:
+            raise ToolError(str(exc)) from exc
+
+    @play_tool
+    async def play_release_control(
         client_id: str,
         claim_id: str | None = None,
         claim_secret: str | None = None,
@@ -1365,6 +1708,7 @@ def create_bunnyland_mcp_app(
         try:
             async with actor._lock:
                 player(client_id)
+                claim_secret = request_claim_secret(claim_secret)
                 return release_mcp_controller(
                     actor,
                     claim_secrets=claim_secrets,
@@ -1380,7 +1724,7 @@ def create_bunnyland_mcp_app(
             raise ToolError(str(exc)) from exc
 
     @play_tool
-    async def release_claim(
+    async def play_release_claim(
         client_id: str,
         claim_id: str | None = None,
         claim_secret: str | None = None,
@@ -1390,6 +1734,7 @@ def create_bunnyland_mcp_app(
         try:
             async with actor._lock:
                 player(client_id)
+                claim_secret = request_claim_secret(claim_secret)
                 return release_mcp_claim(
                     actor,
                     claim_secrets=claim_secrets,
@@ -1402,7 +1747,7 @@ def create_bunnyland_mcp_app(
 
     @play_tool
     @_traced_tool
-    async def send_command(
+    async def play_send_command(
         client_id: str,
         command_type: str,
         payload: dict[str, Any] | None = None,
@@ -1476,14 +1821,43 @@ def create_bunnyland_mcp_app(
             "resolves_at_epoch": _next_tick_epoch(),
             "note": (
                 "Queued only. Commands resolve on a later world tick and may still be "
-                "rejected. Observe the outcome via perceived_events (execution or "
-                "CommandRejectedEvent with a reason) or character_commands (still pending)."
+                "rejected. Observe the outcome via play_recent_events (execution or "
+                "CommandRejectedEvent with a reason) or play_pending_commands (still pending)."
             ),
         }
 
+    @play_tool
+    async def play_cancel_command(
+        client_id: str,
+        command_id: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+    ) -> dict[str, Any]:
+        """Cancel one still-pending command for the controlled character."""
+
+        try:
+            character, _controller, _generation = controlled_or_requested_player(
+                client_id,
+                None,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
+            )
+            command = await actor.cancel_command(str(character), command_id)
+            if command is None:
+                raise ToolError("command is not pending")
+            return {
+                "command_id": command_id,
+                "status": "cancelled",
+                "world_epoch": actor.epoch,
+                "summary": f"Cancelled {command.command_type}.",
+                "next_actions": ["Call play_pending_commands to review the remaining queue."],
+            }
+        except (RuntimeError, ValueError) as exc:
+            raise ToolError(str(exc)) from exc
+
     @admin_tool
     @_traced_tool
-    async def patch_world_admin(
+    async def admin_patch_world(
         operations: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Apply a world editor patch. Requires world:admin scope."""
@@ -1498,7 +1872,7 @@ def create_bunnyland_mcp_app(
         return response.model_dump(mode="json")
 
     @admin_tool
-    def list_controller_definitions_admin() -> dict[str, Any]:
+    def admin_list_controller_definitions() -> dict[str, Any]:
         """List registered scripts, behavior trees, and the authorable leaf library.
 
         Requires world:admin scope.
@@ -1510,7 +1884,27 @@ def create_bunnyland_mcp_app(
         return list_controller_definitions().model_dump(mode="json")
 
     @admin_tool
-    async def register_script_admin(
+    async def admin_assign_controller(
+        character_id: str,
+        controller_id: str,
+    ) -> dict[str, Any]:
+        """Assign one existing controller to a character."""
+
+        if assign_controller is None:
+            raise ToolError("controller assignment is not configured")
+        try:
+            response = await assign_controller(
+                ControllerAssignmentRequest(
+                    character_id=character_id,
+                    controller_id=controller_id,
+                )
+            )
+            return response.model_dump(mode="json")
+        except Exception as exc:
+            raise ToolError(str(exc)) from exc
+
+    @admin_tool
+    async def admin_register_script(
         name: str,
         calls: list[dict[str, Any]],
         description: str = "",
@@ -1534,7 +1928,7 @@ def create_bunnyland_mcp_app(
         return response.model_dump(mode="json")
 
     @admin_tool
-    async def register_behavior_admin(
+    async def admin_register_behavior(
         name: str,
         root: dict[str, Any],
         description: str = "",
@@ -1559,8 +1953,16 @@ def create_bunnyland_mcp_app(
         return response.model_dump(mode="json")
 
     @admin_tool
+    def admin_list_generators() -> dict[str, Any]:
+        """List registered generation strategies and their seed behavior."""
+
+        if list_generators is None:
+            return {"generators": []}
+        return list_generators()
+
+    @admin_tool
     @_traced_tool
-    async def generate_world_admin(
+    async def admin_generate_world(
         seed: str | None = None,
         generator: str | None = None,
         max_rooms: int | None = None,
@@ -1585,7 +1987,7 @@ def create_bunnyland_mcp_app(
         return response.model_dump(mode="json")
 
     @admin_tool
-    async def world_generation_status_admin() -> dict[str, Any]:
+    async def admin_generation_status() -> dict[str, Any]:
         """Return the current async world generation job status. Requires world:admin scope."""
 
         admin()
@@ -1593,7 +1995,7 @@ def create_bunnyland_mcp_app(
 
     @admin_tool
     @_traced_tool
-    async def generate_room_patch_admin(
+    async def admin_generate_room(
         door_entity_id: str,
         direction: str | None = None,
         prompt: str = "",
@@ -1615,7 +2017,7 @@ def create_bunnyland_mcp_app(
 
     @admin_tool
     @_traced_tool
-    async def generate_character_patch_admin(
+    async def admin_generate_character(
         room_entity_id: str,
         prompt: str = "",
     ) -> dict[str, Any]:
@@ -1632,7 +2034,7 @@ def create_bunnyland_mcp_app(
 
     @admin_tool
     @_traced_tool
-    async def generate_item_patch_admin(
+    async def admin_generate_item(
         container_entity_id: str,
         prompt: str = "",
     ) -> dict[str, Any]:
@@ -1652,7 +2054,7 @@ def create_bunnyland_mcp_app(
 
     @admin_tool
     @_traced_tool
-    async def generate_event_patch_admin(
+    async def admin_generate_event(
         room_entity_id: str,
         prompt: str = "",
     ) -> dict[str, Any]:
@@ -1668,7 +2070,7 @@ def create_bunnyland_mcp_app(
         return response.model_dump(mode="json")
 
     @admin_tool
-    async def generate_image_admin(
+    async def admin_generate_image(
         entity_id: str,
         purpose: str = "portrait",
         template: str = "",
@@ -1702,7 +2104,51 @@ def create_bunnyland_mcp_app(
 
     @play_tool
     @_traced_tool
-    async def request_scene_image(
+    async def play_chat(
+        client_id: str,
+        message: str,
+        claim_id: str | None = None,
+        claim_secret: str | None = None,
+        history_summary: str = "",
+        history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Have a higher-level in-character exchange using the controlled claim."""
+
+        if chat is None:
+            raise ToolError("character chat is not configured")
+        try:
+            character, _controller, _generation = controlled_or_requested_player(
+                client_id,
+                None,
+                claim_id=claim_id,
+                claim_secret=claim_secret,
+            )
+            request = CharacterChatRequest.model_validate(
+                {
+                    "client_id": client_id,
+                    "claim_id": claim_id,
+                    "message": message,
+                    "history_summary": history_summary,
+                    "history": history or [],
+                }
+            )
+            result = await chat(str(character), request, claim_secret)
+            return {
+                "summary": result.get("reply", "Character replied."),
+                "world_epoch": result.get("world_epoch", actor.epoch),
+                "reply": result.get("reply", ""),
+                "action": result.get("action", {}),
+                "next_actions": [
+                    "Call play_recent_events if the reply queued an action.",
+                    "Call play_look to refresh the situation.",
+                ],
+            }
+        except (RuntimeError, ValueError) as exc:
+            raise ToolError(str(exc)) from exc
+
+    @play_tool
+    @_traced_tool
+    async def play_request_scene_image(
         client_id: str,
         character_id: str | None = None,
         claim_id: str | None = None,
@@ -1732,9 +2178,9 @@ def create_bunnyland_mcp_app(
             raise ToolError("character has no room to illustrate")
         return response.model_dump(mode="json")
 
-    policy_registrar = PolicyRegistrar()
     try:
         for plugin in plugins:
+            policy_registrar = PolicyRegistrar(plugin.id)
             for contribution in plugin.runtime.mcp:
                 for registrar in contribution.registrars:
                     registrar(

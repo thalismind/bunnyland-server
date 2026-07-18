@@ -1,0 +1,83 @@
+{
+  "version": "v1",
+  "routes": {
+    "public": {
+      "GET": [
+        "/v1/public/features",
+        "/v1/public/health",
+        "/v1/public/media/{namespace}/{name}"
+      ]
+    },
+    "auth": {
+      "POST": ["/v1/auth/session"],
+      "GET": ["/v1/auth/session"],
+      "PATCH": ["/v1/auth/session"],
+      "DELETE": ["/v1/auth/session"]
+    },
+    "play": {
+      "GET": [
+        "/v1/play/catalog",
+        "/v1/play/characters",
+        "/v1/play/claims/{claim_id}/events",
+        "/v1/play/claims/{claim_id}/jobs",
+        "/v1/play/claims/{claim_id}/jobs/{job_id}",
+        "/v1/play/claims/{claim_id}/projection"
+      ],
+      "POST": [
+        "/v1/play/claims",
+        "/v1/play/claims/{claim_id}/commands",
+        "/v1/play/claims/{claim_id}/jobs",
+        "/v1/play/claims/{claim_id}/queries"
+      ],
+      "PUT": ["/v1/play/claims/{claim_id}"],
+      "PATCH": ["/v1/play/claims/{claim_id}"],
+      "DELETE": [
+        "/v1/play/claims/{claim_id}",
+        "/v1/play/claims/{claim_id}/commands/{command_id}"
+      ],
+      "WEBSOCKET": ["/v1/play/claims/{claim_id}/stream"]
+    },
+    "admin": {
+      "GET": [
+        "/v1/admin/characters/{character_id}",
+        "/v1/admin/controller-definitions",
+        "/v1/admin/memory/collections",
+        "/v1/admin/memory/collections/{collection}/documents",
+        "/v1/admin/memory/collections/{collection}/documents/{document_id}",
+        "/v1/admin/world",
+        "/v1/admin/world/events",
+        "/v1/admin/world/generation-jobs/{job_id}",
+        "/v1/admin/world/generators",
+        "/v1/admin/world/runtime",
+        "/v1/admin/world/snapshot"
+      ],
+      "POST": [
+        "/v1/admin/memory/collections/{collection}/documents",
+        "/v1/admin/world/checkpoints",
+        "/v1/admin/world/generation-jobs"
+      ],
+      "PUT": [
+        "/v1/admin/characters/{character_id}/controller",
+        "/v1/admin/controller-definitions/{kind}/{name}",
+        "/v1/admin/media/{target_kind}/{target_id}/{purpose}",
+        "/v1/admin/memory/collections/{collection}/documents/{document_id}"
+      ],
+      "PATCH": [
+        "/v1/admin/memory/collections/{collection}/documents/{document_id}",
+        "/v1/admin/world",
+        "/v1/admin/world/runtime"
+      ],
+      "DELETE": [
+        "/v1/admin/memory/collections/{collection}/documents/{document_id}"
+      ],
+      "WEBSOCKET": ["/v1/admin/world/stream"]
+    }
+  },
+  "infrastructure": [
+    "/v1/admin/docs",
+    "/v1/admin/docs/oauth2-redirect",
+    "/v1/admin/openapi.json",
+    "/v1/admin/redoc",
+    "/v1/mcp"
+  ]
+}

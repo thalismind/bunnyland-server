@@ -12,6 +12,7 @@ from bunnyland import chat
 class FakeResponse:
     def __init__(self, payload: dict):
         self.payload = payload
+        self.headers = {}
 
     def __enter__(self):
         return self
@@ -33,7 +34,7 @@ def test_chat_client_keeps_bounded_history_in_payload():
 
     assert len(state["messages"]) == chat.HISTORY_LIMIT
     payload = chat.request_payload("client-1", state, "next")
-    assert payload["client_id"] == "client-1"
+    assert payload["kind"] == "chat"
     assert payload["history_summary"] == "old context"
     assert len(payload["history"]) == chat.HISTORY_LIMIT
     assert payload["message"] == "next"
@@ -109,16 +110,16 @@ def test_chat_client_api_helpers_and_character_selection(monkeypatch):
         return FakeResponse(
             {
                 "characters": [
-                    {"character_id": "char-1", "name": "Juniper"},
-                    {"character_id": "char-2", "name": "Hazel"},
+                    {"id": "char-1", "name": "Juniper"},
+                    {"id": "char-2", "name": "Hazel"},
                 ]
             }
         )
 
     monkeypatch.setattr(chat.urllib.request, "urlopen", fake_urlopen)
 
-    assert chat.api_url(" http://server/ ", "/play/world") == "http://server/play/world"
-    assert chat.get_json("http://server", "/play/world/characters")["characters"][0]["name"] == (
+    assert chat.api_url(" http://server/ ", "/play/characters") == "http://server/play/characters"
+    assert chat.get_json("http://server", "/play/characters")["characters"][0]["name"] == (
         "Juniper"
     )
     assert chat.choose_character("http://server", "") == ("char-1", "Juniper")
@@ -129,7 +130,7 @@ def test_chat_client_api_helpers_and_character_selection(monkeypatch):
 
 
 def test_chat_client_choose_character_rejects_empty_list(monkeypatch):
-    monkeypatch.setattr(chat, "get_json", lambda _base, _path: {"characters": []})
+    monkeypatch.setattr(chat, "get_json", lambda _base, _path, _client="": {"characters": []})
 
     with pytest.raises(RuntimeError, match="no characters"):
         chat.choose_character("http://server", "")
@@ -164,7 +165,7 @@ def test_chat_client_post_json_success_and_error(monkeypatch):
 
 def test_chat_client_main_disabled_server_exits(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    monkeypatch.setattr(chat, "get_json", lambda _base, _path: {"enabled": False})
+    monkeypatch.setattr(chat, "get_json", lambda _base, _path: {"character_chat": False})
 
     with pytest.raises(SystemExit, match="not enabled"):
         chat.main(["--server", "http://server"])
@@ -175,17 +176,25 @@ def test_chat_client_main_interactive_round_trip(monkeypatch, tmp_path, capsys):
     inputs = iter(["", "hello", "/quit"])
     posted = []
 
-    def fake_get_json(_base, path):
-        if path == "/play/world/chat/status":
-            return {"enabled": True}
-        return {"characters": [{"character_id": "char:1", "name": "Juniper"}]}
+    def fake_get_json(_base, path, _client_id=""):
+        if path == "/public/features":
+            return {"character_chat": True}
+        return {"characters": [{"id": "char:1", "name": "Juniper"}]}
 
-    def fake_post_json(base, path, payload):
+    def fake_post_json(base, path, payload, **_kwargs):
         posted.append((base, path, payload))
-        return {"reply": "I am here.", "action": {"tool": "look", "status": "executed"}}
+        return {
+            "status": "succeeded",
+            "result": {
+                "reply": "I am here.",
+                "action": {"tool": "look", "status": "executed"},
+            },
+        }
 
     monkeypatch.setattr(chat, "get_json", fake_get_json)
     monkeypatch.setattr(chat, "post_json", fake_post_json)
+    monkeypatch.setattr(chat, "create_claim", lambda *_args: ("claim-1", "secret-1"))
+    monkeypatch.setattr(chat, "delete_claim", lambda *_args: None)
 
     with patch("builtins.input", lambda _prompt: next(inputs)):
         assert chat.main(["--server", "http://server", "--character", "Juniper"]) == 0
@@ -193,18 +202,20 @@ def test_chat_client_main_interactive_round_trip(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Chatting with Juniper" in out
     assert "Juniper: I am here. [look executed]" in out
-    assert posted[0][1] == "/play/world/character/char%3A1/chat"
+    assert posted[0][1] == "/play/claims/claim-1/jobs"
 
 
 def test_chat_client_main_exits_on_eof(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
-    def fake_get_json(_base, path):
-        if path == "/play/world/chat/status":
-            return {"enabled": True}
-        return {"characters": [{"character_id": "char:1", "name": "Juniper"}]}
+    def fake_get_json(_base, path, _client_id=""):
+        if path == "/public/features":
+            return {"character_chat": True}
+        return {"characters": [{"id": "char:1", "name": "Juniper"}]}
 
     monkeypatch.setattr(chat, "get_json", fake_get_json)
+    monkeypatch.setattr(chat, "create_claim", lambda *_args: ("claim-1", "secret-1"))
+    monkeypatch.setattr(chat, "delete_claim", lambda *_args: None)
 
     with patch("builtins.input", side_effect=EOFError):
         assert chat.main(["--server", "http://server"]) == 0

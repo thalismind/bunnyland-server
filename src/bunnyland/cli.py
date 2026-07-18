@@ -1255,7 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("repl", add_help=False, help="open the terminal REPL (needs the repl extra)")
 
     chat = sub.add_parser("chat", help="chat with an LLM-controlled character")
-    chat.add_argument("--server", default="http://127.0.0.1:8765")
+    chat.add_argument("--server", default="http://127.0.0.1:8765/v1")
     chat.add_argument("--character", default="", help="character id or exact name")
 
     config_wizard = sub.add_parser("config-wizard", help="create or validate bunnyland.yml")

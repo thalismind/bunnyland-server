@@ -6,6 +6,7 @@ import json
 import socket
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import httpx
@@ -789,6 +790,7 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     captured = {}
     registered_tools = {}
     registered_resources = {}
+    registered_prompts = {}
     registered_low_server = {}
 
     class FakeLowServer:
@@ -827,6 +829,13 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
         def resource(self, uri, **_kwargs):
             def decorate(func):
                 registered_resources[uri] = func
+                return func
+
+            return decorate
+
+        def prompt(self, *, name, **_kwargs):
+            def decorate(func):
+                registered_prompts[name] = func
                 return func
 
             return decorate
@@ -879,39 +888,34 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     )
 
     paths = {route.path for route in app.routes}
-    assert "/mcp" in paths
-    assert "request_scene_image" in registered_tools
+    assert "/v1/mcp" in paths
+    assert "play_request_scene_image" in registered_tools
     assert captured["args"] == ("Bunnyland",)
     assert captured["kwargs"]["stateless_http"] is False
     assert captured["kwargs"]["json_response"] is True
     assert captured["kwargs"]["streamable_http_path"] == "/"
-    assert "claim_character" in registered_tools
-    assert "release_character" in registered_tools
-    assert "send_command" in registered_tools
-    assert "client_prompt" in registered_tools
-    assert "patch_world_admin" in registered_tools
-    assert registered_resources[EVENTS_RESOURCE_URI].__name__ == "recent_world_events_resource"
-    recent_events = json.loads(registered_resources[EVENTS_RESOURCE_URI]())
-    assert recent_events == {"ok": True, "events": []}
+    assert "play_claim_character" in registered_tools
+    assert "play_release_control" in registered_tools
+    assert "play_send_command" in registered_tools
+    assert "play_get_projection" in registered_tools
+    assert "admin_patch_world" in registered_tools
+    assert "bunnyland://v1/features" in registered_resources
+    assert "bunnyland://v1/catalog" in registered_resources
+    assert "bunnyland://v1/characters" in registered_resources
+    assert registered_prompts["play_bunnyland"]().startswith("List and claim")
     claimed = asyncio.run(
-        registered_tools["claim_character"](client_id="client-a", character_name="Juniper")
+        registered_tools["play_claim_character"](client_id="client-a", character_name="Juniper")
     )
     assert claimed["claim_id"]
-    with pytest.raises(RuntimeError, match="invalid claim secret"):
-        registered_resources["bunnyland://clients/{client_id}/events"]("client-a")
-    with pytest.raises(RuntimeError, match="invalid claim secret"):
-        asyncio.run(
-            registered_resources["bunnyland://clients/{client_id}/prompt"]("client-a")
-        )
     assert registered_low_server["unsubscribe_resource"].__name__ == "unsubscribe_resource"
     asyncio.run(registered_low_server["unsubscribe_resource"](AnyUrl(EVENTS_RESOURCE_URI)))
 
     with pytest.raises(RuntimeError, match="client is not controlling"):
-        asyncio.run(registered_tools["client_prompt"](client_id="missing"))
+        registered_tools["play_get_projection"](client_id="missing")
 
-    patch_world_admin = registered_tools["patch_world_admin"]
-    assert list(inspect.signature(patch_world_admin).parameters) == ["operations"]
-    patched = asyncio.run(patch_world_admin(operations=[]))
+    admin_patch_world = registered_tools["admin_patch_world"]
+    assert list(inspect.signature(admin_patch_world).parameters) == ["operations"]
+    patched = asyncio.run(admin_patch_world(operations=[]))
     assert patched["ok"] is True
 
 
@@ -1052,17 +1056,17 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     )
     create_bunnyland_mcp_app(generate_image=generate_image, **create_kwargs)
 
-    characters = registered_tools["list_characters"]()
+    characters = registered_tools["play_list_characters"]()
     assert characters["ok"] is True
     assert [character["name"] for character in characters["characters"]] == ["Juniper"]
 
-    snapshot = registered_tools["world_snapshot_admin"]()
+    snapshot = registered_tools["admin_world_snapshot"]()
     assert snapshot["metadata"]["seed"] == "moss"
     assert any(entity["id"] == str(scenario.character) for entity in snapshot["entities"])
 
-    assert "save_world_admin" in registered_tools
+    assert "admin_save_world" in registered_tools
 
-    status = registered_tools["runtime_status"]()
+    status = registered_tools["admin_runtime_status"]()
     assert status == {
         "ok": True,
         "world_epoch": scenario.actor.epoch,
@@ -1073,29 +1077,29 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
         "game_seconds_per_tick": None,
     }
 
-    claimed = await registered_tools["claim_character"](
+    claimed = await registered_tools["play_claim_character"](
         client_id="client-a",
         character_name="Juniper",
     )
     assert claimed["character_id"] == str(scenario.character)
 
-    prompt = await registered_tools["client_prompt"](
+    projection = registered_tools["play_get_projection"](
         client_id="client-a", **_claim_args(claimed)
     )
-    assert prompt["character_id"] == str(scenario.character)
-    assert "You are Juniper" in prompt["prompt"]
+    assert projection["character_id"] == str(scenario.character)
+    assert projection["character_name"] == "Juniper"
 
-    released = await registered_tools["release_character"](
+    released = await registered_tools["play_release_control"](
         client_id="client-a",
         **_claim_args(claimed),
     )
     assert released["controller_kind"] == "suspended"
 
-    patched = await registered_tools["patch_world_admin"](operations=[])
+    patched = await registered_tools["admin_patch_world"](operations=[])
     assert patched["world_epoch"] == scenario.actor.epoch
     assert calls["patch_world"].operations == []
 
-    generated_world = await registered_tools["generate_world_admin"](
+    generated_world = await registered_tools["admin_generate_world"](
         seed="seed-a",
         generator="stub",
         max_rooms=2,
@@ -1107,10 +1111,10 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert calls["generate_world"].max_rooms == 2
     assert calls["generate_world"].confirm_reset is True
 
-    generation = await registered_tools["world_generation_status_admin"]()
+    generation = await registered_tools["admin_generation_status"]()
     assert generation["world_epoch"] == scenario.actor.epoch
 
-    room = await registered_tools["generate_room_patch_admin"](
+    room = await registered_tools["admin_generate_room"](
         door_entity_id="door-1",
         direction="north",
         prompt="room prompt",
@@ -1118,28 +1122,28 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert room["generated_title"] == "Generated Room"
     assert calls["generate_room"].direction == "north"
 
-    character = await registered_tools["generate_character_patch_admin"](
+    character = await registered_tools["admin_generate_character"](
         room_entity_id=str(scenario.room_a),
         prompt="character prompt",
     )
     assert character["generated_name"] == "Generated Character"
     assert calls["generate_character"].prompt == "character prompt"
 
-    item = await registered_tools["generate_item_patch_admin"](
+    item = await registered_tools["admin_generate_item"](
         container_entity_id=str(scenario.room_a),
         prompt="item prompt",
     )
     assert item["generated_name"] == "Generated Item"
     assert calls["generate_item"].container_entity_id == str(scenario.room_a)
 
-    event = await registered_tools["generate_event_patch_admin"](
+    event = await registered_tools["admin_generate_event"](
         room_entity_id=str(scenario.room_a),
         prompt="event prompt",
     )
     assert event["generated_kind"] == "scene"
     assert calls["generate_event"].prompt == "event prompt"
 
-    assert list(inspect.signature(registered_tools["generate_image_admin"]).parameters) == [
+    assert list(inspect.signature(registered_tools["admin_generate_image"]).parameters) == [
         "entity_id",
         "purpose",
         "template",
@@ -1147,7 +1151,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
         "alpha",
         "force",
     ]
-    image = await registered_tools["generate_image_admin"](
+    image = await registered_tools["admin_generate_image"](
         entity_id=str(scenario.character), purpose="portrait"
     )
     assert image["job_id"] == "img-1"
@@ -1156,12 +1160,12 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     # Re-create without an image callback: the tool reports it is not configured.
     create_bunnyland_mcp_app(**create_kwargs)
     with pytest.raises(RuntimeError, match="not configured"):
-        await registered_tools["generate_image_admin"](
+        await registered_tools["admin_generate_image"](
             entity_id=str(scenario.character)
         )
 
     # Player-facing scene-image request (camera affordance, no admin scope required).
-    claimed = await registered_tools["claim_character"](
+    claimed = await registered_tools["play_claim_character"](
         client_id="client-a",
         character_name="Juniper",
         **_claim_args(claimed),
@@ -1178,7 +1182,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
         )
 
     create_bunnyland_mcp_app(scene_image=scene_image, **create_kwargs)
-    scene = await registered_tools["request_scene_image"](
+    scene = await registered_tools["play_request_scene_image"](
         client_id="client-a",
         **_claim_args(claimed),
     )
@@ -1186,7 +1190,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     assert calls["scene_image"] == str(scenario.character)
 
     with pytest.raises(RuntimeError, match="not controlling"):
-        await registered_tools["request_scene_image"](client_id="ghost")
+        await registered_tools["play_request_scene_image"](client_id="ghost")
 
     # The character has no room to illustrate: the callback returns None.
     async def scene_image_none(_character_id):
@@ -1194,7 +1198,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
 
     create_bunnyland_mcp_app(scene_image=scene_image_none, **create_kwargs)
     with pytest.raises(RuntimeError, match="no room"):
-        await registered_tools["request_scene_image"](
+        await registered_tools["play_request_scene_image"](
             client_id="client-a",
             **_claim_args(claimed),
         )
@@ -1202,7 +1206,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     # Without the callback the tool reports image generation is off.
     create_bunnyland_mcp_app(**create_kwargs)
     with pytest.raises(RuntimeError, match="not configured"):
-        await registered_tools["request_scene_image"](
+        await registered_tools["play_request_scene_image"](
             client_id="client-a",
             **_claim_args(claimed),
         )
@@ -1291,35 +1295,35 @@ async def test_mcp_registered_tools_wrap_runtime_errors(monkeypatch, scenario):
         generate_event=generate_room,
     )
 
-    with pytest.raises(FakeToolError, match="client is not controlling") as prompt_error:
-        await registered_tools["client_prompt"](client_id="missing")
-    assert isinstance(prompt_error.value.__cause__, RuntimeError)
+    with pytest.raises(FakeToolError, match="client is not controlling") as projection_error:
+        registered_tools["play_get_projection"](client_id="missing")
+    assert isinstance(projection_error.value.__cause__, RuntimeError)
 
     with pytest.raises(FakeToolError, match="client_id is required") as claim_error:
-        await registered_tools["claim_character"](client_id=" ")
+        await registered_tools["play_claim_character"](client_id=" ")
     assert isinstance(claim_error.value.__cause__, RuntimeError)
 
     with pytest.raises(FakeToolError, match="client is not controlling") as release_error:
-        await registered_tools["release_character"](client_id="missing")
+        await registered_tools["play_release_control"](client_id="missing")
     assert isinstance(release_error.value.__cause__, RuntimeError)
 
     with pytest.raises(FakeToolError, match="client is not controlling") as claim_release_error:
-        await registered_tools["release_claim"](client_id="missing")
+        await registered_tools["play_release_claim"](client_id="missing")
     assert isinstance(claim_release_error.value.__cause__, RuntimeError)
 
     with pytest.raises(FakeToolError, match="client is not controlling") as command_error:
-        await registered_tools["send_command"](
+        await registered_tools["play_send_command"](
             client_id="missing",
             command_type="move",
         )
     assert isinstance(command_error.value.__cause__, RuntimeError)
 
-    claimed = await registered_tools["claim_character"](
+    claimed = await registered_tools["play_claim_character"](
         client_id="client-a",
         character_name="Juniper",
     )
     with pytest.raises(FakeToolError, match="'not-a-lane' is not a valid Lane") as lane_error:
-        await registered_tools["send_command"](
+        await registered_tools["play_send_command"](
             client_id="client-a",
             command_type="move",
             lane="not-a-lane",
@@ -1612,7 +1616,7 @@ def test_mcp_addon_declares_tool_resource_and_prompt_policies(monkeypatch, scena
         generate_event=unused,
         plugins=(plugin,),
     )
-    assert "safe_tool" in registered_tools
+    assert "test_declared_mcp_policy__safe_tool" in registered_tools
     app.bunnyland_mcp_event_bridge.close()
 
 
@@ -1676,48 +1680,48 @@ async def test_mcp_admin_tools_wrap_generator_failures_and_definition_tools(monk
 
     # Each admin generator wraps its underlying ValueError in a ToolError.
     for tool_name, kwargs in [
-        ("patch_world_admin", {"operations": []}),
-        ("generate_world_admin", {}),
-        ("generate_room_patch_admin", {"door_entity_id": "door-1"}),
-        ("generate_character_patch_admin", {"room_entity_id": str(scenario.room_a)}),
-        ("generate_item_patch_admin", {"container_entity_id": str(scenario.room_a)}),
-        ("generate_event_patch_admin", {"room_entity_id": str(scenario.room_a)}),
-        ("generate_image_admin", {"entity_id": str(scenario.character)}),
+        ("admin_patch_world", {"operations": []}),
+        ("admin_generate_world", {}),
+        ("admin_generate_room", {"door_entity_id": "door-1"}),
+        ("admin_generate_character", {"room_entity_id": str(scenario.room_a)}),
+        ("admin_generate_item", {"container_entity_id": str(scenario.room_a)}),
+        ("admin_generate_event", {"room_entity_id": str(scenario.room_a)}),
+        ("admin_generate_image", {"entity_id": str(scenario.character)}),
     ]:
         with pytest.raises(RuntimeError, match="generator unavailable"):
             await registered_tools[tool_name](**kwargs)
 
     # Controller-definition tools succeed and a registration failure wraps as ToolError.
-    listed = registered_tools["list_controller_definitions_admin"]()
+    listed = registered_tools["admin_list_controller_definitions"]()
     assert listed["scripts"] == ["existing"]
 
-    script = await registered_tools["register_script_admin"](
+    script = await registered_tools["admin_register_script"](
         name="patrol",
         calls=[{"name": "wait", "arguments": {}}],
     )
     assert script["scripts"] == ["patrol"]
 
-    behavior = await registered_tools["register_behavior_admin"](
+    behavior = await registered_tools["admin_register_behavior"](
         name="guard",
         root={"kind": "action", "ref": "wait"},
     )
     assert behavior["behaviors"] == ["guard"]
 
     with pytest.raises(RuntimeError):
-        await registered_tools["register_script_admin"](
+        await registered_tools["admin_register_script"](
             name="bad",
             calls="not-a-list",
         )
 
     # An invalid behavior tree root fails validation and wraps as ToolError (1081-1082).
     with pytest.raises(RuntimeError):
-        await registered_tools["register_behavior_admin"](
+        await registered_tools["admin_register_behavior"](
             name="bad",
             root="not-a-node",
         )
 
     with pytest.raises(RuntimeError, match="not controlling"):
-        await registered_tools["character_commands"](client_id="missing")
+        await registered_tools["play_pending_commands"](client_id="missing")
 
 
 async def test_mcp_controller_definition_tools_report_when_unconfigured(monkeypatch, scenario):
@@ -1757,16 +1761,16 @@ async def test_mcp_controller_definition_tools_report_when_unconfigured(monkeypa
     )
 
     with pytest.raises(RuntimeError, match="not configured"):
-        registered_tools["list_controller_definitions_admin"]()
+        registered_tools["admin_list_controller_definitions"]()
     with pytest.raises(RuntimeError, match="not configured"):
-        await registered_tools["register_script_admin"](name="x", calls=[])
+        await registered_tools["admin_register_script"](name="x", calls=[])
     with pytest.raises(RuntimeError, match="not configured"):
-        await registered_tools["register_behavior_admin"](
+        await registered_tools["admin_register_behavior"](
             name="x", root={"kind": "action", "ref": "wait"}
         )
 
 
-async def test_mcp_send_command_reports_submission_rejection(monkeypatch, scenario):
+async def test_mcp_play_send_command_reports_submission_rejection(monkeypatch, scenario):
     registered_tools = {}
 
     class FakeLowServer:
@@ -1801,14 +1805,14 @@ async def test_mcp_send_command_reports_submission_rejection(monkeypatch, scenar
         generate_event=boom,
     )
 
-    claimed = await registered_tools["claim_character"](
+    claimed = await registered_tools["play_claim_character"](
         client_id="client-a",
         character_name="Juniper",
     )
 
     # An unaffordable command under DENY is rejected synchronously (line 977 path) instead
     # of being queued.
-    result = await registered_tools["send_command"](
+    result = await registered_tools["play_send_command"](
         client_id="client-a",
         command_type="move",
         payload={"direction": "north"},
@@ -1822,7 +1826,7 @@ async def test_mcp_send_command_reports_submission_rejection(monkeypatch, scenar
     assert result["reason"]
 
     # A valid move queues successfully (the accepted branch).
-    queued = await registered_tools["send_command"](
+    queued = await registered_tools["play_send_command"](
         client_id="client-a",
         command_type="move",
         payload={"direction": "north"},
@@ -1833,8 +1837,8 @@ async def test_mcp_send_command_reports_submission_rejection(monkeypatch, scenar
 
 
 @pytest.mark.parametrize("verb", ["take-control", "release-to-llm", "suspend", "resume"])
-async def test_mcp_send_command_rejects_control_verbs(monkeypatch, scenario, verb):
-    # send_command must not accept controller-changing verbs: they bypass the
+async def test_mcp_play_send_command_rejects_control_verbs(monkeypatch, scenario, verb):
+    # play_send_command must not accept controller-changing verbs: they bypass the
     # generation/ownership gates and would let a claim holder repoint their character at an
     # arbitrary controller. (ToolError is monkeypatched to RuntimeError by the fake fastmcp.)
     registered_tools = {}
@@ -1871,7 +1875,7 @@ async def test_mcp_send_command_rejects_control_verbs(monkeypatch, scenario, ver
         generate_event=boom,
     )
 
-    claimed = await registered_tools["claim_character"](
+    claimed = await registered_tools["play_claim_character"](
         client_id="client-a",
         character_name="Juniper",
     )
@@ -1880,7 +1884,7 @@ async def test_mcp_send_command_rejects_control_verbs(monkeypatch, scenario, ver
     )
 
     with pytest.raises(RuntimeError, match="control verb"):
-        await registered_tools["send_command"](
+        await registered_tools["play_send_command"](
             client_id="client-a",
             command_type=verb,
             payload={"controller_id": str(other.id)},
@@ -1930,7 +1934,7 @@ async def test_mcp_admin_fails_closed_when_request_is_absent(monkeypatch, scenar
     )
 
     with pytest.raises(RuntimeError, match="authenticated MCP request context required"):
-        await registered_tools["patch_world_admin"](operations=[])
+        await registered_tools["admin_patch_world"](operations=[])
 
 
 async def test_mcp_admin_fails_closed_when_request_context_is_absent(monkeypatch, scenario):
@@ -1972,14 +1976,13 @@ async def test_mcp_admin_fails_closed_when_request_context_is_absent(monkeypatch
     )
 
     with pytest.raises(RuntimeError, match="authenticated MCP request context required"):
-        await registered_tools["patch_world_admin"](operations=[])
+        await registered_tools["admin_patch_world"](operations=[])
 
 
 async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(scenario):
     import uvicorn
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
-    from mcp.types import ResourceUpdatedNotification, ServerNotification
 
     plugins = select(bunnyland_plugins(), [MCP, WORLDGEN])
     token_store = TokenStore(":memory:")
@@ -1999,6 +2002,7 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
     mcp_http_client = httpx.AsyncClient(
         headers={
             "Authorization": f"Bearer {play_token}",
+            "X-Bunnyland-Client-Id": "e2e-client",
             "Origin": f"http://127.0.0.1:{port}",
         }
     )
@@ -2012,19 +2016,20 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
         assert server.started
 
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as raw_client:
-            assert (await raw_client.post("/mcp/", json={})).status_code == 401
+            assert (await raw_client.post("/v1/mcp/", json={})).status_code == 401
             assert (
                 await raw_client.post(
-                    "/mcp/",
+                    "/v1/mcp/",
                     headers={"Authorization": "Bearer malformed"},
                     json={},
                 )
             ).status_code == 401
             assert (
                 await raw_client.post(
-                    "/mcp/",
+                    "/v1/mcp/",
                     headers={
                         "Authorization": f"Bearer {play_token}",
+                        "X-Bunnyland-Client-Id": "e2e-client",
                         "Host": "hostile.invalid",
                     },
                     json={},
@@ -2032,9 +2037,10 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
             ).status_code == 421
             assert (
                 await raw_client.post(
-                    "/mcp/",
+                    "/v1/mcp/",
                     headers={
                         "Authorization": f"Bearer {play_token}",
+                        "X-Bunnyland-Client-Id": "e2e-client",
                         "Origin": "https://hostile.invalid",
                     },
                     json={},
@@ -2047,7 +2053,7 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
             notifications.append(message)
 
         async with streamable_http_client(
-            f"http://127.0.0.1:{port}/mcp/",
+            f"http://127.0.0.1:{port}/v1/mcp/",
             http_client=mcp_http_client,
         ) as (
             read_stream,
@@ -2063,38 +2069,33 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
                 assert init.capabilities.resources is not None
                 assert init.capabilities.resources.subscribe is True
 
-                admin_result = await session.call_tool("world_overview_admin", {})
+                admin_result = await session.call_tool("admin_world_overview", {})
                 assert admin_result.isError is True
                 assert "world:admin scope required" in admin_result.content[0].text
 
                 client_id = "e2e-client"
-                client_events_uri = f"bunnyland://clients/{client_id}/events"
-                client_prompt_uri = f"bunnyland://clients/{client_id}/prompt"
-                await session.subscribe_resource(AnyUrl(EVENTS_RESOURCE_URI))
-                await session.subscribe_resource(AnyUrl(client_events_uri))
-                await session.subscribe_resource(AnyUrl(client_prompt_uri))
-
                 claimed = _tool_result(
                     await session.call_tool(
-                        "claim_character",
+                        "play_claim_character",
                         {"client_id": client_id, "character_name": "Juniper"},
                     )
                 )
                 assert claimed["character_name"] == "Juniper"
                 claim_payload = _claim_args(claimed)
+                mcp_http_client.headers["X-Bunnyland-Claim-Id"] = claimed["claim_id"]
+                mcp_http_client.headers["X-Bunnyland-Claim-Secret"] = claimed["claim_secret"]
 
-                prompt = _tool_result(
+                projection = _tool_result(
                     await session.call_tool(
-                        "client_prompt",
+                        "play_get_projection",
                         {"client_id": client_id, **claim_payload},
                     )
                 )
-                assert "You are Juniper" in prompt["prompt"]
-                assert "controlled by an MCP client" in prompt["prompt"]
+                assert projection["character_name"] == "Juniper"
 
                 queued = _tool_result(
                     await session.call_tool(
-                        "send_command",
+                        "play_send_command",
                         {
                             "client_id": client_id,
                             "command_type": "move",
@@ -2107,28 +2108,9 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
 
                 await scenario.actor.tick(0.0)
 
-                for _ in range(100):
-                    if any(
-                        isinstance(message, ServerNotification)
-                        and isinstance(message.root, ResourceUpdatedNotification)
-                        for message in notifications
-                    ):
-                        break
-                    await asyncio.sleep(0.01)
-
-                updated_uris = [
-                    str(message.root.params.uri)
-                    for message in notifications
-                    if isinstance(message, ServerNotification)
-                    and isinstance(message.root, ResourceUpdatedNotification)
-                ]
-                assert EVENTS_RESOURCE_URI in updated_uris
-                assert client_events_uri in updated_uris
-                assert client_prompt_uri in updated_uris
-
                 events_payload = _tool_result(
                     await session.call_tool(
-                        "perceived_events",
+                        "play_recent_events",
                         {"client_id": client_id, **claim_payload},
                     )
                 )
@@ -2138,17 +2120,17 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
                 assert "ActorMovedEvent" in event_types
                 assert "ActionPointsChangedEvent" in event_types
 
-                prompt = _tool_result(
+                projection = _tool_result(
                     await session.call_tool(
-                        "client_prompt",
+                        "play_get_projection",
                         {"client_id": client_id, **claim_payload},
                     )
                 )
-                assert "North Tunnel" in prompt["prompt"]
+                assert projection["room"]["title"] == "North Tunnel"
 
                 released = _tool_result(
                     await session.call_tool(
-                        "release_character",
+                        "play_release_control",
                         {"client_id": client_id, **claim_payload},
                     )
                 )
@@ -2159,17 +2141,20 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
                 )
 
         admin_http_client = httpx.AsyncClient(
-            headers={"Authorization": f"Bearer {admin_token}"}
+            headers={
+                "Authorization": f"Bearer {admin_token}",
+                "X-Bunnyland-Client-Id": "mcp-admin",
+            }
         )
         try:
             async with streamable_http_client(
-                f"http://127.0.0.1:{port}/mcp/",
+                f"http://127.0.0.1:{port}/v1/mcp/",
                 http_client=admin_http_client,
             ) as (read_stream, write_stream, _get_session_id):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
-                    characters = await session.call_tool("list_characters", {})
-                    overview = await session.call_tool("world_overview_admin", {})
+                    characters = await session.call_tool("play_list_characters", {})
+                    overview = await session.call_tool("admin_world_overview", {})
                     assert characters.isError is False
                     assert overview.isError is False
         finally:
@@ -2288,23 +2273,35 @@ def _capture_mcp_tools(
     return registered_tools
 
 
-def test_runtime_status_reports_tick_cadence(monkeypatch, scenario):
+def test_formal_v1_mcp_tool_catalog_is_exact(monkeypatch, scenario):
+    expected = json.loads(
+        (Path(__file__).parents[1] / "contracts" / "mcp-v1-tools.json").read_text()
+    )
+    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
+
+    assert set(tools) == set(expected["player"] + expected["admin"])
+    assert "list_characters" not in tools
+    assert "character_view" not in tools
+    assert "world_overview_admin" not in tools
+
+
+def test_admin_runtime_status_reports_tick_cadence(monkeypatch, scenario):
     loop = SimpleNamespace(running=True, paused=False, tick_seconds=2.0, time_scale=1800.0)
     tools = _capture_mcp_tools(monkeypatch, scenario.actor, loop=loop)
 
-    status = tools["runtime_status"]()
+    status = tools["admin_runtime_status"]()
     assert status["running"] is True
     assert status["tick_seconds"] == 2.0
     assert status["time_scale"] == 1800.0
     assert status["game_seconds_per_tick"] == 3600.0
 
     # No loop -> cadence fields are null rather than missing.
-    no_loop = _capture_mcp_tools(monkeypatch, scenario.actor)["runtime_status"]()
+    no_loop = _capture_mcp_tools(monkeypatch, scenario.actor)["admin_runtime_status"]()
     assert no_loop["tick_seconds"] is None
     assert no_loop["game_seconds_per_tick"] is None
 
 
-def test_query_world_uses_claimed_perspective_registry(monkeypatch, scenario):
+def test_play_query_world_uses_claimed_perspective_registry(monkeypatch, scenario):
     from bunnyland.core.perspective import V1_PERSPECTIVE_QUERIES
     from bunnyland.foundation.social.mechanics import SocialBond, create_obligation
     from bunnyland.foundation.social.queries import SOCIAL_PERSPECTIVE_QUERIES
@@ -2332,10 +2329,10 @@ def test_query_world_uses_claimed_perspective_registry(monkeypatch, scenario):
     )
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
     claimed = asyncio.run(
-        tools["claim_character"](client_id="query-client", character_name="Juniper")
+        tools["play_claim_character"](client_id="query-client", character_name="Juniper")
     )
 
-    result = tools["query_world"](
+    result = tools["play_query_world"](
         client_id="query-client",
         query="valid_targets",
         arguments={"action": "move"},
@@ -2346,13 +2343,13 @@ def test_query_world_uses_claimed_perspective_registry(monkeypatch, scenario):
     assert result["owner"] == "bunnyland.core_verbs"
     assert result["actor_id"] == str(scenario.character)
     assert result["result"]["exit_id"][0]["id"] == str(scenario.room_b)
-    connections = tools["query_world"](
+    connections = tools["play_query_world"](
         client_id="query-client",
         query="social_connections",
         claim_id=claimed["claim_id"],
         claim_secret=claimed["claim_secret"],
     )
-    obligations = tools["query_world"](
+    obligations = tools["play_query_world"](
         client_id="query-client",
         query="open_obligations",
         claim_id=claimed["claim_id"],
@@ -2362,7 +2359,7 @@ def test_query_world_uses_claimed_perspective_registry(monkeypatch, scenario):
     assert obligations["result"][0]["role"] == "debtor"
     assert obligations["result"][0]["due_epoch"] == 77
     with pytest.raises(RuntimeError, match="unknown perspective query"):
-        tools["query_world"](
+        tools["play_query_world"](
             client_id="query-client",
             query="raw_relics",
             claim_id=claimed["claim_id"],
@@ -2370,61 +2367,38 @@ def test_query_world_uses_claimed_perspective_registry(monkeypatch, scenario):
         )
 
 
-def test_mcp_client_resources_require_and_accept_claim_headers(monkeypatch, scenario):
+def test_formal_mcp_resources_are_exact_and_scope_enforced(monkeypatch, scenario):
     resources: dict = {}
-    headers: dict[str, str] = {}
-    tools = _capture_mcp_tools(
+    _capture_mcp_tools(
         monkeypatch,
         scenario.actor,
-        request_headers=headers,
+        request_scopes=[WORLD_PLAY_SCOPE],
         registered_resources=resources,
     )
-    claimed = asyncio.run(tools["claim_character"](client_id="client-a", character_name="Juniper"))
 
-    with pytest.raises(RuntimeError, match="client is not controlling"):
-        resources["bunnyland://clients/{client_id}/events"]("missing")
-    with pytest.raises(RuntimeError, match="invalid claim secret"):
-        resources["bunnyland://clients/{client_id}/events"]("client-a")
-
-    headers["X-Bunnyland-Claim-Id"] = claimed["claim_id"]
-    headers["X-Bunnyland-Claim-Secret"] = claimed["claim_secret"]
-    events = json.loads(resources["bunnyland://clients/{client_id}/events"]("client-a"))
-    prompt = asyncio.run(resources["bunnyland://clients/{client_id}/prompt"]("client-a"))
-    assert events["ok"] is True
-    assert events["client_id"] == "client-a"
-    assert "You are Juniper" in prompt
-    asyncio.run(
-        tools["release_character"](
-            client_id="client-a",
-            claim_id=claimed["claim_id"],
-            claim_secret=claimed["claim_secret"],
-        )
-    )
-
-    no_context_resources: dict = {}
-    no_context_tools = _capture_mcp_tools(
-        monkeypatch,
-        scenario.actor,
-        request_headers=None,
-        registered_resources=no_context_resources,
-    )
-    with pytest.raises(RuntimeError, match="authenticated MCP request context required"):
-        asyncio.run(
-            no_context_tools["claim_character"](
-                client_id="client-without-context", character_name="Juniper"
-            )
-        )
-    with pytest.raises(RuntimeError, match="authenticated MCP request context required"):
-        no_context_resources["bunnyland://clients/{client_id}/events"](
-            "client-without-context"
-        )
+    assert set(resources) == {
+        "bunnyland://v1/features",
+        "bunnyland://v1/catalog",
+        "bunnyland://v1/characters",
+        "bunnyland://v1/admin/world",
+        "bunnyland://v1/admin/runtime",
+        "bunnyland://v1/admin/generators",
+        "bunnyland://v1/admin/controller-definitions",
+        "bunnyland://v1/admin/generation-jobs/current",
+    }
+    features = json.loads(resources["bunnyland://v1/features"]())
+    characters = json.loads(resources["bunnyland://v1/characters"]())
+    assert features["mcp"] is True
+    assert characters["characters"][0]["name"] == "Juniper"
+    with pytest.raises(RuntimeError, match="world:admin scope required"):
+        resources["bunnyland://v1/admin/world"]()
 
 
-def test_save_world_admin_uses_configured_path(monkeypatch, scenario, tmp_path):
+def test_admin_save_world_uses_configured_path(monkeypatch, scenario, tmp_path):
     path = tmp_path / "mcp-save.json"
     tools = _capture_mcp_tools(monkeypatch, scenario.actor, save_path=path)
 
-    saved = asyncio.run(tools["save_world_admin"]())
+    saved = asyncio.run(tools["admin_save_world"]())
 
     assert saved["path"] == str(path)
     assert saved["world_epoch"] == scenario.actor.epoch
@@ -2432,14 +2406,14 @@ def test_save_world_admin_uses_configured_path(monkeypatch, scenario, tmp_path):
     assert json.loads(path.read_text())["bunnyland"]["seed"] == ""
 
 
-def test_save_world_admin_requires_configured_path(monkeypatch, scenario):
+def test_admin_save_world_requires_configured_path(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
 
     with pytest.raises(RuntimeError, match="server was not started with --save"):
-        asyncio.run(tools["save_world_admin"]())
+        asyncio.run(tools["admin_save_world"]())
 
 
-def test_save_world_admin_wraps_save_errors(monkeypatch, scenario, tmp_path):
+def test_admin_save_world_wraps_save_errors(monkeypatch, scenario, tmp_path):
     def raise_save_error(*_args, **_kwargs):
         raise OSError("disk full")
 
@@ -2451,17 +2425,17 @@ def test_save_world_admin_wraps_save_errors(monkeypatch, scenario, tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="disk full"):
-        asyncio.run(tools["save_world_admin"]())
+        asyncio.run(tools["admin_save_world"]())
 
 
-def test_send_command_and_queue_report_resolves_at_epoch(monkeypatch, scenario):
+def test_play_send_command_and_queue_report_resolves_at_epoch(monkeypatch, scenario):
     loop = SimpleNamespace(running=True, paused=False, tick_seconds=2.0, time_scale=1800.0)
     tools = _capture_mcp_tools(monkeypatch, scenario.actor, loop=loop)
-    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
+    claimed = asyncio.run(tools["play_claim_character"](client_id="a", character_name="Juniper"))
 
     expected = scenario.actor.epoch + 3600  # tick_seconds * time_scale
     queued = asyncio.run(
-        tools["send_command"](
+        tools["play_send_command"](
             client_id="a",
             command_type="move",
             payload={"direction": "north"},
@@ -2470,20 +2444,20 @@ def test_send_command_and_queue_report_resolves_at_epoch(monkeypatch, scenario):
     )
     assert queued["resolves_at_epoch"] == expected
 
-    pending = tools["character_commands"](client_id="a", **_claim_args(claimed))
+    pending = tools["play_pending_commands"](client_id="a", **_claim_args(claimed))
     assert pending["commands"][0]["resolves_at_epoch"] == expected
 
     # With no loop attached, the estimate is null rather than wrong.
     no_loop = _capture_mcp_tools(monkeypatch, scenario.actor, loop=None)
     claimed_no_loop = asyncio.run(
-        no_loop["claim_character"](
+        no_loop["play_claim_character"](
             client_id="a",
             character_name="Juniper",
             **_claim_args(claimed),
         )
     )
     queued_no_loop = asyncio.run(
-        no_loop["send_command"](
+        no_loop["play_send_command"](
             client_id="a",
             command_type="move",
             payload={"direction": "north"},
@@ -2493,7 +2467,7 @@ def test_send_command_and_queue_report_resolves_at_epoch(monkeypatch, scenario):
     assert queued_no_loop["resolves_at_epoch"] is None
 
 
-def test_character_view_exposes_actions_and_resolved_target_ids(monkeypatch, scenario):
+def test_play_get_projection_exposes_actions_and_resolved_target_ids(monkeypatch, scenario):
     from bunnyland.core import ContainmentMode, Contains
     from bunnyland.core.components import PortableComponent
 
@@ -2506,14 +2480,14 @@ def test_character_view_exposes_actions_and_resolved_target_ids(monkeypatch, sce
         Contains(mode=ContainmentMode.ROOM_CONTENT), bun.id
     )
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
+    claimed = asyncio.run(tools["play_claim_character"](client_id="a", character_name="Juniper"))
 
-    view = tools["character_view"](client_id="a", **_claim_args(claimed))
+    view = tools["play_get_projection"](client_id="a", **_claim_args(claimed))
     assert view["character_name"] == "Juniper"
     # Progressive disclosure: the full action catalogue is omitted here.
     assert "actions" not in view
     assert view["action_count"] >= 1
-    assert "search_actions" in view["actions_hint"]
+    assert "play_search_actions" in view["actions_hint"]
     # The portable item still resolves to a concrete entity id the agent can target.
     reachable_ids = {target["id"] for target in view["target_groups"]["reachableItems"]}
     assert str(bun.id) in reachable_ids
@@ -2521,7 +2495,7 @@ def test_character_view_exposes_actions_and_resolved_target_ids(monkeypatch, sce
     assert str(scenario.room_b) in exit_ids
 
     with pytest.raises(RuntimeError, match="not controlling"):
-        tools["character_view"](client_id="missing")
+        tools["play_get_projection"](client_id="missing")
 
 
 def test_examine_inspects_perceivable_entity_and_self(monkeypatch, scenario):
@@ -2542,10 +2516,10 @@ def test_examine_inspects_perceivable_entity_and_self(monkeypatch, scenario):
         Contains(mode=ContainmentMode.ROOM_CONTENT), bun.id
     )
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
+    claimed = asyncio.run(tools["play_claim_character"](client_id="a", character_name="Juniper"))
 
     # Examining a perceivable item exposes its component values.
-    item = tools["examine"](client_id="a", entity_id=str(bun.id), **_claim_args(claimed))
+    item = tools["play_examine"](client_id="a", entity_id=str(bun.id), **_claim_args(claimed))
     assert item["is_self"] is False
     assert item["name"] == "steamed bun"
     assert item["details"]["food"]["satiety"] == 10.0
@@ -2553,14 +2527,14 @@ def test_examine_inspects_perceivable_entity_and_self(monkeypatch, scenario):
     assert item["points"] is None
 
     # Examining yourself (default target) adds points + the is_self flag.
-    me = tools["examine"](client_id="a", **_claim_args(claimed))
+    me = tools["play_examine"](client_id="a", **_claim_args(claimed))
     assert me["is_self"] is True
     assert me["name"] == "Juniper"
     assert me["points"]["action"] == 5.0
 
     # An entity the character cannot perceive (an adjacent room) is rejected.
     with pytest.raises(RuntimeError, match="not perceivable"):
-        tools["examine"](client_id="a", entity_id=str(scenario.room_b), **_claim_args(claimed))
+        tools["play_examine"](client_id="a", entity_id=str(scenario.room_b), **_claim_args(claimed))
 
 
 def test_serialize_examine_self_needs_and_targets(scenario):
@@ -2664,48 +2638,48 @@ def test_serialize_examine_self_needs_and_targets(scenario):
 def test_search_and_list_actions_tools(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
 
-    found = tools["search_actions"](query="move")
+    found = tools["play_search_actions"](query="move")
     assert found["query"] == "move"
     assert "move" in {action["command_type"] for action in found["actions"]}
     assert found["returned"] == len(found["actions"])
 
-    empty = tools["search_actions"](query="zzznotaverb")
+    empty = tools["play_search_actions"](query="zzznotaverb")
     assert empty["actions"] == []
     assert empty["total_available"] == 0
 
     # limit caps the returned page while total_available reflects the full match count.
-    capped = tools["search_actions"](query="", limit=1)
+    capped = tools["play_search_actions"](query="", limit=1)
     assert capped["returned"] == 1
     assert capped["total_available"] >= 1
 
-    # list_actions returns the whole available catalogue (>= a narrow search).
-    full = tools["list_actions"]()
+    # An empty search returns the whole available catalogue.
+    full = tools["play_search_actions"](query="", limit=0)
     assert "move" in {action["command_type"] for action in full["actions"]}
     assert full["returned"] >= found["returned"]
     assert full["returned"] == full["total_available"]
 
 
-def test_search_actions_substring_vs_word_mode(monkeypatch, scenario):
+def test_play_search_actions_substring_vs_word_mode(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
 
     # "ove" is inside "move" -> substring matches, word (boundary) does not.
-    substring = tools["search_actions"](query="ove", mode="substring")
+    substring = tools["play_search_actions"](query="ove", mode="substring")
     assert substring["mode"] == "substring"
     assert "move" in {action["command_type"] for action in substring["actions"]}
 
-    word = tools["search_actions"](query="ove", mode="word")
+    word = tools["play_search_actions"](query="ove", mode="word")
     assert word["mode"] == "word"
     assert "move" not in {action["command_type"] for action in word["actions"]}
 
     # A word-start query still finds it under word mode.
-    word_hit = tools["search_actions"](query="mov", mode="word")
+    word_hit = tools["play_search_actions"](query="mov", mode="word")
     assert "move" in {action["command_type"] for action in word_hit["actions"]}
 
     with pytest.raises(RuntimeError, match="mode must be"):
-        tools["search_actions"](query="move", mode="bogus")
+        tools["play_search_actions"](query="move", mode="bogus")
 
 
-def test_search_actions_smart_mode_uses_chroma(monkeypatch, scenario):
+def test_play_search_actions_smart_mode_uses_chroma(monkeypatch, scenario):
     import bunnyland.server.action_search as action_search
 
     class _Handler:
@@ -2753,7 +2727,7 @@ def test_search_actions_smart_mode_uses_chroma(monkeypatch, scenario):
     monkeypatch.setattr(action_search, "_SMART_ACTION_INDEX", None)
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
 
-    result = tools["search_actions"](query="walk north", mode="smart", limit=3)
+    result = tools["play_search_actions"](query="walk north", mode="smart", limit=3)
 
     assert result["query"] == "walk north"
     assert result["mode"] == "smart"
@@ -2764,7 +2738,7 @@ def test_search_actions_smart_mode_uses_chroma(monkeypatch, scenario):
     action_search._SMART_ACTION_INDEX = None
 
 
-def test_search_actions_smart_mode_reports_missing_chroma(monkeypatch, scenario):
+def test_play_search_actions_smart_mode_reports_missing_chroma(monkeypatch, scenario):
     import bunnyland.server.action_search as action_search
 
     monkeypatch.setitem(sys.modules, "chromadb", None)
@@ -2772,14 +2746,14 @@ def test_search_actions_smart_mode_reports_missing_chroma(monkeypatch, scenario)
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
 
     with pytest.raises(RuntimeError, match="smart action search requires"):
-        tools["search_actions"](query="walk north", mode="smart")
+        tools["play_search_actions"](query="walk north", mode="smart")
     action_search._SMART_ACTION_INDEX = None
 
 
-def test_world_overview_admin_tool_is_gated_and_returns_room_network(monkeypatch, scenario):
+def test_admin_world_overview_tool_is_gated_and_returns_room_network(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    assert not inspect.signature(tools["world_overview_admin"]).parameters
-    overview = tools["world_overview_admin"]()
+    assert not inspect.signature(tools["admin_world_overview"]).parameters
+    overview = tools["admin_world_overview"]()
     assert overview["room_count"] == 2
     assert overview["character_count"] == 1
     titles = {room["title"] for room in overview["rooms"]}
@@ -2793,7 +2767,7 @@ def test_admin_tool_authorizes_via_request_principal(monkeypatch, scenario):
         request_headers={},
     )
 
-    overview = tools["world_overview_admin"]()
+    overview = tools["admin_world_overview"]()
     assert overview["room_count"] == 2
 
     # A valid play-only bearer principal cannot invoke an admin tool.
@@ -2804,12 +2778,12 @@ def test_admin_tool_authorizes_via_request_principal(monkeypatch, scenario):
         request_scopes=[WORLD_PLAY_SCOPE],
     )
     with pytest.raises(RuntimeError, match="world:admin scope required"):
-        rejected["world_overview_admin"]()
+        rejected["admin_world_overview"]()
 
 
 def test_admin_tool_schema_has_no_credential_argument(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    assert not inspect.signature(tools["world_overview_admin"]).parameters
+    assert not inspect.signature(tools["admin_world_overview"]).parameters
 
 
 def test_mcp_admin_client_id_allowlist_uses_injected_header(monkeypatch, scenario):
@@ -2819,7 +2793,7 @@ def test_mcp_admin_client_id_allowlist_uses_injected_header(monkeypatch, scenari
         admin_client_ids=["admin-a"],
     )
     with pytest.raises(RuntimeError, match="admin client_id is required"):
-        missing["world_overview_admin"]()
+        missing["admin_world_overview"]()
 
     rejected = _capture_mcp_tools(
         monkeypatch,
@@ -2830,7 +2804,7 @@ def test_mcp_admin_client_id_allowlist_uses_injected_header(monkeypatch, scenari
         },
     )
     with pytest.raises(RuntimeError, match="admin client_id is not allowed"):
-        rejected["world_overview_admin"]()
+        rejected["admin_world_overview"]()
 
     allowed = _capture_mcp_tools(
         monkeypatch,
@@ -2840,7 +2814,7 @@ def test_mcp_admin_client_id_allowlist_uses_injected_header(monkeypatch, scenari
             CLIENT_ID_HEADER: "admin-a",
         },
     )
-    assert allowed["world_overview_admin"]()["room_count"] == 2
+    assert allowed["admin_world_overview"]()["room_count"] == 2
 
 
 def test_mcp_player_client_id_allowlist_gates_claim_tool(monkeypatch, scenario):
@@ -2851,51 +2825,46 @@ def test_mcp_player_client_id_allowlist_gates_claim_tool(monkeypatch, scenario):
     )
 
     with pytest.raises(RuntimeError, match="player client_id is not allowed"):
-        asyncio.run(tools["claim_character"](client_id="client-b", character_name="Juniper"))
+        asyncio.run(tools["play_claim_character"](client_id="client-b", character_name="Juniper"))
 
-    claimed = asyncio.run(tools["claim_character"](client_id="client-a", character_name="Juniper"))
+    claimed = asyncio.run(
+        tools["play_claim_character"](client_id="client-a", character_name="Juniper")
+    )
     assert claimed["client_id"] == "client-a"
 
 
-def test_room_view_and_component_schema_tools(monkeypatch, scenario):
+def test_catalog_resource_includes_component_schemas(monkeypatch, scenario):
+    resources: dict = {}
+    _capture_mcp_tools(monkeypatch, scenario.actor, registered_resources=resources)
+
+    catalog = json.loads(resources["bunnyland://v1/catalog"]())
+    assert "RoomComponent" in catalog["components"]
+    assert "title" in catalog["components"]["RoomComponent"]["json_schema"]["properties"]
+    assert len(catalog["components"]) > 1
+
+
+def test_play_pending_commands_reflects_queue(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-
-    room = tools["room_view"](room_id=str(scenario.room_a))
-    assert room["room"]["title"] == "Mosslit Burrow"
-
-    with pytest.raises(RuntimeError, match="room does not exist"):
-        tools["room_view"](room_id="entity_does_not_exist")
-
-    schema = tools["component_schema"](types=["RoomComponent"])
-    assert set(schema["components"]) == {"RoomComponent"}
-    assert "title" in schema["components"]["RoomComponent"]["json_schema"]["properties"]
-    full = tools["component_schema"]()
-    assert "RoomComponent" in full["components"]
-    assert len(full["components"]) > 1
-
-
-def test_character_commands_reflects_queue(monkeypatch, scenario):
-    tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
+    claimed = asyncio.run(tools["play_claim_character"](client_id="a", character_name="Juniper"))
 
     asyncio.run(
-        tools["send_command"](
+        tools["play_send_command"](
             client_id="a",
             command_type="move",
             payload={"direction": "north"},
             **_claim_args(claimed),
         )
     )
-    pending = tools["character_commands"](client_id="a", **_claim_args(claimed))
+    pending = tools["play_pending_commands"](client_id="a", **_claim_args(claimed))
     assert [command["command_type"] for command in pending["commands"]] == ["move"]
 
 
-def test_send_command_returns_outcome_hint(monkeypatch, scenario):
+def test_play_send_command_returns_outcome_hint(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
+    claimed = asyncio.run(tools["play_claim_character"](client_id="a", character_name="Juniper"))
 
     queued = asyncio.run(
-        tools["send_command"](
+        tools["play_send_command"](
             client_id="a",
             command_type="move",
             payload={"direction": "north"},
@@ -2903,17 +2872,17 @@ def test_send_command_returns_outcome_hint(monkeypatch, scenario):
         )
     )
     assert queued["queued"] is True
-    assert "perceived_events" in queued["note"]
+    assert "play_recent_events" in queued["note"]
 
 
-def test_send_command_rejects_unknown_command_type(monkeypatch, scenario):
+def test_play_send_command_rejects_unknown_command_type(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
+    claimed = asyncio.run(tools["play_claim_character"](client_id="a", character_name="Juniper"))
 
     # Fail fast on a typo'd verb instead of queuing it for a tick-later rejection.
     with pytest.raises(RuntimeError, match="unknown command_type"):
         asyncio.run(
-            tools["send_command"](
+            tools["play_send_command"](
                 client_id="a",
                 command_type="flibber",
                 **_claim_args(claimed),
@@ -2921,7 +2890,7 @@ def test_send_command_rejects_unknown_command_type(monkeypatch, scenario):
         )
 
     queued = asyncio.run(
-        tools["send_command"](
+        tools["play_send_command"](
             client_id="a",
             command_type="move",
             payload={"direction": "north"},
@@ -2931,13 +2900,13 @@ def test_send_command_rejects_unknown_command_type(monkeypatch, scenario):
     assert queued["queued"] is True
 
 
-def test_perceived_events_tool_reports_rejection(monkeypatch, scenario):
+def test_play_recent_events_tool_reports_rejection(monkeypatch, scenario):
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
-    claimed = asyncio.run(tools["claim_character"](client_id="a", character_name="Juniper"))
+    claimed = asyncio.run(tools["play_claim_character"](client_id="a", character_name="Juniper"))
 
     # A valid verb that the handler rejects on resolution (no exit in that direction).
     asyncio.run(
-        tools["send_command"](
+        tools["play_send_command"](
             client_id="a",
             command_type="move",
             payload={"direction": "west"},
@@ -2946,7 +2915,7 @@ def test_perceived_events_tool_reports_rejection(monkeypatch, scenario):
     )
     asyncio.run(scenario.actor.tick(0.0))
 
-    first = tools["perceived_events"](client_id="a", **_claim_args(claimed))
+    first = tools["play_recent_events"](client_id="a", **_claim_args(claimed))
     assert first["ok"] is True
     rejected = [
         message["data"]["event"]
@@ -2956,7 +2925,7 @@ def test_perceived_events_tool_reports_rejection(monkeypatch, scenario):
     assert rejected and rejected[0]["command_type"] == "move"
     assert first["next_cursor"] > 0
     # The watermark advances: re-polling from it yields nothing new.
-    second = tools["perceived_events"](
+    second = tools["play_recent_events"](
         client_id="a",
         since=first["next_cursor"],
         **_claim_args(claimed),

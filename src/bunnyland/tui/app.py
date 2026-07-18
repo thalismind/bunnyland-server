@@ -1145,7 +1145,10 @@ class BunnylandTUI(App[None]):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bunnyland tui", description=__doc__)
-    parser.add_argument("--server", help="connect to a running server (e.g. http://localhost:8765)")
+    parser.add_argument(
+        "--server",
+        help="connect to a v1 API root (e.g. http://localhost:8765/v1)",
+    )
     parser.add_argument("--username", default="", help="login username for a remote server")
     parser.add_argument("--password-stdin", action="store_true")
     parser.add_argument(
