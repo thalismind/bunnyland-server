@@ -226,6 +226,9 @@ def apply_plugins(
     context.plugins = registry
     for plugin in ordered:
         apply_plugin(plugin, actor, context)
+    from ..foundation.policy.mechanics import activate_boundary_tags
+
+    activate_boundary_tags(actor.world, registry.boundary_tags)
     # Optional integrations are deliberately installed only after every enabled plugin's
     # ordinary contracts and mechanics are registered.
     for plugin in ordered:

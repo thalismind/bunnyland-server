@@ -86,5 +86,11 @@ World policy can disable or restrict categories such as romance, pregnancy, PvP,
 pickpocketing. If a command says a mechanic is disabled or someone has not consented, use
 ordinary speech or another non-restricted action instead.
 
+Plugins may add validated, namespaced boundary scopes such as `adult:violence` or
+`adult:bondage`. `adult` is an umbrella denial, not blanket permission: disabling or denying
+`adult` blocks every `adult:*` scope, while enabling or allowing `adult` grants none of its
+children. Each applicable child scope must be enabled (or explicitly allowed by every
+participant) and must not be denied. A denial always wins and has no admin override.
+
 Prose alone does not create sensitive state. Say what your character means, then use the
 explicit command when the world allows that mechanic.

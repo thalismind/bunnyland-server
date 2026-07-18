@@ -1,6 +1,7 @@
 """Canonical Policy plugin entrypoint."""
 
 from bunnyland.foundation.policy.mechanics import (
+    BoundaryTag,
     CharacterBoundaryComponent,
     WorldPolicyComponent,
     boundary_fragments,
@@ -17,6 +18,7 @@ from ...plugins.model import (
     EcsContribution,
     Plugin,
     PluginPlacement,
+    PolicyContribution,
     RuntimeContribution,
 )
 
@@ -33,6 +35,7 @@ def _definition() -> Plugin:
         ecs=EcsContribution(components=(WorldPolicyComponent, CharacterBoundaryComponent)),
         runtime=RuntimeContribution(service_factories=(_policy_factory,)),
         content=ContentContribution(persona_fragments=(boundary_fragments,)),
+        policy=PolicyContribution(boundary_tags=frozenset(BoundaryTag)),
     )
 
 

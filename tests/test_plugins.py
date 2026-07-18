@@ -42,6 +42,7 @@ from bunnyland.plugins import (
     Plugin,
     PluginError,
     PluginRegistry,
+    PolicyContribution,
     apply_plugins,
     bunnyland_plugins,
     resolve_order,
@@ -169,9 +170,7 @@ def test_prompt_filter_registration_rejects_invalid_contracts():
                     id="example.filters",
                     name="Filters",
                     ecs=EcsContribution(components=(FilterComponent,)),
-                    content=ContentContribution(
-                        prompt_filters=(definition("wrong.filter"),)
-                    ),
+                    content=ContentContribution(prompt_filters=(definition("wrong.filter"),)),
                 ),
             )
         )
@@ -249,6 +248,32 @@ def test_collect_prompt_filters_gathers_definitions():
 
     plugin = next(plugin for plugin in bunnyland_plugins() if plugin.id == PROMPT_FILTERS)
     assert collect_prompt_filters((plugin,)) == list(BUILTIN_PROMPT_FILTERS)
+
+
+def test_registry_collects_validated_plugin_boundary_scopes():
+    plugin = Plugin(
+        id="example.boundaries",
+        name="Boundaries",
+        policy=PolicyContribution(boundary_tags=frozenset({"adult:custom"})),
+    )
+    assert PluginRegistry((plugin,)).boundary_tags == frozenset({"adult:custom"})
+    with pytest.raises(ValueError, match="boundary scopes"):
+        PolicyContribution(boundary_tags=frozenset({"Adult:Invalid"}))
+
+
+def test_apply_plugins_activates_contributed_boundary_scopes_in_world_policy():
+    from bunnyland.foundation.policy.mechanics import WorldPolicyComponent
+    from bunnyland.foundation.policy.plugin import plugin as policy_plugin
+
+    custom = Plugin(
+        id="example.boundaries",
+        name="Boundaries",
+        policy=PolicyContribution(boundary_tags=frozenset({"adult:custom"})),
+    )
+    actor = WorldActor()
+    apply_plugins((core_verbs_plugin(), policy_plugin(), custom), actor)
+    entity = next(actor.world.query().with_all([WorldPolicyComponent]).execute_entities())
+    assert "adult:custom" in entity.get_component(WorldPolicyComponent).available
 
 
 def test_collect_persona_fragments_gathers_stable_persona_providers():

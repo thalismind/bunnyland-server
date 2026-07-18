@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
 from conftest import build_scenario
+from pydantic import TypeAdapter
 
 from bunnyland.core import (
     CharacterComponent,
@@ -21,6 +23,7 @@ from bunnyland.foundation.policy.mechanics import (
     BoundaryTag,
     CharacterBoundaryComponent,
     WorldPolicyComponent,
+    activate_boundary_tags,
     boundary_fragments,
     evaluate,
     flirt_classifier,
@@ -29,6 +32,7 @@ from bunnyland.foundation.policy.mechanics import (
 
 HOUR = 3600.0
 FLIRTING = BoundaryTag.FLIRTING
+ADULT_SEXUAL = BoundaryTag.ADULT_SEXUAL
 
 
 def _two_characters(actor, *, a_boundary=None, b_boundary=None):
@@ -92,6 +96,98 @@ def test_unenabled_tag_with_no_opt_in_is_denied():
     install_policy(actor)
     a, b = _two_characters(actor)
     assert evaluate(actor.world, BoundaryTag.PVP, [a, b])[0] is False
+
+
+def test_adult_parent_enable_and_allow_do_not_grant_child_scope():
+    actor = WorldActor()
+    install_policy(actor, enabled=frozenset({BoundaryTag.ADULT}))
+    parent_only = CharacterBoundaryComponent(allowed=frozenset({BoundaryTag.ADULT}))
+    a, b = _two_characters(actor, a_boundary=parent_only, b_boundary=parent_only)
+
+    assert evaluate(actor.world, ADULT_SEXUAL, [a, b]) == (
+        False,
+        "adult:sexual is not enabled here",
+    )
+
+
+def test_exact_adult_child_enable_or_mutual_opt_in_grants_scope():
+    enabled_actor = WorldActor()
+    install_policy(enabled_actor, enabled=frozenset({ADULT_SEXUAL}))
+    a, b = _two_characters(enabled_actor)
+    assert evaluate(enabled_actor.world, ADULT_SEXUAL, [a, b]) == (True, None)
+
+    opted_actor = WorldActor()
+    install_policy(opted_actor, enabled=frozenset())
+    exact = CharacterBoundaryComponent(allowed=frozenset({ADULT_SEXUAL}))
+    c, d = _two_characters(opted_actor, a_boundary=exact, b_boundary=exact)
+    assert evaluate(opted_actor.world, ADULT_SEXUAL, [c, d]) == (True, None)
+
+
+def test_adult_parent_or_exact_denial_blocks_child_but_unrelated_denial_does_not():
+    for denied in (BoundaryTag.ADULT, ADULT_SEXUAL):
+        actor = WorldActor()
+        install_policy(actor, enabled=frozenset({ADULT_SEXUAL}))
+        a, b = _two_characters(
+            actor,
+            b_boundary=CharacterBoundaryComponent(denied=frozenset({denied})),
+        )
+        assert evaluate(actor.world, ADULT_SEXUAL, [a, b])[0] is False
+
+    actor = WorldActor()
+    install_policy(actor, enabled=frozenset({ADULT_SEXUAL}))
+    a, b = _two_characters(
+        actor,
+        b_boundary=CharacterBoundaryComponent(denied=frozenset({BoundaryTag.ADULT_BONDAGE})),
+    )
+    assert evaluate(actor.world, ADULT_SEXUAL, [a, b]) == (True, None)
+
+
+def test_world_adult_parent_or_exact_disable_blocks_child():
+    for disabled in (BoundaryTag.ADULT, ADULT_SEXUAL):
+        actor = WorldActor()
+        install_policy(
+            actor,
+            enabled=frozenset({ADULT_SEXUAL}),
+            disabled=frozenset({disabled}),
+        )
+        a, b = _two_characters(actor)
+        assert evaluate(actor.world, ADULT_SEXUAL, [a, b])[0] is False
+
+
+def test_plugin_boundary_scopes_are_validated_and_activated():
+    actor = WorldActor()
+    install_policy(actor, enabled=frozenset({"adult:custom"}))
+    a, b = _two_characters(actor)
+    assert evaluate(actor.world, "adult:custom", [a, b]) == (
+        False,
+        "adult:custom is not available here",
+    )
+
+    activate_boundary_tags(actor.world, {"adult:custom"})
+
+    assert evaluate(actor.world, "adult:custom", [a, b]) == (True, None)
+
+
+def test_boundary_components_reject_malformed_string_scopes():
+    with pytest.raises(ValueError, match="boundary scopes"):
+        CharacterBoundaryComponent(allowed=frozenset({"Adult:Invalid"}))
+
+    with pytest.raises(ValueError, match="boundary scopes"):
+        CharacterBoundaryComponent(allowed=frozenset({"a" * 65}))
+
+
+def test_old_enum_only_policy_payload_loads_with_core_scope_defaults():
+    loaded = TypeAdapter(WorldPolicyComponent).validate_python(
+        {"enabled": ["flirting"], "disabled": ["pvp"]}
+    )
+    assert loaded.enabled == frozenset({"flirting"})
+    assert BoundaryTag.ADULT_SEXUAL in loaded.available
+
+
+def test_activating_no_scopes_or_without_policy_is_a_noop():
+    actor = WorldActor()
+    activate_boundary_tags(actor.world, {"adult:custom"})
+    activate_boundary_tags(actor.world, set())
 
 
 def test_unknown_participant_id_is_treated_as_unconsented():

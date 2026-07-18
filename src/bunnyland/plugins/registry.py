@@ -54,6 +54,7 @@ class PluginRegistry:
         self._prompt_filters: dict[str, tuple[str, Any]] = {}
         self._prompt_filter_components: dict[type, tuple[str, Any]] = {}
         self._integrations: dict[tuple[str, str], Any] = {}
+        self._boundary_tags: set[str] = set()
         self._normalizers: list[tuple[str, Any]] = []
         from ..core.generation import CoreGenerationEnricher
 
@@ -144,6 +145,10 @@ class PluginRegistry:
         return MappingProxyType(self._integrations)
 
     @property
+    def boundary_tags(self) -> frozenset[str]:
+        return frozenset(self._boundary_tags)
+
+    @property
     def intent_normalizers(self) -> tuple[tuple[str, Any], ...]:
         return tuple(self._normalizers)
 
@@ -192,6 +197,7 @@ class PluginRegistry:
 
             raise PluginError(f"duplicate plugin id {plugin.id!r}")
         self._plugins[plugin.id] = plugin
+        self._boundary_tags.update(plugin.policy.boundary_tags)
 
         for event_type in plugin.commands.typed_events:
             if self._event_owners.get(event_type, (None,))[0] == "bunnyland.core":

@@ -20,7 +20,8 @@ from relics import Component, Entity, World
 
 from ...core.commands import SubmittedCommand
 from ...core.components import IdentityComponent, WorldClockComponent
-from ...core.ecs import parse_entity_id, spawn_entity
+from ...core.ecs import parse_entity_id, replace_component, spawn_entity
+from ...plugins.policy import BoundaryScope, validate_boundary_scope
 
 if TYPE_CHECKING:
     from ...core.world_actor import WorldActor
@@ -30,6 +31,12 @@ class BoundaryTag(StrEnum):
     FLIRTING = "flirting"
     ROMANCE = "romance"
     ADULT = "adult"
+    ADULT_SEXUAL = "adult:sexual"
+    ADULT_NUDITY = "adult:nudity"
+    ADULT_BONDAGE = "adult:bondage"
+    ADULT_POWER_EXCHANGE = "adult:power_exchange"
+    ADULT_IMPACT = "adult:impact"
+    ADULT_VIOLENCE = "adult:violence"
     PREGNANCY = "pregnancy"
     PVP = "pvp"
     LETHAL_PVP = "lethal_pvp"
@@ -41,21 +48,22 @@ class BoundaryTag(StrEnum):
 class WorldPolicyComponent(Component):
     """What the world makes available at all (spec 20.3)."""
 
-    enabled: frozenset[BoundaryTag] = frozenset()
-    disabled: frozenset[BoundaryTag] = frozenset()
+    enabled: frozenset[BoundaryScope] = frozenset()
+    disabled: frozenset[BoundaryScope] = frozenset()
+    available: frozenset[BoundaryScope] = frozenset(str(tag) for tag in BoundaryTag)
 
 
 @dataclass(frozen=True)
 class CharacterBoundaryComponent(Component):
     """A character's opt-ins and opt-outs (spec 20.2). Denied always wins."""
 
-    allowed: frozenset[BoundaryTag] = frozenset()
-    denied: frozenset[BoundaryTag] = frozenset()
+    allowed: frozenset[BoundaryScope] = frozenset()
+    denied: frozenset[BoundaryScope] = frozenset()
 
 
 # A classifier maps a command to the boundary it touches and the participants who must
 # consent, or None if the command is unrestricted.
-Classifier = "Callable[[SubmittedCommand], tuple[BoundaryTag, list[str]] | None]"
+Classifier = "Callable[[SubmittedCommand], tuple[str, list[str]] | None]"
 
 
 def _world_policy(world: World) -> WorldPolicyComponent:
@@ -82,24 +90,53 @@ def _boundary(world: World, raw_id: str) -> tuple[str, CharacterBoundaryComponen
     return name, boundary
 
 
-def evaluate(world: World, tag: BoundaryTag, participants: list[str]) -> tuple[bool, str | None]:
+def _blocking_scopes(scope: str) -> tuple[str, ...]:
+    if scope.startswith("adult:"):
+        return ("adult", scope)
+    return (scope,)
+
+
+def activate_boundary_tags(world: World, tags) -> None:
+    """Persist syntactically valid scopes contributed by enabled plugins."""
+
+    scopes = frozenset(validate_boundary_scope(str(tag)) for tag in tags)
+    if not scopes:
+        return
+    for entity in world.query().with_all([WorldPolicyComponent]).execute_entities():
+        policy = entity.get_component(WorldPolicyComponent)
+        replace_component(
+            entity,
+            WorldPolicyComponent(
+                enabled=policy.enabled,
+                disabled=policy.disabled,
+                available=policy.available | scopes,
+            ),
+        )
+        return
+
+
+def evaluate(world: World, tag: str, participants: list[str]) -> tuple[bool, str | None]:
     """Decide whether a ``tag`` action among ``participants`` is permitted (spec 20.3)."""
+    scope = validate_boundary_scope(str(tag))
     policy = _world_policy(world)
-    if tag in policy.disabled:
-        return False, f"{tag.value} is disabled in this world"
+    if scope not in policy.available:
+        return False, f"{scope} is not available here"
+    blocking = _blocking_scopes(scope)
+    if any(candidate in policy.disabled for candidate in blocking):
+        return False, f"{scope} is disabled in this world"
 
     named = [_boundary(world, raw) for raw in participants]
     for name, boundary in named:
-        if boundary is not None and tag in boundary.denied:
-            return False, f"{name} has not consented to {tag.value}"
+        if boundary is not None and any(candidate in boundary.denied for candidate in blocking):
+            return False, f"{name} has not consented to {scope}"
 
-    world_enables = tag in policy.enabled
+    world_enables = scope in policy.enabled
     everyone_opted_in = bool(named) and all(
-        boundary is not None and tag in boundary.allowed for _name, boundary in named
+        boundary is not None and scope in boundary.allowed for _name, boundary in named
     )
     if world_enables or everyone_opted_in:
         return True, None
-    return False, f"{tag.value} is not enabled here"
+    return False, f"{scope} is not enabled here"
 
 
 def boundary_fragments(world: World, character: Entity) -> list[str]:
@@ -108,18 +145,18 @@ def boundary_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     policy = _world_policy(world)
     if policy.enabled:
-        enabled = ", ".join(sorted(tag.value for tag in policy.enabled))
+        enabled = ", ".join(sorted(policy.enabled))
         lines.append(f"World boundaries enabled: {enabled}.")
     if policy.disabled:
-        disabled = ", ".join(sorted(tag.value for tag in policy.disabled))
+        disabled = ", ".join(sorted(policy.disabled))
         lines.append(f"World boundaries disabled: {disabled}.")
     if character.has_component(CharacterBoundaryComponent):
         boundary = character.get_component(CharacterBoundaryComponent)
         if boundary.allowed:
-            allowed = ", ".join(sorted(tag.value for tag in boundary.allowed))
+            allowed = ", ".join(sorted(boundary.allowed))
             lines.append(f"Your allowed boundaries: {allowed}.")
         if boundary.denied:
-            denied = ", ".join(sorted(tag.value for tag in boundary.denied))
+            denied = ", ".join(sorted(boundary.denied))
             lines.append(f"Your denied boundaries: {denied}.")
     return lines
 
@@ -158,8 +195,8 @@ class PolicyGate:
 def install_policy(
     actor: WorldActor,
     *,
-    enabled: frozenset[BoundaryTag] | None = None,
-    disabled: frozenset[BoundaryTag] | None = None,
+    enabled: frozenset[str] | None = None,
+    disabled: frozenset[str] | None = None,
     classifiers=(flirt_classifier,),
 ) -> None:
     """Register the policy gate and ensure a world policy exists (kept if already present)."""
@@ -178,9 +215,11 @@ def install_policy(
 
 __all__ = [
     "BoundaryTag",
+    "BoundaryScope",
     "CharacterBoundaryComponent",
     "PolicyGate",
     "WorldPolicyComponent",
+    "activate_boundary_tags",
     "boundary_fragments",
     "evaluate",
     "flirt_classifier",

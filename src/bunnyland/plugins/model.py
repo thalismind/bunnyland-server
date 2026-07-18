@@ -17,6 +17,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .policy import BoundaryScope
+
 
 class EcsContribution(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
@@ -94,7 +96,7 @@ class ContentContribution(BaseModel):
 class PolicyContribution(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
-    boundary_tags: frozenset[str] = Field(default_factory=frozenset)
+    boundary_tags: frozenset[BoundaryScope] = Field(default_factory=frozenset)
     world_defaults: dict[str, Any] = Field(default_factory=dict)
     config_schema: type | None = None
 
