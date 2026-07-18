@@ -22,6 +22,7 @@ from uuid import uuid4
 
 from relics import Entity
 
+from bunnyland import telemetry
 from bunnyland.foundation.history.mechanics import WorldHistoryRecordComponent
 from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 
@@ -137,6 +138,7 @@ class ImageGenService:
         self._jobs: dict[str, ImageGenJob] = {}
         self._extras: dict[str, str] = {}
         self._alpha_jobs: set[str] = set()
+        self._parent_contexts: dict[str, object] = {}
         #: Entity ids whose generation failed; the backfill skips them so a broken workflow
         #: parks failures and keeps making progress instead of retrying one forever.
         self._failed: set[str] = set()
@@ -182,39 +184,59 @@ class ImageGenService:
             requested_by=requested_by,
             target_id=target_id,
         )
-        async with self._actor._lock:
-            if parsed is None or not self._actor.world.has_entity(parsed):
-                job.status = "failed"
-                job.error = "unknown entity"
-                self._jobs[job.job_id] = job
-                return job
-            entity = self._actor.world.get_entity(parsed)
-            existing = _existing_image_url(entity, purpose)
-            if existing and not force:
-                job.status = "skipped"
-                job.url = existing
-                self._jobs[job.job_id] = job
-                return job
-            if entity.has_component(ImageRequestComponent) and not force:
-                job.status = "duplicate"
-                self._jobs[job.job_id] = job
-                return job
-            _set_component(
-                entity,
-                ImageRequestComponent(
-                    purpose=purpose.value,
-                    requested_at_epoch=self._actor.epoch,
-                    requested_by=requested_by,
-                ),
-            )
-        self._jobs[job.job_id] = job
-        self._extras[job.job_id] = extra
-        if alpha:
-            self._alpha_jobs.add(job.job_id)
-        await self._publish_started(job)
-        self._ensure_worker()
-        priority = _EVENT_PRIORITY if purpose is ImagePurpose.EVENT else _BACKFILL_PRIORITY
-        self._queue.put_nowait((priority, next(self._seq), job))
+        attributes = {
+            "image.job_id": job.job_id,
+            "entity.id": entity_id,
+            "image.purpose": purpose.value,
+            "image.generator": generator.name,
+            "image.profile": template_name or "default",
+            "image.alpha.requested": alpha,
+        }
+        with telemetry.span("image.generate.enqueue", attributes) as enqueue_span:
+            async with self._actor._lock:
+                if parsed is None or not self._actor.world.has_entity(parsed):
+                    job.status = "failed"
+                    job.error = "unknown entity"
+                    self._jobs[job.job_id] = job
+                    enqueue_span.set_attribute("image.outcome", "rejected")
+                    telemetry.mark_span_ok(enqueue_span)
+                    return job
+                entity = self._actor.world.get_entity(parsed)
+                existing = _existing_image_url(entity, purpose)
+                if existing and not force:
+                    job.status = "skipped"
+                    job.url = existing
+                    self._jobs[job.job_id] = job
+                    enqueue_span.set_attribute("image.outcome", "skipped")
+                    telemetry.mark_span_ok(enqueue_span)
+                    return job
+                if entity.has_component(ImageRequestComponent) and not force:
+                    job.status = "duplicate"
+                    self._jobs[job.job_id] = job
+                    enqueue_span.set_attribute("image.outcome", "duplicate")
+                    telemetry.mark_span_ok(enqueue_span)
+                    return job
+                _set_component(
+                    entity,
+                    ImageRequestComponent(
+                        purpose=purpose.value,
+                        requested_at_epoch=self._actor.epoch,
+                        requested_by=requested_by,
+                    ),
+                )
+            self._jobs[job.job_id] = job
+            self._extras[job.job_id] = extra
+            if alpha:
+                self._alpha_jobs.add(job.job_id)
+            await self._publish_started(job)
+            parent_context = telemetry.capture_context()
+            if parent_context is not None:
+                self._parent_contexts[job.job_id] = parent_context
+            self._ensure_worker()
+            priority = _EVENT_PRIORITY if purpose is ImagePurpose.EVENT else _BACKFILL_PRIORITY
+            self._queue.put_nowait((priority, next(self._seq), job))
+            enqueue_span.set_attribute("image.outcome", "queued")
+            telemetry.mark_span_ok(enqueue_span)
         return job
 
     async def enqueue_one_missing(self) -> ImageGenJob | None:
@@ -283,58 +305,110 @@ class ImageGenService:
                 self._queue.task_done()
 
     async def _process(self, job: ImageGenJob) -> None:
+        parent_context = self._parent_contexts.pop(job.job_id, None)
         parsed = parse_entity_id(job.entity_id)
         extra = self._extras.pop(job.job_id, "")
         alpha_requested = job.job_id in self._alpha_jobs
         self._alpha_jobs.discard(job.job_id)
-        try:
-            async with self._actor._lock:
-                if parsed is None or not self._actor.world.has_entity(parsed):
-                    raise ImageGenError("entity no longer exists")
-                entity = self._actor.world.get_entity(parsed)
-                generator = self._generators[job.purpose]
-                profile = generator.resolve_profile(job.purpose, job.profile_name)
-                job.profile_name = profile.name
-                job.template_name = profile.name
-                subject = self._subject_for(entity, job.purpose)
-            job.status = "running"
-            seed = _seed_for(job.entity_id)
-            prompt = await self._enhance(subject, profile, job.purpose, extra)
-            data = await generator.generate(
-                ImageGeneratorRequest(
-                    purpose=job.purpose,
-                    prompt=prompt.prompt,
-                    negative=prompt.negative or profile.default_negative,
-                    seed=seed,
-                    width=profile.width,
-                    height=profile.height,
-                    profile_name=profile.name,
-                )
-            )
-            do_alpha = self._alpha is not None and (
-                alpha_requested or job.purpose is ImagePurpose.SPRITE
-            )
-            url, alpha_url = await self._store_image(job.purpose, data, do_alpha)
-            async with self._actor._lock:
-                entity = self._actor.world.get_entity(parsed)
-                self._attach(
-                    entity, job.purpose, url, alpha_url, prompt, seed, profile, generator.name
-                )
-                _clear_request(entity)
-            job.status = "succeeded"
-            job.url = url
-            job.alpha_url = alpha_url
-            self._failed.discard(job.entity_id)
-            await self._publish_completed(job, profile.name)
-        except Exception as exc:  # noqa: BLE001 - any failure becomes a failed job + event
-            logger.warning("image generation failed for %s: %s", job.entity_id, exc)
-            job.status = "failed"
-            job.error = str(exc)
-            self._failed.add(job.entity_id)
-            if parsed is not None and self._actor.world.has_entity(parsed):
+        attributes = {
+            "image.job_id": job.job_id,
+            "entity.id": job.entity_id,
+            "image.purpose": job.purpose.value,
+            "image.generator": job.generator,
+            "image.alpha.requested": alpha_requested,
+        }
+        with telemetry.span(
+            "image.generate", attributes, parent_context=parent_context
+        ) as generation_span:
+            try:
                 async with self._actor._lock:
-                    _clear_request(self._actor.world.get_entity(parsed))
-            await self._publish_failed(job)
+                    if parsed is None or not self._actor.world.has_entity(parsed):
+                        raise ImageGenError("entity no longer exists")
+                    entity = self._actor.world.get_entity(parsed)
+                    generator = self._generators[job.purpose]
+                    profile = generator.resolve_profile(job.purpose, job.profile_name)
+                    job.profile_name = profile.name
+                    job.template_name = profile.name
+                    subject = self._subject_for(entity, job.purpose)
+                generation_span.set_attribute("image.profile", profile.name)
+                generation_span.set_attribute("image.width", profile.width)
+                generation_span.set_attribute("image.height", profile.height)
+                job.status = "running"
+                seed = _seed_for(job.entity_id)
+                with telemetry.span(
+                    "image.prompt.enhance",
+                    {
+                        "image.job_id": job.job_id,
+                        "image.enhancer": self._enhancer.name,
+                        "image.purpose": job.purpose.value,
+                        "image.profile": profile.name,
+                    },
+                ) as enhance_span:
+                    prompt = await self._enhance(subject, profile, job.purpose, extra)
+                    telemetry.mark_span_ok(enhance_span)
+                with telemetry.span(
+                    "image.provider.generate",
+                    {
+                        "image.job_id": job.job_id,
+                        "image.generator": generator.name,
+                        "image.profile": profile.name,
+                        "image.width": profile.width,
+                        "image.height": profile.height,
+                    },
+                ) as provider_span:
+                    data = await generator.generate(
+                        ImageGeneratorRequest(
+                            purpose=job.purpose,
+                            prompt=prompt.prompt,
+                            negative=prompt.negative or profile.default_negative,
+                            seed=seed,
+                            width=profile.width,
+                            height=profile.height,
+                            profile_name=profile.name,
+                        )
+                    )
+                    provider_span.set_attribute("image.output.bytes", len(data))
+                    telemetry.mark_span_ok(provider_span)
+                do_alpha = self._alpha is not None and (
+                    alpha_requested or job.purpose is ImagePurpose.SPRITE
+                )
+                with telemetry.span(
+                    "image.postprocess",
+                    {
+                        "image.job_id": job.job_id,
+                        "image.input.bytes": len(data),
+                        "image.alpha.applied": do_alpha,
+                    },
+                ) as postprocess_span:
+                    url, alpha_url = await self._store_image(job.purpose, data, do_alpha)
+                    telemetry.mark_span_ok(postprocess_span)
+                async with self._actor._lock:
+                    entity = self._actor.world.get_entity(parsed)
+                    self._attach(
+                        entity, job.purpose, url, alpha_url, prompt, seed, profile, generator.name
+                    )
+                    _clear_request(entity)
+                job.status = "succeeded"
+                job.url = url
+                job.alpha_url = alpha_url
+                self._failed.discard(job.entity_id)
+                await self._publish_completed(job, profile.name)
+                generation_span.set_attribute("image.output.bytes", len(data))
+                generation_span.set_attribute("image.alpha.applied", do_alpha)
+                generation_span.set_attribute("image.outcome", "succeeded")
+                telemetry.mark_span_ok(generation_span)
+            except Exception as exc:  # noqa: BLE001 - any failure becomes a failed job + event
+                generation_span.record_exception(exc)
+                generation_span.set_attribute("image.outcome", "failed")
+                telemetry.mark_span_error(str(exc), generation_span)
+                logger.warning("image generation failed for %s: %s", job.entity_id, exc)
+                job.status = "failed"
+                job.error = str(exc)
+                self._failed.add(job.entity_id)
+                if parsed is not None and self._actor.world.has_entity(parsed):
+                    async with self._actor._lock:
+                        _clear_request(self._actor.world.get_entity(parsed))
+                await self._publish_failed(job)
 
     # -- helpers ---------------------------------------------------------------------
 
@@ -348,8 +422,17 @@ class ImageGenService:
         """
         segment = _SEGMENT_BY_PURPOSE[purpose]
         if not do_alpha:
+            telemetry.set_span_attributes(
+                {"image.output.bytes": len(data), "image.alpha.output.bytes": 0}
+            )
             return self._write(segment, data), ""
         alpha_bytes = await asyncio.to_thread(self._alpha, data)
+        telemetry.set_span_attributes(
+            {
+                "image.output.bytes": len(data),
+                "image.alpha.output.bytes": len(alpha_bytes),
+            }
+        )
         if purpose is ImagePurpose.SPRITE:
             return self._write(segment, alpha_bytes), ""
         return self._write(segment, data), self._write(SEGMENT_ALPHA, alpha_bytes)

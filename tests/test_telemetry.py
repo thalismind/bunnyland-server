@@ -8,7 +8,9 @@ needed.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import sqlite3
 import sys
 import types
 
@@ -117,6 +119,7 @@ def test_otel_import_failure_marks_unavailable_and_no_ops(monkeypatch):
 def test_span_and_record_helpers_are_no_ops_when_disabled(monkeypatch):
     monkeypatch.delenv("BUNNYLAND_OTEL_ENABLED", raising=False)
     telemetry.init_telemetry()
+    assert telemetry.capture_context() is None
     with telemetry.span("game.tick", {"a": 1}) as span:
         span.set_attribute("b", 2)
         span.record_exception(ValueError("x"))
@@ -1396,3 +1399,781 @@ def test_instrument_fastapi_attaches_when_enabled(otel_capture):
     assert getattr(app, "_is_instrumented_by_opentelemetry", False) is True
     # Leave no global instrumentation state behind for sibling tests.
     FastAPIInstrumentor.uninstrument_app(app)
+
+
+# -- high-signal background and integration boundaries ---------------------------------
+
+
+def _serialized_spans(span_exporter) -> str:
+    return str(
+        [
+            {
+                "name": span.name,
+                "attributes": dict(span.attributes),
+                "events": [dict(event.attributes) for event in span.events],
+            }
+            for span in span_exporter.get_finished_spans()
+        ]
+    )
+
+
+@pytestmark_otel
+def test_captured_context_can_parent_later_work(otel_capture):
+    span_exporter, _reader = otel_capture
+
+    with telemetry.span("submit.root") as root_span:
+        context = telemetry.capture_context()
+        root_span_id = root_span.get_span_context().span_id
+    with telemetry.span("background.work", parent_context=context):
+        pass
+
+    background = _spans_by_name(span_exporter)["background.work"]
+    assert background.parent.span_id == root_span_id
+
+
+class _TelemetryImageGenerator:
+    name = "telemetry-image"
+
+    def __init__(self, *, error: Exception | None = None, gate: asyncio.Event | None = None):
+        self.error = error
+        self.gate = gate
+        self.started = asyncio.Event()
+
+    def resolve_profile(self, purpose, profile_name=""):
+        from bunnyland.imagegen.generators import ImageGeneratorProfile
+
+        if profile_name and profile_name != purpose.value:
+            raise ValueError("unknown telemetry image profile")
+        return ImageGeneratorProfile(
+            name=purpose.value,
+            purpose=purpose,
+            width=8,
+            height=6,
+        )
+
+    async def generate(self, request):
+        del request
+        self.started.set()
+        if self.gate is not None:
+            await self.gate.wait()
+        if self.error is not None:
+            raise self.error
+        return b"private-image-bytes"
+
+
+def _telemetry_image_service(actor, tmp_path, generator, *, enhancer=None, alpha=None):
+    from bunnyland.imagegen.config import ImageGenConfig
+    from bunnyland.imagegen.media import MediaStore
+    from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
+    from bunnyland.imagegen.service import ImageGenService
+    from bunnyland.imagegen.spec import ImagePurpose
+
+    return ImageGenService(
+        actor,
+        ImageGenConfig(),
+        generators={purpose: generator for purpose in ImagePurpose},
+        enhancer=enhancer or StubPromptEnhancer(),
+        examples=CatalogExampleSource(),
+        media=MediaStore(tmp_path),
+        alpha=alpha,
+    )
+
+
+@pytestmark_otel
+async def test_image_jobs_keep_each_submitting_trace_and_emit_child_spans(
+    otel_capture, tmp_path, monkeypatch
+):
+    from bunnyland.core.components import CharacterComponent, IdentityComponent
+    from bunnyland.imagegen.spec import ImagePurpose
+
+    span_exporter, _reader = otel_capture
+
+    async def run_inline(function, *args):
+        return function(*args)
+
+    monkeypatch.setattr(asyncio, "to_thread", run_inline)
+    scenario = build_scenario()
+    second = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Clover", kind="character"), CharacterComponent()],
+    )
+    generator = _TelemetryImageGenerator()
+    service = _telemetry_image_service(
+        scenario.actor, tmp_path, generator, alpha=lambda _data: b"alpha-bytes"
+    )
+
+    with telemetry.span("submit.one"):
+        first = await service.start(
+            str(scenario.character), ImagePurpose.PORTRAIT, alpha=True
+        )
+    with telemetry.span("submit.two"):
+        second_job = await service.start(str(second.id), ImagePurpose.PORTRAIT)
+    await service.wait_idle()
+    await service.aclose()
+
+    spans = span_exporter.get_finished_spans()
+    roots = {span.name: span for span in spans if span.name.startswith("submit.")}
+    enqueues = {
+        span.attributes["image.job_id"]: span
+        for span in spans
+        if span.name == "image.generate.enqueue"
+    }
+    generations = {
+        span.attributes["image.job_id"]: span for span in spans if span.name == "image.generate"
+    }
+    assert generations[first.job_id].context.trace_id == roots["submit.one"].context.trace_id
+    assert generations[second_job.job_id].context.trace_id == roots["submit.two"].context.trace_id
+    assert generations[first.job_id].parent.span_id == enqueues[first.job_id].context.span_id
+    assert (
+        generations[second_job.job_id].parent.span_id
+        == enqueues[second_job.job_id].context.span_id
+    )
+    assert enqueues[first.job_id].parent.span_id == roots["submit.one"].context.span_id
+    assert enqueues[second_job.job_id].parent.span_id == roots["submit.two"].context.span_id
+
+    children = [
+        span
+        for span in spans
+        if span.parent is not None
+        and span.parent.span_id == generations[first.job_id].context.span_id
+    ]
+    assert {span.name for span in children} == {
+        "image.prompt.enhance",
+        "image.provider.generate",
+        "image.postprocess",
+    }
+    assert generations[first.job_id].attributes["image.width"] == 8
+    assert generations[first.job_id].attributes["image.height"] == 6
+    assert generations[first.job_id].attributes["image.outcome"] == "succeeded"
+    postprocess = next(span for span in children if span.name == "image.postprocess")
+    assert postprocess.attributes["image.alpha.applied"] is True
+    assert postprocess.attributes["image.alpha.output.bytes"] == len(b"alpha-bytes")
+    assert _span_status_name(generations[first.job_id]) == "OK"
+
+
+@pytestmark_otel
+async def test_image_enqueue_records_duplicate_skipped_and_rejected(otel_capture, tmp_path):
+    from bunnyland.imagegen.spec import ImagePurpose
+
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    gate = asyncio.Event()
+    generator = _TelemetryImageGenerator(gate=gate)
+    service = _telemetry_image_service(scenario.actor, tmp_path, generator)
+
+    queued = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
+    await generator.started.wait()
+    duplicate = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
+    rejected = await service.start("not-an-entity", ImagePurpose.PORTRAIT)
+    gate.set()
+    await service.wait_idle()
+    skipped = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
+    await service.aclose()
+
+    assert [queued.status, duplicate.status, rejected.status, skipped.status] == [
+        "succeeded",
+        "duplicate",
+        "failed",
+        "skipped",
+    ]
+    outcomes = [
+        span.attributes["image.outcome"]
+        for span in span_exporter.get_finished_spans()
+        if span.name == "image.generate.enqueue"
+    ]
+    assert outcomes == ["queued", "duplicate", "rejected", "skipped"]
+
+
+@pytestmark_otel
+async def test_image_provider_and_enhancer_failures_are_error_spans_and_redacted(
+    otel_capture, tmp_path
+):
+    from bunnyland.imagegen.spec import ImagePurpose
+
+    private = "private image prompt and provider payload"
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    provider_service = _telemetry_image_service(
+        scenario.actor,
+        tmp_path / "provider",
+        _TelemetryImageGenerator(error=RuntimeError(private)),
+    )
+    provider_job = await provider_service.start(
+        str(scenario.character), ImagePurpose.PORTRAIT
+    )
+    await provider_service.wait_idle()
+    await provider_service.aclose()
+
+    class _FailingEnhancer:
+        name = "failing"
+
+        async def enhance(self, request, *, examples=()):
+            del request, examples
+            raise RuntimeError(private)
+
+    enhancer_service = _telemetry_image_service(
+        scenario.actor,
+        tmp_path / "enhancer",
+        _TelemetryImageGenerator(),
+        enhancer=_FailingEnhancer(),
+    )
+    enhancer_job = await enhancer_service.start(
+        str(scenario.character), ImagePurpose.PORTRAIT, force=True
+    )
+    await enhancer_service.wait_idle()
+    await enhancer_service.aclose()
+
+    assert provider_job.status == enhancer_job.status == "failed"
+    spans = span_exporter.get_finished_spans()
+    provider_span = next(span for span in spans if span.name == "image.provider.generate")
+    enhance_spans = [span for span in spans if span.name == "image.prompt.enhance"]
+    generation_spans = [span for span in spans if span.name == "image.generate"]
+    assert _span_status_name(provider_span) == "ERROR"
+    assert any(_span_status_name(span) == "ERROR" for span in enhance_spans)
+    assert all(_span_status_name(span) == "ERROR" for span in generation_spans)
+    assert private not in _serialized_spans(span_exporter)
+
+
+@pytestmark_otel
+async def test_ollama_image_prompt_attempt_records_usage_under_enhancement(otel_capture):
+    from bunnyland.imagegen.prompt import ImagePromptRequest, LLMPromptEnhancer
+    from bunnyland.imagegen.spec import ImagePurpose, PromptStyle
+
+    span_exporter, reader = otel_capture
+
+    class _Client:
+        async def chat(self, **kwargs):
+            assert kwargs["messages"][1]["content"]
+            return {
+                "message": {"content": '{"prompt":"painted rabbit"}'},
+                "prompt_eval_count": 4,
+                "eval_count": 2,
+            }
+
+    enhancer = LLMPromptEnhancer.__new__(LLMPromptEnhancer)
+    enhancer._client = _Client()
+    enhancer._model = "image-model"
+    request = ImagePromptRequest(
+        subject="private subject text",
+        style=PromptStyle.NATURAL,
+        purpose=ImagePurpose.PORTRAIT,
+    )
+    with telemetry.span("image.prompt.enhance") as enhancement:
+        result = await enhancer.enhance(request)
+        telemetry.mark_span_ok(enhancement)
+
+    assert result.prompt == "painted rabbit"
+    spans = _spans_by_name(span_exporter)
+    attempt = spans["llm.provider.attempt"]
+    assert attempt.parent.span_id == spans["image.prompt.enhance"].context.span_id
+    assert attempt.attributes["provider"] == "ollama"
+    assert attempt.attributes["llm.request.kind"] == "image_prompt"
+    assert attempt.attributes["llm.tokens.prompt"] == 4
+    assert attempt.attributes["llm.tokens.completion"] == 2
+    assert "private subject text" not in _serialized_spans(span_exporter)
+    points = _metric_points(reader)
+    assert points["bunnyland.llm.tokens.total"][0].value == 6
+
+
+@pytestmark_otel
+async def test_ollama_image_prompt_attempt_marks_provider_failure(otel_capture):
+    from bunnyland.imagegen.prompt import ImagePromptRequest, LLMPromptEnhancer
+    from bunnyland.imagegen.spec import ImagePurpose, PromptStyle
+
+    private = "private provider credential detail"
+    span_exporter, _reader = otel_capture
+
+    class _Client:
+        async def chat(self, **kwargs):
+            del kwargs
+            raise RuntimeError(private)
+
+    enhancer = LLMPromptEnhancer.__new__(LLMPromptEnhancer)
+    enhancer._client = _Client()
+    enhancer._model = "image-model"
+    with pytest.raises(RuntimeError, match="private provider"):
+        await enhancer.enhance(
+            ImagePromptRequest(
+                subject="subject",
+                style=PromptStyle.TAG,
+                purpose=ImagePurpose.SPRITE,
+            )
+        )
+
+    attempt = _spans_by_name(span_exporter)["llm.provider.attempt"]
+    assert _span_status_name(attempt) == "ERROR"
+    assert private not in _serialized_spans(span_exporter)
+
+
+@pytestmark_otel
+async def test_one_shot_ollama_worldgen_records_usage_and_redacts_seed(otel_capture):
+    from bunnyland.worldgen.ollama_builder import OllamaWorldBuilder
+
+    private_seed = "private world seed narration"
+    span_exporter, reader = otel_capture
+
+    class _Client:
+        async def chat(self, **kwargs):
+            del kwargs
+            return {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "seed": "ignored",
+                            "rooms": [{"key": "moss", "title": "Moss Room"}],
+                        }
+                    )
+                },
+                "prompt_eval_count": 9,
+                "eval_count": 3,
+            }
+
+    builder = OllamaWorldBuilder.__new__(OllamaWorldBuilder)
+    builder._client = _Client()
+    builder._model = "world-model"
+    proposal = await builder.propose(private_seed)
+
+    assert proposal.seed == private_seed
+    request = _spans_by_name(span_exporter)["worldgen.llm.request"]
+    assert _span_status_name(request) == "OK"
+    assert request.attributes["provider"] == "ollama"
+    assert request.attributes["llm.tokens.total"] == 12
+    assert request.attributes["worldgen.seed.chars"] == len(private_seed)
+    assert private_seed not in _serialized_spans(span_exporter)
+    points = _metric_points(reader)
+    assert points["bunnyland.worldgen.request.duration"][0].attributes["provider"] == "ollama"
+
+
+@pytestmark_otel
+async def test_one_shot_ollama_worldgen_marks_invalid_response_error(otel_capture):
+    from bunnyland.worldgen.ollama_builder import OllamaWorldBuilder
+
+    span_exporter, _reader = otel_capture
+
+    class _Client:
+        async def chat(self, **kwargs):
+            del kwargs
+            return {"message": {"content": "private invalid proposal"}}
+
+    builder = OllamaWorldBuilder.__new__(OllamaWorldBuilder)
+    builder._client = _Client()
+    builder._model = "world-model"
+    with pytest.raises(ValueError):
+        await builder.propose("seed")
+
+    request = _spans_by_name(span_exporter)["worldgen.llm.request"]
+    assert _span_status_name(request) == "ERROR"
+    assert "private invalid proposal" not in _serialized_spans(span_exporter)
+
+
+@pytestmark_otel
+async def test_narration_render_traces_success_timeout_and_exception_fallbacks(otel_capture):
+    from bunnyland.narration.projection import NarrationProjection, SceneInput
+
+    private = "private narration renderer failure"
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    scene = SceneInput(
+        viewer_id=str(scenario.character),
+        room_id=str(scenario.room_a),
+        location_title="Moss Room",
+        room_summary="private scene narration",
+    )
+    projection = NarrationProjection(world=scenario.actor.world, fallback_renderer=lambda _: "safe")
+
+    projection.renderer = lambda _scene: "rendered"
+    await projection._deliver(scene.viewer_id, 1, scene)
+
+    async def slow(_scene):
+        await asyncio.sleep(0.02)
+        return "late"
+
+    projection.renderer = slow
+    projection.render_timeout_seconds = 0.001
+    await projection._deliver(scene.viewer_id, 2, scene)
+
+    def fail(_scene):
+        raise RuntimeError(private)
+
+    projection.renderer = fail
+    await projection._deliver(scene.viewer_id, 3, scene)
+
+    renders = [
+        span for span in span_exporter.get_finished_spans() if span.name == "narration.render"
+    ]
+    assert [span.attributes["narration.outcome"] for span in renders] == [
+        "succeeded",
+        "timeout_fallback",
+        "exception_fallback",
+    ]
+    assert [_span_status_name(span) for span in renders] == ["OK", "ERROR", "ERROR"]
+    assert projection.latest(scene.viewer_id).epoch == 3
+    assert projection.latest(scene.viewer_id).text == "safe"
+    assert private not in _serialized_spans(span_exporter)
+    assert "private scene narration" not in _serialized_spans(span_exporter)
+
+
+class _TelemetryChromaCollection:
+    def __init__(self):
+        self.rows: list[tuple[str, str, dict]] = []
+
+    def add(self, *, ids, documents, metadatas):
+        self.rows.extend(zip(ids, documents, metadatas, strict=False))
+
+    def get(self, ids=None, include=None):
+        del include
+        selected = set(ids or [row[0] for row in self.rows])
+        rows = [row for row in self.rows if row[0] in selected]
+        return {
+            "ids": [row[0] for row in rows],
+            "documents": [row[1] for row in rows],
+            "metadatas": [row[2] for row in rows],
+        }
+
+    def query(self, *, query_texts, n_results):
+        del query_texts
+        got = self.get()
+        return {
+            key: [values[:n_results]] for key, values in got.items()
+        }
+
+    def update(self, *, ids, documents, metadatas):
+        selected = set(ids)
+        self.rows = [
+            (
+                row[0],
+                documents[0] if row[0] in selected else row[1],
+                metadatas[0] if row[0] in selected else row[2],
+            )
+            for row in self.rows
+        ]
+
+    def delete(self, *, ids):
+        selected = set(ids)
+        self.rows = [row for row in self.rows if row[0] not in selected]
+
+
+class _TelemetryChromaClient:
+    def __init__(self):
+        self.collection = _TelemetryChromaCollection()
+
+    def get_or_create_collection(self, *, name, **kwargs):
+        del name, kwargs
+        return self.collection
+
+
+@pytestmark_otel
+def test_json_and_chroma_memory_backend_spans_are_content_free(otel_capture, tmp_path):
+    from bunnyland.memory.chroma import ChromaMemoryStore
+    from bunnyland.memory.jsonfile import JsonMemoryStore
+
+    private = "private remembered document content"
+    span_exporter, _reader = otel_capture
+    path = tmp_path / "memory.json"
+    json_store = JsonMemoryStore(path)
+    json_store.add("private-collection", text=private, created_at_epoch=1)
+    JsonMemoryStore(path)
+
+    chroma = ChromaMemoryStore(client=_TelemetryChromaClient())
+    entry = chroma.add("private-collection", text=private, created_at_epoch=1)
+    assert chroma.search("private-collection", query=private, mode="vector")
+    document = chroma.create_document(
+        "private-collection", document=private, metadata={"tags": "private"}
+    )
+    assert chroma.list_documents("private-collection")
+    assert (
+        chroma.update_document(
+            "private-collection", document.id, document=private, metadata={}
+        )
+        is not None
+    )
+    assert (
+        chroma.update_document("private-collection", "missing", document=private, metadata={})
+        is None
+    )
+    assert chroma.delete("private-collection", entry.id) is True
+    assert chroma.delete("private-collection", entry.id) is False
+
+    spans = [
+        span for span in span_exporter.get_finished_spans() if span.name == "memory.backend"
+    ]
+    assert {span.attributes["memory.backend"] for span in spans} == {"json", "chroma"}
+    assert {span.attributes["memory.operation"] for span in spans} >= {
+        "load",
+        "save",
+        "add",
+        "search",
+        "create",
+        "list",
+        "update",
+        "delete",
+    }
+    assert all(_span_status_name(span) == "OK" for span in spans)
+    assert private not in _serialized_spans(span_exporter)
+    assert "private-collection" not in _serialized_spans(span_exporter)
+
+
+@pytestmark_otel
+def test_memory_backend_failure_marks_error_and_redacts_content(otel_capture, tmp_path):
+    from bunnyland.memory.chroma import ChromaMemoryStore
+    from bunnyland.memory.jsonfile import JsonMemoryStore
+
+    private = "private corrupt memory payload"
+    span_exporter, _reader = otel_capture
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text(private)
+    with pytest.raises(json.JSONDecodeError):
+        JsonMemoryStore(invalid)
+
+    class _FailingClient:
+        def get_or_create_collection(self, **kwargs):
+            del kwargs
+            raise RuntimeError(private)
+
+    with pytest.raises(RuntimeError, match="private corrupt"):
+        ChromaMemoryStore(client=_FailingClient()).search("collection")
+
+    failures = [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.name == "memory.backend" and _span_status_name(span) == "ERROR"
+    ]
+    assert len(failures) == 2
+    assert private not in _serialized_spans(span_exporter)
+
+
+@pytestmark_otel
+def test_auth_store_initialization_and_mutations_are_traced_without_subjects(
+    otel_capture, tmp_path
+):
+    from bunnyland.server.auth import HUMAN_ROTATE_AFTER_SECONDS, TokenStore
+
+    private_subject = "private-token-subject"
+    span_exporter, _reader = otel_capture
+    store = TokenStore(tmp_path / "tokens.sqlite3")
+    token, principal = store.issue(
+        private_subject,
+        [WORLD_ADMIN_SCOPE],
+        automatic_rotation=True,
+        now=0,
+    )
+    store.rotate(token, now=HUMAN_ROTATE_AFTER_SECONDS)
+    store.import_digest(
+        "0123456789abcdef",
+        "a" * 64,
+        private_subject,
+        [WORLD_ADMIN_SCOPE],
+        expires_at=999999,
+        created_at=1,
+    )
+    store.replace(principal.token_id, now=HUMAN_ROTATE_AFTER_SECONDS + 1)
+    store.revoke_token("0123456789abcdef", now=2)
+    store.revoke_subject(private_subject, now=3)
+    with pytest.raises(PermissionError):
+        store.rotate("private-invalid-token", now=4)
+    store.close()
+
+    spans = span_exporter.get_finished_spans()
+    initialize = next(span for span in spans if span.name == "auth.token_store.initialize")
+    mutations = [span for span in spans if span.name == "auth.token.mutate"]
+    assert _span_status_name(initialize) == "OK"
+    assert {span.attributes["auth.operation"] for span in mutations} >= {
+        "issue",
+        "import",
+        "rotate",
+        "replace",
+        "revoke",
+    }
+    assert any(_span_status_name(span) == "ERROR" for span in mutations)
+    assert private_subject not in _serialized_spans(span_exporter)
+    assert token not in _serialized_spans(span_exporter)
+
+
+@pytestmark_otel
+def test_auth_store_initialization_failure_marks_error(otel_capture, tmp_path):
+    from bunnyland.server.auth import TokenStore
+
+    span_exporter, _reader = otel_capture
+    with pytest.raises(sqlite3.OperationalError):
+        TokenStore(tmp_path)
+    initialize = _spans_by_name(span_exporter)["auth.token_store.initialize"]
+    assert _span_status_name(initialize) == "ERROR"
+
+
+@pytestmark_otel
+def test_plugin_apply_and_integrate_trace_success_and_failure(otel_capture):
+    from bunnyland.core import WorldActor
+    from bunnyland.plugins import Plugin, RuntimeContribution, apply_plugin, apply_plugins
+
+    private = "private plugin integration failure"
+    span_exporter, _reader = otel_capture
+
+    def integrate(_actor):
+        return None
+
+    plugin = Plugin(
+        id="test.telemetry",
+        name="Telemetry",
+        runtime=RuntimeContribution(integration_factories=(integrate,)),
+    )
+    apply_plugins([plugin], WorldActor())
+
+    def fail(_actor):
+        raise RuntimeError(private)
+
+    failing = Plugin(
+        id="test.failure",
+        name="Failure",
+        runtime=RuntimeContribution(service_factories=(fail,)),
+    )
+    with pytest.raises(RuntimeError, match="private plugin"):
+        apply_plugin(failing, WorldActor())
+
+    apply_spans = [
+        span for span in span_exporter.get_finished_spans() if span.name == "plugin.apply"
+    ]
+    integrate_span = _spans_by_name(span_exporter)["plugin.integrate"]
+    assert [_span_status_name(span) for span in apply_spans] == ["OK", "ERROR"]
+    assert _span_status_name(integrate_span) == "OK"
+    assert integrate_span.attributes["plugin.factories.count"] == 1
+    assert private not in _serialized_spans(span_exporter)
+
+
+@pytestmark_otel
+async def test_discord_command_and_delivery_spans_capture_outcomes_without_messages(
+    otel_capture, monkeypatch
+):
+    import bunnyland.discord.bot as bot_module
+    from bunnyland.discord.bot import DiscordBot, DiscordCommandCooldown
+
+    private = "private discord message body"
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    bot = object.__new__(DiscordBot)
+    bot.actor = scenario.actor
+    bot.command_cooldown = DiscordCommandCooldown()
+
+    class _Context:
+        def __init__(self):
+            self.author = types.SimpleNamespace(id=123, mention="<@123>")
+            self.channel = types.SimpleNamespace(id=456)
+            self.message = types.SimpleNamespace()
+            self.replies = []
+
+        async def reply(self, body, mention_author=False):
+            self.replies.append((body, mention_author))
+
+    submitted = []
+
+    async def submit_action(_ctx, action):
+        submitted.append(action)
+        return "submitted"
+
+    bot._submit_action = submit_action
+    ctx = _Context()
+    await bot.handle_text_command(ctx, "unknown " + private)
+    await bot.handle_text_command(ctx, "move north")
+
+    class _Channel:
+        def __init__(self):
+            self.messages = []
+
+        async def send(self, message):
+            self.messages.append(message)
+
+    channel = _Channel()
+
+    class _Client:
+        user = "bot"
+
+        def get_channel(self, channel_id):
+            return channel if channel_id == 1 else None
+
+        async def fetch_channel(self, channel_id):
+            raise RuntimeError(f"private delivery failure {channel_id}")
+
+    bot.client = _Client()
+    await bot._send_room_feed_message(1, private)
+    await bot._send_room_feed_message(2, private)
+
+    bot._world_paused = False
+    bot._paused_reactions = {}
+    monkeypatch.setattr(bot_module, "discord_broadcast_channel_ids", lambda _actor: (1, 2))
+    await bot._post_pause_status(types.SimpleNamespace(paused=True, message=private))
+
+    commands = [
+        span for span in span_exporter.get_finished_spans() if span.name == "discord.command"
+    ]
+    deliveries = [
+        span for span in span_exporter.get_finished_spans() if span.name == "discord.delivery"
+    ]
+    assert [span.attributes["discord.command.outcome"] for span in commands] == [
+        "rejected",
+        "submitted",
+    ]
+    assert submitted[0].command_type == "move"
+    assert {span.attributes["discord.delivery.kind"] for span in deliveries} == {
+        "room_feed",
+        "pause_status",
+    }
+    assert {_span_status_name(span) for span in deliveries} == {"OK", "ERROR"}
+    assert private not in _serialized_spans(span_exporter)
+
+
+@pytestmark_otel
+async def test_discord_image_delivery_records_success_and_external_failure(
+    otel_capture, monkeypatch
+):
+    import bunnyland.discord.bot as bot_module
+    from bunnyland.discord.bot import DELIVER_EMOJI, DiscordBot
+
+    private = "private image delivery failure"
+    span_exporter, _reader = otel_capture
+    bot = object.__new__(DiscordBot)
+
+    class _Media:
+        def read(self, namespace, name):
+            assert (namespace, name) == ("events", "scene.png")
+            return b"image-bytes"
+
+    bot.imagegen = types.SimpleNamespace(media=_Media())
+
+    class _Message:
+        def __init__(self, *, fail=False):
+            self.fail = fail
+            self.reactions = []
+
+        async def reply(self, **kwargs):
+            del kwargs
+            if self.fail:
+                raise RuntimeError(private)
+
+        async def add_reaction(self, reaction):
+            self.reactions.append(reaction)
+
+    monkeypatch.setattr(
+        bot_module,
+        "_require_discord",
+        lambda: (types.SimpleNamespace(File=lambda *_args, **_kwargs: object()), object()),
+    )
+    success = _Message()
+    failure = _Message(fail=True)
+    bot._image_messages = {"record-1": success, "record-2": failure}
+    def event(entity_id):
+        return types.SimpleNamespace(
+            entity_id=entity_id,
+            purpose="event",
+            url="/public/media/events/scene.png",
+        )
+
+    await bot._deliver_image(event("record-1"))
+    with pytest.raises(RuntimeError, match="private image"):
+        await bot._deliver_image(event("record-2"))
+
+    spans = [
+        span for span in span_exporter.get_finished_spans() if span.name == "discord.delivery"
+    ]
+    assert [_span_status_name(span) for span in spans] == ["OK", "ERROR"]
+    assert spans[0].attributes["discord.delivery.bytes"] == len(b"image-bytes")
+    assert success.reactions == [DELIVER_EMOJI]
+    assert private not in _serialized_spans(span_exporter)

@@ -33,6 +33,7 @@ from relics import (
     OnRelationshipRemoved,
 )
 
+from .. import telemetry
 from ..claims import ClaimSecretRegistry
 from ..core.claim_timeout import (
     normalize_claim_timeout,
@@ -610,25 +611,39 @@ class DiscordBot:
             self._actor_rooms[event.actor_id] = event.to_room_id
 
     async def _send_room_feed_message(self, channel_id: int, message: str) -> None:
-        channel = self.client.get_channel(channel_id)
-        if channel is None:
-            try:
-                channel = await self.client.fetch_channel(channel_id)
-            except Exception as exc:
-                print(
-                    f"Discord room feed post failed for channel {channel_id}: {exc!r}",
-                    flush=True,
-                )
-                return
-        for chunk in split_discord_text(message):
-            try:
-                await channel.send(chunk)
-            except Exception as exc:
-                print(
-                    f"Discord room feed post failed for channel {channel_id}: {exc!r}",
-                    flush=True,
-                )
-                return
+        with telemetry.span(
+            "discord.delivery",
+            {"discord.delivery.kind": "room_feed", "discord.channel.id": channel_id},
+        ) as delivery_span:
+            channel = self.client.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await self.client.fetch_channel(channel_id)
+                except Exception as exc:
+                    delivery_span.record_exception(exc)
+                    delivery_span.set_attribute("discord.delivery.outcome", "failed")
+                    telemetry.mark_span_error(str(exc), delivery_span)
+                    print(
+                        f"Discord room feed post failed for channel {channel_id}: {exc!r}",
+                        flush=True,
+                    )
+                    return
+            chunks = split_discord_text(message)
+            for chunk in chunks:
+                try:
+                    await channel.send(chunk)
+                except Exception as exc:
+                    delivery_span.record_exception(exc)
+                    delivery_span.set_attribute("discord.delivery.outcome", "failed")
+                    telemetry.mark_span_error(str(exc), delivery_span)
+                    print(
+                        f"Discord room feed post failed for channel {channel_id}: {exc!r}",
+                        flush=True,
+                    )
+                    return
+            delivery_span.set_attribute("discord.delivery.outcome", "succeeded")
+            delivery_span.set_attribute("discord.messages.count", len(chunks))
+            telemetry.mark_span_ok(delivery_span)
 
     def _is_world_paused(self) -> bool:
         if self._pause_status is not None:
@@ -656,23 +671,37 @@ class DiscordBot:
         if not event.paused:
             await self._replace_paused_reactions()
         for channel_id in discord_broadcast_channel_ids(self.actor):
-            channel = self.client.get_channel(channel_id)
-            if channel is None:
+            with telemetry.span(
+                "discord.delivery",
+                {"discord.delivery.kind": "pause_status", "discord.channel.id": channel_id},
+            ) as delivery_span:
+                channel = self.client.get_channel(channel_id)
+                if channel is None:
+                    try:
+                        channel = await self.client.fetch_channel(channel_id)
+                    except Exception as exc:
+                        delivery_span.record_exception(exc)
+                        delivery_span.set_attribute("discord.delivery.outcome", "failed")
+                        telemetry.mark_span_error(str(exc), delivery_span)
+                        print(
+                            f"Discord pause status post failed for channel {channel_id}: {exc!r}",
+                            flush=True,
+                        )
+                        continue
                 try:
-                    channel = await self.client.fetch_channel(channel_id)
+                    await channel.send(event.message)
                 except Exception as exc:
+                    delivery_span.record_exception(exc)
+                    delivery_span.set_attribute("discord.delivery.outcome", "failed")
+                    telemetry.mark_span_error(str(exc), delivery_span)
                     print(
                         f"Discord pause status post failed for channel {channel_id}: {exc!r}",
                         flush=True,
                     )
                     continue
-            try:
-                await channel.send(event.message)
-            except Exception as exc:
-                print(
-                    f"Discord pause status post failed for channel {channel_id}: {exc!r}",
-                    flush=True,
-                )
+                delivery_span.set_attribute("discord.delivery.outcome", "succeeded")
+                delivery_span.set_attribute("discord.messages.count", 1)
+                telemetry.mark_span_ok(delivery_span)
 
     async def _replace_paused_reactions(self) -> None:
         for message in tuple(self._paused_reactions.values()):
@@ -720,14 +749,35 @@ class DiscordBot:
         message = self._image_messages.pop(event.entity_id, None)
         if message is None:
             return
-        await self._post_image(message, event.url)
-        await message.add_reaction(DELIVER_EMOJI)
+        with telemetry.span(
+            "discord.delivery",
+            {
+                "discord.delivery.kind": "image",
+                "entity.id": event.entity_id,
+                "image.purpose": event.purpose,
+            },
+        ) as delivery_span:
+            await self._post_image(message, event.url)
+            await message.add_reaction(DELIVER_EMOJI)
+            delivery_span.set_attribute("discord.delivery.outcome", "succeeded")
+            delivery_span.set_attribute("discord.messages.count", 1)
+            telemetry.mark_span_ok(delivery_span)
 
     async def _image_failed(self, event: ImageGenerationFailedEvent) -> None:
         message = self._image_messages.pop(event.entity_id, None)
         if message is None:
             return
-        await message.add_reaction(FAIL_EMOJI)
+        with telemetry.span(
+            "discord.delivery",
+            {
+                "discord.delivery.kind": "image_failure",
+                "entity.id": event.entity_id,
+                "image.purpose": event.purpose,
+            },
+        ) as delivery_span:
+            await message.add_reaction(FAIL_EMOJI)
+            delivery_span.set_attribute("discord.delivery.outcome", "succeeded")
+            telemetry.mark_span_ok(delivery_span)
 
     async def _post_image(self, message, url: str) -> None:
         discord, _ = _require_discord()
@@ -736,6 +786,7 @@ class DiscordBot:
             raise ValueError("image URL is outside the public media surface")
         namespace, name = parts[2:]
         data = self.imagegen.media.read(namespace, name)
+        telemetry.set_span_attributes({"discord.delivery.bytes": len(data)})
         await message.reply(file=discord.File(BytesIO(data), filename=name))
 
     async def _build_command(
@@ -1111,29 +1162,50 @@ class DiscordBot:
 
     async def handle_text_command(self, ctx, text: str) -> None:
         """Handle one Discord command body after the leading ``!`` has been removed."""
-        stripped = text.strip()
-        if not stripped:
-            return
-        cooldown = getattr(self, "command_cooldown", DiscordCommandCooldown())
-        retry_after = cooldown.check(ctx.author.id)
-        if retry_after:
-            await self._reply(ctx, f"Cooldown active. Try again in {retry_after} seconds.")
-            return
-        head, _, rest = stripped.partition(" ")
-        head = head.lower()
-        rest = rest.strip()
-        if head in META_COMMANDS and await self._handle_meta_command(ctx, head, rest):
-            return
-        try:
-            action = parse_discord_action(
-                stripped,
-                self.actor.available_command_types(),
-                self.actor.action_definitions(),
-            )
-        except ValueError as exc:
-            await self._reply(ctx, str(exc))
-            return
-        await self._reply(ctx, await self._submit_action(ctx, action))
+        with telemetry.span(
+            "discord.command",
+            {
+                "discord.user.id": ctx.author.id,
+                "discord.channel.id": getattr(ctx.channel, "id", 0),
+            },
+        ) as command_span:
+            stripped = text.strip()
+            if not stripped:
+                command_span.set_attribute("discord.command.outcome", "ignored")
+                telemetry.mark_span_ok(command_span)
+                return
+            cooldown = getattr(self, "command_cooldown", DiscordCommandCooldown())
+            retry_after = cooldown.check(ctx.author.id)
+            if retry_after:
+                await self._reply(ctx, f"Cooldown active. Try again in {retry_after} seconds.")
+                command_span.set_attribute("discord.command.outcome", "throttled")
+                telemetry.mark_span_ok(command_span)
+                return
+            head, _, rest = stripped.partition(" ")
+            head = head.lower()
+            rest = rest.strip()
+            if head in META_COMMANDS and await self._handle_meta_command(ctx, head, rest):
+                command_span.set_attribute("discord.command.kind", "meta")
+                command_span.set_attribute("command.type", head)
+                command_span.set_attribute("discord.command.outcome", "handled")
+                telemetry.mark_span_ok(command_span)
+                return
+            try:
+                action = parse_discord_action(
+                    stripped,
+                    self.actor.available_command_types(),
+                    self.actor.action_definitions(),
+                )
+            except ValueError as exc:
+                await self._reply(ctx, str(exc))
+                command_span.set_attribute("discord.command.outcome", "rejected")
+                telemetry.mark_span_ok(command_span)
+                return
+            command_span.set_attribute("discord.command.kind", "world")
+            command_span.set_attribute("command.type", action.command_type)
+            await self._reply(ctx, await self._submit_action(ctx, action))
+            command_span.set_attribute("discord.command.outcome", "submitted")
+            telemetry.mark_span_ok(command_span)
 
     def _register_commands(self) -> None:
         discord, commands = _require_discord()

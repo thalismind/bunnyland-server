@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter, ValidationError
 
+from .. import telemetry
 from .contributions import collect_content_items
 from .model import Plugin, PluginRuntimeContext
 from .registry import PluginRegistry
@@ -181,28 +182,41 @@ def apply_plugin(
 ) -> None:
     """Wire a single plugin's contributions into the actor."""
     context = context or PluginRuntimeContext()
-    registration = actor.bus.begin_registration(plugin.id, plugin.placement.value)
-    try:
-        for system in plugin.ecs.systems:
-            actor.world.register_system(_instantiate(system))
-        for observer in plugin.ecs.observers:
-            actor.world.observe(_instantiate(observer))
-        for definition in plugin.commands.action_definitions:
-            actor.register_action_definition(_instantiate(definition))
-        for handler in plugin.commands.action_handlers:
-            instance = _instantiate(handler)
-            actor.register_handler(instance)
-        for definition in plugin.runtime.perspective_queries:
-            actor.perspective_queries.register(_instantiate(definition), owner=plugin.id)
-        for factory in (
-            plugin.runtime.controller_factories
-            + plugin.runtime.generator_factories
-            + plugin.runtime.service_factories
-            + plugin.runtime.projection_factories
-        ):
-            _call_runtime_factory(factory, actor, context)
-    finally:
-        actor.bus.end_registration(registration)
+    factories = (
+        plugin.runtime.controller_factories
+        + plugin.runtime.generator_factories
+        + plugin.runtime.service_factories
+        + plugin.runtime.projection_factories
+    )
+    with telemetry.span(
+        "plugin.apply",
+        {
+            "plugin.id": plugin.id,
+            "plugin.placement": plugin.placement.value,
+            "plugin.systems.count": len(plugin.ecs.systems),
+            "plugin.observers.count": len(plugin.ecs.observers),
+            "plugin.actions.count": len(plugin.commands.action_handlers),
+            "plugin.factories.count": len(factories),
+        },
+    ) as apply_span:
+        registration = actor.bus.begin_registration(plugin.id, plugin.placement.value)
+        try:
+            for system in plugin.ecs.systems:
+                actor.world.register_system(_instantiate(system))
+            for observer in plugin.ecs.observers:
+                actor.world.observe(_instantiate(observer))
+            for definition in plugin.commands.action_definitions:
+                actor.register_action_definition(_instantiate(definition))
+            for handler in plugin.commands.action_handlers:
+                instance = _instantiate(handler)
+                actor.register_handler(instance)
+            for definition in plugin.runtime.perspective_queries:
+                actor.perspective_queries.register(_instantiate(definition), owner=plugin.id)
+            for factory in factories:
+                _call_runtime_factory(factory, actor, context)
+        finally:
+            actor.bus.end_registration(registration)
+        telemetry.mark_span_ok(apply_span)
 
 
 def apply_plugins(
@@ -232,12 +246,21 @@ def apply_plugins(
     # Optional integrations are deliberately installed only after every enabled plugin's
     # ordinary contracts and mechanics are registered.
     for plugin in ordered:
-        for factory in plugin.runtime.integration_factories:
-            registration = actor.bus.begin_registration(plugin.id, plugin.placement.value)
-            try:
-                _call_runtime_factory(factory, actor, context)
-            finally:
-                actor.bus.end_registration(registration)
+        with telemetry.span(
+            "plugin.integrate",
+            {
+                "plugin.id": plugin.id,
+                "plugin.placement": plugin.placement.value,
+                "plugin.factories.count": len(plugin.runtime.integration_factories),
+            },
+        ) as integrate_span:
+            for factory in plugin.runtime.integration_factories:
+                registration = actor.bus.begin_registration(plugin.id, plugin.placement.value)
+                try:
+                    _call_runtime_factory(factory, actor, context)
+                finally:
+                    actor.bus.end_registration(registration)
+            telemetry.mark_span_ok(integrate_span)
     return ordered
 
 

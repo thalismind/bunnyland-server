@@ -8,16 +8,19 @@ import re
 import secrets
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, wraps
 from pathlib import Path
 from threading import Lock
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 import yaml
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyCookie, HTTPAuthorizationCredentials, HTTPBearer, SecurityScopes
 from pydantic import BaseModel, Field
+
+from .. import telemetry
 
 WORLD_PLAY_SCOPE = "world:play"
 WORLD_ADMIN_SCOPE = "world:admin"
@@ -30,6 +33,31 @@ ROTATION_GRACE_SECONDS = 30
 _TOKEN_RE = re.compile(r"^blt_([a-f0-9]{16})_([A-Za-z0-9_-]{32,})$")
 _bearer_scheme = HTTPBearer(auto_error=False)
 _cookie_scheme = APIKeyCookie(name=AUTH_COOKIE_NAME, auto_error=False)
+
+
+def _trace_token_mutation(operation: str, **attributes: object):
+    """Trace one token-store mutation without exposing token or subject values."""
+
+    def decorate(method: Callable[..., Any]):
+        @wraps(method)
+        def traced(*args: Any, **kwargs: Any):
+            with telemetry.span(
+                "auth.token.mutate", {"auth.operation": operation, **attributes}
+            ) as mutation_span:
+                result = method(*args, **kwargs)
+                if isinstance(result, bool):
+                    mutation_span.set_attribute("auth.changed", result)
+                    mutation_span.set_attribute("auth.records.count", int(result))
+                elif isinstance(result, int):
+                    mutation_span.set_attribute("auth.records.count", result)
+                else:
+                    mutation_span.set_attribute("auth.records.count", 1)
+                telemetry.mark_span_ok(mutation_span)
+                return result
+
+        return traced
+
+    return decorate
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -256,37 +284,45 @@ class TokenStore:
 
     def __init__(self, path: str | Path) -> None:
         self.path = str(path)
-        if self.path != ":memory:":
-            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self._connection = sqlite3.connect(self.path, check_same_thread=False)
-        if self.path != ":memory:":
-            Path(self.path).chmod(0o600)
-        self._connection.row_factory = sqlite3.Row
-        self._lock = Lock()
-        with self._connection:
-            self._connection.execute("PRAGMA journal_mode=WAL")
-            self._connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS auth_tokens (
-                    token_id TEXT PRIMARY KEY,
-                    digest TEXT NOT NULL,
-                    subject TEXT NOT NULL,
-                    scopes TEXT NOT NULL,
-                    created_at INTEGER NOT NULL,
-                    rotate_after INTEGER,
-                    expires_at INTEGER NOT NULL,
-                    automatic_rotation INTEGER NOT NULL,
-                    family_id TEXT NOT NULL,
-                    revoked_at INTEGER,
-                    grace_until INTEGER,
-                    replaced_by TEXT
+        with telemetry.span(
+            "auth.token_store.initialize",
+            {
+                "auth.backend": "sqlite",
+                "auth.persistent": self.path != ":memory:",
+            },
+        ) as initialize_span:
+            if self.path != ":memory:":
+                Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+            self._connection = sqlite3.connect(self.path, check_same_thread=False)
+            if self.path != ":memory:":
+                Path(self.path).chmod(0o600)
+            self._connection.row_factory = sqlite3.Row
+            self._lock = Lock()
+            with self._connection:
+                self._connection.execute("PRAGMA journal_mode=WAL")
+                self._connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS auth_tokens (
+                        token_id TEXT PRIMARY KEY,
+                        digest TEXT NOT NULL,
+                        subject TEXT NOT NULL,
+                        scopes TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        rotate_after INTEGER,
+                        expires_at INTEGER NOT NULL,
+                        automatic_rotation INTEGER NOT NULL,
+                        family_id TEXT NOT NULL,
+                        revoked_at INTEGER,
+                        grace_until INTEGER,
+                        replaced_by TEXT
+                    )
+                    """
                 )
-                """
-            )
-            self._connection.execute(
-                "CREATE INDEX IF NOT EXISTS auth_tokens_subject ON auth_tokens(subject)"
-            )
-        self._lock_permissions()
+                self._connection.execute(
+                    "CREATE INDEX IF NOT EXISTS auth_tokens_subject ON auth_tokens(subject)"
+                )
+            self._lock_permissions()
+            telemetry.mark_span_ok(initialize_span)
 
     def _lock_permissions(self) -> None:
         if self.path == ":memory:":
@@ -323,6 +359,7 @@ class TokenStore:
             family_id=row["family_id"],
         )
 
+    @_trace_token_mutation("issue")
     def issue(
         self,
         subject: str,
@@ -369,6 +406,7 @@ class TokenStore:
         self._lock_permissions()
         return token, self._principal(row)
 
+    @_trace_token_mutation("import")
     def import_digest(
         self,
         token_id: str,
@@ -450,6 +488,7 @@ class TokenStore:
             return None
         return self._principal(row)
 
+    @_trace_token_mutation("rotate")
     def rotate(
         self,
         token: str,
@@ -528,6 +567,7 @@ class TokenStore:
         self._lock_permissions()
         return replacement, self._principal(replacement_row)
 
+    @_trace_token_mutation("revoke", **{"auth.target.kind": "token"})
     def revoke_token(self, token_or_id: str, *, now: int | None = None) -> bool:
         current = int(time.time()) if now is None else now
         match = _TOKEN_RE.fullmatch(token_or_id)
@@ -543,6 +583,7 @@ class TokenStore:
         self._lock_permissions()
         return cursor.rowcount > 0
 
+    @_trace_token_mutation("revoke", **{"auth.target.kind": "subject"})
     def revoke_subject(self, subject: str, *, now: int | None = None) -> int:
         current = int(time.time()) if now is None else now
         with self._lock, self._connection:
@@ -556,6 +597,7 @@ class TokenStore:
         self._lock_permissions()
         return cursor.rowcount
 
+    @_trace_token_mutation("replace")
     def replace(self, token_id: str, *, now: int | None = None) -> tuple[str, TokenPrincipal]:
         current = int(time.time()) if now is None else now
         with self._lock:

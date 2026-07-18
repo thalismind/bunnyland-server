@@ -9,6 +9,12 @@ from __future__ import annotations
 
 import logging
 
+from .. import telemetry
+from ..llm_agents.agent import (
+    _llm_request_attrs,
+    _ollama_usage,
+    _record_llm_usage,
+)
 from .defaults import DEFAULT_WORLDGEN_MODEL
 from .proposal import WorldProposal
 
@@ -54,16 +60,30 @@ class OllamaWorldBuilder:
         self._model = model
 
     async def propose(self, seed: str) -> WorldProposal:
-        response = await self._client.chat(
-            model=self._model,
-            format=WorldProposal.model_json_schema(),
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": f"Seed: {seed}"},
-            ],
-        )
-        content = response["message"]["content"]
-        proposal = WorldProposal.model_validate_json(content)
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": f"Seed: {seed}"},
+        ]
+        attributes = {
+            "provider": "ollama",
+            **_llm_request_attrs(
+                "worldgen", self._model, messages, None, system_prompt=_SYSTEM_PROMPT
+            ),
+            "worldgen.seed.chars": len(seed),
+        }
+        with (
+            telemetry.record_duration(telemetry.record_worldgen_request, attributes),
+            telemetry.span("worldgen.llm.request", attributes) as request_span,
+        ):
+            response = await self._client.chat(
+                model=self._model,
+                format=WorldProposal.model_json_schema(),
+                messages=messages,
+            )
+            _record_llm_usage("ollama", self._model, _ollama_usage(response))
+            content = response["message"]["content"]
+            proposal = WorldProposal.model_validate_json(content)
+            telemetry.mark_span_ok(request_span)
         return repair_world_proposal(proposal.model_copy(update={"seed": seed}))
 
 

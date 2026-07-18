@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from relics import Entity, World
 
+from .. import telemetry
 from ..core.components import CharacterComponent, IdentityComponent, RoomComponent
 from ..core.ecs import container_of, parse_entity_id
 from ..core.events import (
@@ -643,19 +644,37 @@ class NarrationProjection:
         task.add_done_callback(self._delivery_tasks.discard)
 
     async def _deliver(self, viewer_id: str, epoch: int, scene: SceneInput) -> None:
-        try:
-            rendered = self.renderer(scene)
-            if inspect.isawaitable(rendered):
-                text = await asyncio.wait_for(rendered, timeout=self.render_timeout_seconds)
-            else:
-                text = rendered
-        except TimeoutError:
-            self.errors.append("narration render timed out")
-            text = self.fallback_renderer(scene)
-        except Exception as exc:  # noqa: BLE001 - delivery must fall back, not fail the tick.
-            self.errors.append(str(exc))
-            text = self.fallback_renderer(scene)
-        self._record_narration(viewer_id, epoch, scene, text)
+        with telemetry.span(
+            "narration.render",
+            {
+                "viewer.id": viewer_id,
+                "world.epoch": epoch,
+                "narration.events.count": len(scene.events),
+                "narration.voice": scene.voice.name,
+                "narration.timeout.seconds": self.render_timeout_seconds,
+            },
+        ) as render_span:
+            try:
+                rendered = self.renderer(scene)
+                if inspect.isawaitable(rendered):
+                    text = await asyncio.wait_for(rendered, timeout=self.render_timeout_seconds)
+                else:
+                    text = rendered
+                render_span.set_attribute("narration.outcome", "succeeded")
+                telemetry.mark_span_ok(render_span)
+            except TimeoutError as exc:
+                self.errors.append("narration render timed out")
+                text = self.fallback_renderer(scene)
+                render_span.record_exception(exc)
+                render_span.set_attribute("narration.outcome", "timeout_fallback")
+                telemetry.mark_span_error(str(exc), render_span)
+            except Exception as exc:  # noqa: BLE001 - delivery must fall back, not fail the tick.
+                self.errors.append(str(exc))
+                text = self.fallback_renderer(scene)
+                render_span.record_exception(exc)
+                render_span.set_attribute("narration.outcome", "exception_fallback")
+                telemetry.mark_span_error(str(exc), render_span)
+            self._record_narration(viewer_id, epoch, scene, text)
 
     def _record_narration(self, viewer_id: str, epoch: int, scene: SceneInput, text: str) -> None:
         narration = SceneNarration(

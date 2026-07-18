@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from opentelemetry import context as _otel_context
     from opentelemetry import metrics as _otel_metrics
     from opentelemetry import trace as _otel_trace
     from opentelemetry.trace import Status as _OtelStatus
@@ -34,6 +35,7 @@ try:
 
     _OTEL_AVAILABLE = True
 except ImportError:  # the optional ``otel`` extra is not installed
+    _otel_context = None
     _otel_metrics = None
     _otel_trace = None
     _OtelStatus = None
@@ -389,8 +391,24 @@ class _RedactingSpan:
         return getattr(self._span, name)
 
 
+def capture_context() -> Any | None:
+    """Capture the active trace context for later background work.
+
+    The return value is deliberately opaque.  Disabled telemetry returns the shared
+    ``None`` singleton without consulting an OTel provider or allocating a context.
+    """
+    if not _ENABLED:
+        return None
+    return _otel_context.get_current()
+
+
 @contextmanager
-def span(name: str, attributes: dict[str, Any] | None = None) -> Iterator[Any]:
+def span(
+    name: str,
+    attributes: dict[str, Any] | None = None,
+    *,
+    parent_context: Any | None = None,
+) -> Iterator[Any]:
     """Return a span context manager. A shared singleton no-op when telemetry is disabled."""
     if not _ENABLED:
         with _NOOP_SPAN_CM as noop:
@@ -398,6 +416,7 @@ def span(name: str, attributes: dict[str, Any] | None = None) -> Iterator[Any]:
         return
     with _tracer.start_as_current_span(
         name,
+        context=parent_context,
         attributes=_redacted_attributes(attributes or {}),
         record_exception=False,
         set_status_on_exception=False,

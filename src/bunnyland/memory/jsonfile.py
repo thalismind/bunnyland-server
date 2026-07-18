@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .. import telemetry
 from .store import (
     InMemoryStore,
     MemoryEntry,
@@ -64,21 +65,45 @@ class JsonMemoryStore(InMemoryStore):
         self._load()
 
     def _load(self) -> None:
-        if not self._path.exists():
-            return
-        raw = json.loads(self._path.read_text(encoding="utf-8"))
-        for collection, entries in raw.get("collections", {}).items():
-            self._collections[collection] = [_entry_from_json(item) for item in entries]
+        with telemetry.span(
+            "memory.backend", {"memory.backend": "json", "memory.operation": "load"}
+        ) as backend_span:
+            if not self._path.exists():
+                backend_span.set_attribute("memory.outcome", "absent")
+                backend_span.set_attribute("memory.documents.count", 0)
+                telemetry.mark_span_ok(backend_span)
+                return
+            encoded = self._path.read_text(encoding="utf-8")
+            raw = json.loads(encoded)
+            for collection, entries in raw.get("collections", {}).items():
+                self._collections[collection] = [_entry_from_json(item) for item in entries]
+            backend_span.set_attribute("memory.outcome", "loaded")
+            backend_span.set_attribute("memory.input.bytes", len(encoded.encode("utf-8")))
+            backend_span.set_attribute(
+                "memory.documents.count",
+                sum(len(entries) for entries in self._collections.values()),
+            )
+            telemetry.mark_span_ok(backend_span)
 
     def _save(self) -> None:
-        data = {
-            "collections": {
-                collection: [_entry_to_json(entry) for entry in entries]
-                for collection, entries in self._collections.items()
+        with telemetry.span(
+            "memory.backend", {"memory.backend": "json", "memory.operation": "save"}
+        ) as backend_span:
+            data = {
+                "collections": {
+                    collection: [_entry_to_json(entry) for entry in entries]
+                    for collection, entries in self._collections.items()
+                }
             }
-        }
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+            encoded = json.dumps(data, indent=2, sort_keys=True)
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._path.write_text(encoded, encoding="utf-8")
+            backend_span.set_attribute("memory.output.bytes", len(encoded.encode("utf-8")))
+            backend_span.set_attribute(
+                "memory.documents.count",
+                sum(len(entries) for entries in self._collections.values()),
+            )
+            telemetry.mark_span_ok(backend_span)
 
     def add(
         self,

@@ -20,7 +20,14 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
-from ..llm_agents.agent import DEFAULT_MODEL, normalize_model
+from .. import telemetry
+from ..llm_agents.agent import (
+    DEFAULT_MODEL,
+    _llm_request_attrs,
+    _ollama_usage,
+    _record_llm_usage,
+    normalize_model,
+)
 from .spec import GeneratedPrompt, ImagePurpose, MediaKind, PromptStyle
 
 logger = logging.getLogger("bunnyland.imagegen")
@@ -151,14 +158,32 @@ class LLMPromptEnhancer:
     async def enhance(
         self, request: ImagePromptRequest, *, examples: Sequence[GeneratedPrompt] = ()
     ) -> GeneratedPrompt:
-        response = await self._client.chat(
-            model=normalize_model(self._model),
-            format="json",
-            messages=[
-                {"role": "system", "content": _system_prompt(request.style)},
-                {"role": "user", "content": _user_prompt(request, examples)},
-            ],
-        )
+        model = normalize_model(self._model)
+        system_prompt = _system_prompt(request.style)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": _user_prompt(request, examples)},
+        ]
+        with telemetry.span(
+            "llm.provider.attempt",
+            {
+                "provider": "ollama",
+                "llm.attempt": 0,
+                **_llm_request_attrs(
+                    "image_prompt", model, messages, None, system_prompt=system_prompt
+                ),
+                "image.purpose": request.purpose.value,
+                "image.prompt.style": request.style.value,
+                "image.examples.count": len(examples),
+            },
+        ) as provider_span:
+            response = await self._client.chat(
+                model=model,
+                format="json",
+                messages=messages,
+            )
+            _record_llm_usage("ollama", model, _ollama_usage(response))
+            telemetry.mark_span_ok(provider_span)
         data = json.loads(response["message"]["content"])
         data.setdefault("style", request.style.value)
         return GeneratedPrompt.model_validate(data)

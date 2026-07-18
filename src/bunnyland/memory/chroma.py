@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .. import telemetry
 from .store import MemoryDocument, MemoryEntry, normalize_tags
 
 
@@ -66,33 +67,38 @@ class ChromaMemoryStore:
         created_at_epoch: int = 0,
         source: str = "manual",
     ) -> MemoryEntry:
-        self._counter += 1
-        metadata = {
-            "tags": list(normalize_tags(tags)),
-            "created_at_epoch": created_at_epoch,
-            "source": source,
-        }
-        entry = MemoryEntry(
-            id=uuid4().hex,
-            text=text,
-            tags=normalize_tags(tags),
-            created_at_epoch=created_at_epoch,
-            source=source,
-            metadata=metadata,
-        )
-        self._collection(collection).add(
-            ids=[entry.id],
-            documents=[text],
-            metadatas=[
-                {
-                    "tags": ",".join(tags),
-                    "created_at_epoch": created_at_epoch,
-                    "source": source,
-                    "seq": self._counter,
-                }
-            ],
-        )
-        return entry
+        with telemetry.span(
+            "memory.backend", {"memory.backend": "chroma", "memory.operation": "add"}
+        ) as backend_span:
+            self._counter += 1
+            metadata = {
+                "tags": list(normalize_tags(tags)),
+                "created_at_epoch": created_at_epoch,
+                "source": source,
+            }
+            entry = MemoryEntry(
+                id=uuid4().hex,
+                text=text,
+                tags=normalize_tags(tags),
+                created_at_epoch=created_at_epoch,
+                source=source,
+                metadata=metadata,
+            )
+            self._collection(collection).add(
+                ids=[entry.id],
+                documents=[text],
+                metadatas=[
+                    {
+                        "tags": ",".join(tags),
+                        "created_at_epoch": created_at_epoch,
+                        "source": source,
+                        "seq": self._counter,
+                    }
+                ],
+            )
+            backend_span.set_attribute("memory.documents.count", 1)
+            telemetry.mark_span_ok(backend_span)
+            return entry
 
     def search(
         self,
@@ -102,31 +108,59 @@ class ChromaMemoryStore:
         mode: str = "recent",
         limit: int = 5,
     ) -> list[MemoryEntry]:
-        col = self._collection(collection)
-        if mode == "vector" and query:
-            result = col.query(query_texts=[query], n_results=limit)
-            return self._entries_from_query(result)
-        # recent / keyword: pull everything and order by sequence (most recent first).
-        got = col.get(include=["documents", "metadatas"])
-        entries = self._entries_from_get(got)
-        entries.sort(key=lambda e: e.created_at_epoch, reverse=True)
-        if query and mode == "keyword":
-            tokens = set(query.lower().split())
-            entries = [e for e in entries if tokens & set(e.text.lower().split())]
-        return entries[:limit]
+        with telemetry.span(
+            "memory.backend",
+            {
+                "memory.backend": "chroma",
+                "memory.operation": "search",
+                "memory.search.mode": mode,
+                "memory.limit": limit,
+                "memory.query.present": bool(query),
+            },
+        ) as backend_span:
+            col = self._collection(collection)
+            if mode == "vector" and query:
+                result = self._entries_from_query(col.query(query_texts=[query], n_results=limit))
+            else:
+                # recent / keyword: pull everything and order by sequence (most recent first).
+                got = col.get(include=["documents", "metadatas"])
+                entries = self._entries_from_get(got)
+                entries.sort(key=lambda e: e.created_at_epoch, reverse=True)
+                if query and mode == "keyword":
+                    tokens = set(query.lower().split())
+                    entries = [e for e in entries if tokens & set(e.text.lower().split())]
+                result = entries[:limit]
+            backend_span.set_attribute("memory.results.count", len(result))
+            telemetry.mark_span_ok(backend_span)
+            return result
 
     def delete(self, collection: str, note_id: str) -> bool:
-        col = self._collection(collection)
-        got = col.get(ids=[note_id])
-        ids = got.get("ids", []) or []
-        if note_id not in ids:
-            return False
-        col.delete(ids=[note_id])
-        return True
+        with telemetry.span(
+            "memory.backend", {"memory.backend": "chroma", "memory.operation": "delete"}
+        ) as backend_span:
+            col = self._collection(collection)
+            got = col.get(ids=[note_id])
+            ids = got.get("ids", []) or []
+            if note_id not in ids:
+                backend_span.set_attribute("memory.outcome", "not_found")
+                backend_span.set_attribute("memory.documents.count", 0)
+                telemetry.mark_span_ok(backend_span)
+                return False
+            col.delete(ids=[note_id])
+            backend_span.set_attribute("memory.outcome", "deleted")
+            backend_span.set_attribute("memory.documents.count", 1)
+            telemetry.mark_span_ok(backend_span)
+            return True
 
     def list_documents(self, collection: str) -> list[MemoryDocument]:
-        got = self._collection(collection).get(include=["documents", "metadatas"])
-        return self._documents_from_get(got)
+        with telemetry.span(
+            "memory.backend", {"memory.backend": "chroma", "memory.operation": "list"}
+        ) as backend_span:
+            got = self._collection(collection).get(include=["documents", "metadatas"])
+            documents = self._documents_from_get(got)
+            backend_span.set_attribute("memory.results.count", len(documents))
+            telemetry.mark_span_ok(backend_span)
+            return documents
 
     def create_document(
         self,
@@ -135,17 +169,23 @@ class ChromaMemoryStore:
         document: str,
         metadata: dict[str, Any],
     ) -> MemoryDocument:
-        note_id = uuid4().hex
-        self._collection(collection).add(
-            ids=[note_id],
-            documents=[document],
-            metadatas=[_metadata_for_chroma(metadata)],
-        )
-        return MemoryDocument(
-            id=note_id,
-            document=document,
-            metadata=_metadata_for_document(metadata),
-        )
+        with telemetry.span(
+            "memory.backend", {"memory.backend": "chroma", "memory.operation": "create"}
+        ) as backend_span:
+            note_id = uuid4().hex
+            self._collection(collection).add(
+                ids=[note_id],
+                documents=[document],
+                metadatas=[_metadata_for_chroma(metadata)],
+            )
+            result = MemoryDocument(
+                id=note_id,
+                document=document,
+                metadata=_metadata_for_document(metadata),
+            )
+            backend_span.set_attribute("memory.documents.count", 1)
+            telemetry.mark_span_ok(backend_span)
+            return result
 
     def update_document(
         self,
@@ -155,21 +195,31 @@ class ChromaMemoryStore:
         document: str,
         metadata: dict[str, Any],
     ) -> MemoryDocument | None:
-        col = self._collection(collection)
-        got = col.get(ids=[note_id])
-        ids = got.get("ids", []) or []
-        if note_id not in ids:
-            return None
-        col.update(
-            ids=[note_id],
-            documents=[document],
-            metadatas=[_metadata_for_chroma(metadata)],
-        )
-        return MemoryDocument(
-            id=note_id,
-            document=document,
-            metadata=_metadata_for_document(metadata),
-        )
+        with telemetry.span(
+            "memory.backend", {"memory.backend": "chroma", "memory.operation": "update"}
+        ) as backend_span:
+            col = self._collection(collection)
+            got = col.get(ids=[note_id])
+            ids = got.get("ids", []) or []
+            if note_id not in ids:
+                backend_span.set_attribute("memory.outcome", "not_found")
+                backend_span.set_attribute("memory.documents.count", 0)
+                telemetry.mark_span_ok(backend_span)
+                return None
+            col.update(
+                ids=[note_id],
+                documents=[document],
+                metadatas=[_metadata_for_chroma(metadata)],
+            )
+            result = MemoryDocument(
+                id=note_id,
+                document=document,
+                metadata=_metadata_for_document(metadata),
+            )
+            backend_span.set_attribute("memory.outcome", "updated")
+            backend_span.set_attribute("memory.documents.count", 1)
+            telemetry.mark_span_ok(backend_span)
+            return result
 
     @staticmethod
     def _documents_from_get(got: dict) -> list[MemoryDocument]:
