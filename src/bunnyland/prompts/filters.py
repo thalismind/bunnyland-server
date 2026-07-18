@@ -13,6 +13,7 @@ from typing import Any, Protocol
 
 from relics import Component, Entity, World
 
+from .. import telemetry
 from .builder import PromptContext
 
 LOG = logging.getLogger("bunnyland.prompt_filters")
@@ -87,7 +88,6 @@ class PromptFilterRuntime:
         )
         current = text
         for binding, filter_id in bindings:
-            del binding
             filter_entity = self.actor.world.get_entity(filter_id)
             matches = [
                 (component_type, definition)
@@ -112,20 +112,40 @@ class PromptFilterRuntime:
                 memory_store=getattr(self.actor, "memory_store", None),
                 llm=self.llm,
             )
-            try:
-                filtered = await definition.handler(current, context, component)
-                if not isinstance(filtered, str):
-                    raise TypeError(
-                        f"prompt filter {definition.id!r} returned "
-                        f"{type(filtered).__name__}, expected str"
+            with telemetry.span(
+                "prompt.filter.apply",
+                {
+                    "character.id": str(character.id),
+                    "prompt.filter.id": definition.id,
+                    "prompt.filter.component": component_type.__name__,
+                    "prompt.filter.entity_id": str(filter_id),
+                    "prompt.filter.order": binding.order,
+                    "prompt.filter.input_chars": len(current),
+                },
+            ) as filter_span:
+                try:
+                    filtered = await definition.handler(current, context, component)
+                    if not isinstance(filtered, str):
+                        raise TypeError(
+                            f"prompt filter {definition.id!r} returned "
+                            f"{type(filtered).__name__}, expected str"
+                        )
+                    filter_span.set_attribute("prompt.filter.changed", filtered != current)
+                    filter_span.set_attribute("prompt.filter.output_chars", len(filtered))
+                    filter_span.set_attribute("prompt.filter.status", "applied")
+                    telemetry.mark_span_ok(filter_span)
+                    current = filtered
+                except Exception as exc:
+                    filter_span.set_attribute("prompt.filter.changed", False)
+                    filter_span.set_attribute("prompt.filter.output_chars", len(current))
+                    filter_span.set_attribute("prompt.filter.status", "failed")
+                    filter_span.record_exception(exc)
+                    telemetry.mark_span_error(str(exc), filter_span)
+                    LOG.exception(
+                        "prompt filter %s failed for character %s; keeping prior text",
+                        definition.id,
+                        character.id,
                     )
-                current = filtered
-            except Exception:
-                LOG.exception(
-                    "prompt filter %s failed for character %s; keeping prior text",
-                    definition.id,
-                    character.id,
-                )
         return current
 
 

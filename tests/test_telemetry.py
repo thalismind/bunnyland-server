@@ -27,6 +27,11 @@ from bunnyland.core import (
 )
 from bunnyland.core.controllers import BehaviorControllerComponent
 from bunnyland.engine import GameLoop
+from bunnyland.foundation.prompt_filters.mechanics import (
+    BUILTIN_PROMPT_FILTERS,
+    PromptFilterBinding,
+    RedactedPromptFilterComponent,
+)
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.llm_agents.agent import (
     CHARACTER_SYSTEM_PROMPT,
@@ -37,6 +42,7 @@ from bunnyland.llm_agents.agent import (
     _openrouter_token_usage,
     _openrouter_usage,
 )
+from bunnyland.prompts import PromptFilterDefinition, PromptFilterRuntime
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server.auth import WORLD_ADMIN_SCOPE, TokenPrincipal
 from bunnyland.server.character_chat import CharacterChatService, _trace_json
@@ -437,6 +443,83 @@ def test_trace_attributes_and_exceptions_never_export_private_values(otel_captur
     assert private not in serialized
     assert exported.attributes["safe.id"] == "entity_123"
     assert exported.attributes["chat.input"].startswith("[REDACTED sha256:")
+
+
+@pytestmark_otel
+async def test_prompt_filter_invocations_emit_redacted_child_spans(otel_capture):
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    filter_entity = spawn_entity(
+        scenario.actor.world,
+        [RedactedPromptFilterComponent(strength=1.0, targets=("private",))],
+    )
+    character.add_relationship(PromptFilterBinding(order=7), filter_entity.id)
+    prompt = PromptBuilder(scenario.actor.world).build(scenario.character)
+    private_input = "private prompt payload"
+
+    private_failure = "private provider failure"
+
+    async def failing_filter(text, context, component):
+        del text, context, component
+        raise RuntimeError(private_failure)
+
+    with telemetry.span("agent.prompt.filter"):
+        filtered = await PromptFilterRuntime(scenario.actor, BUILTIN_PROMPT_FILTERS).apply(
+            private_input,
+            character=character,
+            prompt=prompt,
+        )
+        assert filtered == "- prompt payload"
+
+        failed = await PromptFilterRuntime(
+            scenario.actor,
+            (
+                PromptFilterDefinition(
+                    id="example.prompt_filter.failure",
+                    component_type=RedactedPromptFilterComponent,
+                    handler=failing_filter,
+                ),
+            ),
+        ).apply(private_input, character=character, prompt=prompt)
+        assert failed == private_input
+
+    spans = [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.name == "prompt.filter.apply"
+    ]
+    assert len(spans) == 2
+    parent = _spans_by_name(span_exporter)["agent.prompt.filter"]
+    assert all(span.parent.span_id == parent.context.span_id for span in spans)
+    by_filter = {span.attributes["prompt.filter.id"]: span for span in spans}
+    applied = by_filter["bunnyland.prompt_filters.redacted"]
+    assert applied.attributes["character.id"] == str(scenario.character)
+    assert applied.attributes["prompt.filter.component"] == "RedactedPromptFilterComponent"
+    assert applied.attributes["prompt.filter.entity_id"] == str(filter_entity.id)
+    assert applied.attributes["prompt.filter.order"] == 7
+    assert applied.attributes["prompt.filter.input_chars"] == len(private_input)
+    assert applied.attributes["prompt.filter.output_chars"] == len(filtered)
+    assert applied.attributes["prompt.filter.changed"] is True
+    assert applied.attributes["prompt.filter.status"] == "applied"
+    assert _span_status_name(applied) == "OK"
+
+    failure = by_filter["example.prompt_filter.failure"]
+    assert failure.attributes["prompt.filter.changed"] is False
+    assert failure.attributes["prompt.filter.output_chars"] == len(private_input)
+    assert failure.attributes["prompt.filter.status"] == "failed"
+    assert _span_status_name(failure) == "ERROR"
+    serialized = str(
+        [
+            {
+                "attributes": dict(span.attributes),
+                "events": [dict(event.attributes) for event in span.events],
+            }
+            for span in spans
+        ]
+    )
+    assert private_input not in serialized
+    assert private_failure not in serialized
 
 
 @pytestmark_otel
