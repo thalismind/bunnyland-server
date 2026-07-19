@@ -37,6 +37,7 @@ from bunnyland.server.character_chat import (
     PendingChatAction,
     build_character_chat_service,
 )
+from bunnyland.server.client_ids import CLIENT_ID_HEADER
 from bunnyland.server.models import CharacterChatActionResult, CharacterChatRequest
 
 
@@ -87,7 +88,16 @@ def route_client(app) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://testserver",
+        headers={CLIENT_ID_HEADER: "chat-client"},
     )
+
+
+async def claim_character(client: httpx.AsyncClient, character_id: str) -> tuple[str, dict]:
+    response = await client.post("/v1/play/claims", json={"character_id": character_id})
+    return response.json()["id"], {
+        CLIENT_ID_HEADER: "chat-client",
+        "X-Bunnyland-Claim-Secret": response.headers["X-Bunnyland-Claim-Secret"],
+    }
 
 
 @pytest.mark.asyncio
@@ -211,6 +221,15 @@ async def test_character_chat_rejects_missing_non_character_and_no_chat_agent():
 
     with pytest.raises(RuntimeError, match="does not support character chat"):
         await chat_service(scenario, object()).chat(str(scenario.character), chat_request())
+
+    assert "look" in service.allowed_tools
+    web = spawn_entity(
+        scenario.actor.world,
+        [WebControllerComponent(client_id="browser", label="manual")],
+    )
+    scenario.actor.assign_controller(scenario.character, web.id)
+    with pytest.raises(PermissionError, match="current controller to be llm"):
+        await service.chat(str(scenario.character), chat_request())
 
 
 @pytest.mark.asyncio
@@ -540,19 +559,15 @@ async def test_character_chat_status_and_disabled_route():
     app = create_app(scenario.actor, allow_unauthenticated_embedding=True)
 
     async with route_client(app) as client:
-        assert (await client.get("/play/world/chat/status")).json()["enabled"] is False
+        assert (await client.get("/v1/public/features")).json()["character_chat"] is False
+        claim_id, headers = await claim_character(client, str(scenario.character))
         response = await client.post(
-            f"/play/world/character/{scenario.character}/chat",
-            json={"client_id": "c", "message": "hi"},
+            f"/v1/play/claims/{claim_id}/jobs",
+            headers=headers,
+            json={"kind": "chat", "message": "hi"},
         )
         assert response.status_code == 409
         assert response.json()["detail"] == "character chat is not enabled"
-        pending = await client.get(
-            f"/play/world/character/{scenario.character}/chat/pending/missing",
-            params={"client_id": "c"},
-        )
-        assert pending.status_code == 409
-        assert pending.json()["detail"] == "character chat is not enabled"
 
 
 @pytest.mark.asyncio
@@ -561,43 +576,42 @@ async def test_character_chat_route_reports_invalid_character_and_wrong_kind():
     install_core(scenario.actor)
     service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
     item = spawn_entity(scenario.actor.world, [IdentityComponent(name="stone", kind="item")])
-    app = create_app(
-        scenario.actor, character_chat=service, allow_unauthenticated_embedding=True
-    )
+    app = create_app(scenario.actor, character_chat=service, allow_unauthenticated_embedding=True)
 
     async with route_client(app) as client:
         assert (
             await client.post(
-                "/play/world/character/not-real/chat",
-                json={"client_id": "c", "message": "hi"},
+                "/v1/play/claims",
+                json={"character_id": "not-real"},
             )
         ).status_code == 404
         assert (
             await client.post(
-                f"/play/world/character/{item.id}/chat",
-                json={"client_id": "c", "message": "hi"},
+                "/v1/play/claims",
+                json={"character_id": str(item.id)},
             )
         ).status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_character_chat_route_conflicts_for_non_llm_character():
+async def test_character_chat_job_composes_control_handoff_and_result():
     scenario = build_scenario()
     install_core(scenario.actor)
     web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="web")])
     scenario.actor.assign_controller(scenario.character, web.id)
     service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
-    app = create_app(
-        scenario.actor, character_chat=service, allow_unauthenticated_embedding=True
-    )
+    app = create_app(scenario.actor, character_chat=service, allow_unauthenticated_embedding=True)
 
     async with route_client(app) as client:
+        claim_id, headers = await claim_character(client, str(scenario.character))
         response = await client.post(
-            f"/play/world/character/{scenario.character}/chat",
-            json={"client_id": "c", "message": "hi"},
+            f"/v1/play/claims/{claim_id}/jobs",
+            headers=headers,
+            json={"kind": "chat", "message": "hi"},
         )
-    assert response.status_code == 409
-    assert response.json()["detail"] == "character chat requires the current controller to be llm"
+    assert response.status_code == 202
+    assert response.json()["status"] == "succeeded"
+    assert response.json()["result"]["reply"] == "hi"
 
 
 @pytest.mark.asyncio
@@ -605,24 +619,21 @@ async def test_character_chat_route_validates_request_and_reports_allowed_tools(
     scenario = build_scenario()
     install_core(scenario.actor)
     service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
-    app = create_app(
-        scenario.actor, character_chat=service, allow_unauthenticated_embedding=True
-    )
+    app = create_app(scenario.actor, character_chat=service, allow_unauthenticated_embedding=True)
 
     async with route_client(app) as client:
-        status = (await client.get("/play/world/chat/status")).json()
-        assert status["enabled"] is True
-        assert set(status["allowed_tools"]) == ALLOWED_CHAT_TOOLS
-        assert {"remember", "take_note", "reflect", "forget"}.issubset(status["allowed_tools"])
+        assert (await client.get("/v1/public/features")).json()["character_chat"] is True
+        claim_id, headers = await claim_character(client, str(scenario.character))
         response = await client.post(
-            f"/play/world/character/{scenario.character}/chat",
-            json={"client_id": "c", "message": ""},
+            f"/v1/play/claims/{claim_id}/jobs",
+            headers=headers,
+            json={"kind": "chat", "message": ""},
         )
         assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_character_chat_pending_route_reports_queued_action_and_scopes_client():
+async def test_character_chat_job_is_listed_and_claim_scoped():
     scenario = build_scenario()
     install_core(scenario.actor)
     service = chat_service(
@@ -630,34 +641,19 @@ async def test_character_chat_pending_route_reports_queued_action_and_scopes_cli
         FakeChatAgent([ChatAgentReply(tool_call=ToolCall("say", {"text": "soon"}))]),
         timeout=0.0,
     )
-    app = create_app(
-        scenario.actor, character_chat=service, allow_unauthenticated_embedding=True
-    )
+    app = create_app(scenario.actor, character_chat=service, allow_unauthenticated_embedding=True)
 
     async with route_client(app) as client:
+        claim_id, headers = await claim_character(client, str(scenario.character))
         response = await client.post(
-            f"/play/world/character/{scenario.character}/chat",
-            json={"client_id": "c", "message": "say something"},
+            f"/v1/play/claims/{claim_id}/jobs",
+            headers=headers,
+            json={"kind": "chat", "message": "say something"},
         )
         body = response.json()
-        command_id = body["action"]["command_id"]
-        assert body["action"]["status"] == "queued"
-
-        pending = (
-            await client.get(
-                f"/play/world/character/{scenario.character}/chat/pending/{command_id}",
-                params={"client_id": "c"},
-            )
-        ).json()
-        assert pending["complete"] is False
-        assert pending["action"]["status"] == "queued"
-        assert pending["reply"] == ""
-
-        missing = await client.get(
-            f"/play/world/character/{scenario.character}/chat/pending/{command_id}",
-            params={"client_id": "other"},
-        )
-        assert missing.status_code == 404
+        assert body["result"]["action"]["status"] == "queued"
+        listed = await client.get(f"/v1/play/claims/{claim_id}/jobs", headers=headers)
+        assert [job["id"] for job in listed.json()] == [body["id"]]
 
 
 def test_build_character_chat_service_factory_returns_service():

@@ -100,6 +100,8 @@ from bunnyland.foundation.persona.mechanics import (
 from bunnyland.foundation.social.mechanics import SocialBond, create_obligation
 from bunnyland.foundation.social.queries import SOCIAL_PERSPECTIVE_QUERIES
 from bunnyland.foundation.storyteller.mechanics import IncidentComponent
+from bunnyland.imagegen.service import ImageGenJob
+from bunnyland.imagegen.spec import ImagePurpose
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.llm_agents.specs import BehaviorNodeSpec, BehaviorTreeSpec, ScriptSpec, ToolCallSpec
 from bunnyland.memory import InMemoryStore, install_memory
@@ -147,23 +149,39 @@ from bunnyland.server.app import (
 from bunnyland.server.auth import WORLD_ADMIN_SCOPE, WORLD_PLAY_SCOPE, TokenStore
 from bunnyland.server.client_ids import CLIENT_ID_HEADER
 from bunnyland.server.models import (
-    CharacterChatRequest,
+    CharacterChatResponse,
     ClientTargetView,
-    ControllerAssignmentRequest,
-    WebControllerClaimRequest,
-    WebControllerFallbackRequest,
+    MemoryDocumentUpdateRequest,
     WorldCharacterGenerationRequest,
     WorldEventGenerationRequest,
     WorldGenerateRequest,
     WorldItemGenerationRequest,
     WorldPatchRequest,
     WorldRoomGenerationRequest,
+    WorldRoomGenerationResponse,
 )
 from bunnyland.server.patches import WorldPatchError, apply_world_patch
 from bunnyland.server.rate_limit import FixedWindowRateLimiter
 from bunnyland.server.runtime import run_loop_with_api
 from bunnyland.server.schema import _type_schema, world_schema
 from bunnyland.server.serialization import jsonable, serialize_world_overview
+from bunnyland.server.v1_models import (
+    ChatJobRequest,
+    CheckpointRequest,
+    ClaimCommandRequest,
+    ClaimControlUpdate,
+    ClaimCreateRequest,
+    ClaimFallbackUpdate,
+    ControllerAssignment,
+    ControllerDefinitionRequest,
+    GenerateCharacterRequest,
+    GenerateEventRequest,
+    GenerateImageRequest,
+    GenerateItemRequest,
+    GenerateRoomRequest,
+    GenerateWorldRequest,
+    RuntimePatchRequest,
+)
 from bunnyland.server.worldgen import (
     _room_description,
     build_character_generation_response,
@@ -344,6 +362,7 @@ def create_app(*args, **kwargs):
         kwargs["token_store"] = store
         _ADMIN_HEADERS.clear()
         _ADMIN_HEADERS["Authorization"] = f"Bearer {token}"
+        _ADMIN_HEADERS[CLIENT_ID_HEADER] = "admin-a"
         _ADMIN_CLIENT_HEADERS.clear()
         _ADMIN_CLIENT_HEADERS.update(_ADMIN_HEADERS)
         _ADMIN_CLIENT_HEADERS[CLIENT_ID_HEADER] = "admin-a"
@@ -358,6 +377,28 @@ def create_app(*args, **kwargs):
         )
         app.state.test_player_headers = {"Authorization": f"Bearer {player_token}"}
     return app
+
+
+def _claim_headers(client_id: str, secret: str | None = None) -> dict[str, str]:
+    headers = {CLIENT_ID_HEADER: client_id}
+    if secret is not None:
+        headers["X-Bunnyland-Claim-Secret"] = secret
+    return headers
+
+
+def _create_claim(
+    client,
+    request: ClaimCreateRequest,
+    *,
+    client_id: str = "client-a",
+):
+    response = client.post(
+        "/v1/play/claims",
+        headers=_claim_headers(client_id),
+        json=request.model_dump(mode="json", exclude_none=True),
+    )
+    assert response.status_code == 201, response.text
+    return response.json(), response.headers["X-Bunnyland-Claim-Secret"]
 
 
 def test_world_snapshot_serializes_entities_relationships_and_metadata(scenario):
@@ -1382,38 +1423,27 @@ def test_fastapi_app_factory_registers_client_routes_when_extra_is_installed(sce
     app = create_app(scenario.actor, loop=loop)
 
     paths = {route.path for route in app.routes}
-    assert "/public/health" in paths
-    assert "/public/features" in paths
-    assert "/admin/world/snapshot" in paths
-    assert "/play/world/characters" in paths
-    assert "/play/world/character/{id}" in paths
-    assert "/play/world/character/{id}/commands" in paths
-    assert "/play/world/character/{id}/commands/{command_id}" in paths
-    assert "/play/world/room/{id}" in paths
-    assert "/admin/world/dm/{id}" in paths
+    assert "/v1/public/health" in paths
+    assert "/v1/public/features" in paths
+    assert "/v1/admin/world/snapshot" in paths
+    assert "/v1/play/characters" in paths
+    assert "/v1/play/claims/{claim_id}/projection" in paths
+    assert "/v1/play/claims/{claim_id}/commands" in paths
+    assert "/v1/play/claims/{claim_id}/commands/{command_id}" in paths
+    assert "/v1/admin/characters/{character_id}" in paths
     assert "/play/world/client-view/{character_id}" not in paths
-    assert "/play/world/schema" in paths
-    assert "/play/world/library" in paths
-    assert "/admin/world/events/recent" in paths
-    assert "/play/world/commands" in paths
-    assert "/play/world/controllers/web/claim" in paths
-    assert "/play/world/controllers/web/fallback" in paths
-    assert "/admin/world" in paths
-    assert "/admin/world/generators" in paths
-    assert "/admin/world/generate" in paths
-    assert "/admin/world/generate-room" in paths
-    assert "/admin/world/generate-character" in paths
-    assert "/admin/world/generate-item" in paths
-    assert "/admin/world/generate-event" in paths
-    assert "/admin/world/character/{character_id}/image/{purpose}" in paths
-    assert "/admin/world/save" in paths
-    assert "/admin/memory/characters" in paths
-    assert "/admin/memory/collections/{collection}/documents" in paths
-    assert "/admin/memory/collections/{collection}/documents/{id}" in paths
-    assert "/admin/world/runtime" in paths
-    assert "/admin/world/pause" in paths
-    assert "/admin/world/resume" in paths
-    assert "/admin/world/updates" in paths
+    assert "/v1/play/catalog" in paths
+    assert "/v1/play/claims" in paths
+    assert "/v1/admin/world" in paths
+    assert "/v1/admin/world/generators" in paths
+    assert "/v1/admin/world/generation-jobs" in paths
+    assert "/v1/admin/media/{target_kind}/{target_id}/{purpose}" in paths
+    assert "/v1/admin/world/checkpoints" in paths
+    assert "/v1/admin/memory/collections" in paths
+    assert "/v1/admin/memory/collections/{collection}/documents" in paths
+    assert "/v1/admin/memory/collections/{collection}/documents/{document_id}" in paths
+    assert "/v1/admin/world/runtime" in paths
+    assert "/v1/admin/world/stream" in paths
 
 
 def test_route_matrix_declares_every_http_and_websocket_surface_once(scenario):
@@ -1425,11 +1455,11 @@ def test_route_matrix_declares_every_http_and_websocket_surface_once(scenario):
     assert all(classify_authorization_surface(path) is surface for _, path, surface in matrix)
     assert (
         "websocket",
-        "/play/world/character/{character_id}/updates",
+        "/v1/play/claims/{claim_id}/stream",
         AuthorizationSurface.PLAY,
     ) in matrix
-    assert ("websocket", "/admin/world/updates", AuthorizationSurface.ADMIN) in matrix
-    assert ("http", "/mcp", AuthorizationSurface.MCP) in matrix
+    assert ("websocket", "/v1/admin/world/stream", AuthorizationSurface.ADMIN) in matrix
+    assert ("http", "/v1/mcp", AuthorizationSurface.MCP) in matrix
 
 
 def test_route_audit_and_addon_zoning_reject_unzoned_or_cross_zone_routes(scenario):
@@ -1448,7 +1478,7 @@ def test_route_audit_and_addon_zoning_reject_unzoned_or_cross_zone_routes(scenar
 
     invalid_websocket = fastapi.FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
-    @invalid_websocket.websocket("/public/socket")
+    @invalid_websocket.websocket("/v1/public/socket")
     async def public_socket(_websocket):
         return None
 
@@ -1464,13 +1494,28 @@ def test_route_audit_and_addon_zoning_reject_unzoned_or_cross_zone_routes(scenar
         id="test.cross-zone",
         name="Cross-zone Test",
         runtime=RuntimeContribution(
-            http=(
-                HttpContribution(zone=HttpZone.PLAY, registrars=(install_cross_zone,)),
-            )
+            http=(HttpContribution(zone=HttpZone.PLAY, registrars=(install_cross_zone,)),)
         ),
     )
-    with pytest.raises(ValueError, match="absolute or cross-zone route"):
-        create_app(scenario.actor, plugins=(plugin,))
+    app = create_app(scenario.actor, plugins=(plugin,))
+    assert any(
+        route.path == "/v1/play/extensions/test.cross-zone/admin/escape" for route in app.routes
+    )
+
+    def install_absolute_zone(router, _actor, **_context):
+        @router.get("/v1/admin/escape")
+        async def absolute_escape():
+            return {"escaped": True}
+
+    absolute = Plugin(
+        id="test.absolute-zone",
+        name="Absolute Zone Test",
+        runtime=RuntimeContribution(
+            http=(HttpContribution(zone=HttpZone.PLAY, registrars=(install_absolute_zone,)),)
+        ),
+    )
+    with pytest.raises(ValueError, match="attempted absolute or cross-zone route"):
+        create_app(scenario.actor, plugins=(absolute,))
 
 
 def test_unknown_zoned_paths_remain_404(scenario):
@@ -1478,8 +1523,8 @@ def test_unknown_zoned_paths_remain_404(scenario):
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
 
-    assert client.get("/play/does-not-exist").status_code == 404
-    assert client.get("/admin/does-not-exist").status_code == 404
+    assert client.get("/v1/play/does-not-exist").status_code == 404
+    assert client.get("/v1/admin/does-not-exist").status_code == 404
 
 
 def test_fixed_window_rate_limiter_bounds_and_recovers() -> None:
@@ -1515,21 +1560,25 @@ def test_fastapi_rate_limit_returns_retry_after_and_exempts_health(scenario):
         "X-Forwarded-For": "198.51.100.1, 10.0.0.1",
         "X-Bunnyland-Client-Id": "first",
     }
-    assert client.get("/play/world/characters", headers=headers).status_code == 200
+    assert client.get("/v1/play/characters", headers=headers).status_code == 200
     limited = client.get(
-        "/play/world/characters",
+        "/v1/play/characters",
         headers={**headers, "X-Bunnyland-Client-Id": "rotated"},
     )
     assert limited.status_code == 429
     assert limited.headers["Retry-After"] == "60"
-    assert limited.json() == {"detail": "request rate limit exceeded"}
+    assert limited.json()["detail"] == "request rate limit exceeded"
+    assert limited.json()["code"] == "rate_limited"
     still_limited = client.get(
-        "/play/world/characters",
-        headers={"X-Forwarded-For": "198.51.100.1, 10.0.0.2"},
+        "/v1/play/characters",
+        headers={
+            "X-Forwarded-For": "198.51.100.1, 10.0.0.2",
+            CLIENT_ID_HEADER: "third",
+        },
     )
     assert still_limited.status_code == 429
-    assert client.get("/public/health", headers=headers).status_code == 200
-    assert client.get("/public/health", headers=headers).status_code == 200
+    assert client.get("/v1/public/health", headers=headers).status_code == 204
+    assert client.get("/v1/public/health", headers=headers).status_code == 204
 
 
 def test_fastapi_app_factory_installs_zoned_plugin_routers(scenario):
@@ -1553,9 +1602,12 @@ def test_fastapi_app_factory_installs_zoned_plugin_routers(scenario):
     )
     meta = WorldMeta(seed="moss")
     app = create_app(scenario.actor, meta=meta, plugins=(plugin,))
-    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
+    client = testclient.TestClient(
+        app,
+        headers={CLIENT_ID_HEADER: "test-player"},
+    )
 
-    response = client.get("/play/plugin/ping")
+    response = client.get("/v1/play/extensions/test.router/plugin/ping")
 
     assert response.status_code == 200
     assert response.json() == {"ok": True, "seed": "moss"}
@@ -1582,73 +1634,39 @@ def test_fastapi_read_endpoints_return_world_state_schema_and_library(scenario, 
     )
     client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
-    health = client.get("/play/world/status")
-    snapshot = client.get("/admin/world/snapshot", headers=_ADMIN_HEADERS)
-    schema = client.get("/play/world/schema")
-    library = client.get("/play/world/library")
+    features = client.get("/v1/public/features")
+    snapshot = client.get("/v1/admin/world/snapshot", headers=_ADMIN_HEADERS)
+    catalog = client.get(
+        "/v1/play/catalog",
+        headers={**app.state.test_player_headers, CLIENT_ID_HEADER: "room-client"},
+    )
     recent = client.get(
-        "/admin/world/events/recent",
+        "/v1/admin/world/events",
         headers=_ADMIN_HEADERS,
     )
-    player_params = {"claim_id": claim.claim_id}
-    player_headers = {"X-Bunnyland-Claim-Secret": claim_secret}
-    character_view = client.get(
-        f"/play/world/character/{scenario.character}",
-        params=player_params,
-        headers=player_headers,
-    )
-    room_view = client.get(
-        f"/play/world/room/{scenario.room_a}",
-        params={"character_id": str(scenario.character), "claim_id": claim.claim_id},
-        headers=player_headers,
-    )
-    queued = client.get(
-        f"/play/world/character/{scenario.character}/commands",
-        params=player_params,
+    player_headers = {
+        **app.state.test_player_headers,
+        CLIENT_ID_HEADER: "room-client",
+        "X-Bunnyland-Claim-Secret": claim_secret,
+    }
+    projection = client.get(
+        f"/v1/play/claims/{claim.claim_id}/projection",
         headers=player_headers,
     )
 
-    assert health.status_code == 200
-    assert health.json() == {
-        "ok": True,
-        "world_epoch": scenario.actor.epoch,
-        "git_hash": "deadbeefcafebabe",
-        "features": {
-            "mcp": False,
-            "character_chat": False,
-            "character_sheets": True,
-            "image_generation": False,
-        },
-    }
+    assert features.status_code == 200
+    assert features.json()["character_sheets"] is True
     assert snapshot.status_code == 200
     assert snapshot.json()["metadata"]["seed"] == "moss"
-    assert schema.status_code == 200
-    assert schema.json()["components"]["RoomComponent"]["count"] == 2
-    assert library.status_code == 200
-    assert library.json() == load_content_library().model_dump(mode="json")
+    assert catalog.status_code == 200
+    assert catalog.json()["components"]["RoomComponent"]["count"] == 2
+    assert catalog.json()["content"] == load_content_library().model_dump(mode="json")
     assert recent.status_code == 200
-    assert recent.json() == {"events": []}
-    assert character_view.status_code == 200
-    assert character_view.json()["character_id"] == str(scenario.character)
-    assert "entities" not in character_view.json()
-    assert room_view.status_code == 200
-    assert room_view.json()["room"]["id"] == str(scenario.room_a)
-    assert "components" not in room_view.text
-    assert queued.status_code == 200
-    queued_body = queued.json()
-    assert queued_body == {
-        "ok": True,
-        "schema_version": 1,
-        "world_epoch": scenario.actor.epoch,
-        "character_id": str(scenario.character),
-        "generated_at_unix": queued_body["generated_at_unix"],
-        "next_tick_at_unix": None,
-        "tick_seconds": None,
-        "time_scale": None,
-        "game_seconds_per_tick": None,
-        "commands": [],
-    }
-    assert isinstance(queued_body["generated_at_unix"], float)
+    assert recent.json()["events"] == []
+    assert projection.status_code == 200
+    assert projection.json()["character"]["character_id"] == str(scenario.character)
+    assert projection.json()["scene"]["room"]["id"] == str(scenario.room_a)
+    assert projection.json()["commands"] == []
 
 
 def test_claim_scoped_perspective_query_route_and_stream_metrics(scenario, monkeypatch):
@@ -1689,8 +1707,12 @@ def test_claim_scoped_perspective_query_route_and_stream_metrics(scenario, monke
         with_admin=True,
     )
     client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
-    headers = {"X-Bunnyland-Claim-Secret": secret}
-    path = f"/play/world/character/{scenario.character}/query?claim_id={claim.claim_id}"
+    headers = {
+        **app.state.test_player_headers,
+        CLIENT_ID_HEADER: "query-client",
+        "X-Bunnyland-Claim-Secret": secret,
+    }
+    path = f"/v1/play/claims/{claim.claim_id}/queries"
 
     valid = client.post(
         path,
@@ -1704,14 +1726,10 @@ def test_claim_scoped_perspective_query_route_and_stream_metrics(scenario, monke
     )
     connections = client.post(path, headers=headers, json={"query": "social_connections"})
     obligations = client.post(path, headers=headers, json={"query": "open_obligations"})
-    wrong_claim = client.post(
-        f"/play/world/character/{hazel.id}/query?claim_id={claim.claim_id}",
-        headers=headers,
+    wrong_client = client.post(
+        path,
+        headers={**headers, CLIENT_ID_HEADER: "other-client"},
         json={"query": "social_connections"},
-    )
-    stats = client.get(
-        "/admin/world/stream",
-        headers=_ADMIN_HEADERS,
     )
 
     assert valid.status_code == 200
@@ -1726,9 +1744,7 @@ def test_claim_scoped_perspective_query_route_and_stream_metrics(scenario, monke
     assert obligations.status_code == 200
     assert obligations.json()["result"][0]["role"] == "creditor"
     assert obligations.json()["result"][0]["due_epoch"] == 99
-    assert wrong_claim.status_code == 403
-    assert stats.status_code == 200
-    assert stats.json()["connections"] == 0
+    assert wrong_client.status_code == 403
 
     def forbidden(*args, **kwargs):
         raise PermissionError("query is not visible")
@@ -1759,20 +1775,10 @@ def test_health_reports_unknown_git_hash_when_env_is_missing(scenario, monkeypat
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
 
-    health = client.get("/play/world/status")
+    health = client.get("/v1/public/health")
 
-    assert health.status_code == 200
-    assert health.json() == {
-        "ok": True,
-        "world_epoch": scenario.actor.epoch,
-        "git_hash": "unknown",
-        "features": {
-            "mcp": False,
-            "character_chat": False,
-            "character_sheets": True,
-            "image_generation": False,
-        },
-    }
+    assert health.status_code == 204
+    assert health.content == b""
 
 
 def test_health_reports_configured_feature_flags(scenario, monkeypatch):
@@ -1798,18 +1804,15 @@ def test_health_reports_configured_feature_flags(scenario, monkeypatch):
     )
     client = TestClient(app)
 
-    health = client.get("/play/world/status")
-    public_features = client.get("/public/features")
+    public_features = client.get("/v1/public/features")
 
-    assert health.status_code == 200
-    assert health.json()["features"] == {
+    assert public_features.status_code == 200
+    assert public_features.json() == {
         "mcp": True,
         "character_chat": True,
         "character_sheets": True,
         "image_generation": True,
     }
-    assert public_features.status_code == 200
-    assert public_features.json() == health.json()["features"]
 
 
 def test_fastapi_character_list_returns_claim_lobby_without_state(scenario):
@@ -1825,13 +1828,12 @@ def test_fastapi_character_list_returns_claim_lobby_without_state(scenario):
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
 
-    response = client.get("/play/world/characters")
+    response = client.get("/v1/play/characters", headers={CLIENT_ID_HEADER: "lobby-client"})
 
     assert response.status_code == 200
     body = response.json()
-    assert body["ok"] is True
     assert body["world_epoch"] == scenario.actor.epoch
-    characters = {entry["character_id"]: entry for entry in body["characters"]}
+    characters = {entry["id"]: entry for entry in body["characters"]}
     # Sorted by name: Aspen before Juniper.
     assert [entry["name"] for entry in body["characters"]] == ["Aspen", "Juniper"]
     assert characters[str(suspended.id)]["suspended"] is True
@@ -1847,8 +1849,16 @@ def test_fastapi_character_projection_maps_invalid_ids_to_http_errors(scenario):
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
 
-    invalid = client.get("/play/world/character/not-an-id")
-    wrong_kind = client.get(f"/play/world/character/{scenario.room_a}")
+    invalid = client.post(
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "projection-client"},
+        json={"character_id": "not-an-id"},
+    )
+    wrong_kind = client.post(
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "projection-client"},
+        json={"character_id": str(scenario.room_a)},
+    )
 
     assert invalid.status_code == 404
     assert invalid.json()["detail"] == "character does not exist"
@@ -1868,24 +1878,19 @@ def test_fastapi_room_projection_and_queue_map_invalid_ids_to_http_errors(scenar
     secret = secrets.issue(claim.claim_id)
     app = create_app(scenario.actor, claim_secrets=secrets)
     client = testclient.TestClient(app)
-    kwargs = {
-        "params": {"character_id": str(scenario.character), "claim_id": claim.claim_id},
-        "headers": {"X-Bunnyland-Claim-Secret": secret},
+    headers = {
+        CLIENT_ID_HEADER: "room-client",
+        "X-Bunnyland-Claim-Secret": secret,
     }
 
-    missing_room = client.get("/play/world/room/not-an-id", **kwargs)
-    wrong_room_kind = client.get(f"/play/world/room/{scenario.character}", **kwargs)
-    missing_queue = client.get("/play/world/character/not-an-id/commands")
-    wrong_queue_kind = client.get(f"/play/world/character/{scenario.room_a}/commands")
+    missing_claim = client.get("/v1/play/claims/not-a-claim/projection", headers=headers)
+    visible = client.get(f"/v1/play/claims/{claim.claim_id}/projection", headers=headers)
 
-    assert missing_room.status_code == 404
-    assert missing_room.json()["detail"] == "room does not exist"
-    assert wrong_room_kind.status_code == 400
-    assert wrong_room_kind.json()["detail"] == "entity is not a room"
-    assert missing_queue.status_code == 404
-    assert missing_queue.json()["detail"] == "character does not exist"
-    assert wrong_queue_kind.status_code == 400
-    assert wrong_queue_kind.json()["detail"] == "entity is not a character"
+    assert missing_claim.status_code == 404
+    assert missing_claim.json()["detail"] == "claim does not exist"
+    assert visible.status_code == 200
+    assert visible.json()["scene"]["room"]["id"] == str(scenario.room_a)
+    assert visible.json()["commands"] == []
 
 
 def test_fastapi_room_projection_requires_claim_and_current_perception(scenario, monkeypatch):
@@ -1899,41 +1904,34 @@ def test_fastapi_room_projection_requires_claim_and_current_perception(scenario,
     )
     secret = secrets.issue(claim.claim_id)
     client = testclient.TestClient(create_app(scenario.actor, claim_secrets=secrets))
-    params = {"character_id": str(scenario.character), "claim_id": claim.claim_id}
-
-    missing_secret = client.get(f"/play/world/room/{scenario.room_a}", params=params)
+    path = f"/v1/play/claims/{claim.claim_id}/projection"
+    missing_secret = client.get(path, headers={CLIENT_ID_HEADER: "room-client"})
     wrong_secret = client.get(
-        f"/play/world/room/{scenario.room_a}",
-        params=params,
-        headers={"X-Bunnyland-Claim-Secret": "wrong"},
+        path,
+        headers={
+            CLIENT_ID_HEADER: "room-client",
+            "X-Bunnyland-Claim-Secret": "wrong",
+        },
     )
-    hidden_room = client.get(
-        f"/play/world/room/{scenario.room_b}",
-        params=params,
-        headers={"X-Bunnyland-Claim-Secret": secret},
+    wrong_client = client.get(
+        path,
+        headers={
+            CLIENT_ID_HEADER: "other-client",
+            "X-Bunnyland-Claim-Secret": secret,
+        },
     )
     visible_room = client.get(
-        f"/play/world/room/{scenario.room_a}",
-        params=params,
-        headers={"X-Bunnyland-Claim-Secret": secret},
+        path,
+        headers={
+            CLIENT_ID_HEADER: "room-client",
+            "X-Bunnyland-Claim-Secret": secret,
+        },
     )
 
     assert missing_secret.status_code == 403
     assert wrong_secret.status_code == 403
-    assert hidden_room.status_code == 403
-    assert hidden_room.json()["detail"] == "room is not currently visible to character"
+    assert wrong_client.status_code == 403
     assert visible_room.status_code == 200
-
-    def invalid_projection(*args, **kwargs):
-        raise ValueError("entity is not a room")
-
-    monkeypatch.setattr("bunnyland.server.app.serialize_room_projection", invalid_projection)
-    invalid = client.get(
-        f"/play/world/room/{scenario.room_a}",
-        params=params,
-        headers={"X-Bunnyland-Claim-Secret": secret},
-    )
-    assert invalid.status_code == 400
 
 
 def test_fastapi_openapi_exposes_projection_contract_route(scenario):
@@ -1941,39 +1939,22 @@ def test_fastapi_openapi_exposes_projection_contract_route(scenario):
     app = create_app(scenario.actor, with_admin=True)
 
     schema = app.openapi()
-    operation = schema["paths"]["/play/world/character/{id}"]["get"]
+    operation = schema["paths"]["/v1/play/claims/{claim_id}/projection"]["get"]
 
-    assert operation["parameters"][0]["name"] == "id"
-    assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/CharacterProjectionResponse"
-    }
-    queue_operation = schema["paths"]["/play/world/character/{id}/commands"]["get"]
-    assert queue_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/CharacterQueuedCommandsResponse"
-    }
-    room_operation = schema["paths"]["/play/world/room/{id}"]["get"]
-    assert {parameter["name"] for parameter in room_operation["parameters"]} == {
-        "id",
-        "character_id",
+    assert {parameter["name"] for parameter in operation["parameters"]} == {
         "claim_id",
         "X-Bunnyland-Claim-Secret",
+        "X-Bunnyland-Client-Id",
     }
-    assert room_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/RoomProjectionResponse"
+    assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ClaimProjectionResource"
     }
-    library_operation = schema["paths"]["/play/world/library"]["get"]
-    assert library_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/WorldLibraryResponse"
-    }
-    recent_operation = schema["paths"]["/admin/world/events/recent"]["get"]
+    recent_operation = schema["paths"]["/v1/admin/world/events"]["get"]
     assert recent_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/RecentEventsResponse"
+        "$ref": "#/components/schemas/EventCollection"
     }
-    dm_operation = schema["paths"]["/admin/world/dm/{id}"]["get"]
-    assert {parameter["name"] for parameter in dm_operation["parameters"]} == {"id"}
-    assert dm_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/DmProjectionResponse"
-    }
+    dm_operation = schema["paths"]["/v1/admin/characters/{character_id}"]["get"]
+    assert {parameter["name"] for parameter in dm_operation["parameters"]} == {"character_id"}
 
 
 def test_fastapi_dm_projection_requires_permission_and_returns_typed_view(scenario):
@@ -1993,9 +1974,15 @@ def test_fastapi_dm_projection_requires_permission_and_returns_typed_view(scenar
     app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
-    missing = client.get("/admin/world/dm/dm-1")
-    wrong = client.get("/admin/world/dm/dm-1", headers={"Authorization": "Bearer invalid"})
-    allowed = client.get("/admin/world/dm/dm-1", headers=_ADMIN_HEADERS)
+    missing = client.get("/v1/admin/characters/dm-1")
+    wrong = client.get(
+        "/v1/admin/characters/dm-1",
+        headers={
+            "Authorization": "Bearer invalid",
+            CLIENT_ID_HEADER: "admin-a",
+        },
+    )
+    allowed = client.get("/v1/admin/characters/dm-1", headers=_ADMIN_HEADERS)
 
     assert missing.status_code == 401
     assert wrong.status_code == 401
@@ -2022,9 +2009,15 @@ def test_fastapi_world_overview_requires_permission_and_returns_room_network(sce
     app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
-    missing = client.get("/admin/world/overview")
-    wrong = client.get("/admin/world/overview", headers={"Authorization": "Bearer invalid"})
-    allowed = client.get("/admin/world/overview", headers=_ADMIN_HEADERS)
+    missing = client.get("/v1/admin/world")
+    wrong = client.get(
+        "/v1/admin/world",
+        headers={
+            "Authorization": "Bearer invalid",
+            CLIENT_ID_HEADER: "admin-a",
+        },
+    )
+    allowed = client.get("/v1/admin/world", headers=_ADMIN_HEADERS)
 
     assert missing.status_code == 401
     assert wrong.status_code == 401
@@ -2049,9 +2042,15 @@ def test_fastapi_world_snapshot_requires_admin_scope(scenario):
     app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
-    missing = client.get("/admin/world/snapshot")
-    wrong = client.get("/admin/world/snapshot", headers={"Authorization": "Bearer invalid"})
-    allowed = client.get("/admin/world/snapshot", headers=_ADMIN_HEADERS)
+    missing = client.get("/v1/admin/world/snapshot")
+    wrong = client.get(
+        "/v1/admin/world/snapshot",
+        headers={
+            "Authorization": "Bearer invalid",
+            CLIENT_ID_HEADER: "admin-a",
+        },
+    )
+    allowed = client.get("/v1/admin/world/snapshot", headers=_ADMIN_HEADERS)
 
     assert missing.status_code == 401
     assert wrong.status_code == 401
@@ -2079,11 +2078,9 @@ def test_fastapi_admin_memory_lists_characters_and_documents_without_backend_typ
     app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
-    characters = client.get(
-        "/admin/memory/characters", headers=_ADMIN_HEADERS
-    )
+    characters = client.get("/v1/admin/memory/collections", headers=_ADMIN_HEADERS)
     documents = client.get(
-        "/admin/memory/collections/juniper-private/documents",
+        "/v1/admin/memory/collections/juniper-private/documents",
         headers=_ADMIN_HEADERS,
     )
 
@@ -2127,7 +2124,7 @@ def test_fastapi_admin_memory_updates_and_deletes_document(scenario):
     client = testclient.TestClient(app)
 
     updated = client.patch(
-        f"/admin/memory/collections/juniper-private/documents/{entry.id}",
+        f"/v1/admin/memory/collections/juniper-private/documents/{entry.id}",
         headers=_ADMIN_HEADERS,
         json={
             "document": "updated text",
@@ -2135,15 +2132,15 @@ def test_fastapi_admin_memory_updates_and_deletes_document(scenario):
         },
     )
     listed = client.get(
-        "/admin/memory/collections/juniper-private/documents",
+        "/v1/admin/memory/collections/juniper-private/documents",
         headers=_ADMIN_HEADERS,
     )
     deleted = client.delete(
-        f"/admin/memory/collections/juniper-private/documents/{entry.id}",
+        f"/v1/admin/memory/collections/juniper-private/documents/{entry.id}",
         headers=_ADMIN_HEADERS,
     )
     after_delete = client.get(
-        "/admin/memory/collections/juniper-private/documents",
+        "/v1/admin/memory/collections/juniper-private/documents",
         headers=_ADMIN_HEADERS,
     )
 
@@ -2154,8 +2151,8 @@ def test_fastapi_admin_memory_updates_and_deletes_document(scenario):
         "metadata": {"tags": ["edited"], "created_at_epoch": 22, "source": "admin"},
     }
     assert listed.json()["documents"][0]["document"] == "updated text"
-    assert deleted.status_code == 200
-    assert deleted.json()["ok"] is True
+    assert deleted.status_code == 204
+    assert deleted.content == b""
     assert after_delete.json()["documents"] == []
 
 
@@ -2169,7 +2166,7 @@ def test_fastapi_admin_memory_creates_document(scenario):
     client = testclient.TestClient(app)
 
     created = client.post(
-        "/admin/memory/collections/juniper-private/documents",
+        "/v1/admin/memory/collections/juniper-private/documents",
         headers=_ADMIN_HEADERS,
         json={
             "document": "new memory text",
@@ -2177,7 +2174,7 @@ def test_fastapi_admin_memory_creates_document(scenario):
         },
     )
     listed = client.get(
-        "/admin/memory/collections/juniper-private/documents",
+        "/v1/admin/memory/collections/juniper-private/documents",
         headers=_ADMIN_HEADERS,
     )
 
@@ -2208,12 +2205,12 @@ def test_fastapi_admin_memory_missing_document_returns_404(scenario):
     client = testclient.TestClient(app)
 
     updated = client.patch(
-        "/admin/memory/collections/juniper-private/documents/missing",
+        "/v1/admin/memory/collections/juniper-private/documents/missing",
         headers=_ADMIN_HEADERS,
         json={"document": "updated text", "metadata": {}},
     )
     deleted = client.delete(
-        "/admin/memory/collections/juniper-private/documents/missing",
+        "/v1/admin/memory/collections/juniper-private/documents/missing",
         headers=_ADMIN_HEADERS,
     )
 
@@ -2229,11 +2226,11 @@ def test_fastapi_admin_memory_returns_generic_conflict_when_unconfigured(scenari
     client = testclient.TestClient(app)
 
     response = client.get(
-        "/admin/memory/collections/juniper-private/documents",
+        "/v1/admin/memory/collections/juniper-private/documents",
         headers=_ADMIN_HEADERS,
     )
     create_response = client.post(
-        "/admin/memory/collections/juniper-private/documents",
+        "/v1/admin/memory/collections/juniper-private/documents",
         headers=_ADMIN_HEADERS,
         json={"document": "new text", "metadata": {}},
     )
@@ -2253,14 +2250,14 @@ def test_fastapi_admin_memory_requires_admin_scope(scenario):
     app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
-    missing = client.get("/admin/memory/characters")
+    missing = client.get("/v1/admin/memory/collections")
     wrong = client.get(
-        "/admin/memory/collections/juniper-private/documents",
-        headers={"Authorization": "Bearer invalid"},
+        "/v1/admin/memory/collections/juniper-private/documents",
+        headers={"Authorization": "Bearer invalid", CLIENT_ID_HEADER: "admin-a"},
     )
     wrong_create = client.post(
-        "/admin/memory/collections/juniper-private/documents",
-        headers={"Authorization": "Bearer invalid"},
+        "/v1/admin/memory/collections/juniper-private/documents",
+        headers={"Authorization": "Bearer invalid", CLIENT_ID_HEADER: "admin-a"},
         json={"document": "new text", "metadata": {}},
     )
 
@@ -2273,11 +2270,21 @@ def _admin_route_targets(app):
     # Every /admin/* path with a concrete value for each path param. The admin-secret
     # middleware runs before routing/body parsing, so a method+path with no body is enough
     # to prove the gate; HEAD/OPTIONS are skipped (FastAPI/CORS own those).
-    substitutions = {"{collection}": "c", "{id}": "x", "{job_id}": "j"}
+    substitutions = {
+        "{collection}": "c",
+        "{document_id}": "x",
+        "{job_id}": "j",
+        "{character_id}": "character:1",
+        "{kind}": "script",
+        "{name}": "x",
+        "{target_kind}": "character",
+        "{target_id}": "character:1",
+        "{purpose}": "portrait",
+    }
     targets = []
     for route in app.routes:
         path = getattr(route, "path", "")
-        if not path.startswith("/admin"):
+        if not path.startswith("/v1/admin"):
             continue
         concrete = path
         for token, value in substitutions.items():
@@ -2301,9 +2308,9 @@ def test_admin_routes_require_admin_bearer_scope(scenario):
     targets = _admin_route_targets(app)
     # Sanity: the introspection actually found the sensitive routes we care about.
     paths = {path for _method, _concrete, path in targets}
-    assert "/admin/controllers/assign" in paths
-    assert "/admin/world" in paths
-    assert "/admin/world/generate" in paths
+    assert "/v1/admin/characters/{character_id}/controller" in paths
+    assert "/v1/admin/world" in paths
+    assert "/v1/admin/world/generation-jobs" in paths
 
     for index, (method, concrete, path) in enumerate(targets):
         response = client.request(method, concrete)
@@ -2323,7 +2330,7 @@ def test_admin_routes_allow_cors_preflight_without_bearer_token(scenario):
     client = testclient.TestClient(app)
 
     response = client.options(
-        "/admin/memory/characters",
+        "/v1/admin/memory/collections",
         headers={
             "Origin": "http://127.0.0.1:8091",
             "Access-Control-Request-Method": "GET",
@@ -2342,8 +2349,11 @@ def test_admin_gate_fails_closed_without_bearer_token(scenario):
     client = testclient.TestClient(app)
 
     response = client.post(
-        "/admin/controllers/assign",
-        headers={"Authorization": "Bearer invalid"},
+        "/v1/admin/characters/character:1/controller",
+        headers={
+            "Authorization": "Bearer invalid",
+            CLIENT_ID_HEADER: "admin-a",
+        },
     )
 
     assert response.status_code == 401
@@ -2355,8 +2365,11 @@ def test_fastapi_dm_projection_accepts_admin_bearer(scenario):
     app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app)
 
-    blocked = client.get("/admin/world/dm/dm-1", headers={"Authorization": "Bearer invalid"})
-    allowed = client.get("/admin/world/dm/dm-1", headers=_ADMIN_HEADERS)
+    blocked = client.get(
+        "/v1/admin/characters/dm-1",
+        headers={"Authorization": "Bearer invalid", CLIENT_ID_HEADER: "admin-a"},
+    )
+    allowed = client.get("/v1/admin/characters/dm-1", headers=_ADMIN_HEADERS)
 
     assert blocked.status_code == 401
     assert allowed.status_code == 200
@@ -2368,7 +2381,10 @@ def test_fastapi_dm_projection_rejects_unknown_bearer(scenario):
     app = create_app(scenario.actor, token_store=TokenStore(":memory:"))
     client = testclient.TestClient(app)
 
-    response = client.get("/admin/world/dm/dm-1", headers={"Authorization": "Bearer invalid"})
+    response = client.get(
+        "/v1/admin/characters/dm-1",
+        headers={"Authorization": "Bearer invalid", CLIENT_ID_HEADER: "admin-a"},
+    )
 
     assert response.status_code == 401
     assert response.headers["WWW-Authenticate"] == "Bearer"
@@ -2383,15 +2399,16 @@ def test_fastapi_admin_client_id_allowlist_gates_admin_routes(scenario):
     )
     client = testclient.TestClient(app)
 
-    missing = client.get("/admin/world/overview", headers=_ADMIN_HEADERS)
+    auth_only = {"Authorization": _ADMIN_HEADERS["Authorization"]}
+    missing = client.get("/v1/admin/world", headers=auth_only)
     rejected = client.get(
-        "/admin/world/overview",
+        "/v1/admin/world",
         headers={**_ADMIN_HEADERS, CLIENT_ID_HEADER: "admin-b"},
     )
-    allowed = client.get("/admin/world/overview", headers=_ADMIN_CLIENT_HEADERS)
+    allowed = client.get("/v1/admin/world", headers=_ADMIN_CLIENT_HEADERS)
 
     assert missing.status_code == 403
-    assert missing.json()["detail"] == "admin client_id is required"
+    assert missing.json()["detail"] == f"{CLIENT_ID_HEADER} header is required"
     assert rejected.status_code == 403
     assert rejected.json()["detail"] == "admin client_id is not allowed"
     assert allowed.status_code == 200
@@ -2428,38 +2445,37 @@ def test_fastapi_command_endpoint_queues_command_and_recent_events(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
-    claimed = client.post(
-        "/play/world/controllers/web/claim",
-        json={
-            "character_id": str(scenario.character),
-            "client_id": "client-a",
-        },
-    ).json()
+    claimed_response = client.post(
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"character_id": str(scenario.character)},
+    )
+    claimed = claimed_response.json()
+    claim_headers = {
+        CLIENT_ID_HEADER: "client-a",
+        "X-Bunnyland-Claim-Secret": claimed_response.headers["X-Bunnyland-Claim-Secret"],
+    }
 
     response = client.post(
-        "/play/world/commands",
-        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
+        f"/v1/play/claims/{claimed['id']}/commands",
+        headers=claim_headers,
         json={
-            "character_id": str(scenario.character),
-            "controller_id": claimed["controller_id"],
-            "controller_generation": claimed["controller_generation"],
-            "claim_id": claimed["claim_id"],
             "command_type": "move",
             "payload": {"direction": "north"},
             "cost": {"action": 1},
-            "command_id": "cmd-http-move",
+            "id": "cmd-http-move",
         },
     )
 
     assert response.status_code == 202
-    assert response.json() == {"queued": True, "command_id": "cmd-http-move", "reason": ""}
+    assert response.json()["status"] == "queued"
+    assert response.json()["id"] == "cmd-http-move"
 
     asyncio.run(scenario.actor.tick(0.0))
 
     recent = client.get(
-        f"/play/world/character/{scenario.character}/events/recent",
-        params={"claim_id": claimed["claim_id"]},
-        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
+        f"/v1/play/claims/{claimed['id']}/events",
+        headers=claim_headers,
     )
     assert scenario.character_room() == scenario.room_b
     assert recent.status_code == 200
@@ -2476,23 +2492,25 @@ def test_fastapi_command_endpoint_rejects_control_verbs(scenario, verb):
     testclient = pytest.importorskip("fastapi.testclient")
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
-    claimed = client.post(
-        "/play/world/controllers/web/claim",
-        json={"character_id": str(scenario.character), "client_id": "client-a"},
-    ).json()
+    claimed_response = client.post(
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"character_id": str(scenario.character)},
+    )
+    claimed = claimed_response.json()
+    claim_headers = {
+        CLIENT_ID_HEADER: "client-a",
+        "X-Bunnyland-Claim-Secret": claimed_response.headers["X-Bunnyland-Claim-Secret"],
+    }
     # A controller the caller does not own — the target a hijack attempt would aim at.
     other = spawn_entity(
         scenario.actor.world, [WebControllerComponent(client_id="victim", label="other")]
     )
 
     response = client.post(
-        "/play/world/commands",
-        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
+        f"/v1/play/claims/{claimed['id']}/commands",
+        headers=claim_headers,
         json={
-            "character_id": str(scenario.character),
-            "controller_id": claimed["controller_id"],
-            "controller_generation": claimed["controller_generation"],
-            "claim_id": claimed["claim_id"],
             "command_type": verb,
             "payload": {"controller_id": str(other.id)},
         },
@@ -2513,13 +2531,16 @@ def test_fastapi_cancel_queued_command_removes_it(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
-    claimed = client.post(
-        "/play/world/controllers/web/claim",
-        json={
-            "character_id": str(scenario.character),
-            "client_id": "client-a",
-        },
-    ).json()
+    claimed_response = client.post(
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"character_id": str(scenario.character)},
+    )
+    claimed = claimed_response.json()
+    claim_headers = {
+        CLIENT_ID_HEADER: "client-a",
+        "X-Bunnyland-Claim-Secret": claimed_response.headers["X-Bunnyland-Claim-Secret"],
+    }
     command = build_submitted_command(
         character_id=str(scenario.character),
         controller_id=claimed["controller_id"],
@@ -2534,40 +2555,26 @@ def test_fastapi_cancel_queued_command_removes_it(scenario):
     scenario.actor.queues.enqueue(command)
 
     response = client.delete(
-        f"/play/world/character/{scenario.character}/commands/cmd-cancel-me",
-        params={
-            "controller_id": claimed["controller_id"],
-            "controller_generation": claimed["controller_generation"],
-            "claim_id": claimed["claim_id"],
-        },
-        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
+        f"/v1/play/claims/{claimed['id']}/commands/cmd-cancel-me",
+        headers=claim_headers,
     )
     queued = client.get(
-        f"/play/world/character/{scenario.character}/commands",
-        params={"claim_id": claimed["claim_id"]},
-        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
+        f"/v1/play/claims/{claimed['id']}/projection",
+        headers=claim_headers,
     )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "ok": True,
-        "command_id": "cmd-cancel-me",
-        "cancelled": True,
-        "reason": "",
-    }
+    assert response.json()["id"] == "cmd-cancel-me"
+    assert response.json()["status"] == "cancelled"
     assert queued.status_code == 200
     assert queued.json()["commands"] == []
 
     stale = client.delete(
-        f"/play/world/character/{scenario.character}/commands/missing",
-        params={
-            "controller_id": str(scenario.controller),
-            "controller_generation": scenario.generation + 1,
-            "claim_id": claimed["claim_id"],
-        },
-        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
+        f"/v1/play/claims/{claimed['id']}/commands/missing",
+        headers=claim_headers,
     )
-    assert stale.status_code == 409
+    assert stale.status_code == 200
+    assert stale.json()["status"] == "rejected"
 
 
 async def test_character_chat_endpoint_maps_service_exceptions(scenario):
@@ -2580,24 +2587,32 @@ async def test_character_chat_endpoint_maps_service_exceptions(scenario):
         async def chat(self, character_id, request):
             raise self.exc
 
-    request = CharacterChatRequest(client_id="client-a", message="hello")
-
     for exc, status, detail in (
         (PermissionError("not allowed"), 409, "not allowed"),
         (TypeError("bad shape"), 400, "bad shape"),
         (ValueError("entity is not a character"), 400, "entity is not a character"),
         (ValueError("missing character"), 404, "missing character"),
     ):
-        app = create_app(scenario.actor, character_chat=FakeChat(exc))
-        route = next(
-            route
-            for route in app.routes
-            if route.path == "/play/world/character/{id}/chat"
-        )
-        with pytest.raises(Exception) as raised:
-            await route.endpoint(str(scenario.character), request)
-        assert raised.value.status_code == status
-        assert raised.value.detail == detail
+        current = build_scenario()
+        app = create_app(current.actor, character_chat=FakeChat(exc))
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            claimed = await client.post(
+                "/v1/play/claims",
+                headers={CLIENT_ID_HEADER: "client-a"},
+                json={"character_id": str(current.character)},
+            )
+            response = await client.post(
+                f"/v1/play/claims/{claimed.json()['id']}/jobs",
+                headers={
+                    CLIENT_ID_HEADER: "client-a",
+                    "X-Bunnyland-Claim-Secret": claimed.headers["X-Bunnyland-Claim-Secret"],
+                },
+                json={"kind": "chat", "message": "hello"},
+            )
+        assert response.status_code == status
+        assert response.json()["detail"] == detail
 
 
 def test_fastapi_world_generation_status_endpoint_reports_idle(scenario):
@@ -2605,11 +2620,10 @@ def test_fastapi_world_generation_status_endpoint_reports_idle(scenario):
     app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
-    response = client.get("/admin/world/generation")
+    response = client.get("/v1/admin/world/generators")
 
     assert response.status_code == 200
-    assert response.json()["status"] == "idle"
-    assert response.json()["world_epoch"] == scenario.actor.epoch
+    assert response.json()["generators"] == []
 
 
 def test_fastapi_runtime_endpoint_reports_attached_loop(scenario):
@@ -2625,12 +2639,11 @@ def test_fastapi_runtime_endpoint_reports_attached_loop(scenario):
     app = create_app(scenario.actor, loop=FakeLoop(), with_admin=True)
     client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
-    response = client.get("/admin/world/runtime")
-    queued = client.get(f"/play/world/character/{scenario.character}/commands")
+    response = client.get("/v1/admin/world/runtime")
 
     assert response.status_code == 200
     assert response.json() == {
-        "ok": True,
+        "world_id": response.json()["world_id"],
         "world_epoch": scenario.actor.epoch,
         "paused": True,
         "running": False,
@@ -2641,13 +2654,6 @@ def test_fastapi_runtime_endpoint_reports_attached_loop(scenario):
         "game_seconds_per_tick": 3600.0,
     }
     assert isinstance(response.json()["generated_at_unix"], float)
-    assert queued.status_code == 200
-    queued_body = queued.json()
-    assert queued_body["tick_seconds"] == 2.0
-    assert queued_body["time_scale"] == 1800.0
-    assert queued_body["game_seconds_per_tick"] == 3600.0
-    assert queued_body["next_tick_at_unix"] is None
-    assert isinstance(queued_body["generated_at_unix"], float)
 
 
 def test_fastapi_pause_and_resume_endpoints_update_runtime(scenario):
@@ -2680,8 +2686,8 @@ def test_fastapi_pause_and_resume_endpoints_update_runtime(scenario):
     app = create_app(scenario.actor, loop=loop, with_admin=True)
     client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
-    paused = client.post("/admin/world/pause")
-    resumed = client.post("/admin/world/resume")
+    paused = client.patch("/v1/admin/world/runtime", json={"paused": True})
+    resumed = client.patch("/v1/admin/world/runtime", json={"paused": False})
 
     assert paused.status_code == 200
     assert paused.json()["paused"] is True
@@ -2700,24 +2706,26 @@ def test_fastapi_web_controller_claim_reports_bad_requests(scenario):
     )
 
     missing = client.post(
-        "/play/world/controllers/web/claim",
-        json={"character_id": "entity_999", "client_id": "client-a"},
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"character_id": "entity_999"},
     )
     not_character = client.post(
-        "/play/world/controllers/web/claim",
-        json={"character_id": str(non_character.id), "client_id": "client-a"},
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"character_id": str(non_character.id)},
     )
     blank_client = client.post(
-        "/play/world/controllers/web/claim",
-        json={"character_id": str(scenario.character), "client_id": " "},
+        "/v1/play/claims",
+        json={"character_id": str(scenario.character)},
     )
 
     assert missing.status_code == 404
     assert missing.json()["detail"] == "character does not exist"
     assert not_character.status_code == 400
     assert not_character.json()["detail"] == "entity is not a character"
-    assert blank_client.status_code == 400
-    assert blank_client.json()["detail"] == "client_id must not be blank"
+    assert blank_client.status_code == 403
+    assert blank_client.json()["detail"] == f"{CLIENT_ID_HEADER} header is required"
 
 
 def test_fastapi_web_controller_claim_bounds_client_id_length(scenario):
@@ -2728,8 +2736,9 @@ def test_fastapi_web_controller_claim_bounds_client_id_length(scenario):
     client = testclient.TestClient(app)
 
     oversized = client.post(
-        "/play/world/controllers/web/claim",
-        json={"character_id": str(scenario.character), "client_id": "x" * 200},
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "x" * 200},
+        json={"character_id": str(scenario.character)},
     )
 
     assert oversized.status_code == 422
@@ -2741,18 +2750,20 @@ def test_fastapi_player_client_id_allowlist_gates_claims(scenario):
     client = testclient.TestClient(app)
 
     rejected = client.post(
-        "/play/world/controllers/web/claim",
-        json={"character_id": str(scenario.character), "client_id": "client-b"},
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "client-b"},
+        json={"character_id": str(scenario.character)},
     )
     allowed = client.post(
-        "/play/world/controllers/web/claim",
-        json={"character_id": str(scenario.character), "client_id": "client-a"},
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"character_id": str(scenario.character)},
     )
 
     assert rejected.status_code == 403
     assert rejected.json()["detail"] == "player client_id is not allowed"
-    assert allowed.status_code == 200
-    assert allowed.json()["claim_secret"]
+    assert allowed.status_code == 201
+    assert allowed.headers["X-Bunnyland-Claim-Secret"]
 
 
 def test_fastapi_player_client_id_header_populates_web_claim_request(scenario):
@@ -2761,19 +2772,19 @@ def test_fastapi_player_client_id_header_populates_web_claim_request(scenario):
     client = testclient.TestClient(app)
 
     rejected = client.post(
-        "/play/world/controllers/web/claim",
+        "/v1/play/claims",
         headers={CLIENT_ID_HEADER: "client-b"},
-        json={"character_id": str(scenario.character), "client_id": "client-a"},
+        json={"character_id": str(scenario.character)},
     )
     response = client.post(
-        "/play/world/controllers/web/claim",
+        "/v1/play/claims",
         headers={CLIENT_ID_HEADER: "client-a"},
-        json={"character_id": str(scenario.character), "client_id": "client-b"},
+        json={"character_id": str(scenario.character)},
     )
 
     assert rejected.status_code == 403
     assert rejected.json()["detail"] == "player client_id is not allowed"
-    assert response.status_code == 200
+    assert response.status_code == 201
     controller, _edge = current_controller(
         scenario.actor, scenario.actor.world.get_entity(scenario.character)
     )
@@ -2786,9 +2797,9 @@ def test_fastapi_player_client_id_header_is_validated(scenario):
     client = testclient.TestClient(app)
 
     response = client.post(
-        "/play/world/controllers/web/claim",
+        "/v1/play/claims",
         headers={CLIENT_ID_HEADER: "x" * 200},
-        json={"character_id": str(scenario.character), "client_id": "client-a"},
+        json={"character_id": str(scenario.character)},
     )
 
     assert response.status_code == 422
@@ -2806,8 +2817,8 @@ def test_fastapi_world_generate_translates_start_errors(monkeypatch, scenario):
     client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
     conflict = client.post(
-        "/admin/world/generate",
-        json={"confirm_reset": True, "generator": "oneshot"},
+        "/v1/admin/world/generation-jobs",
+        json={"kind": "world", "confirm_reset": True, "generator": "oneshot"},
     )
 
     assert conflict.status_code == 409
@@ -2819,8 +2830,8 @@ def test_fastapi_world_generate_translates_start_errors(monkeypatch, scenario):
     monkeypatch.setattr(server_app, "start_world_generation", unexpected_error)
 
     failed = client.post(
-        "/admin/world/generate",
-        json={"confirm_reset": True, "generator": "oneshot"},
+        "/v1/admin/world/generation-jobs",
+        json={"kind": "world", "confirm_reset": True, "generator": "oneshot"},
     )
 
     assert failed.status_code == 500
@@ -2832,23 +2843,23 @@ def test_fastapi_world_generate_translates_start_errors(monkeypatch, scenario):
     [
         (
             "generate_room_patch",
-            "/admin/world/generate-room",
-            {"door_entity_id": "entity_999"},
+            "/v1/admin/world/generation-jobs",
+            {"kind": "room", "door_entity_id": "entity_999"},
         ),
         (
             "generate_character_patch",
-            "/admin/world/generate-character",
-            {"room_entity_id": "entity_999"},
+            "/v1/admin/world/generation-jobs",
+            {"kind": "character", "room_entity_id": "entity_999"},
         ),
         (
             "generate_item_patch",
-            "/admin/world/generate-item",
-            {"container_entity_id": "entity_999"},
+            "/v1/admin/world/generation-jobs",
+            {"kind": "item", "container_entity_id": "entity_999"},
         ),
         (
             "generate_event_patch",
-            "/admin/world/generate-event",
-            {"room_entity_id": "entity_999"},
+            "/v1/admin/world/generation-jobs",
+            {"kind": "event", "room_entity_id": "entity_999"},
         ),
     ],
 )
@@ -2884,7 +2895,7 @@ def test_fastapi_save_endpoint_translates_save_errors(monkeypatch, scenario, tmp
     app = create_app(scenario.actor, save_path=tmp_path / "world.json", with_admin=True)
     client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
-    response = client.post("/admin/world/save")
+    response = client.post("/v1/admin/world/checkpoints")
 
     assert response.status_code == 500
     assert response.json()["detail"] == "disk full"
@@ -2895,9 +2906,7 @@ async def test_run_loop_with_api_stops_server_when_game_loop_finishes(
     scenario,
     tmp_path,
 ):
-    monkeypatch.setattr(
-        "bunnyland.server.runtime.UserCredentialStore.validate", lambda _self: None
-    )
+    monkeypatch.setattr("bunnyland.server.runtime.UserCredentialStore.validate", lambda _self: None)
     servers = []
 
     class FakeLoop:
@@ -2947,12 +2956,9 @@ async def test_run_loop_with_api_stops_server_when_game_loop_finishes(
     assert servers[0].exited_after_signal is True
 
 
-async def test_run_loop_with_api_stops_game_when_server_finishes(
-    monkeypatch, scenario, tmp_path
-):
-    monkeypatch.setattr(
-        "bunnyland.server.runtime.UserCredentialStore.validate", lambda _self: None
-    )
+async def test_run_loop_with_api_stops_game_when_server_finishes(monkeypatch, scenario, tmp_path):
+    monkeypatch.setattr("bunnyland.server.runtime.UserCredentialStore.validate", lambda _self: None)
+
     class FakeLoop:
         paused = False
         running = True
@@ -2997,239 +3003,190 @@ async def test_run_loop_with_api_stops_game_when_server_finishes(
     assert loop.stopped is True
 
 
-async def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
+def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
     scenario,
     caplog,
 ):
     caplog.set_level("INFO", logger="bunnyland.server")
     app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == "/play/world/controllers/web/claim")
-
-    first = await route.endpoint(
-        WebControllerClaimRequest(
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    first, secret = _create_claim(
+        client,
+        ClaimCreateRequest(
             character_id=str(scenario.character),
-            client_id="client-a",
             label="toon",
-            claim_id="client-chosen-claim",
             fallback_controller="llm",
             timeout_seconds=600,
-        )
-    )
-    second = await route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            label="toon",
-            claim_id=first.claim_id,
         ),
-        claim_secret=first.claim_secret,
     )
+    reclaimed = client.put(
+        f"/v1/play/claims/{first['id']}",
+        headers=_claim_headers("client-a", secret),
+    )
+    assert reclaimed.status_code == 200
+    second = reclaimed.json()
 
-    assert first.controller_id == second.controller_id
-    assert first.controller_generation == second.controller_generation
-    assert first.controller_generation == scenario.generation + 1
-    assert first.claim_id != "client-chosen-claim"
+    assert first["controller_id"] == second["controller_id"]
+    assert first["controller_generation"] == second["controller_generation"]
+    assert first["controller_generation"] == scenario.generation + 1
 
-    controller = scenario.actor.world.get_entity(parse_entity_id(first.controller_id))
+    controller = scenario.actor.world.get_entity(parse_entity_id(first["controller_id"]))
     assert controller.get_component(WebControllerComponent).client_id == "client-a"
     claim = controller.get_component(ClaimTimeoutComponent)
     assert claim.fallback_controller == "llm"
     assert claim.timeout_seconds == 600
     character = scenario.actor.world.get_entity(scenario.character)
     edge, controller_id = character.get_relationships(ControlledBy)[0]
-    assert str(controller_id) == first.controller_id
-    assert edge.generation == first.controller_generation
+    assert str(controller_id) == first["controller_id"]
+    assert edge.generation == first["controller_generation"]
     log_text = caplog.text
     assert f"character={scenario.character}" in log_text
-    assert f"controller={first.controller_id}" in log_text
+    assert f"controller={first['controller_id']}" in log_text
     assert "client_id=client-a" in log_text
 
 
-async def test_web_controller_claim_unsuspends_character(scenario):
+def test_web_controller_claim_unsuspends_character(scenario):
     app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == "/play/world/controllers/web/claim")
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(SuspendedComponent(reason="offline"))
 
-    await route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            label="toon",
-        )
-    )
+    _create_claim(client, ClaimCreateRequest(character_id=str(scenario.character), label="toon"))
 
     assert not character.has_component(SuspendedComponent)
 
 
-async def test_web_controller_claim_rejects_active_claim_conflicts(scenario):
+def test_web_controller_claim_rejects_active_claim_conflicts(scenario):
     app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == "/play/world/controllers/web/claim")
-
-    claimed = await route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            label="toon",
-        )
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    claimed, secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(scenario.character), label="toon")
     )
 
-    with pytest.raises(Exception) as wrong_secret:
-        await route.endpoint(
-            WebControllerClaimRequest(
-                character_id=str(scenario.character),
-                client_id="client-a",
-                claim_id=claimed.claim_id,
-            ),
-            claim_secret="wrong",
-        )
-    assert wrong_secret.value.status_code == 403
-    assert wrong_secret.value.detail == "invalid claim secret"
+    wrong_secret = client.put(
+        f"/v1/play/claims/{claimed['id']}",
+        headers=_claim_headers("client-a", "wrong"),
+    )
+    assert wrong_secret.status_code == 403
+    assert wrong_secret.json()["detail"] == "invalid claim secret"
 
-    controller = scenario.actor.world.get_entity(parse_entity_id(claimed.controller_id))
+    duplicate_with_wrong_secret = client.post(
+        "/v1/play/claims",
+        headers=_claim_headers("client-a", "wrong"),
+        json=ClaimCreateRequest(character_id=str(scenario.character)).model_dump(mode="json"),
+    )
+    assert duplicate_with_wrong_secret.status_code == 403
+    assert duplicate_with_wrong_secret.json()["detail"] == "invalid claim secret"
+
+    controller = scenario.actor.world.get_entity(parse_entity_id(claimed["controller_id"]))
     add_claim(
         controller,
         client_kind="mcp",
         client_id="client-a",
         character_id=str(scenario.character),
         label="toon",
-        claim_id=claimed.claim_id,
+        claim_id=claimed["id"],
     )
 
-    moved = await route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            claim_id=claimed.claim_id,
-        ),
-        claim_secret=claimed.claim_secret,
+    moved = client.put(
+        f"/v1/play/claims/{claimed['id']}",
+        headers=_claim_headers("client-a", secret),
     )
-    assert moved.claim_id == claimed.claim_id
-    moved_controller = scenario.actor.world.get_entity(parse_entity_id(moved.controller_id))
+    assert moved.status_code == 200
+    assert moved.json()["id"] == claimed["id"]
+    moved_controller = scenario.actor.world.get_entity(
+        parse_entity_id(moved.json()["controller_id"])
+    )
     assert moved_controller.get_component(ClaimedComponent).client_kind == "web"
 
-    with pytest.raises(Exception) as other_client:
-        await route.endpoint(
-            WebControllerClaimRequest(
-                character_id=str(scenario.character),
-                client_id="client-b",
-            ),
-        )
-    assert other_client.value.status_code == 409
-    assert other_client.value.detail == "character is already claimed"
+    other_client = client.post(
+        "/v1/play/claims",
+        headers=_claim_headers("client-b"),
+        json={"character_id": str(scenario.character)},
+    )
+    assert other_client.status_code == 409
+    assert other_client.json()["detail"] == "character is already claimed"
 
 
-async def test_web_controller_claim_ignores_client_controller_claimed_for_other_character(
+def test_web_controller_claim_ignores_client_controller_claimed_for_other_character(
     scenario,
 ):
     app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == "/play/world/controllers/web/claim")
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
     other = spawn_entity(
         scenario.actor.world,
         [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
     )
 
-    first = await route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            label="toon",
-        )
+    first, _secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(scenario.character), label="toon")
     )
-    second = await route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(other.id),
-            client_id="client-a",
-            label="toon",
-        )
+    second, _other_secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(other.id), label="toon")
     )
 
-    assert second.controller_id != first.controller_id
+    assert second["controller_id"] != first["controller_id"]
 
 
-async def test_web_controller_fallback_endpoint_updates_existing_claim(scenario):
+def test_web_controller_fallback_endpoint_updates_existing_claim(scenario):
     app = create_app(scenario.actor)
-    claim_route = next(
-        route for route in app.routes if route.path == "/play/world/controllers/web/claim"
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    claimed, secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(scenario.character), label="toon")
     )
-    fallback_route = next(
-        route for route in app.routes if route.path == "/play/world/controllers/web/fallback"
-    )
-
-    claimed = await claim_route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            label="toon",
-        )
-    )
-    updated = await fallback_route.endpoint(
-        WebControllerFallbackRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            claim_id=claimed.claim_id,
+    response = client.patch(
+        f"/v1/play/claims/{claimed['id']}",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimFallbackUpdate(
+            kind="fallback",
             fallback_controller="llm",
             llm_model="claim-model",
             timeout_seconds=900,
-        ),
-        claim_secret=claimed.claim_secret,
+        ).model_dump(mode="json", exclude_none=True),
     )
+    assert response.status_code == 200
+    updated = response.json()
 
-    assert updated.controller_id == claimed.controller_id
-    assert updated.controller_generation == claimed.controller_generation
-    assert updated.fallback_controller == "llm"
-    assert updated.timeout_seconds == 900
-    controller = scenario.actor.world.get_entity(parse_entity_id(updated.controller_id))
+    assert updated["controller_id"] == claimed["controller_id"]
+    assert updated["controller_generation"] == claimed["controller_generation"]
+    assert updated["fallback_controller"] == "llm"
+    assert updated["timeout_seconds"] == 900
+    controller = scenario.actor.world.get_entity(parse_entity_id(updated["controller_id"]))
     claim = controller.get_component(ClaimTimeoutComponent)
     assert claim.llm_model == "claim-model"
 
 
-async def test_web_command_submission_resumes_idle_claim(scenario):
+def test_web_command_submission_resumes_idle_claim(scenario):
     app = create_app(scenario.actor)
-    claim_route = next(
-        route for route in app.routes if route.path == "/play/world/controllers/web/claim"
-    )
-    idle_route = next(
-        route
-        for route in app.routes
-        if route.path == "/play/world/controllers/web/release-controller"
-    )
-    submit_route = next(route for route in app.routes if route.path == "/play/world/commands")
-
-    claimed = await claim_route.endpoint(
-        WebControllerClaimRequest(
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    claimed, secret = _create_claim(
+        client,
+        ClaimCreateRequest(
             character_id=str(scenario.character),
-            client_id="client-a",
             label="toon",
             fallback_controller="llm",
-        )
-    )
-    idled = await idle_route.endpoint(
-        WebControllerFallbackRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            claim_id=claimed.claim_id,
-            fallback_controller="llm",
         ),
-        claim_secret=claimed.claim_secret,
     )
-    assert idled.controller_id != claimed.controller_id
+    idled = client.patch(
+        f"/v1/play/claims/{claimed['id']}",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimControlUpdate(kind="control", desired="fallback").model_dump(mode="json"),
+    )
+    assert idled.status_code == 200
+    assert idled.json()["controller_id"] != claimed["controller_id"]
 
-    response = await submit_route.endpoint(
-        CommandRequest(
-            character_id=str(scenario.character),
-            controller_id=claimed.controller_id,
-            controller_generation=claimed.controller_generation,
-            claim_id=claimed.claim_id,
-            command_type="say",
-            payload={"text": "back"},
+    response = client.post(
+        f"/v1/play/claims/{claimed['id']}/commands",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimCommandRequest(command_type="say", payload={"text": "back"}).model_dump(
+            mode="json"
         ),
-        claim_secret=claimed.claim_secret,
     )
 
-    assert response.queued is False
-    assert response.reason == "no handler for say"
-    web_controller_id = parse_entity_id(claimed.controller_id)
+    assert response.status_code == 202
+    assert response.json()["status"] == "rejected"
+    assert response.json()["reason"] == "no handler for say"
+    web_controller_id = parse_entity_id(claimed["controller_id"])
     assert web_controller_id is not None
     assert scenario.actor.current_generation(scenario.character, web_controller_id) is not None
     assert (
@@ -3237,98 +3194,74 @@ async def test_web_command_submission_resumes_idle_claim(scenario):
             scenario.character,
             web_controller_id,
         )
-        != claimed.controller_generation
+        != claimed["controller_generation"]
     )
 
 
-async def test_web_command_submission_with_no_controller_returns_stale_generation(scenario):
+def test_web_command_submission_with_no_controller_returns_stale_generation(scenario):
     app = create_app(scenario.actor)
-    submit_route = next(route for route in app.routes if route.path == "/play/world/commands")
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
     character = scenario.actor.world.get_entity(scenario.character)
     character.remove_relationship(ControlledBy, scenario.controller)
 
-    with pytest.raises(Exception) as exc:
-        await submit_route.endpoint(
-            CommandRequest(
-                character_id=str(scenario.character),
-                controller_id=str(scenario.controller),
-                controller_generation=scenario.generation,
-                command_type="say",
-                payload={"text": "hello"},
-            )
-        )
-
-    assert exc.value.status_code == 403
-    assert exc.value.detail == "character is not claimed"
-
-
-async def test_web_command_submission_keeps_active_matching_web_claim(scenario):
-    app = create_app(scenario.actor)
-    claim_route = next(
-        route for route in app.routes if route.path == "/play/world/controllers/web/claim"
-    )
-    submit_route = next(route for route in app.routes if route.path == "/play/world/commands")
-    claimed = await claim_route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-        )
-    )
-
-    response = await submit_route.endpoint(
-        CommandRequest(
-            character_id=str(scenario.character),
-            controller_id=claimed.controller_id,
-            controller_generation=claimed.controller_generation,
-            claim_id=claimed.claim_id,
-            command_type="say",
-            payload={"text": "hello"},
+    response = client.post(
+        "/v1/play/claims/missing/commands",
+        headers=_claim_headers("client-a", "wrong"),
+        json=ClaimCommandRequest(command_type="say", payload={"text": "hello"}).model_dump(
+            mode="json"
         ),
-        claim_secret=claimed.claim_secret,
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "claim does not exist"
+
+
+def test_web_command_submission_keeps_active_matching_web_claim(scenario):
+    app = create_app(scenario.actor)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    claimed, secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(scenario.character))
     )
 
-    assert response.reason == "no handler for say"
+    response = client.post(
+        f"/v1/play/claims/{claimed['id']}/commands",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimCommandRequest(command_type="say", payload={"text": "hello"}).model_dump(
+            mode="json"
+        ),
+    )
+
+    assert response.status_code == 202
+    assert response.json()["reason"] == "no handler for say"
     assert (
         scenario.actor.current_generation(
             scenario.character,
-            parse_entity_id(claimed.controller_id),
+            parse_entity_id(claimed["controller_id"]),
         )
-        == claimed.controller_generation
+        == claimed["controller_generation"]
     )
 
 
-async def test_web_command_submission_rejects_unclaimed_and_resumes_portable_claims(
+def test_web_command_submission_rejects_unclaimed_and_resumes_portable_claims(
     scenario,
 ):
     app = create_app(scenario.actor)
-    submit_route = next(route for route in app.routes if route.path == "/play/world/commands")
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
     character = scenario.actor.world.get_entity(scenario.character)
 
-    with pytest.raises(Exception) as no_claim:
-        await submit_route.endpoint(
-            CommandRequest(
-                character_id=str(scenario.character),
-                controller_id=str(scenario.controller),
-                controller_generation=scenario.generation,
-                command_type="say",
-                payload={"text": "hello"},
-            )
-        )
-    assert no_claim.value.status_code == 403
-    assert no_claim.value.detail == "character is not claimed"
-
-    claim_route = next(
-        route for route in app.routes if route.path == "/play/world/controllers/web/claim"
+    no_claim = client.post(
+        "/v1/play/claims/missing/commands",
+        headers=_claim_headers("client-a", "wrong"),
+        json=ClaimCommandRequest(command_type="say", payload={"text": "hello"}).model_dump(
+            mode="json"
+        ),
     )
-    claimed = await claim_route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            label="toon",
-        )
+    assert no_claim.status_code == 404
+
+    claimed, secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(scenario.character), label="toon")
     )
     controller = actor_controller = scenario.actor.world.get_entity(
-        parse_entity_id(claimed.controller_id)
+        parse_entity_id(claimed["controller_id"])
     )
     controller.remove_component(WebControllerComponent)
     controller.add_component(MCPControllerComponent(client_id="client-a", label="toon"))
@@ -3338,21 +3271,18 @@ async def test_web_command_submission_rejects_unclaimed_and_resumes_portable_cla
         client_id="client-a",
         character_id=str(scenario.character),
         label="toon",
-        claim_id=claimed.claim_id,
+        claim_id=claimed["id"],
     )
-    non_web = await submit_route.endpoint(
-        CommandRequest(
-            character_id=str(scenario.character),
-            controller_id=claimed.controller_id,
-            controller_generation=claimed.controller_generation,
-            claim_id=claimed.claim_id,
-            command_type="say",
-            payload={"text": "hello"},
+    non_web = client.post(
+        f"/v1/play/claims/{claimed['id']}/commands",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimCommandRequest(command_type="say", payload={"text": "hello"}).model_dump(
+            mode="json"
         ),
-        claim_secret=claimed.claim_secret,
     )
 
-    assert non_web.reason == "no handler for say"
+    assert non_web.status_code == 202
+    assert non_web.json()["reason"] == "no handler for say"
     active_controller_id = character.get_relationships(ControlledBy)[0][1]
     active_controller = scenario.actor.world.get_entity(active_controller_id)
     assert active_controller.id != actor_controller.id
@@ -3360,76 +3290,55 @@ async def test_web_command_submission_rejects_unclaimed_and_resumes_portable_cla
     assert active_controller.get_component(ClaimedComponent).client_kind == "web"
 
 
-async def test_web_command_submission_rejects_mismatched_active_web_claim(scenario):
+def test_web_command_submission_rejects_mismatched_active_web_claim(scenario):
     app = create_app(scenario.actor)
-    submit_route = next(route for route in app.routes if route.path == "/play/world/commands")
-    claim_route = next(
-        route for route in app.routes if route.path == "/play/world/controllers/web/claim"
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    claimed, secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(scenario.character))
     )
-    claimed = await claim_route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-        )
-    )
-    web = scenario.actor.world.get_entity(parse_entity_id(claimed.controller_id))
+    web = scenario.actor.world.get_entity(parse_entity_id(claimed["controller_id"]))
     replace_component(web, WebControllerComponent(client_id="wrong-client"))
 
-    with pytest.raises(Exception) as exc:
-        await submit_route.endpoint(
-            CommandRequest(
-                character_id=str(scenario.character),
-                controller_id=claimed.controller_id,
-                controller_generation=claimed.controller_generation,
-                claim_id=claimed.claim_id,
-                command_type="say",
-                payload={"text": "hello"},
-            ),
-            claim_secret=claimed.claim_secret,
-        )
+    response = client.post(
+        f"/v1/play/claims/{claimed['id']}/commands",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimCommandRequest(command_type="say", payload={"text": "hello"}).model_dump(
+            mode="json"
+        ),
+    )
 
-    assert exc.value.status_code == 409
-    assert exc.value.detail == "claim is not active for this web client"
+    assert response.status_code == 409
+    assert response.json()["detail"] == "claim is not active for this web client"
 
 
-async def test_web_command_submission_resumes_idle_claim_with_new_web_controller(scenario):
+def test_web_command_submission_resumes_idle_claim_with_new_web_controller(scenario):
     app = create_app(scenario.actor)
-    submit_route = next(route for route in app.routes if route.path == "/play/world/commands")
-    claim_route = next(
-        route for route in app.routes if route.path == "/play/world/controllers/web/claim"
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    claimed, secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(scenario.character), label="toon")
     )
-    claimed = await claim_route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            label="toon",
-        )
-    )
-    active = scenario.actor.world.get_entity(parse_entity_id(claimed.controller_id))
+    active = scenario.actor.world.get_entity(parse_entity_id(claimed["controller_id"]))
     idle = spawn_entity(
         scenario.actor.world,
         [LLMControllerComponent(profile_name="idle", model="claim-model")],
     )
     transfer_claim(active, idle)
     active.remove_component(WebControllerComponent)
-    generation = scenario.actor.assign_controller(scenario.character, idle.id)
+    scenario.actor.assign_controller(scenario.character, idle.id)
     scenario.actor.world.get_entity(scenario.character).add_component(
         SuspendedComponent(reason="idle")
     )
 
-    response = await submit_route.endpoint(
-        CommandRequest(
-            character_id=str(scenario.character),
-            controller_id=str(idle.id),
-            controller_generation=generation,
-            claim_id=claimed.claim_id,
-            command_type="say",
-            payload={"text": "back"},
+    response = client.post(
+        f"/v1/play/claims/{claimed['id']}/commands",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimCommandRequest(command_type="say", payload={"text": "back"}).model_dump(
+            mode="json"
         ),
-        claim_secret=claimed.claim_secret,
     )
 
-    assert response.reason == "no handler for say"
+    assert response.status_code == 202
+    assert response.json()["reason"] == "no handler for say"
     character = scenario.actor.world.get_entity(scenario.character)
     _edge, controller_id = character.get_relationships(ControlledBy)[0]
     assert controller_id != idle.id
@@ -3437,37 +3346,24 @@ async def test_web_command_submission_resumes_idle_claim_with_new_web_controller
     assert not character.has_component(SuspendedComponent)
 
 
-async def test_release_web_controller_to_llm_unsuspends_character(scenario):
+def test_release_web_controller_to_llm_unsuspends_character(scenario):
     app = create_app(scenario.actor)
-    claim_route = next(
-        route for route in app.routes if route.path == "/play/world/controllers/web/claim"
-    )
-    release_route = next(
-        route
-        for route in app.routes
-        if route.path == "/play/world/controllers/web/release-controller"
-    )
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
     character = scenario.actor.world.get_entity(scenario.character)
-    claimed = await claim_route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            fallback_controller="llm",
-        )
+    claimed, secret = _create_claim(
+        client,
+        ClaimCreateRequest(character_id=str(scenario.character), fallback_controller="llm"),
     )
     character.add_component(SuspendedComponent(reason="idle"))
 
-    released = await release_route.endpoint(
-        WebControllerFallbackRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            claim_id=claimed.claim_id,
-            fallback_controller="llm",
-        ),
-        claim_secret=claimed.claim_secret,
+    released = client.patch(
+        f"/v1/play/claims/{claimed['id']}",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimControlUpdate(kind="control", desired="fallback").model_dump(mode="json"),
     )
 
-    assert released.fallback_controller == "llm"
+    assert released.status_code == 200
+    assert released.json()["fallback_controller"] == "llm"
     assert not character.has_component(SuspendedComponent)
 
 
@@ -3476,34 +3372,27 @@ def test_fastapi_claimed_character_private_views_require_claim_secret(scenario):
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
 
-    claim = client.post(
-        "/play/world/controllers/web/claim",
-        json={
-            "character_id": str(scenario.character),
-            "client_id": "client-a",
-            "label": "toon",
-        },
-    ).json()
+    claim, secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(scenario.character), label="toon")
+    )
 
     missing_secret = client.get(
-        f"/play/world/character/{scenario.character}",
-        params={"claim_id": claim["claim_id"]},
+        f"/v1/play/claims/{claim['id']}/projection",
+        headers=_claim_headers("client-a"),
     )
     wrong_claim = client.get(
-        f"/play/world/character/{scenario.character}/commands",
-        params={"claim_id": "wrong"},
-        headers={"X-Bunnyland-Claim-Secret": claim["claim_secret"]},
+        "/v1/play/claims/wrong/projection",
+        headers=_claim_headers("client-a", secret),
     )
     allowed = client.get(
-        f"/play/world/character/{scenario.character}",
-        params={"claim_id": claim["claim_id"]},
-        headers={"X-Bunnyland-Claim-Secret": claim["claim_secret"]},
+        f"/v1/play/claims/{claim['id']}/projection",
+        headers=_claim_headers("client-a", secret),
     )
 
     assert missing_secret.status_code == 403
     assert missing_secret.json()["detail"] == "invalid claim secret"
-    assert wrong_claim.status_code == 403
-    assert wrong_claim.json()["detail"] == "invalid claim id"
+    assert wrong_claim.status_code == 404
+    assert wrong_claim.json()["detail"] == "claim does not exist"
     assert allowed.status_code == 200
 
 
@@ -3512,28 +3401,20 @@ def test_fastapi_release_claim_revokes_private_access(scenario):
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
 
-    claim = client.post(
-        "/play/world/controllers/web/claim",
-        json={
-            "character_id": str(scenario.character),
-            "client_id": "client-a",
-            "label": "toon",
-        },
-    ).json()
-    released = client.post(
-        "/play/world/controllers/web/release-claim",
-        headers={"X-Bunnyland-Claim-Secret": claim["claim_secret"]},
-        json={
-            "character_id": str(scenario.character),
-            "client_id": "client-a",
-            "claim_id": claim["claim_id"],
-        },
+    claim, secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(scenario.character), label="toon")
     )
-    open_view = client.get(f"/play/world/character/{scenario.character}")
+    released = client.delete(
+        f"/v1/play/claims/{claim['id']}",
+        headers=_claim_headers("client-a", secret),
+    )
+    revoked = client.get(
+        f"/v1/play/claims/{claim['id']}/projection",
+        headers=_claim_headers("client-a", secret),
+    )
 
-    assert released.status_code == 200
-    assert released.json()["claim_id"] == claim["claim_id"]
-    assert open_view.status_code == 200
+    assert released.status_code == 204
+    assert revoked.status_code == 404
 
 
 def test_fastapi_player_client_id_header_keeps_claim_secret_guard(scenario):
@@ -3541,43 +3422,21 @@ def test_fastapi_player_client_id_header_keeps_claim_secret_guard(scenario):
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
 
-    claim = client.post(
-        "/play/world/controllers/web/claim",
-        json={
-            "character_id": str(scenario.character),
-            "client_id": "client-a",
-            "label": "toon",
-        },
-    ).json()
-    wrong_secret = client.post(
-        "/play/world/controllers/web/release-claim",
-        headers={
-            CLIENT_ID_HEADER: "client-a",
-            "X-Bunnyland-Claim-Secret": "wrong",
-        },
-        json={
-            "character_id": str(scenario.character),
-            "client_id": "client-b",
-            "claim_id": claim["claim_id"],
-        },
+    claim, secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(scenario.character), label="toon")
     )
-    released = client.post(
-        "/play/world/controllers/web/release-claim",
-        headers={
-            CLIENT_ID_HEADER: "client-a",
-            "X-Bunnyland-Claim-Secret": claim["claim_secret"],
-        },
-        json={
-            "character_id": str(scenario.character),
-            "client_id": "client-b",
-            "claim_id": claim["claim_id"],
-        },
+    wrong_secret = client.delete(
+        f"/v1/play/claims/{claim['id']}",
+        headers=_claim_headers("client-a", "wrong"),
+    )
+    released = client.delete(
+        f"/v1/play/claims/{claim['id']}",
+        headers=_claim_headers("client-a", secret),
     )
 
     assert wrong_secret.status_code == 403
     assert wrong_secret.json()["detail"] == "invalid claim secret"
-    assert released.status_code == 200
-    assert released.json()["claim_id"] == claim["claim_id"]
+    assert released.status_code == 204
 
 
 def test_fastapi_release_controller_to_suspended_fallback_retains_claim(scenario):
@@ -3585,164 +3444,120 @@ def test_fastapi_release_controller_to_suspended_fallback_retains_claim(scenario
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
 
-    claim = client.post(
-        "/play/world/controllers/web/claim",
-        json={
-            "character_id": str(scenario.character),
-            "client_id": "client-a",
-            "fallback_controller": "suspend",
-        },
-    ).json()
-    idled = client.post(
-        "/play/world/controllers/web/release-controller",
-        headers={"X-Bunnyland-Claim-Secret": claim["claim_secret"]},
-        json={
-            "character_id": str(scenario.character),
-            "client_id": "client-a",
-            "claim_id": claim["claim_id"],
-            "fallback_controller": "suspend",
-        },
+    claim, secret = _create_claim(
+        client,
+        ClaimCreateRequest(character_id=str(scenario.character), fallback_controller="suspend"),
+    )
+    idled = client.patch(
+        f"/v1/play/claims/{claim['id']}",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimControlUpdate(kind="control", desired="fallback").model_dump(mode="json"),
     )
     private_view = client.get(
-        f"/play/world/character/{scenario.character}",
-        params={"claim_id": claim["claim_id"]},
-        headers={"X-Bunnyland-Claim-Secret": claim["claim_secret"]},
+        f"/v1/play/claims/{claim['id']}/projection",
+        headers=_claim_headers("client-a", secret),
     )
 
     assert idled.status_code == 200
-    assert idled.json()["fallback_controller"] == "suspended"
-    assert idled.json()["claim_id"] == claim["claim_id"]
+    assert idled.json()["fallback_controller"] == "suspend"
+    assert idled.json()["id"] == claim["id"]
     assert private_view.status_code == 200
 
 
-async def test_web_controller_fallback_endpoint_reports_bad_requests(scenario):
+def test_web_controller_fallback_endpoint_reports_bad_requests(scenario):
     app = create_app(scenario.actor)
-    claim_route = next(
-        route for route in app.routes if route.path == "/play/world/controllers/web/claim"
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+
+    missing_character = client.post(
+        "/v1/play/claims",
+        headers=_claim_headers("client-a"),
+        json={"character_id": "entity_999"},
     )
-    fallback_route = next(
-        route for route in app.routes if route.path == "/play/world/controllers/web/fallback"
+    assert missing_character.status_code == 404
+    assert missing_character.json()["detail"] == "character does not exist"
+
+    blank_client = client.post(
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: " "},
+        json={"character_id": str(scenario.character)},
     )
-    release_route = next(
-        route
-        for route in app.routes
-        if route.path == "/play/world/controllers/web/release-controller"
+    assert blank_client.status_code == 403
+
+    claimed, secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(scenario.character))
     )
-    other = spawn_entity(
-        scenario.actor.world,
-        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    wrong_client = client.patch(
+        f"/v1/play/claims/{claimed['id']}",
+        headers=_claim_headers("client-b", secret),
+        json=ClaimFallbackUpdate(kind="fallback", fallback_controller="llm").model_dump(
+            mode="json", exclude_none=True
+        ),
     )
+    assert wrong_client.status_code == 403
+    assert wrong_client.json()["detail"] == "claim belongs to another client"
 
-    with pytest.raises(Exception) as missing_character:
-        await fallback_route.endpoint(
-            WebControllerFallbackRequest(character_id="entity_999", client_id="client-a")
-        )
-    assert missing_character.value.status_code == 404
-    assert missing_character.value.detail == "character does not exist"
-
-    with pytest.raises(Exception) as blank_client:
-        await fallback_route.endpoint(
-            WebControllerFallbackRequest(
-                character_id=str(scenario.character),
-                client_id=" ",
-            )
-        )
-    assert blank_client.value.status_code == 400
-    assert blank_client.value.detail == "client_id must not be blank"
-
-    with pytest.raises(Exception) as missing_controller:
-        await fallback_route.endpoint(
-            WebControllerFallbackRequest(
-                character_id=str(scenario.character),
-                client_id="client-a",
-            )
-        )
-    assert missing_controller.value.status_code == 409
-    assert missing_controller.value.detail == "character is not claimed"
-
-    claimed = await claim_route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-        )
+    wrong_secret = client.patch(
+        f"/v1/play/claims/{claimed['id']}",
+        headers=_claim_headers("client-a", "wrong"),
+        json=ClaimFallbackUpdate(kind="fallback", fallback_controller="llm").model_dump(
+            mode="json", exclude_none=True
+        ),
     )
-    with pytest.raises(Exception) as wrong_character:
-        await fallback_route.endpoint(
-            WebControllerFallbackRequest(
-                character_id=str(other.id),
-                client_id="client-a",
-                claim_id=claimed.claim_id,
-            ),
-            claim_secret=claimed.claim_secret,
-        )
-    assert wrong_character.value.status_code == 409
-    assert wrong_character.value.detail == "character has no controller"
-
-    with pytest.raises(Exception) as wrong_client:
-        await fallback_route.endpoint(
-            WebControllerFallbackRequest(
-                character_id=str(scenario.character),
-                client_id="client-b",
-                claim_id=claimed.claim_id,
-            ),
-            claim_secret=claimed.claim_secret,
-        )
-    assert wrong_client.value.status_code == 409
-    assert wrong_client.value.detail == "character is claimed by another client"
-
-    with pytest.raises(Exception) as wrong_secret:
-        await fallback_route.endpoint(
-            WebControllerFallbackRequest(
-                character_id=str(scenario.character),
-                client_id="client-a",
-                claim_id=claimed.claim_id,
-            ),
-            claim_secret="wrong",
-        )
-    assert wrong_secret.value.status_code == 403
-    assert wrong_secret.value.detail == "invalid claim secret"
+    assert wrong_secret.status_code == 403
+    assert wrong_secret.json()["detail"] == "invalid claim secret"
 
     unknown = spawn_entity(scenario.actor.world)
-    with pytest.raises(Exception) as unknown_controller:
-        await release_route.endpoint(
-            WebControllerFallbackRequest(
-                character_id=str(scenario.character),
-                client_id="client-a",
-                claim_id=claimed.claim_id,
-                fallback_controller=str(unknown.id),
-            ),
-            claim_secret=claimed.claim_secret,
-        )
-    assert unknown_controller.value.status_code == 400
-    assert unknown_controller.value.detail == "entity is not a controller"
+    unknown_controller = client.patch(
+        f"/v1/play/claims/{claimed['id']}",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimFallbackUpdate(kind="fallback", fallback_controller=str(unknown.id)).model_dump(
+            mode="json", exclude_none=True
+        ),
+    )
+    assert unknown_controller.status_code == 200
+    unknown_release = client.patch(
+        f"/v1/play/claims/{claimed['id']}",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimControlUpdate(kind="control", desired="fallback").model_dump(mode="json"),
+    )
+    assert unknown_release.status_code == 400
+    assert unknown_release.json()["detail"] == "entity is not a controller"
 
-    with pytest.raises(Exception) as invalid_fallback:
-        await release_route.endpoint(
-            WebControllerFallbackRequest(
-                character_id=str(scenario.character),
-                client_id="client-a",
-                claim_id=claimed.claim_id,
-                fallback_controller="manual",
-            ),
-            claim_secret=claimed.claim_secret,
-        )
-    assert invalid_fallback.value.status_code == 400
-    assert invalid_fallback.value.detail == "fallback_controller is not a controller"
+    invalid_fallback = client.patch(
+        f"/v1/play/claims/{claimed['id']}",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimFallbackUpdate(kind="fallback", fallback_controller="manual").model_dump(
+            mode="json", exclude_none=True
+        ),
+    )
+    assert invalid_fallback.status_code == 200
+    invalid_release = client.patch(
+        f"/v1/play/claims/{claimed['id']}",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimControlUpdate(kind="control", desired="fallback").model_dump(mode="json"),
+    )
+    assert invalid_release.status_code == 400
+    assert invalid_release.json()["detail"] == "fallback_controller is not a controller"
 
     existing = spawn_entity(
         scenario.actor.world,
         [LLMControllerComponent(profile_name="idle", model="claim-model")],
     )
-    released = await release_route.endpoint(
-        WebControllerFallbackRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            claim_id=claimed.claim_id,
-            fallback_controller=str(existing.id),
+    configured = client.patch(
+        f"/v1/play/claims/{claimed['id']}",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimFallbackUpdate(kind="fallback", fallback_controller=str(existing.id)).model_dump(
+            mode="json", exclude_none=True
         ),
-        claim_secret=claimed.claim_secret,
     )
-    assert released.controller_id == str(existing.id)
+    assert configured.status_code == 200
+    released = client.patch(
+        f"/v1/play/claims/{claimed['id']}",
+        headers=_claim_headers("client-a", secret),
+        json=ClaimControlUpdate(kind="control", desired="fallback").model_dump(mode="json"),
+    )
+    assert released.status_code == 200
+    assert released.json()["controller_id"] == str(existing.id)
 
 
 def test_admin_save_uses_configured_path_and_meta(scenario, tmp_path):
@@ -3762,26 +3577,45 @@ def test_admin_save_uses_configured_path_and_meta(scenario, tmp_path):
     assert meta.seed == "moss"
 
 
-async def test_admin_runtime_endpoints_require_attached_loop(scenario):
-    app = create_app(scenario.actor)
+def test_idle_generation_status_reports_current_epoch(scenario):
+    status = server_admin.idle_generation_status(scenario.actor)
 
-    for path in ("/admin/world/runtime", "/admin/world/pause", "/admin/world/resume"):
-        route = next(route for route in app.routes if route.path == path)
-        with pytest.raises(Exception) as exc:
-            await route.endpoint()
-        assert exc.value.status_code == 409
-        assert exc.value.detail == "server runtime is not attached"
+    assert status.status == "idle"
+    assert status.world_epoch == scenario.actor.epoch
 
 
-async def test_admin_save_endpoint_requires_configured_path(scenario):
-    app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == "/admin/world/save")
+def test_admin_runtime_endpoints_require_attached_loop(scenario):
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
 
-    with pytest.raises(Exception) as exc:
-        await route.endpoint()
+    responses = [
+        client.get("/v1/admin/world/runtime"),
+        client.patch(
+            "/v1/admin/world/runtime",
+            json=RuntimePatchRequest(paused=True).model_dump(mode="json"),
+        ),
+        client.patch(
+            "/v1/admin/world/runtime",
+            json=RuntimePatchRequest(paused=False).model_dump(mode="json"),
+        ),
+    ]
+    assert [response.status_code for response in responses] == [409, 409, 409]
+    assert all(
+        response.json()["detail"] == "server runtime is not attached" for response in responses
+    )
 
-    assert exc.value.status_code == 409
-    assert exc.value.detail == "server was not started with --save"
+
+def test_admin_save_endpoint_requires_configured_path(scenario):
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+
+    response = client.post(
+        "/v1/admin/world/checkpoints",
+        json=CheckpointRequest().model_dump(mode="json"),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "server was not started with --save"
 
 
 async def test_admin_world_generate_replaces_world_and_updates_metadata(scenario):
@@ -3987,73 +3821,85 @@ async def test_start_world_generation_publishes_failure_when_generation_raises(
 def test_admin_world_generators_lists_enabled_generators(scenario):
     plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
     registry = collect_generators(plugins)
-    app = create_app(scenario.actor, plugins=plugins)
+    app = create_app(scenario.actor, plugins=plugins, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
     paths = {route.path for route in app.routes}
-    route = next(route for route in app.routes if route.path == "/admin/world/generators")
-    response = asyncio.run(route.endpoint())
-    generators = {item.name: item for item in response.generators}
+    response = client.get("/v1/admin/world/generators")
+    assert response.status_code == 200
+    generators = {item["name"]: item for item in response.json()["generators"]}
 
-    assert "/admin/world/generators" in paths
-    assert "/admin/world/generation" in paths
+    assert "/v1/admin/world/generators" in paths
+    assert "/v1/admin/world/generation-jobs/{job_id}" in paths
     assert {"empty", "oneshot", "recursive"} <= set(registry)
-    assert generators["empty"].uses_seed is False
-    assert generators["empty"].group == "administrative"
-    assert generators["oneshot"].uses_seed is True
-    assert generators["oneshot"].group == "algorithmic"
-    assert generators["recursive"].uses_seed is True
-    assert generators["recursive"].group == "algorithmic"
+    assert generators["empty"]["uses_seed"] is False
+    assert generators["empty"]["group"] == "administrative"
+    assert generators["oneshot"]["uses_seed"] is True
+    assert generators["oneshot"]["group"] == "algorithmic"
+    assert generators["recursive"]["uses_seed"] is True
+    assert generators["recursive"]["group"] == "algorithmic"
 
 
-async def test_admin_world_generate_defaults_to_recursive_when_available(scenario):
+def test_admin_world_generate_defaults_to_recursive_when_available(scenario):
     plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
     meta = WorldMeta(seed="old seed", generator="oneshot")
-    app = create_app(scenario.actor, meta=meta, plugins=plugins)
-    route = next(route for route in app.routes if route.path == "/admin/world/generate")
-
-    response = await route.endpoint(WorldGenerateRequest(confirm_reset=True, seed="rain port"))
-
-    assert response.generator == "recursive"
-
-
-async def test_admin_world_generate_endpoint_reports_precondition_errors(scenario):
-    app_without_plugins = create_app(scenario.actor)
-    route_without_plugins = next(
-        route for route in app_without_plugins.routes if route.path == "/admin/world/generate"
+    app = create_app(scenario.actor, meta=meta, plugins=plugins, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+    response = client.post(
+        "/v1/admin/world/generation-jobs",
+        json=GenerateWorldRequest(kind="world", confirm_reset=True, seed="rain port").model_dump(
+            mode="json"
+        ),
     )
 
-    with pytest.raises(Exception) as unconfirmed:
-        await route_without_plugins.endpoint(WorldGenerateRequest())
-    assert unconfirmed.value.status_code == 400
-    assert unconfirmed.value.detail == "confirm_reset must be true"
+    assert response.status_code == 202
+    assert response.json()["result"]["generator"] == "recursive"
 
-    with pytest.raises(Exception) as no_registry:
-        await route_without_plugins.endpoint(WorldGenerateRequest(confirm_reset=True))
-    assert no_registry.value.status_code == 409
-    assert no_registry.value.detail == "server was not started with a world generator registry"
+
+def test_admin_world_generate_endpoint_reports_precondition_errors(scenario):
+    app_without_plugins = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(
+        app_without_plugins, headers=_ADMIN_HEADERS
+    )
+
+    unconfirmed = client.post(
+        "/v1/admin/world/generation-jobs",
+        json=GenerateWorldRequest(kind="world").model_dump(mode="json"),
+    )
+    assert unconfirmed.status_code == 400
+    assert unconfirmed.json()["detail"] == "confirm_reset must be true"
+
+    no_registry = client.post(
+        "/v1/admin/world/generation-jobs",
+        json=GenerateWorldRequest(kind="world", confirm_reset=True).model_dump(mode="json"),
+    )
+    assert no_registry.status_code == 409
+    assert no_registry.json()["detail"] == (
+        "server was not started with a world generator registry"
+    )
 
     plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
-    app = create_app(scenario.actor, plugins=plugins)
-    route = next(route for route in app.routes if route.path == "/admin/world/generate")
+    app = create_app(scenario.actor, plugins=plugins, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+    unknown = client.post(
+        "/v1/admin/world/generation-jobs",
+        json=GenerateWorldRequest(kind="world", confirm_reset=True, generator="missing").model_dump(
+            mode="json"
+        ),
+    )
+    assert unknown.status_code == 400
+    assert "unknown generator 'missing'" in unknown.json()["detail"]
 
-    with pytest.raises(Exception) as unknown:
-        await route.endpoint(WorldGenerateRequest(confirm_reset=True, generator="missing"))
-    assert unknown.value.status_code == 400
-    assert "unknown generator 'missing'" in unknown.value.detail
 
+def test_admin_patch_endpoint_translates_patch_errors_to_http_400(scenario):
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+    request = WorldPatchRequest.model_validate(
+        {"operations": [{"op": "delete_entity", "entity_id": "entity_999"}]}
+    )
+    response = client.patch("/v1/admin/world", json=request.model_dump(mode="json"))
 
-async def test_admin_patch_endpoint_translates_patch_errors_to_http_400(scenario):
-    app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == "/admin/world")
-
-    with pytest.raises(Exception) as exc:
-        await route.endpoint(
-            WorldPatchRequest.model_validate(
-                {"operations": [{"op": "delete_entity", "entity_id": "entity_999"}]}
-            )
-        )
-
-    assert exc.value.status_code == 400
-    assert exc.value.detail == "entity 'entity_999' does not exist"
+    assert response.status_code == 400
+    assert response.json()["detail"] == "entity 'entity_999' does not exist"
 
 
 def test_fastapi_list_controller_definitions_endpoint(scenario):
@@ -4061,7 +3907,7 @@ def test_fastapi_list_controller_definitions_endpoint(scenario):
     app = create_app(scenario.actor, with_admin=True)
     client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
-    response = client.get("/admin/controllers/definitions")
+    response = client.get("/v1/admin/controller-definitions")
 
     assert response.status_code == 200
     body = response.json()
@@ -4070,7 +3916,7 @@ def test_fastapi_list_controller_definitions_endpoint(scenario):
     assert "stored" in body
 
 
-async def test_admin_controller_assign_to_unsuspended_character(scenario):
+def test_admin_controller_assign_to_unsuspended_character(scenario):
     # The character starts unsuspended, so the assign path skips the SuspendedComponent
     # removal branch entirely (the False side of that guard).
     controller = spawn_entity(
@@ -4079,16 +3925,14 @@ async def test_admin_controller_assign_to_unsuspended_character(scenario):
     )
     assert not scenario.actor.world.get_entity(scenario.character).has_component(SuspendedComponent)
 
-    app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == "/admin/controllers/assign")
-    response = await route.endpoint(
-        ControllerAssignmentRequest(
-            character_id=str(scenario.character),
-            controller_id=str(controller.id),
-        )
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+    response = client.put(
+        f"/v1/admin/characters/{scenario.character}/controller",
+        json=ControllerAssignment(controller_id=str(controller.id)).model_dump(mode="json"),
     )
 
-    assert response.ok is True
+    assert response.status_code == 200
     character = scenario.actor.world.get_entity(scenario.character)
     assert not character.has_component(SuspendedComponent)
     _edge, target = character.get_relationships(ControlledBy)[0]
@@ -4107,7 +3951,7 @@ def test_fastapi_dm_projection_translates_value_errors_to_400(scenario):
     client = testclient.TestClient(app)
 
     # A whitespace-only dm id strips to empty and raises ValueError from the serializer.
-    response = client.get("/admin/world/dm/%20", headers=_ADMIN_HEADERS)
+    response = client.get("/v1/admin/characters/%20", headers=_ADMIN_HEADERS)
 
     assert response.status_code == 400
     assert response.json()["detail"] == "dm id must not be blank"
@@ -4123,10 +3967,10 @@ def test_runtime_timing_projects_next_tick_for_running_loop(scenario):
         time_scale = 60.0
         next_tick_at_unix = None
 
-    app = create_app(scenario.actor, loop=RunningLoop())
-    client = testclient.TestClient(app)
+    app = create_app(scenario.actor, loop=RunningLoop(), with_admin=True)
+    client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
-    body = client.get(f"/play/world/character/{scenario.character}/commands").json()
+    body = client.get("/v1/admin/world/runtime").json()
 
     # A running, unpaused loop with no explicit next_tick computes one from now + tick_seconds.
     assert body["next_tick_at_unix"] is not None
@@ -4137,139 +3981,130 @@ def test_fastapi_cancel_command_rejects_missing_and_non_character(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
-    non_character = spawn_entity(
-        scenario.actor.world, [IdentityComponent(name="boulder", kind="object")]
-    )
-
     missing = client.delete(
-        "/play/world/character/entity_999/commands/cmd-x",
-        params={
-            "controller_id": str(scenario.controller),
-            "controller_generation": scenario.generation,
-        },
-    )
-    not_character = client.delete(
-        f"/play/world/character/{non_character.id}/commands/cmd-x",
-        params={
-            "controller_id": str(scenario.controller),
-            "controller_generation": scenario.generation,
-        },
+        "/v1/play/claims/missing/commands/cmd-x",
+        headers=_claim_headers("client-a", "wrong"),
     )
 
     assert missing.status_code == 404
-    assert missing.json()["detail"] == "character does not exist"
-    assert not_character.status_code == 400
-    assert not_character.json()["detail"] == "entity is not a character"
+    assert missing.json()["detail"] == "claim does not exist"
 
 
 def test_fastapi_cancel_command_reports_not_found_when_command_absent(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     app = create_app(scenario.actor)
     client = testclient.TestClient(app)
-    claimed = client.post(
-        "/play/world/controllers/web/claim",
-        json={
-            "character_id": str(scenario.character),
-            "client_id": "client-a",
-        },
-    ).json()
+    claimed, secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(scenario.character))
+    )
 
     # Valid character + generation but no such queued command -> ok=False, "command not found".
     response = client.delete(
-        f"/play/world/character/{scenario.character}/commands/never-queued",
-        params={
-            "controller_id": claimed["controller_id"],
-            "controller_generation": claimed["controller_generation"],
-            "claim_id": claimed["claim_id"],
-        },
-        headers={"X-Bunnyland-Claim-Secret": claimed["claim_secret"]},
+        f"/v1/play/claims/{claimed['id']}/commands/never-queued",
+        headers=_claim_headers("client-a", secret),
     )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "ok": False,
-        "command_id": "never-queued",
-        "cancelled": False,
-        "reason": "command not found",
-    }
+    assert response.json()["id"] == "never-queued"
+    assert response.json()["status"] == "rejected"
+    assert response.json()["reason"] == "command not found"
 
 
-async def test_admin_patch_endpoint_translates_unexpected_errors_to_400(scenario, monkeypatch):
+def test_admin_patch_endpoint_translates_unexpected_errors_to_400(scenario, monkeypatch):
     def boom(actor, request):
         raise RuntimeError("ecs exploded")
 
     monkeypatch.setattr(server_app, "apply_world_patch", boom)
-    app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == "/admin/world")
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+    request = WorldPatchRequest.model_validate({"operations": []})
+    response = client.patch("/v1/admin/world", json=request.model_dump(mode="json"))
 
-    with pytest.raises(Exception) as exc:
-        await route.endpoint(WorldPatchRequest.model_validate({"operations": []}))
-
-    assert exc.value.status_code == 400
-    assert exc.value.detail == "ecs exploded"
+    assert response.status_code == 400
+    assert response.json()["detail"] == "ecs exploded"
 
 
-async def test_register_script_endpoint_persists_valid_spec(scenario, tmp_path):
-    app = create_app(scenario.actor, definitions_path=tmp_path / "definitions.json")
-    route = next(route for route in app.routes if route.path == "/admin/controllers/scripts")
-
-    response = await route.endpoint(
-        ScriptSpec(name="greeter", calls=(ToolCallSpec(name="wait", arguments={}),))
+def test_register_script_endpoint_persists_valid_spec(scenario, tmp_path):
+    app = create_app(
+        scenario.actor, definitions_path=tmp_path / "definitions.json", with_admin=True
+    )
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+    spec = ScriptSpec(name="greeter", calls=(ToolCallSpec(name="wait", arguments={}),))
+    response = client.put(
+        "/v1/admin/controller-definitions/script/greeter",
+        json=ControllerDefinitionRequest(
+            definition=spec.model_dump(mode="json", exclude={"name"})
+        ).model_dump(mode="json"),
     )
 
-    assert "greeter" in response.stored.scripts
+    assert response.status_code == 200
+    assert "greeter" in response.json()["stored"]["scripts"]
 
 
-async def test_register_behavior_endpoint_persists_valid_spec(scenario, tmp_path):
-    app = create_app(scenario.actor, definitions_path=tmp_path / "definitions.json")
-    route = next(route for route in app.routes if route.path == "/admin/controllers/behaviors")
-
-    response = await route.endpoint(
-        BehaviorTreeSpec(
-            name="waiter",
-            root=BehaviorNodeSpec(kind="action", ref="take_first_item"),
-        )
+def test_register_behavior_endpoint_persists_valid_spec(scenario, tmp_path):
+    app = create_app(
+        scenario.actor, definitions_path=tmp_path / "definitions.json", with_admin=True
+    )
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+    spec = BehaviorTreeSpec(
+        name="waiter",
+        root=BehaviorNodeSpec(kind="action", ref="take_first_item"),
+    )
+    response = client.put(
+        "/v1/admin/controller-definitions/behavior/waiter",
+        json=ControllerDefinitionRequest(
+            definition=spec.model_dump(mode="json", exclude={"name"})
+        ).model_dump(mode="json"),
     )
 
-    assert "waiter" in response.stored.behaviors
+    assert response.status_code == 200
+    assert "waiter" in response.json()["stored"]["behaviors"]
 
 
-async def test_register_behavior_endpoint_translates_value_errors(scenario):
-    app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == "/admin/controllers/behaviors")
+def test_register_behavior_endpoint_translates_value_errors(scenario):
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
 
     # A behavior leaf referencing an unknown condition fails to compile -> ValueError -> 400.
     bad = BehaviorTreeSpec(
         name="broken",
         root=BehaviorNodeSpec(kind="condition", ref="definitely_not_a_real_condition"),
     )
-    with pytest.raises(Exception) as exc:
-        await route.endpoint(bad)
+    response = client.put(
+        "/v1/admin/controller-definitions/behavior/broken",
+        json=ControllerDefinitionRequest(
+            definition=bad.model_dump(mode="json", exclude={"name"})
+        ).model_dump(mode="json"),
+    )
 
-    assert exc.value.status_code == 400
+    assert response.status_code == 400
 
 
-async def test_register_script_endpoint_translates_value_errors(scenario):
-    app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == "/admin/controllers/scripts")
+def test_register_script_endpoint_translates_value_errors(scenario):
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
 
     # A script call referencing an unknown tool fails to compile -> ValueError -> 400.
     bad = ScriptSpec(
         name="broken",
         calls=(ToolCallSpec(name="definitely_not_a_real_tool", arguments={}),),
     )
-    with pytest.raises(Exception) as exc:
-        await route.endpoint(bad)
+    response = client.put(
+        "/v1/admin/controller-definitions/script/broken",
+        json=ControllerDefinitionRequest(
+            definition=bad.model_dump(mode="json", exclude={"name"})
+        ).model_dump(mode="json"),
+    )
 
-    assert exc.value.status_code == 400
-    assert "definitely_not_a_real_tool" in exc.value.detail
+    assert response.status_code == 400
+    assert "definitely_not_a_real_tool" in response.json()["detail"]
 
 
 async def test_world_updates_websocket_handles_disconnect_on_send(scenario, monkeypatch):
     from fastapi import WebSocketDisconnect
 
     app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), with_admin=True)
-    route = next(route for route in app.routes if route.path == "/admin/world/updates")
+    route = next(route for route in app.routes if route.path == "/v1/admin/world/stream")
 
     closed = []
     monkeypatch.setattr(server_app, "WEBSOCKET_HEARTBEAT_SECONDS", 0.01)
@@ -4299,39 +4134,64 @@ async def test_world_updates_websocket_handles_disconnect_on_send(scenario, monk
     await route.endpoint(FakeWebSocket())
 
 
-async def test_world_generation_status_endpoint_reports_running_job(scenario):
+async def test_world_generation_status_endpoint_reports_running_job(scenario, monkeypatch):
     plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
-    app = create_app(scenario.actor, plugins=plugins)
-    generate = next(route for route in app.routes if route.path == "/admin/world/generate")
-    status = next(route for route in app.routes if route.path == "/admin/world/generation")
+    app = create_app(scenario.actor, plugins=plugins, with_admin=True)
+    release_generation = asyncio.Event()
+    original_generate = server_admin.traced_generate
 
-    started = await generate.endpoint(
-        WorldGenerateRequest(confirm_reset=True, generator="recursive", max_rooms=2)
+    async def delayed_generate(*args, **kwargs):
+        await release_generation.wait()
+        return await original_generate(*args, **kwargs)
+
+    monkeypatch.setattr(server_admin, "traced_generate", delayed_generate)
+    request = GenerateWorldRequest(
+        kind="world", confirm_reset=True, generator="recursive", max_rooms=2
     )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        headers=_ADMIN_HEADERS,
+    ) as client:
+        started = await client.post(
+            "/v1/admin/world/generation-jobs", json=request.model_dump(mode="json")
+        )
+        assert started.status_code == 202
+        job_id = started.json()["id"]
 
-    # While the background job exists, status reflects it (not the idle response).
-    running = await status.endpoint()
-    assert running.job_id == started.job_id
+        # While the background job exists, status reflects it (not the idle response).
+        running = await client.get(f"/v1/admin/world/generation-jobs/{job_id}")
+        assert running.status_code == 200
+        assert running.json()["id"] == job_id
 
-    # A second generate while running is rejected with a conflict.
-    with pytest.raises(Exception) as conflict:
-        await generate.endpoint(WorldGenerateRequest(confirm_reset=True, generator="recursive"))
-    assert conflict.value.status_code == 409
-    assert conflict.value.detail == "world generation is already running"
+        # A second generate while running is rejected with a conflict.
+        conflict = await client.post(
+            "/v1/admin/world/generation-jobs",
+            json=GenerateWorldRequest(
+                kind="world", confirm_reset=True, generator="recursive"
+            ).model_dump(mode="json"),
+        )
+        assert conflict.status_code == 409
+        assert conflict.json()["detail"] == "world generation is already running"
+        release_generation.set()
 
 
-async def test_admin_world_generate_uses_generator_name_for_seedless_generators(scenario):
+def test_admin_world_generate_uses_generator_name_for_seedless_generators(scenario):
     plugins = select(bunnyland_plugins(), ["bunnyland.worldgen"])
-    app = create_app(scenario.actor, plugins=plugins)
-    route = next(route for route in app.routes if route.path == "/admin/world/generate")
+    app = create_app(scenario.actor, plugins=plugins, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
 
     # "empty" reports uses_seed=False, so the seed must be the generator name, not the request.
-    response = await route.endpoint(
-        WorldGenerateRequest(confirm_reset=True, generator="empty", seed="ignored")
+    response = client.post(
+        "/v1/admin/world/generation-jobs",
+        json=GenerateWorldRequest(
+            kind="world", confirm_reset=True, generator="empty", seed="ignored"
+        ).model_dump(mode="json"),
     )
 
-    assert response.generator == "empty"
-    assert response.seed == "empty"
+    assert response.status_code == 202
+    assert response.json()["result"]["generator"] == "empty"
+    assert response.json()["result"]["seed"] == "empty"
 
 
 def test_pause_and_resume_tolerate_loops_without_publish(scenario):
@@ -4352,8 +4212,14 @@ def test_pause_and_resume_tolerate_loops_without_publish(scenario):
     app = create_app(scenario.actor, loop=QuietLoop(), with_admin=True)
     client = testclient.TestClient(app, headers=_ADMIN_HEADERS)
 
-    paused = client.post("/admin/world/pause")
-    resumed = client.post("/admin/world/resume")
+    paused = client.patch(
+        "/v1/admin/world/runtime",
+        json=RuntimePatchRequest(paused=True).model_dump(mode="json"),
+    )
+    resumed = client.patch(
+        "/v1/admin/world/runtime",
+        json=RuntimePatchRequest(paused=False).model_dump(mode="json"),
+    )
 
     assert paused.status_code == 200
     assert paused.json()["paused"] is True
@@ -4366,16 +4232,21 @@ async def test_fastapi_world_updates_websocket_handles_client_disconnect(scenari
 
     outputs = await _websocket_outputs(
         app,
-        "/admin/world/updates",
+        "/v1/admin/world/stream",
         headers=_ADMIN_HEADERS,
-        messages=[{"type": "authenticate", "data": {}}],
+        messages=[
+            {
+                "type": "authenticate",
+                "data": {"client_id": _ADMIN_HEADERS[CLIENT_ID_HEADER]},
+            }
+        ],
     )
 
     assert outputs[0]["type"] == "websocket.accept"
     assert json.loads(outputs[1]["text"])["type"] == "snapshot"
 
 
-async def test_admin_controller_assign_endpoint_uses_controller_handoff(scenario):
+def test_admin_controller_assign_endpoint_uses_controller_handoff(scenario):
     controller = spawn_entity(
         scenario.actor.world,
         [WebControllerComponent(client_id="operator", label="graph")],
@@ -4393,17 +4264,15 @@ async def test_admin_controller_assign_endpoint_uses_controller_handoff(scenario
     ).to_submitted(submitted_at_epoch=42)
     scenario.actor.queues.enqueue(command)
 
-    app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == "/admin/controllers/assign")
-    response = await route.endpoint(
-        ControllerAssignmentRequest(
-            character_id=str(scenario.character),
-            controller_id=str(controller.id),
-        )
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+    response = client.put(
+        f"/v1/admin/characters/{scenario.character}/controller",
+        json=ControllerAssignment(controller_id=str(controller.id)).model_dump(mode="json"),
     )
 
-    assert response.ok is True
-    assert response.changed_entities[0]["id"] == str(scenario.character)
+    assert response.status_code == 200
+    assert response.json()["changed_entities"][0]["id"] == str(scenario.character)
     character = scenario.actor.world.get_entity(scenario.character)
     controlled = character.get_relationships(ControlledBy)
     assert len(controlled) == 1
@@ -4414,22 +4283,20 @@ async def test_admin_controller_assign_endpoint_uses_controller_handoff(scenario
     assert not character.has_component(SuspendedComponent)
 
 
-async def test_admin_controller_assign_endpoint_suspends_character(scenario):
+def test_admin_controller_assign_endpoint_suspends_character(scenario):
     controller = spawn_entity(
         scenario.actor.world,
         [SuspendedControllerComponent(reason="admin pause")],
     )
 
-    app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == "/admin/controllers/assign")
-    response = await route.endpoint(
-        ControllerAssignmentRequest(
-            character_id=str(scenario.character),
-            controller_id=str(controller.id),
-        )
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+    response = client.put(
+        f"/v1/admin/characters/{scenario.character}/controller",
+        json=ControllerAssignment(controller_id=str(controller.id)).model_dump(mode="json"),
     )
 
-    assert response.ok is True
+    assert response.status_code == 200
     character = scenario.actor.world.get_entity(scenario.character)
     assert character.get_component(SuspendedComponent).reason == "admin pause"
     edge, target = character.get_relationships(ControlledBy)[0]
@@ -4438,91 +4305,374 @@ async def test_admin_controller_assign_endpoint_suspends_character(scenario):
 
 
 @pytest.mark.parametrize(
-    ("payload", "status", "message"),
+    ("character_id", "controller_id", "status", "message"),
     [
         (
-            {"character_id": "entity_999", "controller_id": "$controller"},
+            "entity_999",
+            "$controller",
             404,
             "character does not exist",
         ),
         (
-            {"character_id": "$character", "controller_id": "entity_999"},
+            "$character",
+            "entity_999",
             404,
             "controller does not exist",
         ),
         (
-            {"character_id": "$room", "controller_id": "$controller"},
+            "$room",
+            "$controller",
             400,
             "entity is not a character",
         ),
         (
-            {"character_id": "$character", "controller_id": "$room"},
+            "$character",
+            "$room",
             400,
             "entity is not a controller",
         ),
     ],
 )
-async def test_admin_controller_assign_endpoint_rejects_invalid_targets(
+def test_admin_controller_assign_endpoint_rejects_invalid_targets(
     scenario,
-    payload,
+    character_id,
+    controller_id,
     status,
     message,
 ):
-    app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == "/admin/controllers/assign")
-    rendered = {
-        key: value.replace("$character", str(scenario.character))
-        .replace("$controller", str(scenario.controller))
-        .replace("$room", str(scenario.room_a))
-        for key, value in payload.items()
-    }
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
 
-    with pytest.raises(Exception) as exc:
-        await route.endpoint(ControllerAssignmentRequest(**rendered))
+    def render(value: str) -> str:
+        return (
+            value.replace("$character", str(scenario.character))
+            .replace("$controller", str(scenario.controller))
+            .replace("$room", str(scenario.room_a))
+        )
 
-    assert exc.value.status_code == status
-    assert exc.value.detail == message
+    response = client.put(
+        f"/v1/admin/characters/{render(character_id)}/controller",
+        json=ControllerAssignment(controller_id=render(controller_id)).model_dump(mode="json"),
+    )
+
+    assert response.status_code == status
+    assert response.json()["detail"] == message
 
 
 @pytest.mark.parametrize(
-    ("path", "payload", "message"),
+    ("payload", "message"),
     [
         (
-            "/admin/world/generate-room",
-            WorldRoomGenerationRequest(door_entity_id="entity_999"),
+            GenerateRoomRequest(kind="room", door_entity_id="entity_999"),
             "door entity 'entity_999' does not exist",
         ),
         (
-            "/admin/world/generate-character",
-            WorldCharacterGenerationRequest(room_entity_id="entity_999"),
+            GenerateCharacterRequest(kind="character", room_entity_id="entity_999"),
             "room entity 'entity_999' does not exist",
         ),
         (
-            "/admin/world/generate-item",
-            WorldItemGenerationRequest(container_entity_id="entity_999"),
+            GenerateItemRequest(kind="item", container_entity_id="entity_999"),
             "container entity 'entity_999' does not exist",
         ),
         (
-            "/admin/world/generate-event",
-            WorldEventGenerationRequest(room_entity_id="entity_999"),
+            GenerateEventRequest(kind="event", room_entity_id="entity_999"),
             "room entity 'entity_999' does not exist",
         ),
     ],
 )
-async def test_admin_entity_generation_endpoints_translate_patch_errors(
+def test_admin_entity_generation_endpoints_translate_patch_errors(
     scenario,
-    path,
     payload,
     message,
 ):
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+    response = client.post(
+        "/v1/admin/world/generation-jobs",
+        json=payload.model_dump(mode="json", exclude_none=True),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == message
+
+
+def test_v1_claim_can_reactivate_after_fallback(scenario):
     app = create_app(scenario.actor)
-    route = next(route for route in app.routes if route.path == path)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    claim, secret = _create_claim(
+        client,
+        ClaimCreateRequest(
+            character_id=str(scenario.character),
+            fallback_controller="llm",
+        ),
+    )
+    headers = _claim_headers("client-a", secret)
 
-    with pytest.raises(Exception) as exc:
-        await route.endpoint(payload)
+    already_active = client.patch(
+        f"/v1/play/claims/{claim['id']}",
+        headers=headers,
+        json=ClaimControlUpdate(kind="control", desired="active").model_dump(mode="json"),
+    )
+    released = client.patch(
+        f"/v1/play/claims/{claim['id']}",
+        headers=headers,
+        json=ClaimControlUpdate(kind="control", desired="fallback").model_dump(mode="json"),
+    )
+    reactivated = client.patch(
+        f"/v1/play/claims/{claim['id']}",
+        headers=headers,
+        json=ClaimControlUpdate(kind="control", desired="active").model_dump(mode="json"),
+    )
 
-    assert exc.value.status_code == 400
-    assert exc.value.detail == message
+    assert already_active.status_code == 200
+    assert already_active.json()["control"] == "active"
+    assert released.status_code == 200
+    assert reactivated.status_code == 200
+    assert reactivated.json()["control"] == "active"
+
+
+def test_v1_claim_rejects_inactive_claim_controller(scenario):
+    app = create_app(scenario.actor)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    claim, secret = _create_claim(client, ClaimCreateRequest(character_id=str(scenario.character)))
+    replacement = spawn_entity(
+        scenario.actor.world,
+        [LLMControllerComponent(profile_name="idle", model="claim-model")],
+    )
+    scenario.actor.assign_controller(scenario.character, replacement.id)
+
+    response = client.get(
+        f"/v1/play/claims/{claim['id']}/projection",
+        headers=_claim_headers("client-a", secret),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "claim controller is not active"
+
+
+async def test_v1_claim_endpoint_requires_client_identity_when_called_directly(scenario):
+    app = create_app(scenario.actor)
+    route = next(
+        route for route in app.routes if route.path == "/v1/play/claims/{claim_id}/projection"
+    )
+
+    with pytest.raises(server_app.HTTPException, match=f"{CLIENT_ID_HEADER} header is required"):
+        await route.endpoint("missing", None, None)
+
+
+def test_v1_claim_events_support_incremental_reads(scenario):
+    app = create_app(scenario.actor)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    claim, secret = _create_claim(client, ClaimCreateRequest(character_id=str(scenario.character)))
+
+    response = client.get(
+        f"/v1/play/claims/{claim['id']}/events?since=0",
+        headers=_claim_headers("client-a", secret),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["complete"] is True
+    assert response.json()["available_after_epoch"] is not None
+
+
+def test_v1_player_jobs_get_list_and_isolate_claims(scenario):
+    class FakeChat:
+        allowed_tools: tuple[str, ...] = ()
+
+        async def chat(self, character_id: str, request) -> CharacterChatResponse:
+            return CharacterChatResponse(
+                world_epoch=scenario.actor.epoch,
+                character_id=character_id,
+                reply=f"reply to {request.message}",
+            )
+
+    other = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    app = create_app(scenario.actor, character_chat=FakeChat())
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    first, first_secret = _create_claim(
+        client, ClaimCreateRequest(character_id=str(scenario.character))
+    )
+    second, second_secret = _create_claim(client, ClaimCreateRequest(character_id=str(other.id)))
+
+    first_job = client.post(
+        f"/v1/play/claims/{first['id']}/jobs",
+        headers=_claim_headers("client-a", first_secret),
+        json=ChatJobRequest(kind="chat", message="hello").model_dump(mode="json"),
+    )
+    second_job = client.post(
+        f"/v1/play/claims/{second['id']}/jobs",
+        headers=_claim_headers("client-a", second_secret),
+        json=ChatJobRequest(kind="chat", message="hi").model_dump(mode="json"),
+    )
+    listed = client.get(
+        f"/v1/play/claims/{first['id']}/jobs",
+        headers=_claim_headers("client-a", first_secret),
+    )
+    fetched = client.get(
+        f"/v1/play/claims/{first['id']}/jobs/{first_job.json()['id']}",
+        headers=_claim_headers("client-a", first_secret),
+    )
+    missing = client.get(
+        f"/v1/play/claims/{first['id']}/jobs/missing",
+        headers=_claim_headers("client-a", first_secret),
+    )
+
+    assert first_job.status_code == 202
+    assert second_job.status_code == 202
+    assert [job["id"] for job in listed.json()] == [first_job.json()["id"]]
+    assert fetched.json()["id"] == first_job.json()["id"]
+    assert missing.status_code == 404
+
+
+def test_v1_chat_job_keeps_existing_llm_controller(scenario):
+    class FakeChat:
+        allowed_tools: tuple[str, ...] = ()
+
+        async def chat(self, character_id: str, request) -> CharacterChatResponse:
+            return CharacterChatResponse(
+                world_epoch=scenario.actor.epoch,
+                character_id=character_id,
+                reply=request.message,
+            )
+
+    app = create_app(scenario.actor, character_chat=FakeChat())
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    claim, secret = _create_claim(client, ClaimCreateRequest(character_id=str(scenario.character)))
+    web = scenario.actor.world.get_entity(parse_entity_id(claim["controller_id"]))
+    llm = spawn_entity(
+        scenario.actor.world,
+        [LLMControllerComponent(profile_name="idle", model="claim-model")],
+    )
+    transfer_claim(web, llm)
+    scenario.actor.assign_controller(scenario.character, llm.id)
+
+    response = client.post(
+        f"/v1/play/claims/{claim['id']}/jobs",
+        headers=_claim_headers("client-a", secret),
+        json=ChatJobRequest(kind="chat", message="hello").model_dump(mode="json"),
+    )
+
+    assert response.status_code == 202
+    assert response.json()["result"]["reply"] == "hello"
+    assert (
+        current_controller(scenario.actor, scenario.actor.world.get_entity(scenario.character))[
+            0
+        ].id
+        == llm.id
+    )
+
+
+def test_v1_generation_jobs_normalize_status_and_refresh_absent_jobs(scenario):
+    class FakeImageService:
+        def __init__(self, status: str, *, retain: bool = True) -> None:
+            self.status = status
+            self.retain = retain
+            self.jobs: dict[str, ImageGenJob] = {}
+
+        async def start(self, entity_id: str, purpose: ImagePurpose, **_kwargs) -> ImageGenJob:
+            job = ImageGenJob(
+                job_id=f"job-{self.status}",
+                entity_id=entity_id,
+                purpose=purpose,
+                status=self.status,
+                error="generation failed" if self.status == "mystery" else None,
+            )
+            self.jobs[job.job_id] = job
+            return job
+
+        def job(self, job_id: str) -> ImageGenJob | None:
+            return self.jobs.get(job_id) if self.retain else None
+
+    request = GenerateImageRequest(
+        kind="image",
+        entity_id=str(scenario.character),
+        purpose="portrait",
+    )
+    testclient = pytest.importorskip("fastapi.testclient")
+
+    completed = testclient.TestClient(
+        create_app(scenario.actor, imagegen=FakeImageService("complete"), with_admin=True),
+        headers=_ADMIN_HEADERS,
+    ).post("/v1/admin/world/generation-jobs", json=request.model_dump(mode="json"))
+    failed = testclient.TestClient(
+        create_app(scenario.actor, imagegen=FakeImageService("mystery"), with_admin=True),
+        headers=_ADMIN_HEADERS,
+    ).post("/v1/admin/world/generation-jobs", json=request.model_dump(mode="json"))
+    absent = testclient.TestClient(
+        create_app(
+            scenario.actor,
+            imagegen=FakeImageService("queued", retain=False),
+            with_admin=True,
+        ),
+        headers=_ADMIN_HEADERS,
+    ).post("/v1/admin/world/generation-jobs", json=request.model_dump(mode="json"))
+
+    assert completed.json()["status"] == "succeeded"
+    assert failed.json()["status"] == "failed"
+    assert failed.json()["failure"]["code"] == "job_failed"
+    assert absent.json()["status"] == "queued"
+
+
+def test_v1_non_world_generation_job_is_stable_on_refresh(scenario, monkeypatch):
+    async def generated_room(*_args, **_kwargs) -> WorldRoomGenerationResponse:
+        return WorldRoomGenerationResponse(
+            source_room_id=str(scenario.room_a),
+            door_entity_id="door:generated",
+            generated_title="Moss Room",
+            patch=WorldPatchRequest(operations=[]),
+        )
+
+    monkeypatch.setattr(server_app, "generate_room_patch", generated_room)
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+    request = GenerateRoomRequest(kind="room", door_entity_id="door:any")
+
+    created = client.post("/v1/admin/world/generation-jobs", json=request.model_dump(mode="json"))
+    fetched = client.get(f"/v1/admin/world/generation-jobs/{created.json()['id']}")
+
+    assert created.status_code == 202
+    assert fetched.status_code == 200
+    assert fetched.json() == created.json()
+
+
+def test_v1_controller_definition_rejects_unknown_kind(scenario):
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+    request = ControllerDefinitionRequest(definition={})
+
+    response = client.put(
+        "/v1/admin/controller-definitions/unknown/example",
+        json=request.model_dump(mode="json"),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "kind must be script or behavior"
+
+
+def test_v1_memory_document_gets_existing_and_missing_documents(scenario):
+    install_memory(scenario.actor, InMemoryStore())
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        MemoryProfileComponent(vector_collection="juniper-private")
+    )
+    app = create_app(scenario.actor, with_admin=True)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app, headers=_ADMIN_HEADERS)
+    request = MemoryDocumentUpdateRequest(document="A remembered path", metadata={})
+    created = client.post(
+        "/v1/admin/memory/collections/juniper-private/documents",
+        json=request.model_dump(mode="json"),
+    )
+
+    found = client.get(
+        f"/v1/admin/memory/collections/juniper-private/documents/{created.json()['document']['id']}"
+    )
+    missing = client.get("/v1/admin/memory/collections/juniper-private/documents/missing")
+
+    assert found.status_code == 200
+    assert found.json()["document"]["document"] == "A remembered path"
+    assert missing.status_code == 404
 
 
 def test_world_schema_includes_available_types_and_live_usage(scenario):
@@ -5917,15 +6067,23 @@ async def test_player_update_skips_hidden_frames_until_visible_or_heartbeat(scen
 
 
 async def test_character_updates_websocket_authenticates_before_ready(scenario):
-    app = create_app(scenario.actor)
+    registry = ClaimSecretRegistry()
+    claim = add_claim(
+        scenario.actor.world.get_entity(scenario.controller),
+        client_kind="web",
+        client_id="client-a",
+        character_id=str(scenario.character),
+    )
+    secret = registry.issue(claim.claim_id)
+    app = create_app(scenario.actor, claim_secrets=registry)
     auth = {
         "type": "authenticate",
-        "data": {"claim_id": None, "claim_secret": None},
+        "data": {"client_id": "client-a", "claim_secret": secret},
     }
 
     outputs = await _websocket_outputs(
         app,
-        f"/play/world/character/{scenario.character}/updates",
+        f"/v1/play/claims/{claim.claim_id}/stream",
         messages=[auth],
     )
 
@@ -5955,11 +6113,19 @@ async def test_character_updates_websocket_authenticates_before_ready(scenario):
     ],
 )
 async def test_character_updates_websocket_rejects_malformed_auth(scenario, auth):
-    app = create_app(scenario.actor)
+    registry = ClaimSecretRegistry()
+    claim = add_claim(
+        scenario.actor.world.get_entity(scenario.controller),
+        client_kind="web",
+        client_id="client-a",
+        character_id=str(scenario.character),
+    )
+    registry.issue(claim.claim_id)
+    app = create_app(scenario.actor, claim_secrets=registry)
 
     outputs = await _websocket_outputs(
         app,
-        f"/play/world/character/{scenario.character}/updates",
+        f"/v1/play/claims/{claim.claim_id}/stream",
         messages=[auth],
     )
 
@@ -5971,11 +6137,19 @@ async def test_character_updates_websocket_rejects_malformed_auth(scenario, auth
 
 async def test_character_updates_websocket_times_out_before_sending_data(scenario, monkeypatch):
     monkeypatch.setattr(server_app, "PLAYER_WEBSOCKET_AUTH_SECONDS", 0.01)
-    app = create_app(scenario.actor)
+    registry = ClaimSecretRegistry()
+    claim = add_claim(
+        scenario.actor.world.get_entity(scenario.controller),
+        client_kind="web",
+        client_id="client-a",
+        character_id=str(scenario.character),
+    )
+    registry.issue(claim.claim_id)
+    app = create_app(scenario.actor, claim_secrets=registry)
 
     outputs = await _websocket_outputs(
         app,
-        f"/play/world/character/{scenario.character}/updates",
+        f"/v1/play/claims/{claim.claim_id}/stream",
     )
 
     assert outputs == [
@@ -5999,13 +6173,13 @@ async def test_character_updates_websocket_rejects_wrong_secret_unknown_and_nonc
     app = create_app(scenario.actor, claim_secrets=registry)
     wrong = {
         "type": "authenticate",
-        "data": {"claim_id": claim.claim_id, "claim_secret": "wrong"},
+        "data": {"client_id": "client-a", "claim_secret": "wrong"},
     }
 
-    for entity_id in (scenario.character, "ghost_9", scenario.room_a):
+    for claim_id in (claim.claim_id, "missing"):
         outputs = await _websocket_outputs(
             app,
-            f"/play/world/character/{entity_id}/updates",
+            f"/v1/play/claims/{claim_id}/stream",
             messages=[wrong],
         )
         assert outputs[-1]["type"] == "websocket.close"
@@ -6014,7 +6188,7 @@ async def test_character_updates_websocket_rejects_wrong_secret_unknown_and_nonc
     remove_claim(controller, registry)
     nonnull_unclaimed = await _websocket_outputs(
         app,
-        f"/play/world/character/{scenario.character}/updates",
+        f"/v1/play/claims/{claim.claim_id}/stream",
         messages=[wrong],
     )
     assert nonnull_unclaimed[-1]["code"] == 1008
@@ -6031,11 +6205,7 @@ async def test_character_updates_websocket_revalidates_revoked_claim(scenario, m
     )
     secret = registry.issue(claim.claim_id)
     app = create_app(scenario.actor, claim_secrets=registry)
-    route = next(
-        route
-        for route in app.routes
-        if route.path == "/play/world/character/{character_id}/updates"
-    )
+    route = next(route for route in app.routes if route.path == "/v1/play/claims/{claim_id}/stream")
     monkeypatch.setattr(server_app, "WEBSOCKET_HEARTBEAT_SECONDS", 0.01)
     sent = []
     closed = []
@@ -6047,7 +6217,7 @@ async def test_character_updates_websocket_revalidates_revoked_claim(scenario, m
         async def receive_json(self):
             return {
                 "type": "authenticate",
-                "data": {"claim_id": claim.claim_id, "claim_secret": secret},
+                "data": {"client_id": "client-a", "claim_secret": secret},
             }
 
         async def send_json(self, payload):
@@ -6057,7 +6227,7 @@ async def test_character_updates_websocket_revalidates_revoked_claim(scenario, m
         async def close(self, code=1000):
             closed.append(code)
 
-    await route.endpoint(FakeWebSocket(), str(scenario.character))
+    await route.endpoint(FakeWebSocket(), claim.claim_id)
 
     assert sent[0]["type"] == "ready"
     assert closed == [1008]
@@ -6079,11 +6249,7 @@ async def test_character_updates_websocket_handles_revocation_before_ready_and_d
     )
     secret = registry.issue(claim.claim_id)
     app = create_app(scenario.actor, claim_secrets=registry)
-    route = next(
-        route
-        for route in app.routes
-        if route.path == "/play/world/character/{character_id}/updates"
-    )
+    route = next(route for route in app.routes if route.path == "/v1/play/claims/{claim_id}/stream")
     closed = []
 
     class RevokedBeforeReady:
@@ -6094,13 +6260,13 @@ async def test_character_updates_websocket_handles_revocation_before_ready_and_d
             remove_claim(controller, registry)
             return {
                 "type": "authenticate",
-                "data": {"claim_id": claim.claim_id, "claim_secret": secret},
+                "data": {"client_id": "client-a", "claim_secret": secret},
             }
 
         async def close(self, code=1000):
             closed.append(code)
 
-    await route.endpoint(RevokedBeforeReady(), str(scenario.character))
+    await route.endpoint(RevokedBeforeReady(), claim.claim_id)
     assert closed == [1008]
 
     replacement = add_claim(
@@ -6128,7 +6294,7 @@ async def test_character_updates_websocket_handles_revocation_before_ready_and_d
             return {
                 "type": "authenticate",
                 "data": {
-                    "claim_id": replacement.claim_id,
+                    "client_id": "client-a",
                     "claim_secret": replacement_secret,
                 },
             }
@@ -6136,7 +6302,7 @@ async def test_character_updates_websocket_handles_revocation_before_ready_and_d
         async def close(self, code=1000):
             closed.append(code)
 
-    await route.endpoint(RejectedBeforeReady(), str(scenario.character))
+    await route.endpoint(RejectedBeforeReady(), replacement.claim_id)
     assert closed[-1] == 1008
     registry.validate = original_validate
     monkeypatch.setattr(server_app, "WEBSOCKET_HEARTBEAT_SECONDS", 0.01)
@@ -6151,7 +6317,7 @@ async def test_character_updates_websocket_handles_revocation_before_ready_and_d
             return {
                 "type": "authenticate",
                 "data": {
-                    "claim_id": replacement.claim_id,
+                    "client_id": "client-a",
                     "claim_secret": replacement_secret,
                 },
             }
@@ -6161,7 +6327,7 @@ async def test_character_updates_websocket_handles_revocation_before_ready_and_d
             if self.sent >= 3:
                 raise WebSocketDisconnect(code=1006)
 
-    await route.endpoint(DisconnectOnReady(), str(scenario.character))
+    await route.endpoint(DisconnectOnReady(), replacement.claim_id)
 
 
 async def test_fastapi_world_updates_websocket_sends_initial_snapshot(scenario):
@@ -6169,9 +6335,14 @@ async def test_fastapi_world_updates_websocket_sends_initial_snapshot(scenario):
 
     outputs = await _websocket_outputs(
         app,
-        "/admin/world/updates",
+        "/v1/admin/world/stream",
         headers=_ADMIN_HEADERS,
-        messages=[{"type": "authenticate", "data": {}}],
+        messages=[
+            {
+                "type": "authenticate",
+                "data": {"client_id": _ADMIN_HEADERS[CLIENT_ID_HEADER]},
+            }
+        ],
     )
     message = json.loads(outputs[1]["text"])
 
@@ -6183,23 +6354,35 @@ async def test_fastapi_world_updates_websocket_sends_initial_snapshot(scenario):
 async def test_fastapi_world_updates_websocket_requires_admin_scope(scenario):
     app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), with_admin=True)
 
-    auth_frame = [{"type": "authenticate", "data": {}}]
-    missing = await _websocket_outputs(app, "/admin/world/updates", messages=auth_frame)
+    auth_frame = [{"type": "authenticate", "data": {"client_id": "admin-a"}}]
+    missing = await _websocket_outputs(app, "/v1/admin/world/stream", messages=auth_frame)
     assert missing[-1] == {"type": "websocket.close", "code": 1008, "reason": ""}
 
     # A token in the query string is no longer honored -- only the injected header is.
     query = await _websocket_outputs(
-        app, "/admin/world/updates?credential=secret", messages=auth_frame
+        app, "/v1/admin/world/stream?credential=secret", messages=auth_frame
     )
     assert query[-1] == {"type": "websocket.close", "code": 1008, "reason": ""}
 
     wrong = await _websocket_outputs(
         app,
-        "/admin/world/updates",
-        headers={"Authorization": "Bearer invalid"},
+        "/v1/admin/world/stream",
+        headers={"Authorization": "Bearer invalid", CLIENT_ID_HEADER: "admin-a"},
         messages=auth_frame,
     )
     assert wrong[-1] == {"type": "websocket.close", "code": 1008, "reason": ""}
+
+    missing_identity = await _websocket_outputs(
+        app,
+        "/v1/admin/world/stream",
+        headers={"Authorization": _ADMIN_HEADERS["Authorization"]},
+        messages=[{"type": "authenticate", "data": {}}],
+    )
+    assert missing_identity[-1] == {
+        "type": "websocket.close",
+        "code": 1008,
+        "reason": "",
+    }
 
 
 async def test_event_stream_fans_out_pause_status_events(scenario):

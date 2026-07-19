@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import secrets
 import sqlite3
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache, wraps
 from pathlib import Path
 from threading import Lock
@@ -33,6 +34,7 @@ ROTATION_GRACE_SECONDS = 30
 _TOKEN_RE = re.compile(r"^blt_([a-f0-9]{16})_([A-Za-z0-9_-]{32,})$")
 _bearer_scheme = HTTPBearer(auto_error=False)
 _cookie_scheme = APIKeyCookie(name=AUTH_COOKIE_NAME, auto_error=False)
+LOG = logging.getLogger(__name__)
 
 
 def _trace_token_mutation(operation: str, **attributes: object):
@@ -149,69 +151,56 @@ def normalized_scopes(
 class UserCredentialStore:
     """Read manually provisioned users from a deployment-rendered YAML file."""
 
+    _RELOAD_INTERVAL_SECONDS = 1.0
+
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+        self._users: dict[str, UserCredential] = {}
+        self._checked_signature: tuple[int, int] | None = None
+        self._last_check = float("-inf")
+        self._reload_lock = Lock()
 
-    def _load(self, *, strict: bool = False) -> dict[str, UserCredential]:
+    def _load(self) -> dict[str, UserCredential]:
         try:
             raw = yaml.load(self.path.read_text(), Loader=_UniqueKeyLoader) or {}
         except yaml.constructor.ConstructorError as exc:
-            if strict and "duplicate key" in str(exc):
+            if "duplicate key" in str(exc):
                 raise ValueError("authentication user file contains duplicate YAML keys") from exc
-            if strict:
-                raise ValueError(
-                    f"authentication user file is not readable YAML: {self.path}"
-                ) from exc
-            return {}
+            raise ValueError(f"authentication user file is not readable YAML: {self.path}") from exc
         except (OSError, yaml.YAMLError, UnicodeError) as exc:
-            if strict:
-                raise ValueError(
-                    f"authentication user file is not readable YAML: {self.path}"
-                ) from exc
-            return {}
+            raise ValueError(f"authentication user file is not readable YAML: {self.path}") from exc
         entries = raw.get("users", raw) if isinstance(raw, dict) else raw
         if isinstance(entries, dict):
             mapped_entries = []
             for key, value in entries.items():
                 if not isinstance(value, dict):
-                    if strict:
-                        raise ValueError("authentication user entries must be mappings")
-                    continue
+                    raise ValueError("authentication user entries must be mappings")
                 mapped_entries.append(dict(value, username=key))
             entries = mapped_entries
         if not isinstance(entries, list):
-            if strict:
-                raise ValueError("authentication user file must contain a users list or mapping")
-            return {}
+            raise ValueError("authentication user file must contain a users list or mapping")
         users: dict[str, UserCredential] = {}
         for entry in entries:
             if not isinstance(entry, dict):
-                if strict:
-                    raise ValueError("authentication user entries must be mappings")
-                continue
+                raise ValueError("authentication user entries must be mappings")
             username = str(entry.get("username", "")).strip()
             password_hash = str(entry.get("password_hash", "")).strip()
             if not username or not password_hash:
-                if strict:
-                    raise ValueError(
-                        "authentication users require non-empty username and password_hash"
-                    )
-                continue
+                raise ValueError(
+                    "authentication users require non-empty username and password_hash"
+                )
             if username in users:
                 raise ValueError(f"duplicate authentication username: {username!r}")
             scopes = entry.get("scopes", [])
             if not isinstance(scopes, list):
-                if strict:
-                    raise ValueError(f"authentication scopes for {username!r} must be a list")
-                scopes = []
+                raise ValueError(f"authentication scopes for {username!r} must be a list")
             enabled = entry.get("enabled", True)
-            if strict and not isinstance(enabled, bool):
+            if not isinstance(enabled, bool):
                 raise ValueError(f"authentication enabled for {username!r} must be a boolean")
-            if strict and not scopes:
+            if not scopes:
                 raise ValueError(f"authentication scopes for {username!r} must not be empty")
-            if strict and any(
-                not isinstance(scope, str)
-                or scope not in {WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE}
+            if any(
+                not isinstance(scope, str) or scope not in {WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE}
                 for scope in scopes
             ):
                 raise ValueError(
@@ -225,15 +214,12 @@ class UserCredentialStore:
             )
         return users
 
-    def validate(self) -> None:
-        """Fail before listening when the deployment credential file is unusable."""
-
+    def _validate_users(self, users: dict[str, UserCredential]) -> None:
         try:
             from pwdlib import PasswordHash
             from pwdlib.exceptions import UnknownHashError
         except ImportError as exc:
             raise RuntimeError("password login requires pwdlib[argon2]") from exc
-        users = self._load(strict=True)
         if not users:
             raise ValueError("authentication user file must contain at least one user")
         try:
@@ -248,8 +234,55 @@ class UserCredentialStore:
             except (TypeError, ValueError, UnknownHashError) as exc:
                 raise ValueError(f"invalid Argon2 password hash for user {username!r}") from exc
 
+    def validate(self) -> None:
+        """Fail before listening when the deployment credential file is unusable."""
+
+        users = self._load()
+        self._validate_users(users)
+        stat = self.path.stat()
+        with self._reload_lock:
+            self._users = users
+            self._checked_signature = (stat.st_mtime_ns, stat.st_size)
+            self._last_check = time.monotonic()
+
+    def _reload_if_changed(self) -> None:
+        now = time.monotonic()
+        if now - self._last_check < self._RELOAD_INTERVAL_SECONDS:
+            return
+        if not self._reload_lock.acquire(blocking=False):
+            return
+        try:
+            self._last_check = now
+            try:
+                stat = self.path.stat()
+            except OSError:
+                return
+            signature = (stat.st_mtime_ns, stat.st_size)
+            if signature == self._checked_signature:
+                return
+            self._checked_signature = signature
+            try:
+                users = self._load()
+                self._validate_users(users)
+            except (RuntimeError, ValueError):
+                LOG.warning(
+                    "ignoring invalid authentication user file reload: %s",
+                    self.path,
+                    exc_info=True,
+                )
+                return
+            self._users = users
+        finally:
+            self._reload_lock.release()
+
+    def current_user(self, username: str) -> UserCredential | None:
+        """Return a user from the latest valid credential-file snapshot."""
+
+        self._reload_if_changed()
+        return self._users.get(username)
+
     def authenticate(self, username: str, password: str) -> UserCredential | None:
-        user = self._load().get(username)
+        user = self.current_user(username)
         try:
             from pwdlib import PasswordHash
             from pwdlib.exceptions import UnknownHashError
@@ -647,8 +680,20 @@ class TokenStore:
 class RequestAuthenticator:
     """FastAPI security dependency accepting the bearer header or secure cookie."""
 
-    def __init__(self, tokens: TokenStore) -> None:
+    def __init__(self, tokens: TokenStore, users: UserCredentialStore | None = None) -> None:
         self.tokens = tokens
+        self.users = users
+
+    def verify_token(self, token: str) -> TokenPrincipal | None:
+        """Verify a token and apply the current file-backed human authorization."""
+
+        principal = self.tokens.verify(token)
+        if principal is None or not principal.automatic_rotation or self.users is None:
+            return principal
+        user = self.users.current_user(principal.subject)
+        if user is None or not user.enabled:
+            return None
+        return replace(principal, scopes=user.scopes)
 
     @staticmethod
     def _unauthorized(detail: str = "invalid or expired bearer token") -> HTTPException:
@@ -676,7 +721,7 @@ class RequestAuthenticator:
         token = header_token or cookie_token
         if not token:
             raise self._unauthorized("bearer token required")
-        principal = self.tokens.verify(token)
+        principal = self.verify_token(token)
         if principal is None:
             raise self._unauthorized()
         missing = [scope for scope in required_scopes if scope not in principal.scopes]

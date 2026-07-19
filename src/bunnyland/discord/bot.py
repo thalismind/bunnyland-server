@@ -782,9 +782,9 @@ class DiscordBot:
     async def _post_image(self, message, url: str) -> None:
         discord, _ = _require_discord()
         parts = urllib.parse.urlsplit(url).path.strip("/").split("/")
-        if len(parts) != 4 or parts[:2] != ["public", "media"]:
+        if len(parts) != 5 or parts[:3] != ["v1", "public", "media"]:
             raise ValueError("image URL is outside the public media surface")
-        namespace, name = parts[2:]
+        namespace, name = parts[3:]
         data = self.imagegen.media.read(namespace, name)
         telemetry.set_span_attributes({"discord.delivery.bytes": len(data)})
         await message.reply(file=discord.File(BytesIO(data), filename=name))

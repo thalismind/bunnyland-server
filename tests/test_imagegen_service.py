@@ -211,7 +211,7 @@ async def test_start_generates_and_attaches_portrait(tmp_path):
 
     entity = scenario.actor.world.get_entity(scenario.character)
     portrait = entity.get_component(PortraitImageComponent)
-    assert portrait.url.startswith("/public/media/portraits/")
+    assert portrait.url.startswith("/v1/public/media/portraits/")
     assert portrait.seed == _seed_for(str(scenario.character))
     assert not entity.has_component(ImageRequestComponent)  # cleared
     # File written and a completion event emitted.
@@ -279,7 +279,7 @@ async def test_start_sprite_sets_sprite_image(tmp_path):
     await service.start(str(scenario.character), ImagePurpose.SPRITE)
     await service.wait_idle()
     sprite = scenario.actor.world.get_entity(scenario.character).get_component(SpriteImageComponent)
-    assert sprite.url.startswith("/public/media/sprites/")
+    assert sprite.url.startswith("/v1/public/media/sprites/")
     await service.aclose()
 
 
@@ -300,7 +300,7 @@ async def test_start_event_attaches_event_image(tmp_path):
     await service.start(str(record.id), ImagePurpose.EVENT)
     await service.wait_idle()
     image = world.get_entity(record.id).get_component(EventImageComponent)
-    assert image.url.startswith("/public/media/events/")
+    assert image.url.startswith("/v1/public/media/events/")
     assert image.source_event_id == "evt-7"
     await service.aclose()
 

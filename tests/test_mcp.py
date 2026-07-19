@@ -53,6 +53,7 @@ from bunnyland.server.app import create_app
 from bunnyland.server.auth import WORLD_ADMIN_SCOPE, WORLD_PLAY_SCOPE, TokenPrincipal, TokenStore
 from bunnyland.server.client_ids import CLIENT_ID_HEADER
 from bunnyland.server.models import (
+    CharacterChatResponse,
     WorldCharacterGenerationResponse,
     WorldEventGenerationResponse,
     WorldGenerateResponse,
@@ -597,6 +598,12 @@ def test_mcp_release_to_existing_controller_and_claim_release():
         fallback_controller=str(existing.id),
         **_claim_args(claimed),
     )
+    default_prompt = asyncio.run(
+        render_mcp_client_prompt(actor, client_id="client-a", **_claim_args(claimed))
+    )
+    from bunnyland.prompts.filters import PromptFilterRuntime
+
+    actor.prompt_filter_runtime = PromptFilterRuntime.from_actor(actor)
     prompt = asyncio.run(
         render_mcp_client_prompt(actor, client_id="client-a", **_claim_args(claimed))
     )
@@ -605,6 +612,7 @@ def test_mcp_release_to_existing_controller_and_claim_release():
     assert released["controller_id"] == str(existing.id)
     assert released["controller_kind"] == "llm"
     assert not character.has_component(SuspendedComponent)
+    assert default_prompt["character_id"] == str(character.id)
     assert prompt["character_id"] == str(character.id)
     assert claim_released["claim_id"] == claimed["claim_id"]
     with pytest.raises(RuntimeError, match="client is not controlling a character yet"):
@@ -907,6 +915,7 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
         registered_tools["play_claim_character"](client_id="client-a", character_name="Juniper")
     )
     assert claimed["claim_id"]
+    asyncio.run(registered_low_server["subscribe_resource"](AnyUrl(EVENTS_RESOURCE_URI)))
     assert registered_low_server["unsubscribe_resource"].__name__ == "unsubscribe_resource"
     asyncio.run(registered_low_server["unsubscribe_resource"](AnyUrl(EVENTS_RESOURCE_URI)))
 
@@ -921,6 +930,7 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
 
 async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenario):
     registered_tools = {}
+    registered_resources = {}
     calls = {}
 
     class FakeLowServer:
@@ -952,8 +962,9 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
 
             return decorate
 
-        def resource(self, _uri, **_kwargs):
+        def resource(self, uri, **_kwargs):
             def decorate(func):
+                registered_resources[uri] = func
                 return func
 
             return decorate
@@ -1055,6 +1066,18 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
         generate_event=generate_event,
     )
     create_bunnyland_mcp_app(generate_image=generate_image, **create_kwargs)
+
+    assert json.loads(registered_resources["bunnyland://v1/admin/controller-definitions"]()) == {
+        "scripts": [],
+        "behaviors": [],
+    }
+    assert registered_tools["admin_list_generators"]() == {"generators": []}
+    with pytest.raises(RuntimeError, match="assignment is not configured"):
+        await registered_tools["admin_assign_controller"](
+            character_id=str(scenario.character), controller_id=str(scenario.controller)
+        )
+    with pytest.raises(RuntimeError, match="chat is not configured"):
+        await registered_tools["play_chat"](client_id="client-a", message="hello")
 
     characters = registered_tools["play_list_characters"]()
     assert characters["ok"] is True
@@ -1160,9 +1183,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     # Re-create without an image callback: the tool reports it is not configured.
     create_bunnyland_mcp_app(**create_kwargs)
     with pytest.raises(RuntimeError, match="not configured"):
-        await registered_tools["admin_generate_image"](
-            entity_id=str(scenario.character)
-        )
+        await registered_tools["admin_generate_image"](entity_id=str(scenario.character))
 
     # Player-facing scene-image request (camera affordance, no admin scope required).
     claimed = await registered_tools["play_claim_character"](
@@ -1581,12 +1602,20 @@ def test_mcp_addon_declares_tool_resource_and_prompt_policies(monkeypatch, scena
         def safe_tool():
             return {"ok": True}
 
-        @registrar.resource("test://resource", scopes=(WORLD_PLAY_SCOPE,))
+        @registrar.resource("test://resource", scopes=(WORLD_PLAY_SCOPE,), name="safe_resource")
         def safe_resource():
             return {"ok": True}
 
-        @registrar.prompt(scopes=(WORLD_ADMIN_SCOPE,))
+        @registrar.resource("test://unnamed", scopes=(WORLD_PLAY_SCOPE,))
+        def unnamed_resource():
+            return {"ok": True}
+
+        @registrar.prompt(scopes=(WORLD_ADMIN_SCOPE,), name="safe_prompt")
         def safe_prompt():
+            return "safe"
+
+        @registrar.prompt(scopes=(WORLD_ADMIN_SCOPE,))
+        def unnamed_prompt():
             return "safe"
 
     plugin = Plugin(
@@ -2177,6 +2206,7 @@ def _capture_mcp_tools(
     request_scopes=None,
     registered_resources: dict | None = None,
     save_path=None,
+    character_chat=None,
 ) -> dict:
     """Build the MCP app with a fake FastMCP and return its registered tool closures.
 
@@ -2185,9 +2215,7 @@ def _capture_mcp_tools(
     ``get_context()`` exposes no request, matching a direct/argument-only caller."""
 
     registered_tools: dict = {}
-    resolved_request_headers = (
-        {} if request_headers is _AUTHENTICATED_REQUEST else request_headers
-    )
+    resolved_request_headers = {} if request_headers is _AUTHENTICATED_REQUEST else request_headers
 
     class FakeLowServer:
         def __init__(self):
@@ -2224,9 +2252,7 @@ def _capture_mcp_tools(
             if resolved_request_headers is None:
                 return SimpleNamespace(session=object())
             scopes = (
-                [WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE]
-                if request_scopes is None
-                else request_scopes
+                [WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE] if request_scopes is None else request_scopes
             )
             principal = TokenPrincipal(
                 token_id="test-token",
@@ -2269,6 +2295,7 @@ def _capture_mcp_tools(
         admin_client_ids=admin_client_ids,
         loop=loop,
         save_path=save_path,
+        character_chat=character_chat,
     )
     return registered_tools
 
@@ -2307,9 +2334,7 @@ def test_play_query_world_uses_claimed_perspective_registry(monkeypatch, scenari
     from bunnyland.foundation.social.queries import SOCIAL_PERSPECTIVE_QUERIES
 
     for definition in V1_PERSPECTIVE_QUERIES:
-        scenario.actor.perspective_queries.register(
-            definition, owner="bunnyland.core_verbs"
-        )
+        scenario.actor.perspective_queries.register(definition, owner="bunnyland.core_verbs")
     for definition in SOCIAL_PERSPECTIVE_QUERIES:
         scenario.actor.perspective_queries.register(definition, owner="bunnyland.social")
     hazel = spawn_entity(
@@ -2392,6 +2417,202 @@ def test_formal_mcp_resources_are_exact_and_scope_enforced(monkeypatch, scenario
     assert characters["characters"][0]["name"] == "Juniper"
     with pytest.raises(RuntimeError, match="world:admin scope required"):
         resources["bunnyland://v1/admin/world"]()
+
+
+def test_formal_admin_mcp_resources_return_operational_state(monkeypatch, scenario):
+    resources: dict = {}
+    loop = SimpleNamespace(
+        running=True,
+        paused=False,
+        tick_seconds=2.0,
+        time_scale=30.0,
+    )
+    _capture_mcp_tools(
+        monkeypatch,
+        scenario.actor,
+        loop=loop,
+        registered_resources=resources,
+    )
+
+    world = json.loads(resources["bunnyland://v1/admin/world"]())
+    runtime = json.loads(resources["bunnyland://v1/admin/runtime"]())
+    generators = json.loads(resources["bunnyland://v1/admin/generators"]())
+    definitions = json.loads(resources["bunnyland://v1/admin/controller-definitions"]())
+    generation = json.loads(
+        asyncio.run(resources["bunnyland://v1/admin/generation-jobs/current"]())
+    )
+
+    assert world["room_count"] == 2
+    assert runtime["game_seconds_per_tick"] == 60.0
+    assert {item["name"] for item in generators["generators"]} >= {
+        "empty",
+        "oneshot",
+        "recursive",
+    }
+    assert "scripts" in definitions
+    assert generation["world_epoch"] == scenario.actor.epoch
+
+
+async def test_curated_mcp_player_and_admin_workflows(monkeypatch, scenario):
+    from bunnyland.core.perspective import V1_PERSPECTIVE_QUERIES
+
+    for definition in V1_PERSPECTIVE_QUERIES:
+        scenario.actor.perspective_queries.register(definition, owner="bunnyland.core_verbs")
+
+    class RuntimeLoop:
+        running = True
+        paused = False
+        tick_seconds = 2.0
+        time_scale = 30.0
+
+        async def _published(self):
+            return None
+
+        def pause(self):
+            self.paused = True
+            return self._published()
+
+        def resume(self):
+            self.paused = False
+            return self._published()
+
+    async def chat(character_id, request):
+        if request.message == "bad":
+            raise ValueError("bad chat")
+        assert request.message == "Hello"
+        return CharacterChatResponse(
+            world_epoch=scenario.actor.epoch,
+            character_id=character_id,
+            reply="Hello from Juniper.",
+        )
+
+    tools = _capture_mcp_tools(
+        monkeypatch,
+        scenario.actor,
+        loop=RuntimeLoop(),
+        character_chat=SimpleNamespace(allowed_tools=[], chat=chat),
+    )
+    claimed = await tools["play_claim_character"](
+        client_id="workflow-client", character_name="Juniper"
+    )
+    claim_args = _claim_args(claimed)
+
+    look = tools["play_look"](client_id="workflow-client", **claim_args)
+    help_result = tools["play_action_help"](
+        client_id="workflow-client", action="move", **claim_args
+    )
+    recent = tools["play_recent_events"](client_id="workflow-client", **claim_args)
+    changed = tools["play_what_changed"](client_id="workflow-client", since_epoch=0, **claim_args)
+    assert "Juniper" in look["summary"]
+    assert help_result["action"]["command_type"] == "move"
+    assert recent["events"][0]["data"]["event_type"] == "CharacterClaimedEvent"
+    assert changed["summary"].startswith("0 visible change")
+    with pytest.raises(RuntimeError, match="not controlling"):
+        tools["play_look"](client_id="missing")
+    with pytest.raises(RuntimeError, match="unknown action"):
+        tools["play_action_help"](client_id="workflow-client", action="missing", **claim_args)
+
+    original_execute = scenario.actor.perspective_queries.execute
+
+    def unavailable(*_args, **_kwargs):
+        raise TimeoutError("query timed out")
+
+    scenario.actor.perspective_queries.execute = unavailable
+    try:
+        with pytest.raises(RuntimeError, match="query timed out"):
+            tools["play_what_changed"](client_id="workflow-client", since_epoch=0, **claim_args)
+    finally:
+        scenario.actor.perspective_queries.execute = original_execute
+
+    queued = await tools["play_send_command"](
+        client_id="workflow-client",
+        command_type="move",
+        payload={"direction": "north"},
+        **claim_args,
+    )
+    cancelled = await tools["play_cancel_command"](
+        client_id="workflow-client",
+        command_id=queued["command_id"],
+        **claim_args,
+    )
+    assert cancelled["status"] == "cancelled"
+    with pytest.raises(RuntimeError, match="not pending"):
+        await tools["play_cancel_command"](
+            client_id="workflow-client",
+            command_id=queued["command_id"],
+            **claim_args,
+        )
+
+    reply = await tools["play_chat"](
+        client_id="workflow-client",
+        message="Hello",
+        **claim_args,
+    )
+    assert reply["reply"] == "Hello from Juniper."
+    with pytest.raises(RuntimeError, match="bad chat"):
+        await tools["play_chat"](
+            client_id="workflow-client",
+            message="bad",
+            **claim_args,
+        )
+
+    released = await tools["play_release_control"](client_id="workflow-client", **claim_args)
+    assert released["controller_kind"] == "suspended"
+    reclaimed = await tools["play_reclaim_character"](client_id="workflow-client", **claim_args)
+    assert reclaimed["character_id"] == str(scenario.character)
+
+    paused = await tools["admin_pause_world"]()
+    resumed = await tools["admin_resume_world"]()
+    assert paused["paused"] is True
+    assert resumed["paused"] is False
+    assert tools["admin_list_controller_definitions"]()["scripts"]
+    assert tools["admin_list_generators"]()["generators"]
+
+    await tools["play_release_claim"](client_id="workflow-client", **_claim_args(reclaimed))
+
+    controller = spawn_entity(
+        scenario.actor.world,
+        [WebControllerComponent(client_id="admin", label="manual")],
+    )
+    assigned = await tools["admin_assign_controller"](
+        character_id=str(scenario.character), controller_id=str(controller.id)
+    )
+    assert assigned["changed_entities"][0]["id"] == str(scenario.character)
+    with pytest.raises(RuntimeError, match="controller does not exist"):
+        await tools["admin_assign_controller"](
+            character_id=str(scenario.character), controller_id="entity_999"
+        )
+
+    script = await tools["admin_register_script"](
+        name="workflow_wait", calls=[{"name": "wait", "arguments": {}}]
+    )
+    behavior = await tools["admin_register_behavior"](
+        name="workflow_take",
+        root={"kind": "action", "ref": "take_first_item"},
+    )
+    assert "workflow_wait" in script["stored"]["scripts"]
+    assert "workflow_take" in behavior["stored"]["behaviors"]
+
+    without_runtime = _capture_mcp_tools(monkeypatch, scenario.actor)
+    with pytest.raises(RuntimeError, match="runtime is not attached"):
+        await without_runtime["admin_pause_world"]()
+    with pytest.raises(RuntimeError, match="runtime is not attached"):
+        await without_runtime["admin_resume_world"]()
+
+    quiet_runtime = SimpleNamespace(
+        running=True,
+        paused=False,
+        tick_seconds=1.0,
+        time_scale=1.0,
+        pause=lambda: None,
+        resume=lambda: None,
+    )
+    quiet_tools = _capture_mcp_tools(monkeypatch, scenario.actor, loop=quiet_runtime)
+    await quiet_tools["admin_pause_world"]()
+    await quiet_tools["admin_resume_world"]()
+
+    with pytest.raises(RuntimeError, match="does not own"):
+        await tools["play_reclaim_character"](client_id="workflow-client", **_claim_args(reclaimed))
 
 
 def test_admin_save_world_uses_configured_path(monkeypatch, scenario, tmp_path):
@@ -2831,6 +3052,25 @@ def test_mcp_player_client_id_allowlist_gates_claim_tool(monkeypatch, scenario):
         tools["play_claim_character"](client_id="client-a", character_name="Juniper")
     )
     assert claimed["client_id"] == "client-a"
+
+
+def test_mcp_player_identity_and_claim_secret_come_from_request_headers(monkeypatch, scenario):
+    tools = _capture_mcp_tools(
+        monkeypatch,
+        scenario.actor,
+        request_headers={CLIENT_ID_HEADER: "header-client"},
+    )
+
+    with pytest.raises(RuntimeError, match="must match the authenticated request header"):
+        asyncio.run(
+            tools["play_claim_character"](client_id="argument-client", character_name="Juniper")
+        )
+
+    claimed = asyncio.run(
+        tools["play_claim_character"](client_id="header-client", character_name="Juniper")
+    )
+    with pytest.raises(RuntimeError, match="must be supplied in X-Bunnyland-Claim-Secret"):
+        tools["play_get_projection"](client_id="header-client", **_claim_args(claimed))
 
 
 def test_catalog_resource_includes_component_schemas(monkeypatch, scenario):

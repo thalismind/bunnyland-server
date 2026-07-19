@@ -488,9 +488,7 @@ async def test_prompt_filter_invocations_emit_redacted_child_spans(otel_capture)
         assert failed == private_input
 
     spans = [
-        span
-        for span in span_exporter.get_finished_spans()
-        if span.name == "prompt.filter.apply"
+        span for span in span_exporter.get_finished_spans() if span.name == "prompt.filter.apply"
     ]
     assert len(spans) == 2
     parent = _spans_by_name(span_exporter)["agent.prompt.filter"]
@@ -1134,12 +1132,12 @@ async def test_mcp_save_world_admin_traces_status(otel_capture, monkeypatch, tmp
         generate_event=unused,
     )
 
-    saved = await registered_tools["save_world_admin"]()
+    saved = await registered_tools["admin_save_world"]()
 
     assert saved["path"] == str(path)
     assert path.exists()
     spans = _spans_by_name(span_exporter)
-    assert _span_status_name(spans["mcp.save_world_admin"]) == "OK"
+    assert _span_status_name(spans["mcp.admin_save_world"]) == "OK"
     assert _span_status_name(spans["world.save"]) == "OK"
     assert spans["world.save"].attributes["path"] == str(path)
 
@@ -1162,7 +1160,10 @@ async def test_rest_snapshot_emits_child_span_under_request(otel_capture):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
     ) as client:
-        response = await client.get("/admin/world/snapshot")
+        response = await client.get(
+            "/v1/admin/world/snapshot",
+            headers={"X-Bunnyland-Client-Id": "admin-client"},
+        )
         assert response.status_code == 200
 
     assert "world.snapshot" in _spans_by_name(span_exporter)
@@ -1266,19 +1267,19 @@ async def test_character_chat_traces_tool_usage_and_command_submit_status(otel_c
 async def test_controller_assign_endpoint_is_traced(otel_capture):
     pytest.importorskip("fastapi")
     from bunnyland.server.app import create_app
-    from bunnyland.server.models import ControllerAssignmentRequest
+    from bunnyland.server.v1_models import ControllerAssignment
 
     span_exporter, _reader = otel_capture
     scenario = build_scenario()
     app = create_app(scenario.actor, allow_unauthenticated_embedding=True)
     route = next(
-        route for route in app.routes if getattr(route, "path", None) == "/admin/controllers/assign"
+        route
+        for route in app.routes
+        if getattr(route, "path", None) == "/v1/admin/characters/{character_id}/controller"
     )
     await route.endpoint(
-        ControllerAssignmentRequest(
-            character_id=str(scenario.character),
-            controller_id=str(scenario.controller),
-        )
+        str(scenario.character),
+        ControllerAssignment(controller_id=str(scenario.controller)),
     )
 
     span = _spans_by_name(span_exporter)["controller.assign"]
@@ -1290,30 +1291,30 @@ async def test_controller_assign_endpoint_is_traced(otel_capture):
 async def test_web_controller_claim_endpoint_reports_client_id_in_trace(otel_capture):
     pytest.importorskip("fastapi")
     from bunnyland.server.app import create_app
-    from bunnyland.server.models import WebControllerClaimRequest
 
     span_exporter, _reader = otel_capture
     scenario = build_scenario()
     app = create_app(scenario.actor, allow_unauthenticated_embedding=True)
-    route = next(
-        route
-        for route in app.routes
-        if getattr(route, "path", None) == "/play/world/controllers/web/claim"
-    )
-    response = await route.endpoint(
-        WebControllerClaimRequest(
-            character_id=str(scenario.character),
-            client_id="client-a",
-            label="toon",
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/v1/play/claims",
+            headers={"X-Bunnyland-Client-Id": "client-a"},
+            json={
+                "character_id": str(scenario.character),
+                "label": "toon",
+            },
         )
-    )
+    assert response.status_code == 201
+    body = response.json()
 
     span = _spans_by_name(span_exporter)["controller.web_claim"]
     assert span.attributes["character.id"] == str(scenario.character)
     assert span.attributes["client.id"] == "client-a"
     assert span.attributes["client.label"] == "toon"
-    assert span.attributes["controller.id"] == response.controller_id
-    assert span.attributes["controller.generation"] == response.controller_generation
+    assert span.attributes["controller.id"] == body["controller_id"]
+    assert span.attributes["controller.generation"] == body["controller_generation"]
 
 
 @pytestmark_otel
@@ -1503,9 +1504,7 @@ async def test_image_jobs_keep_each_submitting_trace_and_emit_child_spans(
     )
 
     with telemetry.span("submit.one"):
-        first = await service.start(
-            str(scenario.character), ImagePurpose.PORTRAIT, alpha=True
-        )
+        first = await service.start(str(scenario.character), ImagePurpose.PORTRAIT, alpha=True)
     with telemetry.span("submit.two"):
         second_job = await service.start(str(second.id), ImagePurpose.PORTRAIT)
     await service.wait_idle()
@@ -1525,8 +1524,7 @@ async def test_image_jobs_keep_each_submitting_trace_and_emit_child_spans(
     assert generations[second_job.job_id].context.trace_id == roots["submit.two"].context.trace_id
     assert generations[first.job_id].parent.span_id == enqueues[first.job_id].context.span_id
     assert (
-        generations[second_job.job_id].parent.span_id
-        == enqueues[second_job.job_id].context.span_id
+        generations[second_job.job_id].parent.span_id == enqueues[second_job.job_id].context.span_id
     )
     assert enqueues[first.job_id].parent.span_id == roots["submit.one"].context.span_id
     assert enqueues[second_job.job_id].parent.span_id == roots["submit.two"].context.span_id
@@ -1598,9 +1596,7 @@ async def test_image_provider_and_enhancer_failures_are_error_spans_and_redacted
         tmp_path / "provider",
         _TelemetryImageGenerator(error=RuntimeError(private)),
     )
-    provider_job = await provider_service.start(
-        str(scenario.character), ImagePurpose.PORTRAIT
-    )
+    provider_job = await provider_service.start(str(scenario.character), ImagePurpose.PORTRAIT)
     await provider_service.wait_idle()
     await provider_service.aclose()
 
@@ -1833,9 +1829,7 @@ class _TelemetryChromaCollection:
     def query(self, *, query_texts, n_results):
         del query_texts
         got = self.get()
-        return {
-            key: [values[:n_results]] for key, values in got.items()
-        }
+        return {key: [values[:n_results]] for key, values in got.items()}
 
     def update(self, *, ids, documents, metadatas):
         selected = set(ids)
@@ -1882,9 +1876,7 @@ def test_json_and_chroma_memory_backend_spans_are_content_free(otel_capture, tmp
     )
     assert chroma.list_documents("private-collection")
     assert (
-        chroma.update_document(
-            "private-collection", document.id, document=private, metadata={}
-        )
+        chroma.update_document("private-collection", document.id, document=private, metadata={})
         is not None
     )
     assert (
@@ -1894,9 +1886,7 @@ def test_json_and_chroma_memory_backend_spans_are_content_free(otel_capture, tmp
     assert chroma.delete("private-collection", entry.id) is True
     assert chroma.delete("private-collection", entry.id) is False
 
-    spans = [
-        span for span in span_exporter.get_finished_spans() if span.name == "memory.backend"
-    ]
+    spans = [span for span in span_exporter.get_finished_spans() if span.name == "memory.backend"]
     assert {span.attributes["memory.backend"] for span in spans} == {"json", "chroma"}
     assert {span.attributes["memory.operation"] for span in spans} >= {
         "load",
@@ -2159,20 +2149,19 @@ async def test_discord_image_delivery_records_success_and_external_failure(
     success = _Message()
     failure = _Message(fail=True)
     bot._image_messages = {"record-1": success, "record-2": failure}
+
     def event(entity_id):
         return types.SimpleNamespace(
             entity_id=entity_id,
             purpose="event",
-            url="/public/media/events/scene.png",
+            url="/v1/public/media/events/scene.png",
         )
 
     await bot._deliver_image(event("record-1"))
     with pytest.raises(RuntimeError, match="private image"):
         await bot._deliver_image(event("record-2"))
 
-    spans = [
-        span for span in span_exporter.get_finished_spans() if span.name == "discord.delivery"
-    ]
+    spans = [span for span in span_exporter.get_finished_spans() if span.name == "discord.delivery"]
     assert [_span_status_name(span) for span in spans] == ["OK", "ERROR"]
     assert spans[0].attributes["discord.delivery.bytes"] == len(b"image-bytes")
     assert success.reactions == [DELIVER_EMOJI]

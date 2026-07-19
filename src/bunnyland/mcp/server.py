@@ -78,7 +78,6 @@ from ..server.serialization import (
     serialize_character_projection,
     serialize_character_queued_commands,
     serialize_examine,
-    serialize_room_projection,
     serialize_world,
     serialize_world_overview,
 )
@@ -718,9 +717,7 @@ def create_bunnyland_mcp_app(
     generate_image: Callable[[WorldImageGenerationRequest], Awaitable[WorldImageGenerationResponse]]
     | None = None,
     scene_image: Callable[[str], Awaitable[WorldImageGenerationResponse | None]] | None = None,
-    chat: Callable[
-        [str, CharacterChatRequest, str | None], Awaitable[dict[str, Any]]
-    ]
+    chat: Callable[[str, CharacterChatRequest, str | None], Awaitable[dict[str, Any]]]
     | None = None,
     assign_controller: Callable[[ControllerAssignmentRequest], Awaitable[WorldPatchResponse]]
     | None = None,
@@ -883,9 +880,7 @@ def create_bunnyland_mcp_app(
 
     def _resource(*args, required_scopes: tuple[str, ...], **kwargs):
         def register(fn):
-            return mcp.resource(*args, **kwargs)(
-                _authorized_capability(required_scopes, fn)
-            )
+            return mcp.resource(*args, **kwargs)(_authorized_capability(required_scopes, fn))
 
         return register
 
@@ -933,8 +928,7 @@ def create_bunnyland_mcp_app(
 
         def resource(self, uri: str, *, scopes: Sequence[str], **kwargs):
             namespaced_uri = (
-                f"bunnyland://v1/extensions/{quote(self.plugin_id, safe='')}/"
-                f"{quote(uri, safe='')}"
+                f"bunnyland://v1/extensions/{quote(self.plugin_id, safe='')}/{quote(uri, safe='')}"
             )
             if "name" in kwargs:
                 kwargs["name"] = self._name(str(kwargs["name"]))
@@ -994,48 +988,6 @@ def create_bunnyland_mcp_app(
             claim_secret=claim_secret,
         )
 
-    def recent_world_events_resource() -> str:
-        return json.dumps({"ok": True, "events": event_bridge.recent_messages()})
-
-    def client_events_resource(client_id: str) -> str:
-        player(client_id)
-        found = claimed_character_for(
-            actor,
-            client_id=client_id,
-        )
-        if found is None:
-            raise RuntimeError("client is not controlling a character yet")
-        try:
-            ensure_claim_secret(
-                claim_secrets,
-                found[3],
-                claim_id=_request_claim_header("X-Bunnyland-Claim-Id"),
-                claim_secret=_request_claim_header("X-Bunnyland-Claim-Secret"),
-            )
-        except PermissionError as exc:
-            raise RuntimeError(str(exc)) from exc
-        return json.dumps(
-            {
-                "ok": True,
-                "client_id": client_id,
-                "events": event_bridge.recent_for_client(client_id),
-            }
-        )
-
-    async def client_prompt_resource(client_id: str) -> str:
-        player(client_id)
-        return (
-            await render_mcp_client_prompt(
-                actor,
-                claim_secrets=claim_secrets,
-                client_id=client_id,
-                claim_id=_request_claim_header("X-Bunnyland-Claim-Id"),
-                claim_secret=_request_claim_header("X-Bunnyland-Claim-Secret"),
-                fragment_providers=fragment_providers,
-                persona_providers=persona_providers,
-            )
-        )["prompt"]
-
     @play_resource(
         "bunnyland://v1/features",
         name="features",
@@ -1064,8 +1016,7 @@ def create_bunnyland_mcp_app(
                 "world_id": str(actor.world_id),
                 "world_epoch": actor.epoch,
                 "components": {
-                    name: item.model_dump(mode="json")
-                    for name, item in schema.components.items()
+                    name: item.model_dump(mode="json") for name, item in schema.components.items()
                 },
                 "edges": {
                     name: item.model_dump(mode="json") for name, item in schema.edges.items()
@@ -1254,28 +1205,6 @@ def create_bunnyland_mcp_app(
             await publish
         return admin_runtime_status()
 
-    @_traced_tool
-    async def _client_prompt_tool(
-        client_id: str,
-        claim_id: str | None = None,
-        claim_secret: str | None = None,
-    ) -> dict[str, Any]:
-        """Return the current Bunnyland prompt for an MCP-controlled client."""
-
-        try:
-            player(client_id)
-            return await render_mcp_client_prompt(
-                actor,
-                claim_secrets=claim_secrets,
-                client_id=client_id,
-                claim_id=claim_id,
-                claim_secret=claim_secret,
-                fragment_providers=fragment_providers,
-                persona_providers=persona_providers,
-            )
-        except RuntimeError as exc:
-            raise ToolError(str(exc)) from exc
-
     @play_tool
     @_traced_tool
     def play_get_projection(
@@ -1432,9 +1361,7 @@ def create_bunnyland_mcp_app(
                 None,
             )
             if selected is None:
-                raise ToolError(
-                    f"unknown action {action!r}; call play_search_actions to find one"
-                )
+                raise ToolError(f"unknown action {action!r}; call play_search_actions to find one")
             targets = {
                 argument.key: [
                     target.model_dump(mode="json")
@@ -1464,15 +1391,6 @@ def create_bunnyland_mcp_app(
             }
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
-
-    def _list_actions_legacy() -> dict[str, Any]:
-        """Return the entire available action catalogue (every verb and its argument schema).
-
-        This is large; prefer ``search_actions(query)`` for normal use. Useful when a client
-        wants the complete set of verbs at once.
-        """
-
-        return serialize_action_search(actor, query="", limit=0).model_dump()
 
     @play_tool
     @_traced_tool
@@ -1507,15 +1425,6 @@ def create_bunnyland_mcp_app(
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
-    @_traced_tool
-    def _room_view_legacy(room_id: str) -> dict[str, Any]:
-        """Return a structured view of one room: entities, exits, and sprites."""
-
-        try:
-            return serialize_room_projection(actor, room_id).model_dump()
-        except ValueError as exc:
-            raise ToolError(str(exc)) from exc
-
     @play_tool
     def play_pending_commands(
         client_id: str,
@@ -1542,25 +1451,6 @@ def create_bunnyland_mcp_app(
             return data
         except (RuntimeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
-
-    def _component_schema_legacy(types: list[str] | None = None) -> dict[str, Any]:
-        """Return JSON schemas for ECS component types, so a client can learn what the
-
-        components on perceived entities mean (e.g. ``FoodComponent``). Pass ``types`` to
-        filter to specific component names; omit it for the full set with live usage counts.
-        """
-
-        schema = world_schema(actor)
-        if types:
-            wanted = set(types)
-            components = {name: item for name, item in schema.components.items() if name in wanted}
-        else:
-            components = dict(schema.components)
-        return {
-            "ok": True,
-            "world_epoch": schema.world_epoch,
-            "components": {name: item.model_dump() for name, item in components.items()},
-        }
 
     @play_tool
     def play_recent_events(

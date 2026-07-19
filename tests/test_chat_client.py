@@ -10,9 +10,9 @@ from bunnyland import chat
 
 
 class FakeResponse:
-    def __init__(self, payload: dict):
+    def __init__(self, payload: dict, *, headers: dict | None = None):
         self.payload = payload
-        self.headers = {}
+        self.headers = headers or {}
 
     def __enter__(self):
         return self
@@ -161,6 +161,33 @@ def test_chat_client_post_json_success_and_error(monkeypatch):
     monkeypatch.setattr(chat.urllib.request, "urlopen", error_urlopen)
     with pytest.raises(RuntimeError, match="disabled"):
         chat.post_json("http://server", "/chat", {"message": "hi"})
+
+
+def test_chat_client_claim_helpers_use_v1_identity_headers(monkeypatch):
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        if request.method == "POST":
+            return FakeResponse(
+                {"id": "claim-1"},
+                headers={"X-Bunnyland-Claim-Secret": "secret-1"},
+            )
+        return FakeResponse({})
+
+    monkeypatch.setattr(chat.urllib.request, "urlopen", fake_urlopen)
+
+    assert chat.create_claim("http://server/v1", "client-1", "character-1") == (
+        "claim-1",
+        "secret-1",
+    )
+    chat.delete_claim("http://server/v1", "client-1", "claim-1", "secret-1")
+
+    created, deleted = (request for request, _timeout in requests)
+    assert created.full_url == "http://server/v1/play/claims"
+    assert created.headers["X-bunnyland-client-id"] == "client-1"
+    assert deleted.full_url == "http://server/v1/play/claims/claim-1"
+    assert deleted.headers["X-bunnyland-claim-secret"] == "secret-1"
 
 
 def test_chat_client_main_disabled_server_exits(monkeypatch, tmp_path):

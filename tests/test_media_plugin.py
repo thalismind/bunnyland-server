@@ -19,13 +19,13 @@ def test_media_service_supports_content_addressed_models_and_rejects_traversal(t
 
     assert path.read_bytes() == data
     assert service.put_content("models3d", data, "glb")[0] == name
-    assert service.url_for("models3d", name) == f"/public/media/models3d/{name}"
+    assert service.url_for("models3d", name) == f"/v1/public/media/models3d/{name}"
     assert service.public_url_for("models3d", name, base_url="") == service.url_for(
         "models3d", name
     )
     assert (
         service.public_url_for("models3d", name, base_url="https://example.test/")
-        == f"https://example.test/public/media/models3d/{name}"
+        == f"https://example.test/v1/public/media/models3d/{name}"
     )
     with pytest.raises(MediaError):
         service.path_for("../models", name)

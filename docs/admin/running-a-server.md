@@ -172,6 +172,11 @@ tools require `world:admin`. Missing, invalid, expired, or revoked credentials r
 a valid token lacking the required scope returns `403`. nginx terminates TLS and forwards
 `Authorization` and cookies without authenticating Bunnyland itself.
 
+The server checks the authentication user file for changes at most once per second, regardless
+of request volume. A valid replacement updates passwords, enabled status, and scopes for new
+logins and existing human sessions; an invalid replacement leaves the last valid snapshot in
+effect. Manually provisioned automation tokens remain governed by the token database.
+
 Optional client-ID allowlists add a second role-scoped check. Set
 `BUNNYLAND_PLAYER_CLIENT_IDS` and/or `BUNNYLAND_ADMIN_CLIENT_IDS` to comma-separated
 client IDs, or repeat `--player-client-id` / `--admin-client-id`. When configured, player

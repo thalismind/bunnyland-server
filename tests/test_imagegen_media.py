@@ -45,11 +45,11 @@ def test_write_read_roundtrip(tmp_path):
 def test_url_helpers(tmp_path):
     store = MediaStore(tmp_path)
     name = "abc123.png"
-    assert store.url_for(SEGMENT_PORTRAITS, name) == "/public/media/portraits/abc123.png"
+    assert store.url_for(SEGMENT_PORTRAITS, name) == "/v1/public/media/portraits/abc123.png"
     relative = store.public_url_for(SEGMENT_PORTRAITS, name, base_url="")
-    assert relative == "/public/media/portraits/abc123.png"
+    assert relative == "/v1/public/media/portraits/abc123.png"
     absolute = store.public_url_for(SEGMENT_PORTRAITS, name, base_url="https://play.example/")
-    assert absolute == "https://play.example/public/media/portraits/abc123.png"
+    assert absolute == "https://play.example/v1/public/media/portraits/abc123.png"
 
 
 def test_extension_for():

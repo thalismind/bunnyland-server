@@ -15,8 +15,6 @@ from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from pydantic import ValidationError
-
 from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 
 from .. import telemetry
@@ -39,7 +37,6 @@ from ..core import (
     IdentityComponent,
     LLMControllerComponent,
     MemoryProfileComponent,
-    RoomComponent,
     SuspendedComponent,
     SuspendedControllerComponent,
     WebControllerComponent,
@@ -55,7 +52,7 @@ from ..core.events import (
     ControllerChangedEvent,
     serialized_event_visible_to,
 )
-from ..core.perspective import PerspectiveQueryRequest, PerspectiveQueryResult
+from ..core.perspective import PerspectiveQueryResult
 from ..core.world_actor import CONTROL_COMMANDS, WorldActor
 from ..imagegen.components import PortraitImageComponent
 from ..imagegen.media import (
@@ -99,33 +96,22 @@ from .client_ids import (
     require_allowed_client_id,
 )
 from .models import (
-    CharacterChatPendingResponse,
+    IDENTIFIER_MAX_LENGTH,
     CharacterChatRequest,
     CharacterChatResponse,
-    CharacterChatStatusResponse,
-    CharacterImageUploadResponse,
-    CharacterListResponse,
-    CharacterProjectionResponse,
-    CharacterQueuedCommandsResponse,
     ClaimReleaseResponse,
     CommandCancelResponse,
     CommandRequest,
     CommandResponse,
     ControllerAssignmentRequest,
     ControllerDefinitionListResponse,
-    DmProjectionResponse,
-    EventImageRequest,
     FeatureStatusResponse,
-    HealthResponse,
     MemoryCharactersResponse,
     MemoryCharacterView,
     MemoryDocumentResponse,
     MemoryDocumentsResponse,
     MemoryDocumentUpdateRequest,
     MemoryDocumentView,
-    ReadinessResponse,
-    RecentEventsResponse,
-    RoomProjectionResponse,
     StoredControllerDefinitions,
     WebControllerClaimRequest,
     WebControllerClaimResponse,
@@ -144,15 +130,12 @@ from .models import (
     WorldImageGenerationResponse,
     WorldItemGenerationRequest,
     WorldItemGenerationResponse,
-    WorldLibraryResponse,
-    WorldOverviewResponse,
     WorldPatchRequest,
     WorldPatchResponse,
     WorldRoomGenerationRequest,
     WorldRoomGenerationResponse,
     WorldRuntimeResponse,
     WorldSaveResponse,
-    WorldSchemaResponse,
 )
 from .patches import WorldPatchError, apply_world_patch
 from .rate_limit import FixedWindowRateLimiter
@@ -225,7 +208,6 @@ try:
         HTTPException,
         Request,
         Response,
-        Security,
         WebSocket,
         WebSocketDisconnect,
     )
@@ -235,14 +217,13 @@ try:
     from starlette.exceptions import HTTPException as StarletteHTTPException
     from starlette.routing import Match
 except ImportError:
-    APIRouter = FastAPI = Header = HTTPException = Request = Response = Security = None  # type: ignore[assignment, misc]
+    APIRouter = FastAPI = Header = HTTPException = Request = Response = None  # type: ignore[assignment, misc]
     WebSocket = WebSocketDisconnect = CORSMiddleware = JSONResponse = None  # type: ignore[assignment, misc]
     RequestValidationError = StarletteHTTPException = None  # type: ignore[assignment, misc]
     Match = None  # type: ignore[assignment, misc]
 
 
 logger = logging.getLogger("bunnyland.server")
-GIT_HASH_ENV = "BUNNYLAND_GIT_HASH"
 RATE_LIMIT_REQUESTS_ENV = "BUNNYLAND_HTTP_RATE_LIMIT_REQUESTS"
 RATE_LIMIT_WINDOW_ENV = "BUNNYLAND_HTTP_RATE_LIMIT_WINDOW_SECONDS"
 CORS_ORIGINS_ENV = "BUNNYLAND_CORS_ORIGINS"
@@ -575,6 +556,7 @@ def create_app(
     @app.exception_handler(RequestValidationError)
     async def _validation_problem(request: Request, exc: RequestValidationError):
         return _problem_response(request, 422, exc.errors(), code="validation_error")
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=trusted_origins,
@@ -610,7 +592,9 @@ def create_app(
     token_failure_rate_limiter = FixedWindowRateLimiter(
         TOKEN_FAILURE_RATE_LIMIT_REQUESTS, TOKEN_FAILURE_RATE_LIMIT_WINDOW_SECONDS
     )
-    authenticator = RequestAuthenticator(token_store) if token_store is not None else None
+    authenticator = (
+        RequestAuthenticator(token_store, user_credentials) if token_store is not None else None
+    )
     meta = meta or WorldMeta()
     actor.world_id = meta.world_id
     stream = EventStream(actor)
@@ -683,10 +667,6 @@ def create_app(
             error=job.error,
         )
 
-    def _git_hash() -> str:
-        hash_value = os.environ.get(GIT_HASH_ENV, "").strip()
-        return hash_value if hash_value else "unknown"
-
     def _client_host(request: Request) -> str:
         return getattr(getattr(request, "client", None), "host", "") or "unknown"
 
@@ -752,12 +732,6 @@ def create_app(
         # The security dependency has already required and validated one of these sources.
         return request.cookies[AUTH_COOKIE_NAME], True
 
-    async def _authentication_unavailable() -> TokenPrincipal:
-        raise HTTPException(status_code=503, detail="authentication is not configured")
-
-    auth_dependency = authenticator or _authentication_unavailable
-
-    @app.post("/auth/login", response_model=TokenResponse)
     async def auth_login(
         login: LoginRequest,
         request: Request,
@@ -794,27 +768,10 @@ def create_app(
             return _auth_response(principal)
         return _auth_response(principal, token)
 
-    @app.get("/auth/me", response_model=AuthMeResponse)
-    async def auth_me(
-        principal: TokenPrincipal = Security(  # noqa: B008
-            auth_dependency, scopes=[WORLD_PLAY_SCOPE]
-        ),
-    ) -> AuthMeResponse:
-        return AuthMeResponse(
-            subject=principal.subject,
-            scopes=sorted(principal.scopes),
-            expires_at=principal.expires_at,
-            rotate_after=principal.rotate_after,
-            rotation_eligible=principal.can_rotate(),
-        )
-
-    @app.post("/auth/rotate", response_model=TokenResponse)
     async def auth_rotate(
         request: Request,
         response: Response,
-        principal: TokenPrincipal = Security(  # noqa: B008
-            auth_dependency, scopes=[WORLD_PLAY_SCOPE]
-        ),
+        principal: TokenPrincipal,
     ) -> TokenResponse:
         del principal
         token, cookie_delivery = _current_token(request)
@@ -829,13 +786,10 @@ def create_app(
             return _auth_response(replacement_principal)
         return _auth_response(replacement_principal, replacement)
 
-    @app.post("/auth/logout")
     async def auth_logout(
         request: Request,
         response: Response,
-        principal: TokenPrincipal = Security(  # noqa: B008
-            auth_dependency, scopes=[WORLD_PLAY_SCOPE]
-        ),
+        principal: TokenPrincipal,
     ) -> dict[str, bool]:
         del principal
         token, _cookie_delivery = _current_token(request)
@@ -849,10 +803,6 @@ def create_app(
         )
         return {"ok": True}
 
-    @app.get("/public/health", response_model=ReadinessResponse)
-    async def health() -> ReadinessResponse:
-        return ReadinessResponse()
-
     def _feature_status() -> FeatureStatusResponse:
         return FeatureStatusResponse(
             mcp=mcp_enabled(plugins),
@@ -860,117 +810,6 @@ def create_app(
             character_sheets=True,
             image_generation=imagegen is not None,
         )
-
-    @app.get("/public/features", response_model=FeatureStatusResponse)
-    async def public_features() -> FeatureStatusResponse:
-        return _feature_status()
-
-    @app.get("/play/world/status", response_model=HealthResponse)
-    async def world_status() -> HealthResponse:
-        return HealthResponse(
-            world_epoch=actor.epoch,
-            git_hash=_git_hash(),
-            features=_feature_status(),
-        )
-
-    @app.get("/admin/world/snapshot")
-    async def world_snapshot() -> dict:
-        # The raw ECS dump reveals the whole world; gate it like the DM/overview
-        # projections so it is not a back door around the per-room player views.
-        with telemetry.span("world.snapshot"):
-            return serialize_world(actor, meta)
-
-    @app.get("/play/world/characters", response_model=CharacterListResponse)
-    async def world_character_list() -> CharacterListResponse:
-        # The claim lobby: ids and names only, so a player can pick a character without
-        # the admin-gated full snapshot. Per-character state stays behind the projections.
-        return serialize_character_list(actor)
-
-    @app.get("/play/world/character/{id}", response_model=CharacterProjectionResponse)
-    async def world_character_projection(
-        id: str,
-        claim_id: str | None = None,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-    ) -> CharacterProjectionResponse:
-        with telemetry.span("character.projection", {"character.id": id}):
-            _require_claim_secret(id, claim_id=claim_id, claim_secret=claim_secret)
-            return serialize_character_projection(actor, id)
-
-    @app.get("/play/world/character/{id}/commands", response_model=CharacterQueuedCommandsResponse)
-    async def world_character_queued_commands(
-        id: str,
-        claim_id: str | None = None,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-    ) -> CharacterQueuedCommandsResponse:
-        with telemetry.span("character.queued_commands", {"character.id": id}):
-            _require_claim_secret(id, claim_id=claim_id, claim_secret=claim_secret)
-            return serialize_character_queued_commands(actor, id, **_runtime_timing())
-
-    @app.post(
-        "/play/world/character/{id}/query",
-        response_model=PerspectiveQueryResult,
-    )
-    async def world_character_query(
-        id: str,
-        request: PerspectiveQueryRequest,
-        claim_id: str | None = None,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-    ) -> PerspectiveQueryResult:
-        _require_claim_secret(
-            id,
-            claim_id=claim_id,
-            claim_secret=claim_secret,
-            require_claimed=True,
-        )
-        try:
-            return actor.perspective_queries.execute(
-                actor,
-                request.query,
-                request.arguments,
-                actor_id=id,
-                access="claim",
-            )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except (RuntimeError, TimeoutError) as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    @app.get("/play/world/room/{id}", response_model=RoomProjectionResponse)
-    async def world_room_projection(
-        id: str,
-        character_id: str,
-        claim_id: str | None = None,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-    ) -> RoomProjectionResponse:
-        try:
-            with telemetry.span("room.projection", {"room.id": id}):
-                room_id = parse_entity_id(id)
-                if room_id is None or not actor.world.has_entity(room_id):
-                    raise HTTPException(status_code=404, detail="room does not exist")
-                room = actor.world.get_entity(room_id)
-                if not room.has_component(RoomComponent):
-                    raise HTTPException(status_code=400, detail="entity is not a room")
-                claim_context = _require_claim_secret(
-                    character_id,
-                    claim_id=claim_id,
-                    claim_secret=claim_secret,
-                    require_claimed=True,
-                )
-                character = claim_context[0]
-                if container_of(character) != room_id:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="room is not currently visible to character",
-                    )
-                return serialize_room_projection(actor, id)
-        except HTTPException:
-            raise
-        except ValueError as exc:
-            detail = str(exc)
-            status = 400 if detail == "entity is not a room" else 404
-            raise HTTPException(status_code=status, detail=detail) from exc
 
     @app.middleware("http")
     async def _enforce_request_rate_limit(request: Request, call_next):
@@ -1041,6 +880,13 @@ def create_app(
                 f"{CLIENT_ID_HEADER} header is required",
                 code="client_id_required",
             )
+        if len(client_id) > IDENTIFIER_MAX_LENGTH:
+            return _problem_response(
+                request,
+                422,
+                f"{CLIENT_ID_HEADER} header is too long",
+                code="validation_error",
+            )
         try:
             if surface is AuthorizationSurface.ADMIN:
                 _require_allowed_admin_client_id(client_id)
@@ -1092,8 +938,7 @@ def create_app(
                 local_path = route.path.removeprefix(prefix)
                 if classify_authorization_surface(local_path) is not None:
                     raise ValueError(
-                        f"addon {plugin.id!r} attempted absolute or cross-zone route "
-                        f"{local_path!r}"
+                        f"addon {plugin.id!r} attempted absolute or cross-zone route {local_path!r}"
                     )
             app.router.routes.extend(router.routes)
 
@@ -1105,37 +950,6 @@ def create_app(
         if not character.has_component(CharacterComponent):
             raise HTTPException(status_code=400, detail="entity is not a character")
         return character
-
-    def _require_claim_secret(
-        character_id: str,
-        *,
-        claim_id: str | None = None,
-        claim_secret: str | None = None,
-        require_claimed: bool = False,
-    ):
-        character = _character_entity(character_id)
-        found = current_controller(actor, character)
-        if found is None:
-            if require_claimed:
-                raise HTTPException(status_code=403, detail="character is not claimed")
-            return None
-        controller, _edge = found
-        claim = controller_claim(controller)
-        if claim is None:
-            if require_claimed:
-                raise HTTPException(status_code=403, detail="character is not claimed")
-            return None
-        try:
-            ensure_claim_secret(
-                claim_secrets,
-                claim,
-                claim_id=claim_id,
-                claim_secret=claim_secret,
-            )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        _require_allowed_player_client_id(claim.client_id)
-        return character, controller, claim
 
     def _resume_web_claim_for_command(command, claim_context):
         character, controller, claim = claim_context
@@ -1188,51 +1002,6 @@ def create_app(
         normalized = client_id.strip()
         return normalized or None
 
-    def _with_player_client_id(request, client_id: str | None):
-        normalized = _client_id_header_value(client_id)
-        if normalized is None:
-            return request
-        data = request.model_dump()
-        data["client_id"] = normalized
-        try:
-            return request.__class__.model_validate(data)
-        except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=exc.errors()) from exc
-
-    def _with_player_request_context(
-        request,
-        claim_secret: str | None,
-        client_id: str | None,
-    ):
-        request = _with_player_client_id(request, client_id)
-        return _with_claim_secret(request, claim_secret)
-
-    def _claimed_controller_for_web_request(request: WebControllerFallbackRequest):
-        character = _character_entity(request.character_id)
-        client_id = request.client_id.strip()
-        if not client_id:
-            raise HTTPException(status_code=400, detail="client_id must not be blank")
-        _require_allowed_player_client_id(client_id)
-        found = current_controller(actor, character)
-        if found is None:
-            raise HTTPException(status_code=409, detail="character has no controller")
-        controller, edge = found
-        claim = controller_claim(controller)
-        if claim is None:
-            raise HTTPException(status_code=409, detail="character is not claimed")
-        if not claim_client_matches(claim, client_id):
-            raise HTTPException(status_code=409, detail="character is claimed by another client")
-        try:
-            ensure_claim_secret(
-                claim_secrets,
-                claim,
-                claim_id=request.claim_id,
-                claim_secret=_claim_secret(request),
-            )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        return character, controller, edge, claim
-
     def _existing_controller(controller_id: str):
         parsed = parse_entity_id(controller_id)
         if parsed is None or not actor.world.has_entity(parsed):
@@ -1271,69 +1040,10 @@ def create_app(
             return controller, "llm"
         raise HTTPException(status_code=400, detail="fallback_controller is not a controller")
 
-    @app.get("/admin/world/dm/{id}", response_model=DmProjectionResponse)
-    async def world_dm_projection(id: str) -> DmProjectionResponse:
-        try:
-            with telemetry.span("dm.projection", {"dm.id": id}):
-                return serialize_dm_projection(actor, id)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/admin/world/overview", response_model=WorldOverviewResponse)
-    async def world_overview() -> WorldOverviewResponse:
-        with telemetry.span("world.overview"):
-            return serialize_world_overview(actor)
-
-    @app.get("/play/world/schema", response_model=WorldSchemaResponse)
-    async def get_world_schema() -> WorldSchemaResponse:
-        return world_schema(actor)
-
-    @app.get("/play/world/library", response_model=WorldLibraryResponse)
-    async def get_world_library() -> WorldLibraryResponse:
-        return WorldLibraryResponse.model_validate(load_content_library().model_dump(mode="json"))
-
-    @app.get("/admin/world/events/recent", response_model=RecentEventsResponse)
-    async def recent_events() -> RecentEventsResponse:
-        return RecentEventsResponse(events=stream.recent_messages())
-
-    @app.get(
-        "/play/world/character/{id}/events/recent",
-        response_model=RecentEventsResponse,
-    )
-    async def character_recent_events(
-        id: str,
-        claim_id: str | None = None,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-    ) -> RecentEventsResponse:
-        _require_claim_secret(id, claim_id=claim_id, claim_secret=claim_secret)
-        return RecentEventsResponse(
-            events=recent_player_updates(actor, id, stream.recent_messages())
-        )
-
-    @app.get("/play/world/chat/status", response_model=CharacterChatStatusResponse)
-    async def world_chat_status() -> CharacterChatStatusResponse:
-        return CharacterChatStatusResponse(
-            world_epoch=actor.epoch,
-            enabled=character_chat is not None,
-            allowed_tools=character_chat.allowed_tools if character_chat is not None else [],
-        )
-
-    @app.post("/play/world/character/{id}/chat", response_model=CharacterChatResponse)
     async def world_character_chat(
         id: str,
         request: CharacterChatRequest,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        player_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> CharacterChatResponse:
-        request = _with_player_request_context(request, claim_secret, player_client_id)
-        if character_chat is None:
-            raise HTTPException(status_code=409, detail="character chat is not enabled")
-        _require_allowed_player_client_id(request.client_id)
-        _require_claim_secret(
-            id,
-            claim_id=request.claim_id,
-            claim_secret=_claim_secret(request),
-        )
         try:
             with telemetry.span("character.chat", {"character.id": id}) as span:
                 try:
@@ -1352,39 +1062,6 @@ def create_app(
             detail = str(exc)
             status = 400 if detail == "entity is not a character" else 404
             raise HTTPException(status_code=status, detail=detail) from exc
-
-    @app.get(
-        "/play/world/character/{id}/chat/pending/{command_id}",
-        response_model=CharacterChatPendingResponse,
-    )
-    async def world_character_chat_pending(
-        id: str,
-        command_id: str,
-        client_id: str,
-        claim_id: str | None = None,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        player_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
-    ) -> CharacterChatPendingResponse:
-        if character_chat is None:
-            raise HTTPException(status_code=409, detail="character chat is not enabled")
-        client_id = _client_id_header_value(player_client_id) or client_id
-        _require_allowed_player_client_id(client_id)
-        _require_claim_secret(id, claim_id=claim_id, claim_secret=claim_secret)
-        try:
-            with telemetry.span(
-                "character.chat.pending",
-                {"character.id": id, "command.id": command_id},
-            ) as span:
-                try:
-                    response = await character_chat.pending_result(id, client_id, command_id)
-                except Exception as exc:
-                    span.record_exception(exc)
-                    telemetry.mark_span_error(str(exc), span)
-                    raise
-                telemetry.mark_span_ok(span)
-                return response
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     def _runtime_timing() -> dict:
         now = time.time()
@@ -1503,25 +1180,7 @@ def create_app(
     async def _cancel_command_request(
         character_id: str,
         command_id: str,
-        controller_id: str,
-        controller_generation: int,
-        claim_id: str | None = None,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
     ) -> CommandCancelResponse:
-        _require_claim_secret(
-            character_id,
-            claim_id=claim_id,
-            claim_secret=claim_secret,
-            require_claimed=True,
-        )
-        parsed_character = parse_entity_id(character_id)
-        parsed_controller = parse_entity_id(controller_id)
-        if (
-            parsed_controller is None
-            or actor.current_generation(parsed_character, parsed_controller)
-            != controller_generation
-        ):
-            raise HTTPException(status_code=409, detail="stale controller generation")
         command = await actor.cancel_command(character_id, command_id)
         if command is None:
             return CommandCancelResponse(
@@ -1532,7 +1191,7 @@ def create_app(
             )
         return CommandCancelResponse(ok=True, command_id=command_id, cancelled=True)
 
-    async def _submit_command_request(request: CommandRequest) -> CommandResponse:
+    async def _submit_command_request(request: CommandRequest, claim_context) -> CommandResponse:
         if request.command_type in CONTROL_COMMANDS:
             # Control verbs reassign a character's controller (spec 7.4) and deliberately
             # bypass the generation/ownership gates that protect normal actions, taking their
@@ -1545,12 +1204,6 @@ def create_app(
                 status_code=400,
                 detail="control verbs are not accepted here; use the web controller endpoints",
             )
-        claim_context = _require_claim_secret(
-            request.character_id,
-            claim_id=request.claim_id,
-            claim_secret=_claim_secret(request),
-            require_claimed=True,
-        )
         command = request.to_submitted(submitted_at_epoch=actor.epoch)
         async with actor._lock:
             command = _resume_web_claim_for_command(command, claim_context)
@@ -1598,8 +1251,6 @@ def create_app(
             raise HTTPException(status_code=400, detail="entity is not a character")
 
         client_id = request.client_id.strip()
-        if not client_id:
-            raise HTTPException(status_code=400, detail="client_id must not be blank")
         _require_allowed_player_client_id(client_id)
         label = request.label.strip() or "web"
 
@@ -1739,8 +1390,9 @@ def create_app(
 
     async def _web_controller_fallback_request(
         request: WebControllerFallbackRequest,
+        claim_context,
     ) -> WebControllerFallbackResponse:
-        character, controller, edge, claim = _claimed_controller_for_web_request(request)
+        character, controller, edge, claim = claim_context
         client_id = request.client_id.strip()
 
         with telemetry.span(
@@ -1784,8 +1436,9 @@ def create_app(
 
     async def _release_web_controller_to_fallback_request(
         request: WebControllerFallbackRequest,
+        claim_context,
     ) -> WebControllerFallbackResponse:
-        character, controller, _edge, claim = _claimed_controller_for_web_request(request)
+        character, controller, _edge, claim = claim_context
         timeout = (
             controller.get_component(ClaimTimeoutComponent)
             if controller.has_component(ClaimTimeoutComponent)
@@ -1830,8 +1483,9 @@ def create_app(
 
     async def _release_web_claim_request(
         request: WebControllerFallbackRequest,
+        claim_context,
     ) -> ClaimReleaseResponse:
-        character, controller, _edge, claim = _claimed_controller_for_web_request(request)
+        character, controller, _edge, claim = claim_context
         remove_claim(controller, claim_secrets)
         return ClaimReleaseResponse(
             character_id=str(character.id),
@@ -2052,195 +1706,6 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    @app.get("/admin/world/runtime", response_model=WorldRuntimeResponse)
-    async def runtime_status() -> WorldRuntimeResponse:
-        return _runtime_response()
-
-    @app.get("/admin/memory/characters", response_model=MemoryCharactersResponse)
-    async def list_memory_characters() -> MemoryCharactersResponse:
-        _require_memory_store()
-        return _memory_characters_response()
-
-    @app.get(
-        "/admin/memory/collections/{collection}/documents",
-        response_model=MemoryDocumentsResponse,
-    )
-    async def list_memory_documents(collection: str) -> MemoryDocumentsResponse:
-        return _memory_documents_response(collection)
-
-    @app.post(
-        "/admin/memory/collections/{collection}/documents",
-        response_model=MemoryDocumentResponse,
-        status_code=201,
-    )
-    async def create_memory_document(
-        collection: str,
-        request: MemoryDocumentUpdateRequest,
-    ) -> MemoryDocumentResponse:
-        return _memory_create_response(collection, request)
-
-    @app.patch(
-        "/admin/memory/collections/{collection}/documents/{id}",
-        response_model=MemoryDocumentResponse,
-    )
-    async def update_memory_document(
-        collection: str,
-        id: str,
-        request: MemoryDocumentUpdateRequest,
-    ) -> MemoryDocumentResponse:
-        return _memory_update_response(collection, id, request)
-
-    @app.delete("/admin/memory/collections/{collection}/documents/{id}")
-    async def delete_memory_document(collection: str, id: str) -> dict:
-        return _delete_memory_document(collection, id)
-
-    @app.post("/admin/world/pause", response_model=WorldRuntimeResponse)
-    async def pause_world() -> WorldRuntimeResponse:
-        if loop is None:
-            raise HTTPException(status_code=409, detail="server runtime is not attached")
-        publish = loop.pause()
-        if publish is not None:
-            await publish
-        return _runtime_response()
-
-    @app.post("/admin/world/resume", response_model=WorldRuntimeResponse)
-    async def resume_world() -> WorldRuntimeResponse:
-        if loop is None:
-            raise HTTPException(status_code=409, detail="server runtime is not attached")
-        publish = loop.resume()
-        if publish is not None:
-            await publish
-        return _runtime_response()
-
-    @app.get("/admin/world/stream")
-    async def stream_status() -> dict[str, int | float]:
-        return stream.stats()
-
-    @app.post("/play/world/commands", response_model=CommandResponse, status_code=202)
-    async def submit_command(
-        request: CommandRequest,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-    ) -> CommandResponse:
-        _with_claim_secret(request, claim_secret)
-        return await _submit_command_request(request)
-
-    @app.delete(
-        "/play/world/character/{id}/commands/{command_id}",
-        response_model=CommandCancelResponse,
-    )
-    async def cancel_command(
-        id: str,
-        command_id: str,
-        controller_id: str,
-        controller_generation: int,
-        claim_id: str | None = None,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-    ) -> CommandCancelResponse:
-        return await _cancel_command_request(
-            id,
-            command_id,
-            controller_id,
-            controller_generation,
-            claim_id,
-            claim_secret,
-        )
-
-    @app.post("/play/world/controllers/web/claim", response_model=WebControllerClaimResponse)
-    async def claim_web_controller(
-        request: WebControllerClaimRequest,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        player_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
-    ) -> WebControllerClaimResponse:
-        request = _with_player_request_context(request, claim_secret, player_client_id)
-        return await _claim_web_controller_request(request)
-
-    @app.patch("/play/world/controllers/web/fallback", response_model=WebControllerFallbackResponse)
-    async def set_web_controller_fallback(
-        request: WebControllerFallbackRequest,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        player_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
-    ) -> WebControllerFallbackResponse:
-        request = _with_player_request_context(request, claim_secret, player_client_id)
-        return await _web_controller_fallback_request(request)
-
-    @app.post(
-        "/play/world/controllers/web/release-controller",
-        response_model=WebControllerFallbackResponse,
-    )
-    async def release_web_controller_to_fallback(
-        request: WebControllerFallbackRequest,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        player_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
-    ) -> WebControllerFallbackResponse:
-        request = _with_player_request_context(request, claim_secret, player_client_id)
-        return await _release_web_controller_to_fallback_request(request)
-
-    @app.post("/play/world/controllers/web/release-claim", response_model=ClaimReleaseResponse)
-    async def release_web_claim(
-        request: WebControllerFallbackRequest,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        player_client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
-    ) -> ClaimReleaseResponse:
-        request = _with_player_request_context(request, claim_secret, player_client_id)
-        return await _release_web_claim_request(request)
-
-    @app.patch("/admin/world", response_model=WorldPatchResponse)
-    async def patch_world(request: WorldPatchRequest) -> WorldPatchResponse:
-        return await _patch_world_request(request)
-
-    @app.post("/admin/controllers/assign", response_model=WorldPatchResponse)
-    async def assign_controller(
-        request: ControllerAssignmentRequest,
-    ) -> WorldPatchResponse:
-        return await _assign_controller_request(request)
-
-    @app.get("/admin/controllers/definitions", response_model=ControllerDefinitionListResponse)
-    async def list_controller_definitions() -> ControllerDefinitionListResponse:
-        return _controller_definitions_response()
-
-    @app.post("/admin/controllers/scripts", response_model=ControllerDefinitionListResponse)
-    async def register_script(request: ScriptSpec) -> ControllerDefinitionListResponse:
-        return await _register_script_request(request)
-
-    @app.post("/admin/controllers/behaviors", response_model=ControllerDefinitionListResponse)
-    async def register_behavior(request: BehaviorTreeSpec) -> ControllerDefinitionListResponse:
-        return await _register_behavior_request(request)
-
-    @app.get("/admin/world/generators", response_model=WorldGeneratorListResponse)
-    async def list_world_generators() -> WorldGeneratorListResponse:
-        return _list_world_generators_response()
-
-    @app.get("/admin/world/generation", response_model=WorldGenerationStatusResponse)
-    async def world_generation_status() -> WorldGenerationStatusResponse:
-        return await _world_generation_status_response()
-
-    @app.post("/admin/world/generate", response_model=WorldGenerateResponse)
-    async def generate_world(request: WorldGenerateRequest) -> WorldGenerateResponse:
-        return await _generate_world_request(request)
-
-    @app.post("/admin/world/generate-room", response_model=WorldRoomGenerationResponse)
-    async def generate_room(request: WorldRoomGenerationRequest) -> WorldRoomGenerationResponse:
-        return await _generate_room_request(request)
-
-    @app.post(
-        "/admin/world/generate-character",
-        response_model=WorldCharacterGenerationResponse,
-    )
-    async def generate_character(
-        request: WorldCharacterGenerationRequest,
-    ) -> WorldCharacterGenerationResponse:
-        return await _generate_character_request(request)
-
-    @app.post("/admin/world/generate-item", response_model=WorldItemGenerationResponse)
-    async def generate_item(request: WorldItemGenerationRequest) -> WorldItemGenerationResponse:
-        return await _generate_item_request(request)
-
-    @app.post("/admin/world/generate-event", response_model=WorldEventGenerationResponse)
-    async def generate_event(
-        request: WorldEventGenerationRequest,
-    ) -> WorldEventGenerationResponse:
-        return await _generate_event_request(request)
-
     async def _generate_image_request(
         request: WorldImageGenerationRequest,
     ) -> WorldImageGenerationResponse:
@@ -2268,109 +1733,6 @@ def create_app(
             return None
         return _image_response(job)
 
-    @app.post("/admin/world/generate-image", response_model=WorldImageGenerationResponse)
-    async def generate_image(
-        request: WorldImageGenerationRequest,
-    ) -> WorldImageGenerationResponse:
-        return await _generate_image_request(request)
-
-    @app.get(
-        "/admin/world/generate-image/{job_id}",
-        response_model=WorldImageGenerationResponse,
-    )
-    async def image_job_status(job_id: str) -> WorldImageGenerationResponse:
-        service = _require_imagegen()
-        job = service.job(job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="unknown image job")
-        return _image_response(job)
-
-    @app.post(
-        "/admin/world/character/{character_id}/image/{purpose}",
-        response_model=CharacterImageUploadResponse,
-    )
-    async def upload_character_image(
-        character_id: str, purpose: str, request: Request
-    ) -> CharacterImageUploadResponse:
-        if purpose not in {"portrait", "sprite"}:
-            raise HTTPException(status_code=400, detail="purpose must be portrait or sprite")
-
-        content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
-        extension = UPLOAD_IMAGE_TYPES.get(content_type)
-        if extension is None:
-            raise HTTPException(status_code=400, detail="upload must be a PNG, JPEG, or WebP image")
-
-        data = await request.body()
-        if not data:
-            raise HTTPException(status_code=400, detail="upload body is empty")
-        if len(data) > MAX_UPLOAD_IMAGE_BYTES:
-            raise HTTPException(status_code=413, detail="upload image is too large")
-
-        async with actor._lock:
-            _character_entity(character_id)
-
-        segment = SEGMENT_PORTRAITS if purpose == "portrait" else SEGMENT_SPRITES
-        name = media_store.new_name(extension)
-        media_store.write(segment, name, data)
-        url = media_store.url_for(segment, name)
-
-        async with actor._lock:
-            character = _character_entity(character_id)
-            if purpose == "portrait":
-                replace_component(
-                    character,
-                    PortraitImageComponent(
-                        url=url,
-                        prompt="uploaded",
-                        generated_at_epoch=actor.epoch,
-                    ),
-                )
-            else:
-                replace_component(character, SpriteImageComponent(url=url))
-
-        return CharacterImageUploadResponse(
-            world_epoch=actor.epoch,
-            character_id=character_id,
-            purpose=purpose,
-            url=url,
-            content_type=content_type,
-        )
-
-    @app.post(
-        "/admin/world/event/{record_id}/image",
-        response_model=WorldImageGenerationResponse,
-    )
-    async def request_event_image(
-        record_id: str, body: EventImageRequest | None = None
-    ) -> WorldImageGenerationResponse:
-        # Player-facing: events are on-request only and deduped per record by the service.
-        service = _require_imagegen()
-        extra = body.extra if body is not None else ""
-        job = await service.start(record_id, ImagePurpose.EVENT, extra=extra)
-        return _image_response(job)
-
-    @app.post(
-        "/play/world/character/{character_id}/scene-image",
-        response_model=WorldImageGenerationResponse,
-    )
-    async def request_character_scene_image(
-        character_id: str,
-        claim_id: str | None = None,
-        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-    ) -> WorldImageGenerationResponse:
-        # Player-facing: illustrate the character's current room as an on-request scene event.
-        _require_imagegen()
-        _require_claim_secret(
-            character_id,
-            claim_id=claim_id,
-            claim_secret=claim_secret,
-        )
-        response = await _scene_image_request(character_id)
-        if response is None:
-            raise HTTPException(status_code=400, detail="character has no room to illustrate")
-        return response
-
-    @app.post("/admin/world/save", response_model=WorldSaveResponse)
     async def save_world_now() -> WorldSaveResponse:
         if save_path is None:
             raise HTTPException(status_code=409, detail="server was not started with --save")
@@ -2524,6 +1886,8 @@ def create_app(
 
     @auth_v1.get("/session", response_model=AuthMeResponse)
     async def v1_get_session(request: Request) -> AuthMeResponse:
+        if authenticator is None:
+            raise HTTPException(status_code=503, detail="authentication is not configured")
         principal = request.state.auth_principal
         return AuthMeResponse(
             subject=principal.subject,
@@ -2566,8 +1930,7 @@ def create_app(
         return CatalogResource(
             **_world_fields(),
             components={
-                key: value.model_dump(mode="json")
-                for key, value in schema.components.items()
+                key: value.model_dump(mode="json") for key, value in schema.components.items()
             },
             edges={key: value.model_dump(mode="json") for key, value in schema.edges.items()},
             content=load_content_library().model_dump(mode="json"),
@@ -2610,9 +1973,7 @@ def create_app(
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
         client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> ClaimResource:
-        character, controller, _edge, claim = _claim_context_v1(
-            claim_id, claim_secret, client_id
-        )
+        character, controller, _edge, claim = _claim_context_v1(claim_id, claim_secret, client_id)
         timeout = (
             controller.get_component(ClaimTimeoutComponent)
             if controller.has_component(ClaimTimeoutComponent)
@@ -2643,9 +2004,7 @@ def create_app(
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
         client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> ClaimResource:
-        character, controller, _edge, claim = _claim_context_v1(
-            claim_id, claim_secret, client_id
-        )
+        character, controller, _edge, claim = _claim_context_v1(claim_id, claim_secret, client_id)
         request = WebControllerFallbackRequest(
             character_id=str(character.id),
             client_id=claim.client_id,
@@ -2665,9 +2024,11 @@ def create_app(
                 timeout_seconds=body.timeout_seconds,
             )
             _with_claim_secret(request, claim_secret)
-            await _web_controller_fallback_request(request)
+            await _web_controller_fallback_request(request, (character, controller, _edge, claim))
         elif body.desired == "fallback":
-            await _release_web_controller_to_fallback_request(request)
+            await _release_web_controller_to_fallback_request(
+                request, (character, controller, _edge, claim)
+            )
         elif not controller.has_component(WebControllerComponent):
             reclaim = WebControllerClaimRequest(
                 character_id=str(character.id),
@@ -2685,14 +2046,12 @@ def create_app(
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
         client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> Response:
-        character, _controller, _edge, claim = _claim_context_v1(
-            claim_id, claim_secret, client_id
-        )
+        character, _controller, _edge, claim = _claim_context_v1(claim_id, claim_secret, client_id)
         request = WebControllerFallbackRequest(
             character_id=str(character.id), client_id=claim.client_id, claim_id=claim_id
         )
         _with_claim_secret(request, claim_secret)
-        await _release_web_claim_request(request)
+        await _release_web_claim_request(request, (character, _controller, _edge, claim))
         return Response(status_code=204)
 
     @play_v1.get("/claims/{claim_id}/projection", response_model=ClaimProjectionResource)
@@ -2701,17 +2060,13 @@ def create_app(
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
         client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> ClaimProjectionResource:
-        character, controller, edge, claim = _claim_context_v1(
-            claim_id, claim_secret, client_id
-        )
+        character, controller, edge, claim = _claim_context_v1(claim_id, claim_secret, client_id)
         projection = serialize_character_projection(actor, str(character.id))
         room_id = projection.room.id
         scene = serialize_room_projection(actor, room_id).model_dump(mode="json") if room_id else {}
         scene.pop("ok", None)
         scene.pop("schema_version", None)
-        queued = serialize_character_queued_commands(
-            actor, str(character.id), **_runtime_timing()
-        )
+        queued = serialize_character_queued_commands(actor, str(character.id), **_runtime_timing())
         character_data = _without_preview_fields(projection)
         sheet = character_data.pop("sheet", {})
         actions = projection.actions
@@ -2738,9 +2093,7 @@ def create_app(
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
         client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> CommandResource:
-        character, controller, edge, _claim = _claim_context_v1(
-            claim_id, claim_secret, client_id
-        )
+        character, controller, edge, _claim = _claim_context_v1(claim_id, claim_secret, client_id)
         request = CommandRequest(
             character_id=str(character.id),
             controller_id=str(controller.id),
@@ -2756,10 +2109,8 @@ def create_app(
             command_id=body.id,
         )
         _with_claim_secret(request, claim_secret)
-        result = await _submit_command_request(request)
-        response.headers["Location"] = (
-            f"/v1/play/claims/{claim_id}/commands/{result.command_id}"
-        )
+        result = await _submit_command_request(request, (character, controller, _claim))
+        response.headers["Location"] = f"/v1/play/claims/{claim_id}/commands/{result.command_id}"
         return CommandResource(
             **_world_fields(),
             id=result.command_id,
@@ -2777,16 +2128,10 @@ def create_app(
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
         client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> CommandResource:
-        character, controller, edge, _claim = _claim_context_v1(
-            claim_id, claim_secret, client_id
-        )
+        character, controller, edge, _claim = _claim_context_v1(claim_id, claim_secret, client_id)
         result = await _cancel_command_request(
             str(character.id),
             command_id,
-            str(controller.id),
-            edge.generation,
-            claim_id,
-            claim_secret,
         )
         return CommandResource(
             **_world_fields(),
@@ -2802,9 +2147,7 @@ def create_app(
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
         client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> PerspectiveQueryResult:
-        character, _controller, _edge, _claim = _claim_context_v1(
-            claim_id, claim_secret, client_id
-        )
+        character, _controller, _edge, _claim = _claim_context_v1(claim_id, claim_secret, client_id)
         try:
             return actor.perspective_queries.execute(
                 actor,
@@ -2827,9 +2170,7 @@ def create_app(
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
         client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> EventCollection:
-        character, _controller, _edge, _claim = _claim_context_v1(
-            claim_id, claim_secret, client_id
-        )
+        character, _controller, _edge, _claim = _claim_context_v1(claim_id, claim_secret, client_id)
         if since is None:
             return EventCollection(
                 **_world_fields(),
@@ -2851,13 +2192,22 @@ def create_app(
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
         client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> JobResource:
-        character, _controller, _edge, _claim = _claim_context_v1(
-            claim_id, claim_secret, client_id
-        )
+        character, controller, _edge, claim = _claim_context_v1(claim_id, claim_secret, client_id)
         created = datetime.now(UTC)
         if body.kind == "chat":
             if character_chat is None:
                 raise HTTPException(status_code=409, detail="character chat is not enabled")
+            if not controller.has_component(LLMControllerComponent):
+                fallback = WebControllerFallbackRequest(
+                    character_id=str(character.id),
+                    client_id=claim.client_id,
+                    claim_id=claim_id,
+                    fallback_controller="llm",
+                )
+                _with_claim_secret(fallback, claim_secret)
+                await _release_web_controller_to_fallback_request(
+                    fallback, (character, controller, _edge, claim)
+                )
             chat_request = CharacterChatRequest(
                 client_id=client_id or "",
                 claim_id=claim_id,
@@ -2866,9 +2216,7 @@ def create_app(
                 history=body.history,
             )
             _with_claim_secret(chat_request, claim_secret)
-            result = await world_character_chat(
-                str(character.id), chat_request, claim_secret, client_id
-            )
+            result = await world_character_chat(str(character.id), chat_request)
             job_id = uuid4().hex
             job = JobResource(
                 **_world_fields(),
@@ -2909,9 +2257,7 @@ def create_app(
                 continue
             player_jobs[job_id] = _refresh_image_job_v1(job)
         return [
-            job
-            for job_id, job in player_jobs.items()
-            if player_job_claims.get(job_id) == claim_id
+            job for job_id, job in player_jobs.items() if player_job_claims.get(job_id) == claim_id
         ]
 
     @play_v1.get("/claims/{claim_id}/jobs/{job_id}", response_model=JobResource)
@@ -2939,7 +2285,8 @@ def create_app(
 
     @admin_v1.get("/world/snapshot")
     async def v1_world_snapshot() -> dict:
-        snapshot = serialize_world(actor, meta)
+        with telemetry.span("world.snapshot"):
+            snapshot = serialize_world(actor, meta)
         return {**snapshot, **_world_fields()}
 
     @admin_v1.get("/world/runtime")
@@ -2966,17 +2313,16 @@ def create_app(
 
     @admin_v1.get("/characters/{character_id}")
     async def v1_admin_character(character_id: str) -> dict:
-        return {
-            **_world_fields(),
-            **_without_preview_fields(serialize_dm_projection(actor, character_id)),
-        }
+        try:
+            projection = serialize_dm_projection(actor, character_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {**_world_fields(), **_without_preview_fields(projection)}
 
     @admin_v1.put("/characters/{character_id}/controller")
     async def v1_assign_controller(character_id: str, body: ControllerAssignment) -> dict:
         result = await _assign_controller_request(
-            ControllerAssignmentRequest(
-                character_id=character_id, controller_id=body.controller_id
-            )
+            ControllerAssignmentRequest(character_id=character_id, controller_id=body.controller_id)
         )
         return {**_world_fields(), **_without_preview_fields(result)}
 
@@ -3202,10 +2548,13 @@ def create_app(
                 subscription.frame(actor, {"type": "snapshot", "data": snapshot})
             )
             while True:
-                if access_token is not None and token_store.verify(access_token) is None:
+                if access_token is not None and authenticator.verify_token(access_token) is None:
                     await websocket.close(code=1008)
                     return
                 message = await next_websocket_update(actor, subscription)
+                if access_token is not None and authenticator.verify_token(access_token) is None:
+                    await websocket.close(code=1008)
+                    return
                 await websocket.send_json(subscription.frame(actor, message))
         except WebSocketDisconnect:
             pass
@@ -3250,9 +2599,7 @@ def create_app(
         try:
             if client_id is None:
                 raise HTTPException(status_code=403, detail="client identity is required")
-            access_token = _authenticate_websocket_frame(
-                websocket, data, AuthorizationSurface.PLAY
-            )
+            access_token = _authenticate_websocket_frame(websocket, data, AuthorizationSurface.PLAY)
             claim_context = _claim_context_v1(claim_id, claim_secret, client_id)
         except HTTPException:
             await websocket.close(code=1008)
@@ -3262,7 +2609,7 @@ def create_app(
 
         async def send_frame(frame: dict) -> bool:
             try:
-                if access_token is not None and token_store.verify(access_token) is None:
+                if access_token is not None and authenticator.verify_token(access_token) is None:
                     raise HTTPException(status_code=401, detail="invalid bearer token")
                 _claim_context_v1(claim_id, claim_secret, client_id)
             except HTTPException:
@@ -3297,13 +2644,8 @@ def create_app(
         request: CharacterChatRequest,
         claim_secret: str | None,
     ) -> dict:
-        _with_claim_secret(request, claim_secret)
-        response = await world_character_chat(
-            character_id,
-            request,
-            claim_secret,
-            request.client_id,
-        )
+        del claim_secret
+        response = await character_chat.chat(character_id, request)
         return _without_preview_fields(response)
 
     if mcp_enabled(plugins):
@@ -3325,9 +2667,7 @@ def create_app(
             scene_image=_scene_image_request if imagegen is not None else None,
             chat=_mcp_chat_request if character_chat is not None else None,
             assign_controller=_assign_controller_request,
-            list_generators=lambda: _without_preview_fields(
-                _list_world_generators_response()
-            ),
+            list_generators=lambda: _without_preview_fields(_list_world_generators_response()),
             register_script=_register_script_request,
             register_behavior=_register_behavior_request,
             list_controller_definitions=_controller_definitions_response,
@@ -3347,11 +2687,6 @@ def create_app(
             name="mcp",
         )
 
-    app.router.routes[:] = [
-        route
-        for route in app.router.routes
-        if str(getattr(route, "path", "")).startswith("/v1/")
-    ]
     route_surface_matrix(app)
     return app
 

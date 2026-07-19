@@ -29,6 +29,7 @@ from bunnyland.llm_agents import (
     resolve_script,
 )
 from bunnyland.server.auth import WORLD_ADMIN_SCOPE, TokenPrincipal
+from bunnyland.server.client_ids import CLIENT_ID_HEADER
 
 
 def _forager_spec(name: str = "data-forager") -> BehaviorTreeSpec:
@@ -73,13 +74,8 @@ async def test_compile_behavior_tree_happy_path_drives_decision():
     context = PromptBuilder(scenario.actor.world).build(scenario.character)
     # No items in the room -> falls through to move.
     assert (
-        (
-            await BehaviorTreeAgent(tree).decide(
-                "", context, character_id=str(scenario.character)
-            )
-        ).name
-        == "move"
-    )
+        await BehaviorTreeAgent(tree).decide("", context, character_id=str(scenario.character))
+    ).name == "move"
 
 
 @pytest.mark.parametrize(
@@ -148,9 +144,7 @@ async def test_say_action_compiles_with_text():
 
     context = PromptBuilder(scenario.actor.world).build(scenario.character)
     assert (
-        await BehaviorTreeAgent(tree).decide(
-            "", context, character_id=str(scenario.character)
-        )
+        await BehaviorTreeAgent(tree).decide("", context, character_id=str(scenario.character))
         is None
     )
 
@@ -192,9 +186,7 @@ async def test_address_library_actions_compile_and_speak():
     greet = await BehaviorTreeAgent(greeter).decide(
         "", context, character_id=str(scenario.character)
     )
-    warn = await BehaviorTreeAgent(warner).decide(
-        "", context, character_id=str(scenario.character)
-    )
+    warn = await BehaviorTreeAgent(warner).decide("", context, character_id=str(scenario.character))
     assert greet.arguments["text"] == "Hazel, good to see you."
     assert warn.arguments["text"] == "Hazel, leave now."
 
@@ -315,13 +307,14 @@ def _client(scenario, tmp_path):
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://testserver",
+        headers={CLIENT_ID_HEADER: "admin-client"},
     )
 
 
 async def test_rest_lists_and_registers_definitions(tmp_path):
     scenario = build_scenario()
     async with _client(scenario, tmp_path) as client:
-        listing = await client.get("/admin/controllers/definitions")
+        listing = await client.get("/v1/admin/controller-definitions")
         assert listing.status_code == 200
         body = listing.json()
         assert "idle" in body["behaviors"]
@@ -329,20 +322,21 @@ async def test_rest_lists_and_registers_definitions(tmp_path):
         assert "take_first_item" in body["action_library"]
         assert "has_visible_objects" in body["condition_library"]
 
-        created = await client.post(
-            "/admin/controllers/scripts",
-            json={
-                "name": "rest-script",
-                "calls": [{"name": "move", "arguments": {"direction": "north"}}],
-            },
+        created = await client.put(
+            "/v1/admin/controller-definitions/script/rest-script",
+            json={"definition": {"calls": [{"name": "move", "arguments": {"direction": "north"}}]}},
         )
         assert created.status_code == 200
         assert "rest-script" in created.json()["scripts"]
         assert created.json()["stored"]["scripts"] == ["rest-script"]
 
-        behavior = await client.post(
-            "/admin/controllers/behaviors",
-            json=_forager_spec("rest-forager").model_dump(mode="json"),
+        behavior = await client.put(
+            "/v1/admin/controller-definitions/behavior/rest-forager",
+            json={
+                "definition": _forager_spec("rest-forager").model_dump(
+                    mode="json", exclude={"name"}
+                )
+            },
         )
         assert behavior.status_code == 200
         assert "rest-forager" in behavior.json()["behaviors"]
@@ -351,9 +345,9 @@ async def test_rest_lists_and_registers_definitions(tmp_path):
 async def test_rest_rejects_invalid_behavior(tmp_path):
     scenario = build_scenario()
     async with _client(scenario, tmp_path) as client:
-        response = await client.post(
-            "/admin/controllers/behaviors",
-            json={"name": "broken", "root": {"kind": "action", "ref": "nope"}},
+        response = await client.put(
+            "/v1/admin/controller-definitions/behavior/broken",
+            json={"definition": {"root": {"kind": "action", "ref": "nope"}}},
         )
     assert response.status_code == 400
     assert "unknown action" in response.json()["detail"]
@@ -362,14 +356,18 @@ async def test_rest_rejects_invalid_behavior(tmp_path):
 async def test_rest_persists_definitions_across_app_restart(tmp_path):
     scenario = build_scenario()
     async with _client(scenario, tmp_path) as client:
-        await client.post(
-            "/admin/controllers/behaviors",
-            json=_forager_spec("persisted-forager").model_dump(mode="json"),
+        await client.put(
+            "/v1/admin/controller-definitions/behavior/persisted-forager",
+            json={
+                "definition": _forager_spec("persisted-forager").model_dump(
+                    mode="json", exclude={"name"}
+                )
+            },
         )
 
     # A fresh app over the same store file re-registers the saved behavior on boot.
     async with _client(build_scenario(), tmp_path) as second:
-        listing = (await second.get("/admin/controllers/definitions")).json()
+        listing = (await second.get("/v1/admin/controller-definitions")).json()
     assert "persisted-forager" in listing["behaviors"]
     assert listing["stored"]["behaviors"] == ["persisted-forager"]
 
@@ -506,17 +504,17 @@ async def test_mcp_register_and_list_definitions(monkeypatch):
     scenario = build_scenario()
     tools = _make_mcp(monkeypatch, scenario)
 
-    listing = tools["list_controller_definitions_admin"]()
+    listing = tools["admin_list_controller_definitions"]()
     assert "idle" in listing["behaviors"]
 
-    script = await tools["register_script_admin"](
+    script = await tools["admin_register_script"](
         name="mcp-script",
         calls=[{"name": "move", "arguments": {"direction": "north"}}],
     )
     assert "mcp-script" in script["scripts"]
     assert script["stored"]["scripts"] == ["mcp-script"]
 
-    behavior = await tools["register_behavior_admin"](
+    behavior = await tools["admin_register_behavior"](
         name="mcp-forager",
         root=_forager_spec("mcp-forager").root.model_dump(mode="json"),
     )
@@ -526,7 +524,7 @@ async def test_mcp_register_and_list_definitions(monkeypatch):
 async def test_mcp_register_has_no_credential_argument(monkeypatch):
     scenario = build_scenario()
     tools = _make_mcp(monkeypatch, scenario)
-    assert list(inspect.signature(tools["register_script_admin"]).parameters) == [
+    assert list(inspect.signature(tools["admin_register_script"]).parameters) == [
         "name",
         "calls",
         "description",
@@ -537,7 +535,7 @@ async def test_mcp_register_reports_invalid_behavior(monkeypatch):
     scenario = build_scenario()
     tools = _make_mcp(monkeypatch, scenario)
     with pytest.raises(RuntimeError, match="unknown action"):
-        await tools["register_behavior_admin"](
+        await tools["admin_register_behavior"](
             name="broken",
             root={"kind": "action", "ref": "nope"},
         )
@@ -547,10 +545,8 @@ async def test_mcp_tools_guard_when_not_configured(monkeypatch):
     scenario = build_scenario()
     tools = _make_mcp(monkeypatch, scenario, with_definitions=False)
     with pytest.raises(RuntimeError, match="not configured"):
-        tools["list_controller_definitions_admin"]()
+        tools["admin_list_controller_definitions"]()
     with pytest.raises(RuntimeError, match="not configured"):
-        await tools["register_script_admin"](name="x", calls=[])
+        await tools["admin_register_script"](name="x", calls=[])
     with pytest.raises(RuntimeError, match="not configured"):
-        await tools["register_behavior_admin"](
-            name="x", root={"kind": "selector"}
-        )
+        await tools["admin_register_behavior"](name="x", root={"kind": "selector"})

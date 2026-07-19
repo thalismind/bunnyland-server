@@ -348,7 +348,7 @@ def character_sheet_url(api_base: str, character_id: str) -> str:
     frontend = frontend_base_for_api(api_base)
     query = urllib.parse.urlencode({"server": api_base.rstrip("/")})
     fragment = urllib.parse.quote(character_id, safe=":")
-    return f"{frontend}/character-sheet.html?{query}#{fragment}"
+    return f"{frontend}/character.html?{query}#{fragment}"
 
 
 class LocalBackend(Backend):
@@ -701,18 +701,11 @@ class RemoteBackend(Backend):
             {"X-Bunnyland-Claim-Secret": claim.claim_secret} if claim and claim.claim_secret else {}
         )
 
-    def _claim_params(self, character_id: str) -> dict[str, str]:
-        claim = self._claim_for(character_id)
-        return {"claim_id": claim.claim_id} if claim and claim.claim_id else {}
-
-    def _claim_request_kwargs(self, character_id: str, *, params: bool = False) -> dict:
+    def _claim_request_kwargs(self, character_id: str) -> dict:
         kwargs = {}
         claim_headers = self._claim_headers(character_id)
         if claim_headers:
             kwargs["headers"] = claim_headers
-        claim_params = self._claim_params(character_id)
-        if params and claim_params:
-            kwargs["params"] = claim_params
         return kwargs
 
     async def start(self) -> None:

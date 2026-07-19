@@ -25,9 +25,10 @@ from bunnyland.imagegen.wiring import build_image_service, select_enhancer
 from bunnyland.persistence import WorldMeta
 from bunnyland.server.app import MAX_UPLOAD_IMAGE_BYTES, create_app
 from bunnyland.server.auth import WORLD_ADMIN_SCOPE, WORLD_PLAY_SCOPE, TokenStore
+from bunnyland.server.client_ids import CLIENT_ID_HEADER
 from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 
-ADMIN = {}
+ADMIN = {CLIENT_ID_HEADER: "admin-client"}
 
 
 class _FakeClient:
@@ -60,8 +61,16 @@ def _client(app, *, headers: dict[str, str] | None = None) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://testserver",
-        headers=headers,
+        headers={CLIENT_ID_HEADER: "image-client", **(headers or {})},
     )
+
+
+async def _claim(client: httpx.AsyncClient, character_id: str) -> tuple[str, dict[str, str]]:
+    response = await client.post("/v1/play/claims", json={"character_id": character_id})
+    return response.json()["id"], {
+        CLIENT_ID_HEADER: "image-client",
+        "X-Bunnyland-Claim-Secret": response.headers["X-Bunnyland-Claim-Secret"],
+    }
 
 
 # --- admin generate-image ------------------------------------------------------------
@@ -79,7 +88,8 @@ async def test_generate_image_requires_admin(tmp_path):
     )
     async with _client(app, headers={"Authorization": f"Bearer {token}"}) as client:
         response = await client.post(
-            "/admin/world/generate-image", json={"entity_id": str(scenario.character)}
+            "/v1/admin/world/generation-jobs",
+            json={"kind": "image", "entity_id": str(scenario.character)},
         )
     assert response.status_code == 403
 
@@ -87,12 +97,8 @@ async def test_generate_image_requires_admin(tmp_path):
 async def test_event_image_requires_admin_scope(tmp_path):
     scenario = build_scenario()
     store = TokenStore(":memory:")
-    player, _principal = store.issue(
-        "player", [WORLD_PLAY_SCOPE], automatic_rotation=False
-    )
-    operator, _principal = store.issue(
-        "operator", [WORLD_ADMIN_SCOPE], automatic_rotation=False
-    )
+    player, _principal = store.issue("player", [WORLD_PLAY_SCOPE], automatic_rotation=False)
+    operator, _principal = store.issue("operator", [WORLD_ADMIN_SCOPE], automatic_rotation=False)
     app = create_app(
         scenario.actor,
         meta=WorldMeta(seed="moss"),
@@ -101,15 +107,17 @@ async def test_event_image_requires_admin_scope(tmp_path):
     )
     async with _client(app) as client:
         denied = await client.post(
-            "/admin/world/event/record-1/image",
+            "/v1/admin/world/generation-jobs",
             headers={"Authorization": f"Bearer {player}"},
+            json={"kind": "image", "entity_id": "record-1", "purpose": "event"},
         )
         allowed = await client.post(
-            "/admin/world/event/record-1/image",
+            "/v1/admin/world/generation-jobs",
             headers={"Authorization": f"Bearer {operator}"},
+            json={"kind": "image", "entity_id": "record-1", "purpose": "event"},
         )
     assert denied.status_code == 403
-    assert allowed.status_code == 200
+    assert allowed.status_code == 202
     store.close()
 
 
@@ -118,29 +126,37 @@ async def test_generate_image_success_and_status(tmp_path):
     service = _service(scenario.actor, tmp_path)
     async with _client(_app(scenario.actor, service)) as client:
         response = await client.post(
-            "/admin/world/generate-image",
+            "/v1/admin/world/generation-jobs",
             headers=ADMIN,
-            json={"entity_id": str(scenario.character), "purpose": "portrait"},
+            json={
+                "kind": "image",
+                "entity_id": str(scenario.character),
+                "purpose": "portrait",
+            },
         )
-        assert response.status_code == 200
+        assert response.status_code == 202
         payload = response.json()
-        job_id = payload["job_id"]
-        assert payload["entity_id"] == str(scenario.character)
-        assert payload["purpose"] == "portrait"
+        job_id = payload["id"]
+        assert payload["result"]["entity_id"] == str(scenario.character)
+        assert payload["result"]["purpose"] == "portrait"
 
-        status = await client.get(f"/admin/world/generate-image/{job_id}", headers=ADMIN)
-    assert response.status_code == 200
+        status = await client.get(f"/v1/admin/world/generation-jobs/{job_id}", headers=ADMIN)
+    assert response.status_code == 202
     assert status.status_code == 200
-    assert status.json()["job_id"] == job_id
+    assert status.json()["id"] == job_id
 
 
 async def test_generate_image_invalid_purpose(tmp_path):
     scenario = build_scenario()
     async with _client(_app(scenario.actor, _service(scenario.actor, tmp_path))) as client:
         response = await client.post(
-            "/admin/world/generate-image",
+            "/v1/admin/world/generation-jobs",
             headers=ADMIN,
-            json={"entity_id": str(scenario.character), "purpose": "nonsense"},
+            json={
+                "kind": "image",
+                "entity_id": str(scenario.character),
+                "purpose": "nonsense",
+            },
         )
     assert response.status_code == 400
 
@@ -148,7 +164,7 @@ async def test_generate_image_invalid_purpose(tmp_path):
 async def test_image_job_status_unknown(tmp_path):
     scenario = build_scenario()
     async with _client(_app(scenario.actor, _service(scenario.actor, tmp_path))) as client:
-        response = await client.get("/admin/world/generate-image/ghost", headers=ADMIN)
+        response = await client.get("/v1/admin/world/generation-jobs/ghost", headers=ADMIN)
     assert response.status_code == 404
 
 
@@ -159,10 +175,19 @@ async def test_endpoints_409_when_imagegen_disabled():
     )
     async with _client(app) as client:
         assert (
-            await client.post("/admin/world/generate-image", headers=ADMIN, json={"entity_id": "x"})
+            await client.post(
+                "/v1/admin/world/generation-jobs",
+                headers=ADMIN,
+                json={"kind": "image", "entity_id": "x"},
+            )
         ).status_code == 409
-        assert (await client.post("/admin/world/event/rec_1/image")).status_code == 409
-        assert (await client.get("/public/media/portraits/x.png")).status_code == 404
+        assert (
+            await client.post(
+                "/v1/admin/world/generation-jobs",
+                json={"kind": "image", "entity_id": "rec_1", "purpose": "event"},
+            )
+        ).status_code == 409
+        assert (await client.get("/v1/public/media/portraits/x.png")).status_code == 404
 
 
 async def test_admin_upload_character_images_without_imagegen(tmp_path, monkeypatch):
@@ -170,27 +195,25 @@ async def test_admin_upload_character_images_without_imagegen(tmp_path, monkeypa
     scenario = build_scenario()
     store = TokenStore(":memory:")
     player, _principal = store.issue("player", [WORLD_PLAY_SCOPE], automatic_rotation=False)
-    operator, _principal = store.issue(
-        "operator", [WORLD_ADMIN_SCOPE], automatic_rotation=False
-    )
+    operator, _principal = store.issue("operator", [WORLD_ADMIN_SCOPE], automatic_rotation=False)
     app = create_app(scenario.actor, meta=WorldMeta(seed="moss"), token_store=store)
     async with _client(app, headers={"Authorization": f"Bearer {operator}"}) as client:
-        denied = await client.post(
-            f"/admin/world/character/{scenario.character}/image/portrait",
-            content=b"PNG",
-            headers={"Content-Type": "image/png", "Authorization": f"Bearer {player}"},
+        denied = await client.put(
+            f"/v1/admin/media/character/{scenario.character}/portrait",
+            files={"file": ("portrait.png", b"PNG", "image/png")},
+            headers={"Authorization": f"Bearer {player}"},
         )
         assert denied.status_code == 403
 
-        portrait = await client.post(
-            f"/admin/world/character/{scenario.character}/image/portrait",
-            content=b"PNG",
-            headers={**ADMIN, "Content-Type": "image/png"},
+        portrait = await client.put(
+            f"/v1/admin/media/character/{scenario.character}/portrait",
+            files={"file": ("portrait.png", b"PNG", "image/png")},
+            headers=ADMIN,
         )
         assert portrait.status_code == 200
         portrait_payload = portrait.json()
         assert portrait_payload["purpose"] == "portrait"
-        assert portrait_payload["url"].startswith("/public/media/portraits/")
+        assert portrait_payload["url"].startswith("/v1/public/media/portraits/")
         component = scenario.actor.world.get_entity(scenario.character).get_component(
             PortraitImageComponent
         )
@@ -199,16 +222,16 @@ async def test_admin_upload_character_images_without_imagegen(tmp_path, monkeypa
         assert media.status_code == 200
         assert media.content == b"PNG"
 
-        sprite = await client.post(
-            f"/admin/world/character/{scenario.character}/image/sprite",
-            content=b"WEBP",
-            headers={**ADMIN, "Content-Type": "image/webp"},
+        sprite = await client.put(
+            f"/v1/admin/media/character/{scenario.character}/sprite",
+            files={"file": ("sprite.webp", b"WEBP", "image/webp")},
+            headers=ADMIN,
         )
         assert sprite.status_code == 200
         sprite_component = scenario.actor.world.get_entity(scenario.character).get_component(
             SpriteImageComponent
         )
-        assert sprite_component.url.startswith(f"/public/media/{SEGMENT_SPRITES}/")
+        assert sprite_component.url.startswith(f"/v1/public/media/{SEGMENT_SPRITES}/")
 
 
 async def test_admin_upload_character_image_rejects_bad_inputs(tmp_path, monkeypatch):
@@ -218,33 +241,63 @@ async def test_admin_upload_character_image_rejects_bad_inputs(tmp_path, monkeyp
         scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated_embedding=True
     )
     async with _client(app) as client:
-        bad_purpose = await client.post(
-            f"/admin/world/character/{scenario.character}/image/avatar",
-            content=b"PNG",
-            headers={**ADMIN, "Content-Type": "image/png"},
+        missing_file = await client.put(
+            f"/v1/admin/media/character/{scenario.character}/portrait",
+            headers=ADMIN,
+        )
+        assert missing_file.status_code == 400
+
+        bad_purpose = await client.put(
+            f"/v1/admin/media/character/{scenario.character}/avatar",
+            files={"file": ("avatar.png", b"PNG", "image/png")},
+            headers=ADMIN,
         )
         assert bad_purpose.status_code == 400
 
-        bad_type = await client.post(
-            f"/admin/world/character/{scenario.character}/image/portrait",
-            content=b"GIF",
-            headers={**ADMIN, "Content-Type": "image/gif"},
+        bad_type = await client.put(
+            f"/v1/admin/media/character/{scenario.character}/portrait",
+            files={"file": ("portrait.gif", b"GIF", "image/gif")},
+            headers=ADMIN,
         )
         assert bad_type.status_code == 400
 
-        empty = await client.post(
-            f"/admin/world/character/{scenario.character}/image/portrait",
-            content=b"",
-            headers={**ADMIN, "Content-Type": "image/png"},
+        empty = await client.put(
+            f"/v1/admin/media/character/{scenario.character}/portrait",
+            files={"file": ("portrait.png", b"", "image/png")},
+            headers=ADMIN,
         )
         assert empty.status_code == 400
 
-        too_large = await client.post(
-            f"/admin/world/character/{scenario.character}/image/portrait",
-            content=b"P" * (MAX_UPLOAD_IMAGE_BYTES + 1),
-            headers={**ADMIN, "Content-Type": "image/png"},
+        too_large = await client.put(
+            f"/v1/admin/media/character/{scenario.character}/portrait",
+            files={
+                "file": (
+                    "portrait.png",
+                    b"P" * (MAX_UPLOAD_IMAGE_BYTES + 1),
+                    "image/png",
+                )
+            },
+            headers=ADMIN,
         )
         assert too_large.status_code == 413
+
+        missing_character = await client.put(
+            "/v1/admin/media/character/entity_999/portrait",
+            files={"file": ("portrait.png", b"PNG", "image/png")},
+            headers=ADMIN,
+        )
+        assert missing_character.status_code == 404
+
+        non_character = spawn_entity(
+            scenario.actor.world,
+            [IdentityComponent(name="Flat Rock", kind="item")],
+        )
+        wrong_kind = await client.put(
+            f"/v1/admin/media/character/{non_character.id}/portrait",
+            files={"file": ("portrait.png", b"PNG", "image/png")},
+            headers=ADMIN,
+        )
+        assert wrong_kind.status_code == 400
 
 
 # --- player event image --------------------------------------------------------------
@@ -263,10 +316,16 @@ async def test_request_event_image_and_dedup(tmp_path):
     service = _service(scenario.actor, tmp_path)
     async with _client(_app(scenario.actor, service)) as client:
         first = await client.post(
-            f"/admin/world/event/{record.id}/image", json={"extra": "dramatic"}
+            "/v1/admin/world/generation-jobs",
+            json={
+                "kind": "image",
+                "entity_id": str(record.id),
+                "purpose": "event",
+                "extra": "dramatic",
+            },
         )
-    assert first.status_code == 200
-    assert first.json()["purpose"] == "event"
+    assert first.status_code == 202
+    assert first.json()["result"]["purpose"] == "event"
     # Once it has an image, a second request reuses it (deduped).
     world.get_entity(record.id)  # still present
 
@@ -289,10 +348,15 @@ async def test_scene_image_endpoint_success(tmp_path):
     scenario.actor.bus.subscribe(DomainEvent, events.append)
     service = _service(scenario.actor, tmp_path)
     async with _client(_app(scenario.actor, service)) as client:
-        response = await client.post(f"/play/world/character/{scenario.character}/scene-image")
+        claim_id, headers = await _claim(client, str(scenario.character))
+        response = await client.post(
+            f"/v1/play/claims/{claim_id}/jobs",
+            headers=headers,
+            json={"kind": "scene_image"},
+        )
         await service.wait_idle()
-    assert response.status_code == 200
-    assert response.json()["purpose"] == "event"
+    assert response.status_code == 202
+    assert response.json()["result"]["purpose"] == "event"
     image_events = [
         event for event in events if event.__class__.__name__.startswith("ImageGeneration")
     ]
@@ -305,7 +369,12 @@ async def test_scene_image_endpoint_unknown_character(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
     async with _client(_app(scenario.actor, service)) as client:
-        assert (await client.post("/play/world/character/ghost_9/scene-image")).status_code == 404
+        assert (
+            await client.post(
+                "/v1/play/claims",
+                json={"character_id": "ghost_9"},
+            )
+        ).status_code == 404
 
 
 async def test_scene_image_endpoint_no_room(tmp_path):
@@ -316,7 +385,12 @@ async def test_scene_image_endpoint_no_room(tmp_path):
     )
     service = _service(scenario.actor, tmp_path)
     async with _client(_app(scenario.actor, service)) as client:
-        response = await client.post(f"/play/world/character/{roomless.id}/scene-image")
+        claim_id, headers = await _claim(client, str(roomless.id))
+        response = await client.post(
+            f"/v1/play/claims/{claim_id}/jobs",
+            headers=headers,
+            json={"kind": "scene_image"},
+        )
         assert response.status_code == 400
 
 
@@ -326,7 +400,12 @@ async def test_scene_image_endpoint_409_without_imagegen():
         scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated_embedding=True
     )
     async with _client(app) as client:
-        response = await client.post(f"/play/world/character/{scenario.character}/scene-image")
+        claim_id, headers = await _claim(client, str(scenario.character))
+        response = await client.post(
+            f"/v1/play/claims/{claim_id}/jobs",
+            headers=headers,
+            json={"kind": "scene_image"},
+        )
         assert response.status_code == 409
 
 
@@ -369,22 +448,29 @@ async def test_local_backend_request_image_no_room(tmp_path):
 async def test_remote_backend_request_image_paths():
     import httpx
 
-    from bunnyland.tui.backend import RemoteBackend
+    from bunnyland.tui.backend import ControlClaim, RemoteBackend
 
     def handler(request):
-        if request.url.path.endswith("/ok/scene-image"):
+        if request.url.path.endswith("/play/claims/ok/jobs"):
             return httpx.Response(
-                200, json={"status": "queued", "url": "/public/media/events/x.png"}
+                202,
+                json={
+                    "status": "queued",
+                    "result": {"url": "/v1/public/media/events/x.png"},
+                },
             )
-        if request.url.path.endswith("/off/scene-image"):
+        if request.url.path.endswith("/play/claims/off/jobs"):
             return httpx.Response(409, json={"detail": "disabled"})
         return httpx.Response(500, json={"detail": "boom"})
 
     backend = RemoteBackend("https://server")
     backend._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    backend._claims = {
+        key: ControlClaim("controller:1", 1, key, f"secret-{key}") for key in ("ok", "off", "bad")
+    }
 
     ok = await backend.request_image("ok")
-    assert ok.ok is True and ok.url == "/public/media/events/x.png"
+    assert ok.ok is True and ok.url == "/v1/public/media/events/x.png"
     off = await backend.request_image("off")
     assert off.ok is False and off.status == "unavailable"
     err = await backend.request_image("bad")
@@ -426,9 +512,10 @@ async def test_character_projection_includes_portrait(tmp_path):
         scenario.actor, meta=WorldMeta(seed="moss"), allow_unauthenticated_embedding=True
     )
     async with _client(app) as client:
-        body = (await client.get(f"/play/world/character/{scenario.character}")).json()
-    assert body["portrait"]["url"] == "/public/media/portraits/p.png"
-    assert body["portrait"]["alpha_url"] == "/public/media/alpha/p.png"
+        claim_id, headers = await _claim(client, str(scenario.character))
+        body = (await client.get(f"/v1/play/claims/{claim_id}/projection", headers=headers)).json()
+    assert body["character"]["portrait"]["url"] == "/public/media/portraits/p.png"
+    assert body["character"]["portrait"]["alpha_url"] == "/public/media/alpha/p.png"
 
 
 async def test_room_projection_entity_portrait_default_empty(tmp_path):
@@ -447,19 +534,17 @@ async def test_room_projection_entity_portrait_default_empty(tmp_path):
         claim_secrets=secrets,
         allow_unauthenticated_embedding=True,
     )
-    room = scenario.character_room()
     async with _client(app) as client:
         body = (
             await client.get(
-                f"/play/world/room/{room}",
-                params={
-                    "character_id": str(scenario.character),
-                    "claim_id": claim.claim_id,
+                f"/v1/play/claims/{claim.claim_id}/projection",
+                headers={
+                    CLIENT_ID_HEADER: "image-client",
+                    "X-Bunnyland-Claim-Secret": secret,
                 },
-                headers={"X-Bunnyland-Claim-Secret": secret},
             )
         ).json()
-    members = body["room"]["entities"]
+    members = body["scene"]["room"]["entities"]
     assert members  # the character is in the room
     assert all("portrait" in member for member in members)
     assert members[0]["portrait"]["url"] == ""  # no portrait generated yet
@@ -473,14 +558,14 @@ async def test_media_route_serves_and_404(tmp_path):
     service = _service(scenario.actor, tmp_path)
     service.media.write(SEGMENT_PORTRAITS, "abc123.png", b"IMGDATA")
     async with _client(_app(scenario.actor, service)) as client:
-        ok = await client.get("/public/media/portraits/abc123.png")
+        ok = await client.get("/v1/public/media/portraits/abc123.png")
         assert ok.status_code == 200
         assert ok.content == b"IMGDATA"
         assert ok.headers["content-type"].startswith("image/png")
 
-        assert (await client.get("/public/media/portraits/missing.png")).status_code == 404
+        assert (await client.get("/v1/public/media/portraits/missing.png")).status_code == 404
         # Invalid (dotted) name is rejected by the store -> 404.
-        assert (await client.get("/public/media/portraits/..%2Fsecret.png")).status_code == 404
+        assert (await client.get("/v1/public/media/portraits/..%2Fsecret.png")).status_code == 404
 
 
 # --- backfill loop -------------------------------------------------------------------
@@ -508,7 +593,7 @@ async def test_lifespan_starts_backfill_and_closes(tmp_path):
     async with app.router.lifespan_context(app):
         assert service._backfill is not None
         async with _client(app) as client:
-            assert (await client.get("/public/health")).status_code == 200
+            assert (await client.get("/v1/public/health")).status_code == 204
     assert service._backfill is None
 
 

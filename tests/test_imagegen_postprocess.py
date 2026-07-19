@@ -118,8 +118,8 @@ async def test_portrait_alpha_writes_both_variants(tmp_path):
     portrait = scenario.actor.world.get_entity(scenario.character).get_component(
         PortraitImageComponent
     )
-    assert portrait.url.startswith("/public/media/portraits/")
-    assert portrait.alpha_url.startswith("/public/media/alpha/")
+    assert portrait.url.startswith("/v1/public/media/portraits/")
+    assert portrait.alpha_url.startswith("/v1/public/media/alpha/")
     alpha_name = portrait.alpha_url.split("/")[-1]
     assert MediaStore(tmp_path).read(SEGMENT_ALPHA, alpha_name) == b"ALPHA:RAW"
     await service.aclose()

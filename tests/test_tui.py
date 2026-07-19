@@ -35,6 +35,7 @@ from bunnyland.tui.app import ActionForm, BunnylandTUI, FormField, HelpScreen
 from bunnyland.tui.backend import (
     Backend,
     ControlClaim,
+    ImageRequestResult,
     LocalBackend,
     RemoteBackend,
     SubmitResult,
@@ -491,9 +492,10 @@ def test_character_sheet_url_derives_frontend_from_api_base():
 
     assert frontend_base_for_api("https://play.test/api") == "https://play.test"
     assert frontend_base_for_api("https://play.test/prefix/api/") == "https://play.test/prefix"
+    assert frontend_base_for_api("https://play.test/prefix/api/v1/") == "https://play.test/prefix"
     assert frontend_base_for_api("https://play.test/raw") == "https://play.test/raw"
     assert character_sheet_url("https://play.test/api", PLAYER) == (
-        "https://play.test/character-sheet.html?server=https%3A%2F%2Fplay.test%2Fapi#character:1"
+        "https://play.test/character.html?server=https%3A%2F%2Fplay.test%2Fapi#character:1"
     )
 
 
@@ -510,9 +512,7 @@ async def test_remote_backend_opens_character_sheet(monkeypatch):
     result = await backend.open_character_sheet(PLAYER)
 
     assert result.ok is True
-    assert result.url.endswith(
-        "/character-sheet.html?server=https%3A%2F%2Fplay.test%2Fapi#character:1"
-    )
+    assert result.url.endswith("/character.html?server=https%3A%2F%2Fplay.test%2Fapi#character:1")
     assert opened == [(result.url, 2)]
 
 
@@ -526,7 +526,7 @@ async def test_remote_backend_reports_browser_open_failure(monkeypatch):
 
     assert result.ok is False
     assert result.reason == "could not open browser"
-    assert "character-sheet.html" in result.url
+    assert "character.html" in result.url
 
 
 async def test_backend_base_open_character_sheet_default():
@@ -1109,11 +1109,12 @@ async def test_remote_backend_cancel_command_returns_false_on_error():
         is_success = False
 
     class Client:
-        async def delete(self, url, params):
+        async def delete(self, url, **kwargs):
             return Response()
 
     backend = RemoteBackend("https://server.example")
     backend._client = Client()
+    backend._claims[PLAYER] = ControlClaim("controller:1", 3, "claim-1", "secret-1")
 
     assert await backend.cancel_command(PLAYER, "cmd-1", "controller:1", 3) is False
 
@@ -1344,7 +1345,7 @@ async def test_remote_backend_reclaim_uses_stored_claim_secret(monkeypatch, tmp_
     ]
 
 
-async def test_remote_backend_uses_claim_headers_and_params(monkeypatch, tmp_path):
+async def test_remote_backend_uses_claim_headers(monkeypatch, tmp_path):
     monkeypatch.setattr(tui_backend, "CONFIG_DIR", tmp_path / "config")
 
     class Response:
@@ -1391,7 +1392,9 @@ async def test_remote_backend_uses_claim_headers_and_params(monkeypatch, tmp_pat
     await backend.fetch_character_projection(PLAYER)
     await backend.fetch_queued_commands(PLAYER)
     await backend.cancel_command(PLAYER, "cmd-1", "controller:1", 3)
-    submitted = await backend.submit({"character_id": PLAYER, "command_type": "wait"})
+    submitted = await backend.submit(
+        {"character_id": PLAYER, "command_id": "cmd-2", "command_type": "wait"}
+    )
     image = await backend.request_image(PLAYER)
 
     assert submitted.accepted is True
@@ -1417,7 +1420,7 @@ async def test_remote_backend_uses_claim_headers_and_params(monkeypatch, tmp_pat
             "https://server.example/play/claims/claim-1/commands",
             {
                 "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
-                "json": {"command_type": "wait"},
+                "json": {"id": "cmd-2", "command_type": "wait"},
             },
         ),
         (
@@ -1455,6 +1458,31 @@ async def test_remote_backend_request_image_reports_unavailable_and_error():
     assert unavailable.status == "unavailable"
     assert errored.ok is False
     assert errored.status == "error"
+
+
+async def test_remote_backend_claim_scoped_operations_require_a_claim():
+    backend = RemoteBackend("https://server.example", client_id="remote-client")
+    states: list[str] = []
+
+    assert backend._claim_request_kwargs(PLAYER) == {}
+    assert await backend.fetch_character_projection(PLAYER) is None
+    assert await backend.fetch_room_projection("room:1", PLAYER) is None
+    assert await backend.fetch_queued_commands(PLAYER) == {
+        "character_id": PLAYER,
+        "commands": [],
+    }
+    assert await backend.cancel_command(PLAYER, "cmd-1", "controller:1", 1) is False
+    assert (await backend.submit({"character_id": PLAYER, "command_type": "wait"})) == (
+        SubmitResult(accepted=False, reason="a character claim is required")
+    )
+    assert await backend.recent_events(PLAYER) == []
+    assert (await backend.request_image(PLAYER)) == ImageRequestResult(
+        ok=False,
+        status="error",
+        reason="a claim is required",
+    )
+    await backend.watch_updates(PLAYER, None, lambda _frame: None, states.append)
+    assert states == ["fallback"]
 
 
 async def test_remote_backend_release_controller_and_claim_requests():
@@ -1548,16 +1576,12 @@ async def test_remote_backend_recent_events_reads_endpoint():
 
     backend = RemoteBackend("https://server.example")
     backend._client = Client()
-    backend._claims["character:1"] = ControlClaim(
-        "controller:1", 1, "claim-1", "secret-1"
-    )
+    backend._claims["character:1"] = ControlClaim("controller:1", 1, "claim-1", "secret-1")
 
     events = await backend.recent_events("character:1")
 
     assert events == [{"type": "event", "data": {"event_type": "PingEvent"}}]
-    assert backend._client.urls == [
-        "https://server.example/play/claims/claim-1/events"
-    ]
+    assert backend._client.urls == ["https://server.example/play/claims/claim-1/events"]
 
 
 async def test_remote_backend_watches_authenticated_player_updates(monkeypatch):
@@ -1621,9 +1645,7 @@ async def test_remote_backend_watches_authenticated_player_updates(monkeypatch):
         await backend.watch_updates("character:1", control, on_message, states.append)
 
     assert backend.supports_live_updates() is True
-    assert sockets[0].url == (
-        "wss://player:password@server.example/api/play/claims/claim-1/stream"
-    )
+    assert sockets[0].url == ("wss://player:password@server.example/api/play/claims/claim-1/stream")
     assert "top-secret" not in sockets[0].url
     assert json.loads(sockets[0].sent[0]) == {
         "type": "authenticate",
@@ -1809,9 +1831,7 @@ async def test_remote_backend_live_updates_reconnect_after_transport_failure(mon
     control = ControlClaim("controller:1", 1, "claim-1", "secret-1")
 
     with pytest.raises(asyncio.CancelledError):
-        await backend.watch_updates(
-            "character:1", control, lambda _frame: None, states.append
-        )
+        await backend.watch_updates("character:1", control, lambda _frame: None, states.append)
 
     assert calls == [
         "wss://server.example/play/claims/claim-1/stream",
