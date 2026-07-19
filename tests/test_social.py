@@ -564,6 +564,35 @@ def test_obligation_reactor_handles_request_and_ignores_invalid_speech():
     assert obligation_entity.get_relationships(ObligationCreditor)[0][1] == scenario.character
 
 
+def test_obligation_reactor_deduplicates_repeated_open_request_intents():
+    scenario, hazel = _scenario_with_listener()
+    world = scenario.actor.world
+    obligation_reactor = ObligationReactor(world)
+
+    for event_number in range(100):
+        obligation_reactor._on_speech(
+            SpeechToldEvent(
+                event_id=f"repeated-request-{event_number}",
+                world_epoch=event_number,
+                created_at=datetime.now(UTC),
+                visibility=EventVisibility.PRIVATE,
+                actor_id=str(scenario.character),
+                target_ids=(str(hazel),),
+                text="please   bring water",
+                final_interpretation="request",
+            )
+        )
+
+    obligations = obligations_for(world, hazel)
+
+    assert len(obligations) == 1
+    obligation_entity, obligation = obligations[0]
+    assert obligation.text == "please bring water"
+    assert obligation.source_event_id == "repeated-request-0"
+    assert obligation_entity.get_relationships(ObligationDebtor)[0][1] == hazel
+    assert obligation_entity.get_relationships(ObligationCreditor)[0][1] == scenario.character
+
+
 def test_resolve_obligation_updates_status_and_social_consequence():
     scenario, hazel = _scenario_with_listener()
     world = scenario.actor.world

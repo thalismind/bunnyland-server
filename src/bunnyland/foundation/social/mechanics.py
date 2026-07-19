@@ -302,11 +302,17 @@ def obligation_for_source(
         component = entity.get_component(ObligationComponent)
         if component.source_event_id != source_event_id:
             continue
-        if not entity.has_relationship(ObligationDebtor, debtor_id):
-            continue
-        if entity.has_relationship(ObligationCreditor, creditor_id):
+        if _obligation_has_parties(entity, debtor_id, creditor_id):
             return entity
     return None
+
+
+def _obligation_has_parties(
+    entity: Entity, debtor_id: EntityId, creditor_id: EntityId
+) -> bool:
+    return entity.has_relationship(ObligationDebtor, debtor_id) and entity.has_relationship(
+        ObligationCreditor, creditor_id
+    )
 
 
 def create_obligation(
@@ -330,8 +336,14 @@ def create_obligation(
         or not world.has_entity(creditor_id)
     ):
         return None
-    if source_event_id and obligation_for_source(world, source_event_id, debtor_id, creditor_id):
-        return None
+    for entity in world.query().with_all([ObligationComponent]).execute_entities():
+        component = entity.get_component(ObligationComponent)
+        if not _obligation_has_parties(entity, debtor_id, creditor_id):
+            continue
+        if source_event_id and component.source_event_id == source_event_id:
+            return None
+        if component.status == "open" and component.kind == kind and component.text == clean_text:
+            return None
     debtor_name = entity_name(world.get_entity(debtor_id), "someone")
     creditor_name = entity_name(world.get_entity(creditor_id), "someone")
     obligation = spawn_entity(
