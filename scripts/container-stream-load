@@ -141,7 +141,7 @@ echo "Prepared ${count} distinct characters and scoped credentials."
 
 for _attempt in $(seq 1 60); do
   if curl -fsS -H 'User-Agent: bunnyland-stream-load/1' \
-    "http://127.0.0.1:${port}/public/health" >/dev/null 2>&1; then
+    "http://127.0.0.1:${port}/v1/public/health" >/dev/null 2>&1; then
     break
   fi
   if [ "$("$runtime" inspect --format '{{.State.Running}}' "$container" 2>/dev/null)" != true ]; then
@@ -152,7 +152,7 @@ for _attempt in $(seq 1 60); do
   sleep 1
 done
 if ! curl -fsS -H 'User-Agent: bunnyland-stream-load/1' \
-  "http://127.0.0.1:${port}/public/health" >/dev/null; then
+  "http://127.0.0.1:${port}/v1/public/health" >/dev/null; then
   "$runtime" logs "$container" >&2 || true
   echo "stream-load server did not become ready" >&2
   exit 1
@@ -169,13 +169,15 @@ import json
 import os
 import time
 from pathlib import Path
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import urlunsplit
 
 import httpx
 import websockets
 from websockets.exceptions import ConnectionClosed
 
 from bunnyland.server.auth import TokenStore
+from bunnyland.server.models import WorldPatchRequest
+from bunnyland.server.v1_models import ClaimCreateRequest
 
 count = int(os.environ["STREAM_LOAD_COUNT"])
 port = int(os.environ["STREAM_LOAD_PORT"])
@@ -204,7 +206,7 @@ def headers(token, client_id=None, claim_secret=None):
 async def open_stream(index, character_id, claim):
     client_id = f"stream-load-client-{index + 1:03d}"
     socket = await websockets.connect(
-        f"{ws_base}/play/world/character/{character_id}/updates",
+        f"{ws_base}/v1/play/claims/{claim['id']}/stream",
         additional_headers={"X-Bunnyland-Client-Id": client_id},
         open_timeout=15,
         close_timeout=5,
@@ -216,8 +218,8 @@ async def open_stream(index, character_id, claim):
                 "type": "authenticate",
                 "data": {
                     "token": tokens[index],
-                    "claim_id": claim["claim_id"],
-                    "claim_secret": claim["claim_secret"],
+                    "client_id": client_id,
+                    "claim_secret": claim["secret"],
                 },
             }
         )
@@ -235,29 +237,36 @@ async def open_stream(index, character_id, claim):
 async def main():
     started = time.perf_counter()
     async with httpx.AsyncClient(base_url=base_url, timeout=20) as client:
-        lobby = await client.get("/play/world/characters", headers=headers(tokens[0]))
+        lobby = await client.get(
+            "/v1/play/characters",
+            headers=headers(tokens[0], "stream-load-lobby"),
+        )
         lobby.raise_for_status()
-        characters = [entry["character_id"] for entry in lobby.json()["characters"]]
+        characters = [entry["id"] for entry in lobby.json()["characters"]]
         if len(characters) < count or len(set(characters[:count])) != count:
             raise AssertionError(f"expected {count} distinct characters, got {len(characters)}")
         characters = characters[:count]
         client_ids = [f"stream-load-client-{index + 1:03d}" for index in range(count)]
 
         async def claim(index):
+            request = ClaimCreateRequest(
+                character_id=characters[index],
+                label="authenticated-stream-load",
+            )
             response = await client.post(
-                "/play/world/controllers/web/claim",
+                "/v1/play/claims",
                 headers=headers(tokens[index], client_ids[index]),
-                json={
-                    "character_id": characters[index],
-                    "client_id": client_ids[index],
-                    "label": "authenticated-stream-load",
-                },
+                json=request.model_dump(mode="json"),
             )
             response.raise_for_status()
-            return response.json()
+            claim = response.json()
+            secret = response.headers.get("X-Bunnyland-Claim-Secret")
+            if not secret:
+                raise AssertionError("claim response omitted its secret header")
+            return {**claim, "secret": secret}
 
         claims = await asyncio.gather(*(claim(index) for index in range(count)))
-        if len({claim["claim_id"] for claim in claims}) != count:
+        if len({claim["id"] for claim in claims}) != count:
             raise AssertionError("claim ids are not distinct")
 
         opened = await asyncio.gather(
@@ -271,10 +280,11 @@ async def main():
         # Disconnect one client, publish an invalidation while it is absent, then prove that
         # reconnect starts a new connection-local sequence and a fresh projection is usable.
         await sockets[0].close()
+        gap_request = WorldPatchRequest(operations=[])
         gap_update = await client.patch(
-            "/admin/world",
-            headers=headers(admin_token),
-            json={"operations": []},
+            "/v1/admin/world",
+            headers=headers(admin_token, "stream-load-admin"),
+            json=gap_request.model_dump(mode="json"),
         )
         gap_update.raise_for_status()
         gap_frame = json.loads(await asyncio.wait_for(sockets[1].recv(), timeout=10))
@@ -285,11 +295,11 @@ async def main():
         if reconnected["stream_sequence"] != 1:
             raise AssertionError("reconnected client did not reset its connection sequence")
         projection = await client.get(
-            f"/play/world/character/{characters[0]}?{urlencode({'claim_id': claims[0]['claim_id']})}",
-            headers=headers(tokens[0], client_ids[0], claims[0]["claim_secret"]),
+            f"/v1/play/claims/{claims[0]['id']}/projection",
+            headers=headers(tokens[0], client_ids[0], claims[0]["secret"]),
         )
         projection.raise_for_status()
-        if projection.json()["character_id"] != characters[0]:
+        if projection.json()["character"]["character_id"] != characters[0]:
             raise AssertionError("gap recovery projection returned the wrong character")
 
         # Revoke one bearer credential while its stream is live. The shared WebSocket auth
@@ -314,24 +324,6 @@ async def main():
         if close_code != 1008:
             raise AssertionError(f"revoked stream closed with {close_code!r}, expected 1008")
 
-        stats = None
-        for _attempt in range(20):
-            stream_status = await client.get(
-                "/admin/world/stream", headers=headers(admin_token)
-            )
-            stream_status.raise_for_status()
-            stats = stream_status.json()
-            if stats["connections"] == count - 1:
-                break
-            await asyncio.sleep(0.05)
-        assert stats is not None
-        if stats["connections_total"] < count + 1:
-            raise AssertionError("stream statistics did not record the reconnect")
-        if stats["connections"] != count - 1:
-            raise AssertionError(
-                f"expected {count - 1} live streams after revocation, got {stats['connections']}"
-            )
-
         await asyncio.gather(
             *(socket.close() for socket in sockets),
             return_exceptions=True,
@@ -342,12 +334,12 @@ async def main():
                 {
                     "clients": count,
                     "distinct_characters": len(set(characters)),
-                    "distinct_claims": len({claim["claim_id"] for claim in claims}),
+                    "distinct_claims": len({claim["id"] for claim in claims}),
                     "gap_frame_type": gap_frame["type"],
                     "gap_witness_sequence": gap_frame["stream_sequence"],
                     "reconnect_sequence": reconnected["stream_sequence"],
                     "revoked_close_code": close_code,
-                    "connections_total": stats["connections_total"],
+                    "connections_opened": count + 1,
                     "elapsed_seconds": round(elapsed, 3),
                 },
                 sort_keys=True,

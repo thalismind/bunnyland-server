@@ -61,7 +61,7 @@ start_server() {
       --token-db /data/auth-tokens.sqlite3 \
       --mcp >/dev/null
   for _attempt in $(seq 1 60); do
-    if curl -fsS "http://127.0.0.1:${port}/public/health" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:${port}/v1/public/health" >/dev/null 2>&1; then
       return
     fi
     sleep 1
@@ -87,7 +87,7 @@ base_url = f"http://127.0.0.1:{port}"
 
 
 def request(method, path, *, token=None, body=None, accept=None):
-    headers = {}
+    headers = {"X-Bunnyland-Client-Id": "container-auth-smoke"}
     data = None
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -113,16 +113,16 @@ def expect(expected, method, path, **kwargs):
     return payload, headers
 
 
-expect(200, "GET", "/public/health")
-expect(401, "GET", "/play/world/characters")
-expect(401, "GET", "/admin/world/snapshot")
+expect(204, "GET", "/v1/public/health")
+expect(401, "GET", "/v1/play/characters")
+expect(401, "GET", "/v1/admin/world/snapshot")
 
 
 def login(username, password):
     payload, _headers = expect(
         200,
         "POST",
-        "/auth/login",
+        "/v1/auth/session",
         body={"username": username, "password": password, "delivery": "body"},
     )
     token = json.loads(payload)["token"]
@@ -133,11 +133,11 @@ def login(username, password):
 
 player = login("player-smoke", "player-smoke-password")
 operator = login("operator-smoke", "operator-smoke-password")
-expect(200, "GET", "/play/world/characters", token=player)
-expect(403, "GET", "/admin/world/snapshot", token=player)
-expect(200, "GET", "/play/world/characters", token=operator)
-expect(200, "GET", "/admin/world/snapshot", token=operator)
-expect(409, "POST", "/auth/rotate", token=player)
+expect(200, "GET", "/v1/play/characters", token=player)
+expect(403, "GET", "/v1/admin/world/snapshot", token=player)
+expect(200, "GET", "/v1/play/characters", token=operator)
+expect(200, "GET", "/v1/admin/world/snapshot", token=operator)
+expect(409, "PATCH", "/v1/auth/session", token=player)
 
 mcp_init = {
     "jsonrpc": "2.0",
@@ -152,14 +152,14 @@ mcp_init = {
 expect(
     401,
     "POST",
-    "/mcp/",
+    "/v1/mcp/",
     body=mcp_init,
     accept="application/json, text/event-stream",
 )
 expect(
     200,
     "POST",
-    "/mcp/",
+    "/v1/mcp/",
     token=player,
     body=mcp_init,
     accept="application/json, text/event-stream",
@@ -169,7 +169,7 @@ expect(
 def websocket_snapshot(token):
     key = base64.b64encode(os.urandom(16)).decode()
     request_bytes = (
-        "GET /admin/world/updates HTTP/1.1\r\n"
+        "GET /v1/admin/world/stream HTTP/1.1\r\n"
         f"Host: 127.0.0.1:{port}\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
@@ -185,7 +185,12 @@ def websocket_snapshot(token):
         if b" 101 " not in headers.split(b"\r\n", 1)[0]:
             raise SystemExit(f"websocket upgrade failed: {headers!r}")
 
-        payload = json.dumps({"type": "authenticate", "data": {"token": token}}).encode()
+        payload = json.dumps(
+            {
+                "type": "authenticate",
+                "data": {"token": token, "client_id": "container-auth-smoke"},
+            }
+        ).encode()
         mask = os.urandom(4)
         length = len(payload)
         frame = bytearray([0x81])
@@ -220,8 +225,8 @@ def websocket_snapshot(token):
 
 
 websocket_snapshot(operator)
-expect(200, "POST", "/auth/logout", token=player)
-expect(401, "GET", "/play/world/characters", token=player)
+expect(204, "DELETE", "/v1/auth/session", token=player)
+expect(401, "GET", "/v1/play/characters", token=player)
 with open(os.environ["TOKEN_FILE"], "w", encoding="utf-8") as token_handle:
     token_handle.write(player)
 os.chmod(os.environ["TOKEN_FILE"], 0o600)
@@ -242,7 +247,8 @@ start_server
 revoked_token="$(cat "$token_file")"
 status="$(curl -sS -o /dev/null -w '%{http_code}' \
   -H "Authorization: Bearer ${revoked_token}" \
-  "http://127.0.0.1:${port}/play/world/characters")"
+  -H "X-Bunnyland-Client-Id: container-auth-smoke" \
+  "http://127.0.0.1:${port}/v1/play/characters")"
 if [ "$status" != "401" ]; then
   echo "revoked token survived restart with HTTP $status" >&2
   exit 1

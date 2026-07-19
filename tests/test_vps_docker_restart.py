@@ -71,3 +71,41 @@ def test_vps_verify_distinguishes_anonymous_and_player_admin_denials() -> None:
     assert 'BUNNYLAND_VERIFY_ADMIN_PLAY_STATUS:-403' in verify
     assert '"admin rejects player scope"' in verify
     assert "admin_play_status," in verify
+
+
+def test_release_smoke_scripts_use_only_v1_api_routes() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    auth_smoke = (repo_root / "scripts" / "container-auth-smoke").read_text()
+    stream_load = (repo_root / "scripts" / "container-stream-load").read_text()
+    vps_verify = (repo_root / "scripts" / "vps-docker-verify").read_text()
+
+    assert '"/v1/public/health"' in auth_smoke
+    assert '"/v1/play/characters"' in auth_smoke
+    assert '"/v1/auth/session"' in auth_smoke
+    assert '"/v1/mcp/"' in auth_smoke
+    assert "GET /v1/admin/world/stream HTTP/1.1" in auth_smoke
+
+    assert '"/v1/play/characters"' in stream_load
+    assert '"/v1/play/claims"' in stream_load
+    assert "/v1/play/claims/{claim['id']}/stream" in stream_load
+    assert '"/v1/admin/world"' in stream_load
+
+    assert '"/api/v1/public/health"' in vps_verify
+    assert '"/api/v1/play/characters"' in vps_verify
+    assert '"/api/v1/admin/world/runtime"' in vps_verify
+    assert "GET /api/v1/admin/world/stream HTTP/1.1" in vps_verify
+
+    combined = auth_smoke + stream_load + vps_verify
+    for legacy_route in (
+        '"/public/health"',
+        '"/play/world',
+        '"/admin/world',
+        '"/auth/login"',
+        '"/auth/rotate"',
+        '"/auth/logout"',
+        '"/mcp/"',
+        '"/api/public',
+        '"/api/play',
+        '"/api/admin',
+    ):
+        assert legacy_route not in combined

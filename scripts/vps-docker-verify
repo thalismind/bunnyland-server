@@ -27,6 +27,7 @@ import ssl
 import struct
 import sys
 from contextlib import nullcontext
+from dataclasses import asdict, dataclass
 
 domain = os.environ["BUNNYLAND_DOMAIN"]
 connect_host = os.environ["BUNNYLAND_VERIFY_CONNECT_HOST"]
@@ -41,6 +42,11 @@ verify_admin_data = os.environ["BUNNYLAND_VERIFY_ADMIN_DATA"] == "1"
 home_domain = os.environ["BUNNYLAND_HOME_DOMAIN"]
 home_expect_text = os.environ["BUNNYLAND_HOME_EXPECT_TEXT"]
 base_url = f"{scheme}://{domain}"
+
+
+@dataclass(frozen=True)
+class RuntimePatch:
+    paused: bool
 
 
 def fail(message: str) -> None:
@@ -71,13 +77,27 @@ def decode_chunked(body: bytes) -> bytes:
         offset += size + 2
 
 
-def request(method: str, path: str, *, token: str | None = None, target_domain: str | None = None) -> tuple[int, bytes]:
+def request(
+    method: str,
+    path: str,
+    *,
+    token: str | None = None,
+    target_domain: str | None = None,
+    body: RuntimePatch | None = None,
+) -> tuple[int, bytes]:
     request_domain = target_domain or domain
-    headers = {"User-Agent": "bunnyland-vps-docker-verify/1"}
+    headers = {
+        "User-Agent": "bunnyland-vps-docker-verify/1",
+        "X-Bunnyland-Client-Id": "vps-docker-verify",
+    }
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
     headers["Host"] = request_domain
     headers["Connection"] = "close"
+    payload = b"" if body is None else json.dumps(asdict(body)).encode()
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        headers["Content-Length"] = str(len(payload))
     raw_request = f"{method} {path} HTTP/1.1\r\n" + "".join(
         f"{key}: {value}\r\n" for key, value in headers.items()
     ) + "\r\n"
@@ -85,7 +105,7 @@ def request(method: str, path: str, *, token: str | None = None, target_domain: 
         ctx = ssl.create_default_context() if scheme == "https" else None
         stream = ctx.wrap_socket(raw, server_hostname=request_domain) if ctx else nullcontext(raw)
         with stream as sock:
-            sock.sendall(raw_request.encode("ascii"))
+            sock.sendall(raw_request.encode("ascii") + payload)
             data = b""
             while True:
                 chunk = sock.recv(65536)
@@ -114,12 +134,19 @@ def expect_status(
     *,
     token: str | None = None,
     target_domain: str | None = None,
+    body: RuntimePatch | None = None,
 ) -> bytes:
-    status, body = request(method, path, token=token, target_domain=target_domain)
+    status, response_body = request(
+        method,
+        path,
+        token=token,
+        target_domain=target_domain,
+        body=body,
+    )
     if status != expected:
         fail(f"{name}: expected HTTP {expected}, got HTTP {status}")
     ok(f"{name}: HTTP {status}")
-    return body
+    return response_body
 
 
 if home_domain:
@@ -151,32 +178,34 @@ if "discordUrl" not in config:
     fail("frontend config: discordUrl key missing (config.json was not rendered)")
 ok("frontend config: same-origin /api/")
 
-health = json.loads(expect_status("REST health", "GET", "/api/public/health", 200).decode())
-if health.get("ok") is not True:
-    fail(f"REST health: expected ok=true, got {health!r}")
+expect_status("REST health", "GET", "/api/v1/public/health", 204)
 
 # Health is public, but the player API requires a scoped bearer token.
-expect_status("world characters require player auth", "GET", "/api/play/world/characters", 401)
+expect_status("world characters require player auth", "GET", "/api/v1/play/characters", 401)
 expect_status(
     "world characters reject bad player credentials",
     "GET",
-    "/api/play/world/characters",
+    "/api/v1/play/characters",
     401,
     token="invalid",
 )
 lobby = json.loads(expect_status(
-    "world characters player", "GET", "/api/play/world/characters", 200, token=play_token
+    "world characters player", "GET", "/api/v1/play/characters", 200, token=play_token
 ).decode())
 ok(f"world characters player: {len(lobby.get('characters', []))} claimable")
 
 # The raw snapshot is admin-scoped.
 expect_status(
-    "world snapshot requires admin", "GET", "/api/admin/world/snapshot", admin_unauth_status
+    "world snapshot requires admin", "GET", "/api/v1/admin/world/snapshot", admin_unauth_status
 )
 if verify_admin_data:
     snapshot = json.loads(
         expect_status(
-            "world snapshot (admin)", "GET", "/api/admin/world/snapshot", 200, token=operator_token
+            "world snapshot (admin)",
+            "GET",
+            "/api/v1/admin/world/snapshot",
+            200,
+            token=operator_token,
         ).decode()
     )
     metadata = snapshot.get("metadata") or {}
@@ -188,34 +217,37 @@ if verify_admin_data:
 
 expect_status(
     "admin rejects player scope",
-    "POST",
-    "/api/admin/world/pause",
+    "PATCH",
+    "/api/v1/admin/world/runtime",
     admin_play_status,
     token=play_token,
+    body=RuntimePatch(paused=True),
 )
 
 pause_body = expect_status(
     "admin accepts good credentials",
-    "POST",
-    "/api/admin/world/pause",
+    "PATCH",
+    "/api/v1/admin/world/runtime",
     admin_auth_status,
     token=operator_token,
+    body=RuntimePatch(paused=True),
 )
 if admin_auth_status == 200:
     pause = json.loads(pause_body.decode())
-    if pause.get("ok") is not True or pause.get("paused") is not True:
+    if pause.get("paused") is not True:
         fail(f"admin pause: unexpected response {pause!r}")
 
 resume_body = expect_status(
     "admin resume",
-    "POST",
-    "/api/admin/world/resume",
+    "PATCH",
+    "/api/v1/admin/world/runtime",
     admin_auth_status,
     token=operator_token,
+    body=RuntimePatch(paused=False),
 )
 if admin_auth_status == 200:
     resume = json.loads(resume_body.decode())
-    if resume.get("ok") is not True or resume.get("paused") is not False:
+    if resume.get("paused") is not False:
         fail(f"admin resume: unexpected response {resume!r}")
 
 def websocket_handshake(token: str | None = None) -> tuple[str, bytes | None]:
@@ -223,15 +255,13 @@ def websocket_handshake(token: str | None = None) -> tuple[str, bytes | None]:
     None unless the server completed the upgrade (HTTP 101)."""
     key = base64.b64encode(os.urandom(16)).decode()
     lines = [
-        "GET /api/admin/world/updates HTTP/1.1",
+        "GET /api/v1/admin/world/stream HTTP/1.1",
         f"Host: {domain}",
         "Upgrade: websocket",
         "Connection: Upgrade",
         f"Sec-WebSocket-Key: {key}",
         "Sec-WebSocket-Version: 13",
     ]
-    if token is not None:
-        lines.append(f"Authorization: Bearer {token}")
     raw_request = "\r\n".join(lines) + "\r\n\r\n"
     with socket.create_connection((connect_host, port), timeout=15) as raw:
         ctx = ssl.create_default_context() if scheme == "https" else None
@@ -249,7 +279,10 @@ def websocket_handshake(token: str | None = None) -> tuple[str, bytes | None]:
             if " 101 " not in status_line:
                 return status_line, None
 
-            payload = json.dumps({"type": "authenticate", "data": {}}).encode()
+            auth_data = {"client_id": "vps-docker-verify"}
+            if token is not None:
+                auth_data["token"] = token
+            payload = json.dumps({"type": "authenticate", "data": auth_data}).encode()
             mask = os.urandom(4)
             header = bytes((0x81, 0x80 | len(payload)))
             masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
