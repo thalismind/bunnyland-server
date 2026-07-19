@@ -166,11 +166,13 @@ uv run bunnyland serve --config bunnyland.yml
 ## Admin surface security
 
 The entire API is gated server-side and fail-closed. Opaque `blt_...` credentials arrive in
-`Authorization: Bearer` or the secure HttpOnly browser cookie. Normal routes require
-`world:play`; `/admin/*`, snapshots, global streams, overview/DM projections, and admin MCP
-tools require `world:admin`. Missing, invalid, expired, or revoked credentials return `401`;
-a valid token lacking the required scope returns `403`. nginx terminates TLS and forwards
-`Authorization` and cookies without authenticating Bunnyland itself.
+`Authorization: Bearer` or the secure HttpOnly browser cookie. Character sheets require
+`character:profile`, and character conversations require `character:chat`. Normal play
+routes require `world:play`, which implies both character scopes. `/admin/*`, snapshots,
+global streams, overview/DM projections, and admin MCP tools require `world:admin`, which
+implies play. Missing, invalid, expired, or revoked credentials return `401`; a valid token
+lacking the required scope returns `403`. nginx terminates TLS and forwards `Authorization`
+and cookies without authenticating Bunnyland itself.
 
 The server checks the authentication user file for changes at most once per second, regardless
 of request volume. A valid replacement updates passwords, enabled status, and scopes for new

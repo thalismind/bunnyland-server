@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import httpx
 import pytest
@@ -10,9 +11,11 @@ from bunnyland.core import (
     ActionDefinition,
     ContainmentMode,
     Contains,
+    ControlledBy,
     IdentityComponent,
     MemoryProfileComponent,
     PortableComponent,
+    SuspendedControllerComponent,
     WebControllerComponent,
     spawn_entity,
 )
@@ -29,6 +32,7 @@ from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_persona_fragments
 from bunnyland.plugins.ids import CORE_VERBS
 from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.server import app as server_app
 from bunnyland.server import character_chat as character_chat_module
 from bunnyland.server.app import create_app
 from bunnyland.server.character_chat import (
@@ -38,7 +42,12 @@ from bunnyland.server.character_chat import (
     build_character_chat_service,
 )
 from bunnyland.server.client_ids import CLIENT_ID_HEADER
-from bunnyland.server.models import CharacterChatActionResult, CharacterChatRequest
+from bunnyland.server.models import (
+    CharacterChatActionResult,
+    CharacterChatRequest,
+    CharacterChatResponse,
+)
+from bunnyland.server.v1_models import ChatJobRequest
 
 
 class FakeChatAgent:
@@ -59,12 +68,6 @@ class FakeChatAgent:
         if not self.replies:
             return ChatAgentReply(content="done")
         return self.replies.pop(0)
-
-
-class SyncChatAgent:
-    def chat(self, messages, *, character_id, model=None, provider=None, tools=None):
-        del messages, character_id, model, provider, tools
-        return ChatAgentReply(content="sync reply")
 
 
 def install_core(actor):
@@ -193,17 +196,6 @@ async def test_character_chat_initial_prompt_includes_game_context_and_conversat
     assert "You like clear landmarks." in prompt
     assert "Your goal: map the moss tunnels." in prompt
     assert "Human now:\nwhat do you notice?" in prompt
-
-
-@pytest.mark.asyncio
-async def test_character_chat_supports_sync_chat_agent():
-    scenario = build_scenario()
-    install_core(scenario.actor)
-    service = chat_service(scenario, SyncChatAgent())
-
-    response = await service.chat(str(scenario.character), chat_request("hi"))
-
-    assert response.reply == "sync reply"
 
 
 @pytest.mark.asyncio
@@ -560,14 +552,13 @@ async def test_character_chat_status_and_disabled_route():
 
     async with route_client(app) as client:
         assert (await client.get("/v1/public/features")).json()["character_chat"] is False
-        claim_id, headers = await claim_character(client, str(scenario.character))
         response = await client.post(
-            f"/v1/play/claims/{claim_id}/jobs",
-            headers=headers,
+            f"/v1/chat/characters/{scenario.character}/jobs",
             json={"kind": "chat", "message": "hi"},
         )
-        assert response.status_code == 409
-        assert response.json()["detail"] == "character chat is not enabled"
+        assert response.status_code == 202
+        assert response.json()["status"] == "failed"
+    assert response.json()["failure"]["detail"] == "character chat is not enabled"
 
 
 @pytest.mark.asyncio
@@ -581,37 +572,301 @@ async def test_character_chat_route_reports_invalid_character_and_wrong_kind():
     async with route_client(app) as client:
         assert (
             await client.post(
-                "/v1/play/claims",
-                json={"character_id": "not-real"},
+                "/v1/chat/characters/not-real/jobs",
+                json={"kind": "chat", "message": "hello"},
             )
         ).status_code == 404
         assert (
             await client.post(
-                "/v1/play/claims",
-                json={"character_id": str(item.id)},
+                f"/v1/chat/characters/{item.id}/jobs",
+                json={"kind": "chat", "message": "hello"},
             )
         ).status_code == 400
+        assert (await client.get("/v1/profile/characters/not-real")).status_code == 404
+        assert (await client.get(f"/v1/profile/characters/{item.id}")).status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_character_chat_job_composes_control_handoff_and_result():
+async def test_claim_job_rejects_chat_without_changing_controller():
     scenario = build_scenario()
     install_core(scenario.actor)
     web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="web")])
     scenario.actor.assign_controller(scenario.character, web.id)
-    service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
-    app = create_app(scenario.actor, character_chat=service, allow_unauthenticated_embedding=True)
+    app = create_app(scenario.actor, allow_unauthenticated_embedding=True)
 
     async with route_client(app) as client:
         claim_id, headers = await claim_character(client, str(scenario.character))
+        controller_before = scenario.actor.world.get_entity(scenario.character).get_relationships(
+            ControlledBy
+        )[0][1]
         response = await client.post(
             f"/v1/play/claims/{claim_id}/jobs",
             headers=headers,
             json={"kind": "chat", "message": "hi"},
         )
-    assert response.status_code == 202
-    assert response.json()["status"] == "succeeded"
-    assert response.json()["result"]["reply"] == "hi"
+    assert response.status_code == 422
+    assert scenario.actor.world.get_entity(scenario.character).get_relationships(ControlledBy)[0][
+        1
+    ] == controller_before
+
+
+@pytest.mark.asyncio
+async def test_character_profile_and_chat_do_not_require_or_change_a_claim():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
+    app = create_app(scenario.actor, character_chat=service, allow_unauthenticated_embedding=True)
+
+    async with route_client(app) as client:
+        profiles = await client.get("/v1/profile/characters")
+        profile = await client.get(f"/v1/profile/characters/{scenario.character}")
+        submitted = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "hello"},
+        )
+        await asyncio.sleep(0)
+        fetched = await client.get(
+            f"/v1/chat/characters/{scenario.character}/jobs/{submitted.json()['id']}"
+        )
+
+    assert profiles.status_code == 200
+    assert str(scenario.character) in {item["id"] for item in profiles.json()["characters"]}
+    assert profile.status_code == 200
+    assert profile.json()["character_id"] == str(scenario.character)
+    assert profile.json()["sheet"]["vitals"]
+    assert "actions" not in profile.json()
+    assert submitted.status_code == 202
+    assert fetched.json()["status"] == "succeeded"
+    assert fetched.json()["result"]["reply"] == "hi"
+    assert scenario.actor.world.get_entity(scenario.character).get_relationships(
+        ControlledBy
+    )[0][1] == scenario.controller
+
+
+@pytest.mark.asyncio
+async def test_character_chat_job_returns_before_the_llm_finishes():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    release = asyncio.Event()
+
+    class WaitingAgent(FakeChatAgent):
+        async def chat(self, messages, **kwargs):
+            await release.wait()
+            return await super().chat(messages, **kwargs)
+
+    service = chat_service(scenario, WaitingAgent([ChatAgentReply(content="ready")]))
+    app = create_app(scenario.actor, character_chat=service, allow_unauthenticated_embedding=True)
+
+    async with route_client(app) as client:
+        submitted = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "hello"},
+        )
+        assert submitted.status_code == 202
+        assert submitted.json()["status"] == "queued"
+        release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        fetched = await client.get(
+            f"/v1/chat/characters/{scenario.character}/jobs/{submitted.json()['id']}"
+        )
+
+    assert fetched.json()["status"] == "succeeded"
+    assert fetched.json()["result"]["reply"] == "ready"
+
+
+def test_character_chat_job_is_cancelled_during_app_shutdown():
+    scenario = build_scenario()
+    started = threading.Event()
+    cancelled = threading.Event()
+
+    class WaitingChat:
+        async def chat(self, _character_id, _request):
+            started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+    app = create_app(
+        scenario.actor,
+        character_chat=WaitingChat(),
+        allow_unauthenticated_embedding=True,
+    )
+    testclient = pytest.importorskip("fastapi.testclient")
+    with testclient.TestClient(app) as client:
+        response = client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            headers={CLIENT_ID_HEADER: "chat-client"},
+            json={"kind": "chat", "message": "hello"},
+        )
+        assert response.status_code == 202
+        assert started.wait(timeout=1)
+
+    assert cancelled.wait(timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_character_chat_job_reports_pending_result_failure():
+    scenario = build_scenario()
+
+    class FailingPendingChat:
+        async def chat(self, character_id, _request):
+            return CharacterChatResponse(
+                world_epoch=scenario.actor.epoch,
+                character_id=character_id,
+                reply="",
+                complete=False,
+                action=CharacterChatActionResult(
+                    tool="say",
+                    command_id="command:pending",
+                    status="queued",
+                ),
+            )
+
+        async def pending_result(self, *_args):
+            raise RuntimeError("pending result failed")
+
+    app = create_app(
+        scenario.actor,
+        character_chat=FailingPendingChat(),
+        allow_unauthenticated_embedding=True,
+    )
+    async with route_client(app) as client:
+        submitted = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "hello"},
+        )
+        await asyncio.sleep(0.3)
+        fetched = await client.get(submitted.headers["Location"])
+
+    assert fetched.json()["status"] == "failed"
+    assert fetched.json()["failure"]["detail"] == "pending result failed"
+
+
+@pytest.mark.asyncio
+async def test_character_chat_requires_client_and_supported_controller():
+    scenario = build_scenario()
+    app = create_app(scenario.actor, allow_unauthenticated_embedding=True)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        missing_client = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "hello"},
+        )
+        missing_poll_client = await client.get(
+            f"/v1/chat/characters/{scenario.character}/jobs/missing"
+        )
+
+    assert missing_client.status_code == 403
+    assert missing_poll_client.status_code == 403
+
+    submit_route = next(
+        route
+        for route in app.routes
+        if route.path == "/v1/chat/characters/{character_id}/jobs"
+    )
+    poll_route = next(
+        route
+        for route in app.routes
+        if route.path == "/v1/chat/characters/{character_id}/jobs/{job_id}"
+    )
+    with pytest.raises(server_app.HTTPException, match=f"{CLIENT_ID_HEADER} header is required"):
+        await submit_route.endpoint(
+            str(scenario.character),
+            ChatJobRequest(kind="chat", message="hello"),
+            server_app.Response(),
+            None,
+        )
+    with pytest.raises(server_app.HTTPException, match=f"{CLIENT_ID_HEADER} header is required"):
+        await poll_route.endpoint(str(scenario.character), "missing", None)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.remove_relationship(ControlledBy, scenario.controller)
+    async with route_client(app) as client:
+        no_controller = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "hello"},
+        )
+        suspended = spawn_entity(
+            scenario.actor.world,
+            [SuspendedControllerComponent(reason="offline")],
+        )
+        scenario.actor.assign_controller(scenario.character, suspended.id)
+        unavailable = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "hello"},
+        )
+
+    assert no_controller.status_code == 409
+    assert unavailable.status_code == 202
+    assert unavailable.json()["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_human_controlled_character_receives_chat_and_replies_through_claim():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    app = create_app(
+        scenario.actor,
+        character_chat=chat_service(scenario, FakeChatAgent([])),
+        allow_unauthenticated_embedding=True,
+    )
+
+    async with route_client(app) as client:
+        claim_id, claim_headers = await claim_character(client, str(scenario.character))
+        controller_id = client.headers[CLIENT_ID_HEADER]
+        submitted = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            headers={CLIENT_ID_HEADER: "profile-client"},
+            json={"kind": "chat", "message": "Are you there?"},
+        )
+        events = await client.get(f"/v1/play/claims/{claim_id}/events", headers=claim_headers)
+        hidden = await client.get(
+            f"/v1/chat/characters/{scenario.character}/jobs/{submitted.json()['id']}",
+            headers={CLIENT_ID_HEADER: "different-profile-client"},
+        )
+        missing = await client.post(
+            f"/v1/play/claims/{claim_id}/chat-jobs/missing",
+            headers=claim_headers,
+            json={"reply": "No job."},
+        )
+        replied = await client.post(
+            f"/v1/play/claims/{claim_id}/chat-jobs/{submitted.json()['id']}",
+            headers=claim_headers,
+            json={"reply": "I am here."},
+        )
+        fetched = await client.get(
+            f"/v1/chat/characters/{scenario.character}/jobs/{submitted.json()['id']}",
+            headers={CLIENT_ID_HEADER: "profile-client"},
+        )
+        repeated = await client.post(
+            f"/v1/play/claims/{claim_id}/chat-jobs/{submitted.json()['id']}",
+            headers=claim_headers,
+            json={"reply": "Too late."},
+        )
+
+    assert submitted.status_code == 202
+    assert submitted.json()["status"] == "queued"
+    requested = [
+        item["data"]["event"]
+        for item in events.json()["events"]
+        if item["data"]["event_type"] == "CharacterChatRequestedEvent"
+    ]
+    assert requested[0]["message"] == "Are you there?"
+    assert hidden.status_code == 404
+    assert missing.status_code == 404
+    assert replied.status_code == 200
+    assert repeated.status_code == 409
+    assert fetched.json()["status"] == "succeeded"
+    assert fetched.json()["result"]["reply"] == "I am here."
+    active_controller_id = scenario.actor.world.get_entity(scenario.character).get_relationships(
+        ControlledBy
+    )[0][1]
+    active_controller = scenario.actor.world.get_entity(active_controller_id)
+    assert active_controller.get_component(WebControllerComponent).client_id == controller_id
 
 
 @pytest.mark.asyncio
@@ -625,15 +880,14 @@ async def test_character_chat_route_validates_request_and_reports_allowed_tools(
         assert (await client.get("/v1/public/features")).json()["character_chat"] is True
         claim_id, headers = await claim_character(client, str(scenario.character))
         response = await client.post(
-            f"/v1/play/claims/{claim_id}/jobs",
-            headers=headers,
+            f"/v1/chat/characters/{scenario.character}/jobs",
             json={"kind": "chat", "message": ""},
         )
         assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_character_chat_job_is_listed_and_claim_scoped():
+async def test_character_chat_job_reports_and_completes_queued_action():
     scenario = build_scenario()
     install_core(scenario.actor)
     service = chat_service(
@@ -644,16 +898,25 @@ async def test_character_chat_job_is_listed_and_claim_scoped():
     app = create_app(scenario.actor, character_chat=service, allow_unauthenticated_embedding=True)
 
     async with route_client(app) as client:
-        claim_id, headers = await claim_character(client, str(scenario.character))
         response = await client.post(
-            f"/v1/play/claims/{claim_id}/jobs",
-            headers=headers,
+            f"/v1/chat/characters/{scenario.character}/jobs",
             json={"kind": "chat", "message": "say something"},
         )
-        body = response.json()
-        assert body["result"]["action"]["status"] == "queued"
-        listed = await client.get(f"/v1/play/claims/{claim_id}/jobs", headers=headers)
-        assert [job["id"] for job in listed.json()] == [body["id"]]
+        await asyncio.sleep(0)
+        body = await client.get(
+            f"/v1/chat/characters/{scenario.character}/jobs/{response.json()['id']}"
+        )
+        assert body.json()["status"] == "running"
+        assert body.json()["result"]["action"]["status"] == "queued"
+        await asyncio.sleep(0.3)
+        await scenario.actor.tick(0)
+        await asyncio.sleep(0.3)
+        completed = await client.get(
+            f"/v1/chat/characters/{scenario.character}/jobs/{response.json()['id']}"
+        )
+
+    assert completed.json()["status"] == "succeeded"
+    assert completed.json()["result"]["action"]["status"] == "executed"
 
 
 def test_build_character_chat_service_factory_returns_service():

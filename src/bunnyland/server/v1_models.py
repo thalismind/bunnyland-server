@@ -17,6 +17,11 @@ from ..core.perspective import PerspectiveQueryRequest
 from .models import (
     CharacterChatHistoryMessage,
     ClientActionView,
+    ClientCharacterSheetView,
+    ClientControllerView,
+    ClientImageView,
+    ClientPointsView,
+    ClientRoomView,
     CommandCostRequest,
     MemoryDocumentUpdateRequest,
     WorldCharacterGenerationRequest,
@@ -58,6 +63,17 @@ class CharacterResource(BaseModel):
 
 class CharacterCollection(WorldResource):
     characters: list[CharacterResource] = Field(default_factory=list)
+
+
+class CharacterProfileResource(WorldResource):
+    projection_version: int = 1
+    character_id: str
+    character_name: str
+    portrait: ClientImageView = Field(default_factory=ClientImageView)
+    room: ClientRoomView = Field(default_factory=ClientRoomView)
+    points: ClientPointsView = Field(default_factory=ClientPointsView)
+    controller: ClientControllerView | None = None
+    sheet: ClientCharacterSheetView = Field(default_factory=ClientCharacterSheetView)
 
 
 class CatalogResource(WorldResource):
@@ -151,11 +167,12 @@ class ChatJobRequest(V1Request):
     history: list[CharacterChatHistoryMessage] = Field(default_factory=list, max_length=24)
 
 
+class CharacterChatReplyRequest(V1Request):
+    reply: str = Field(min_length=1, max_length=4000)
+
+
 class SceneImageJobRequest(V1Request):
     kind: Literal["scene_image"]
-
-
-PlayerJobRequest = Annotated[ChatJobRequest | SceneImageJobRequest, Field(discriminator="kind")]
 
 
 class JobResource(WorldResource):
@@ -238,6 +255,9 @@ GenerationJobRequest = Annotated[
 __all__ = [
     "CatalogResource",
     "CharacterCollection",
+    "CharacterChatReplyRequest",
+    "CharacterProfileResource",
+    "ChatJobRequest",
     "CheckpointRequest",
     "ClaimCommandRequest",
     "ClaimCreateRequest",
@@ -253,8 +273,8 @@ __all__ = [
     "JobResource",
     "MemoryDocumentUpdateRequest",
     "PerspectiveQueryRequest",
-    "PlayerJobRequest",
     "ProblemDetails",
     "RuntimePatchRequest",
+    "SceneImageJobRequest",
     "WorldPatchRequest",
 ]

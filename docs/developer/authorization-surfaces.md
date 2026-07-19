@@ -14,15 +14,20 @@ subject, scopes, rotation state, expiry, and revocation state.
 
 The authorization vocabulary is deliberately small:
 
+- `character:profile` permits reading claim-free character profiles.
+- `character:chat` permits starting and polling claim-free character conversations.
 - `world:play` permits player-facing world interaction.
+- `world:play` implies both character scopes.
 - `world:admin` permits administrative world operation and implies `world:play`.
 
 Use `/play` for the player-facing HTTP zone because it names the capability and matches
 `world:play`. Do not introduce parallel role names such as `/player`, `player:*`, or
 transport-specific equivalents.
 
-Character claims are an additional object-level authorization check. A valid play scope
-does not grant access to another character's private state. See
+Character claims are an additional object-level authorization check for controlling a
+character and receiving private play events. Profiles and conversations do not claim or
+transfer the character; a human controller replies to conversations through its existing
+claim. See
 [Security Principals And Claims](security-principals.md) for the claim model.
 
 ## One policy across transports
@@ -43,8 +48,9 @@ descriptive only and never confer access.
 
 ## HTTP zones
 
-Application routes belong to exactly one zone: public, session lifecycle, play, admin,
-or MCP transport. The zone prefix is the coarse authorization boundary. Unknown routes
+Application routes belong to exactly one zone: public, session lifecycle, character profile,
+character chat, play, admin, or MCP transport. The zone prefix is the coarse authorization
+boundary. Unknown routes
 return `404`; registering a core or addon route outside a known zone is a startup error.
 
 The public zone is only for intentionally anonymous, non-sensitive resources. Health is
@@ -74,10 +80,11 @@ must reject execution when request context or policy is absent.
 ## Review and test contract
 
 Changes to a protected capability should be tested on every transport that exposes it.
-The expected matrix is consistent: anonymous callers receive `401`; play credentials can
-use play capabilities but receive `403` for admin capabilities; admin credentials can use
-both. WebSocket tests additionally cover first-frame source conflicts, origin, client ID,
-claims, and mid-stream revocation. MCP tests use the real streamable HTTP transport and
+The expected matrix is consistent: anonymous callers receive `401`; character credentials
+can use only their declared profile or chat capability; play credentials can also use both
+character capabilities but receive `403` for admin capabilities; admin credentials can use
+all four. WebSocket tests additionally cover first-frame source conflicts, origin, client
+ID, claims, and mid-stream revocation. MCP tests use the real streamable HTTP transport and
 cover missing request context and undeclared addon policy.
 
 The generated route matrix is the regression check that every HTTP and WebSocket route

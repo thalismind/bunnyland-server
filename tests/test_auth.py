@@ -18,6 +18,8 @@ from starlette.requests import Request
 from bunnyland.server import app as server_app
 from bunnyland.server.app import HSTS_VALUE, create_app
 from bunnyland.server.auth import (
+    CHARACTER_CHAT_SCOPE,
+    CHARACTER_PROFILE_SCOPE,
     HUMAN_ROTATE_AFTER_SECONDS,
     ROTATION_GRACE_SECONDS,
     WORLD_ADMIN_SCOPE,
@@ -63,6 +65,81 @@ def test_token_store_uses_digests_and_persists_revocation(tmp_path) -> None:
     assert reopened.revoke_token(principal.token_id, now=102)
     assert reopened.verify(token, now=102) is None
     reopened.close()
+
+
+def test_character_scopes_are_narrow_while_world_play_implies_both(tmp_path) -> None:
+    store = TokenStore(tmp_path / "tokens.sqlite3")
+    profile_token, _ = store.issue(
+        "profile", [CHARACTER_PROFILE_SCOPE], automatic_rotation=False
+    )
+    chat_token, _ = store.issue("chat", [CHARACTER_CHAT_SCOPE], automatic_rotation=False)
+    play_token, _ = store.issue("play", [WORLD_PLAY_SCOPE], automatic_rotation=False)
+    authenticator = RequestAuthenticator(store)
+
+    assert authenticator.authenticate_values(
+        authorization=f"Bearer {profile_token}",
+        cookie_token=None,
+        required_scopes=(CHARACTER_PROFILE_SCOPE,),
+    ).subject == "profile"
+    with pytest.raises(HTTPException, match="insufficient token scope"):
+        authenticator.authenticate_values(
+            authorization=f"Bearer {profile_token}",
+            cookie_token=None,
+            required_scopes=(CHARACTER_CHAT_SCOPE,),
+        )
+    with pytest.raises(HTTPException, match="insufficient token scope"):
+        authenticator.authenticate_values(
+            authorization=f"Bearer {chat_token}",
+            cookie_token=None,
+            required_scopes=(CHARACTER_PROFILE_SCOPE,),
+        )
+    for required in (CHARACTER_PROFILE_SCOPE, CHARACTER_CHAT_SCOPE, WORLD_PLAY_SCOPE):
+        assert authenticator.authenticate_values(
+            authorization=f"Bearer {play_token}",
+            cookie_token=None,
+            required_scopes=(required,),
+        ).subject == "play"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_character_profile_and_chat_routes_enforce_their_own_scopes(tmp_path) -> None:
+    scenario = build_scenario()
+    store = TokenStore(tmp_path / "tokens.sqlite3")
+    profile_token, _ = store.issue(
+        "profile", [CHARACTER_PROFILE_SCOPE], automatic_rotation=False
+    )
+    chat_token, _ = store.issue("chat", [CHARACTER_CHAT_SCOPE], automatic_rotation=False)
+    play_token, _ = store.issue("play", [WORLD_PLAY_SCOPE], automatic_rotation=False)
+    app = create_app(scenario.actor, token_store=store)
+
+    def headers(token: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {token}", CLIENT_ID_HEADER: "browser-a"}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://testserver"
+    ) as client:
+        profile_path = f"/v1/profile/characters/{scenario.character}"
+        chat_path = f"/v1/chat/characters/{scenario.character}/jobs"
+        assert (await client.get(profile_path, headers=headers(profile_token))).status_code == 200
+        assert (await client.post(
+            chat_path,
+            headers=headers(profile_token),
+            json={"kind": "chat", "message": "hello"},
+        )).status_code == 403
+        assert (await client.get(profile_path, headers=headers(chat_token))).status_code == 403
+        assert (await client.post(
+            chat_path,
+            headers=headers(chat_token),
+            json={"kind": "chat", "message": "hello"},
+        )).status_code == 202
+        assert (await client.get(profile_path, headers=headers(play_token))).status_code == 200
+        assert (await client.post(
+            chat_path,
+            headers=headers(play_token),
+            json={"kind": "chat", "message": "hello"},
+        )).status_code == 202
+    store.close()
 
 
 def test_token_store_locks_main_wal_and_shm_permissions(tmp_path) -> None:
@@ -285,7 +362,7 @@ def test_user_store_tolerates_bad_inventory_and_hashes(tmp_path, monkeypatch) ->
         ),
         (
             "users:\n  player:\n    password_hash: not-argon2\n    scopes: [world:unknown]\n",
-            "world:play or world:admin",
+            "character:profile, character:chat, world:play, or world:admin",
         ),
         (
             "users:\n  player:\n    password_hash: not-argon2\n    scopes: []\n",

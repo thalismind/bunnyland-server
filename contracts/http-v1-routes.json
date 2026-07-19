@@ -14,6 +14,16 @@
       "PATCH": ["/v1/auth/session"],
       "DELETE": ["/v1/auth/session"]
     },
+    "profile": {
+      "GET": [
+        "/v1/profile/characters",
+        "/v1/profile/characters/{character_id}"
+      ]
+    },
+    "chat": {
+      "GET": ["/v1/chat/characters/{character_id}/jobs/{job_id}"],
+      "POST": ["/v1/chat/characters/{character_id}/jobs"]
+    },
     "play": {
       "GET": [
         "/v1/play/catalog",
@@ -25,6 +35,7 @@
       ],
       "POST": [
         "/v1/play/claims",
+        "/v1/play/claims/{claim_id}/chat-jobs/{job_id}",
         "/v1/play/claims/{claim_id}/commands",
         "/v1/play/claims/{claim_id}/jobs",
         "/v1/play/claims/{claim_id}/queries"

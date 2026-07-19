@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -367,14 +366,13 @@ class CharacterChatService:
             chat = getattr(self.agent, "chat", None)
             if chat is None:
                 raise RuntimeError("configured LLM agent does not support character chat")
-            result = chat(
+            reply = await chat(
                 messages,
                 character_id=character_id,
                 model=model,
                 provider=provider,
                 tools=tools,
             )
-            reply = await result if isinstance(result, Awaitable) else result
             span.set_attribute("chat.reply", _trace_text(reply.content or ""))
             span.set_attribute("chat.reply_chars", len(reply.content or ""))
             span.set_attribute("chat.tool.called", reply.tool_call is not None)

@@ -25,6 +25,8 @@ from .. import telemetry
 
 WORLD_PLAY_SCOPE = "world:play"
 WORLD_ADMIN_SCOPE = "world:admin"
+CHARACTER_PROFILE_SCOPE = "character:profile"
+CHARACTER_CHAT_SCOPE = "character:chat"
 AUTH_COOKIE_NAME = "bunnyland_token"
 HUMAN_TOKEN_LIFETIME_SECONDS = 7 * 24 * 60 * 60
 HUMAN_ROTATE_AFTER_SECONDS = 24 * 60 * 60
@@ -148,6 +150,15 @@ def normalized_scopes(
     return frozenset(result)
 
 
+def scope_granted(scopes: frozenset[str], required: str) -> bool:
+    if required in scopes:
+        return True
+    return (
+        required in {CHARACTER_PROFILE_SCOPE, CHARACTER_CHAT_SCOPE}
+        and WORLD_PLAY_SCOPE in scopes
+    )
+
+
 class UserCredentialStore:
     """Read manually provisioned users from a deployment-rendered YAML file."""
 
@@ -200,11 +211,18 @@ class UserCredentialStore:
             if not scopes:
                 raise ValueError(f"authentication scopes for {username!r} must not be empty")
             if any(
-                not isinstance(scope, str) or scope not in {WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE}
+                not isinstance(scope, str)
+                or scope not in {
+                    CHARACTER_CHAT_SCOPE,
+                    CHARACTER_PROFILE_SCOPE,
+                    WORLD_PLAY_SCOPE,
+                    WORLD_ADMIN_SCOPE,
+                }
                 for scope in scopes
             ):
                 raise ValueError(
-                    f"authentication scopes for {username!r} must be world:play or world:admin"
+                    f"authentication scopes for {username!r} must be character:profile, "
+                    "character:chat, world:play, or world:admin"
                 )
             users[username] = UserCredential(
                 username=username,
@@ -724,7 +742,7 @@ class RequestAuthenticator:
         principal = self.verify_token(token)
         if principal is None:
             raise self._unauthorized()
-        missing = [scope for scope in required_scopes if scope not in principal.scopes]
+        missing = [scope for scope in required_scopes if not scope_granted(principal.scopes, scope)]
         if missing:
             raise HTTPException(status_code=403, detail="insufficient token scope")
         return principal
@@ -737,7 +755,11 @@ class RequestAuthenticator:
     ) -> TokenPrincipal:
         existing = getattr(request.state, "auth_principal", None)
         if isinstance(existing, TokenPrincipal):
-            missing = [scope for scope in required_scopes if scope not in existing.scopes]
+            missing = [
+                scope
+                for scope in required_scopes
+                if not scope_granted(existing.scopes, scope)
+            ]
             if missing:
                 raise HTTPException(status_code=403, detail="insufficient token scope")
             return existing
@@ -763,7 +785,11 @@ class RequestAuthenticator:
         existing = getattr(request.state, "auth_principal", None)
         if isinstance(existing, TokenPrincipal):
             principal = existing
-            missing = [scope for scope in security_scopes.scopes if scope not in principal.scopes]
+            missing = [
+                scope
+                for scope in security_scopes.scopes
+                if not scope_granted(principal.scopes, scope)
+            ]
             if missing:
                 raise HTTPException(status_code=403, detail="insufficient token scope")
             return principal
@@ -779,6 +805,8 @@ class RequestAuthenticator:
 __all__ = [
     "AUTH_COOKIE_NAME",
     "AUTOMATION_TOKEN_LIFETIME_SECONDS",
+    "CHARACTER_CHAT_SCOPE",
+    "CHARACTER_PROFILE_SCOPE",
     "AuthMeResponse",
     "HUMAN_ROTATE_AFTER_SECONDS",
     "HUMAN_TOKEN_LIFETIME_SECONDS",
@@ -793,4 +821,5 @@ __all__ = [
     "WORLD_PLAY_SCOPE",
     "hash_password",
     "normalized_scopes",
+    "scope_granted",
 ]

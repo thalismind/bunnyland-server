@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -84,7 +85,6 @@ def post_json(
     payload: dict,
     *,
     client_id: str = "",
-    claim_secret: str = "",
 ) -> dict:
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
@@ -93,7 +93,6 @@ def post_json(
         headers={
             "Content-Type": "application/json",
             **({"X-Bunnyland-Client-Id": client_id} if client_id else {}),
-            **({"X-Bunnyland-Claim-Secret": claim_secret} if claim_secret else {}),
         },
         method="POST",
     )
@@ -105,37 +104,8 @@ def post_json(
         raise RuntimeError(detail or f"HTTP {exc.code}") from exc
 
 
-def create_claim(base: str, client_id: str, character_id: str) -> tuple[str, str]:
-    body = json.dumps({"character_id": character_id, "label": "chat"}).encode("utf-8")
-    request = urllib.request.Request(
-        api_url(base, "/play/claims"),
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "X-Bunnyland-Client-Id": client_id,
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        claim = json.loads(response.read().decode("utf-8"))
-        return str(claim["id"]), response.headers.get("X-Bunnyland-Claim-Secret", "")
-
-
-def delete_claim(base: str, client_id: str, claim_id: str, claim_secret: str) -> None:
-    request = urllib.request.Request(
-        api_url(base, f"/play/claims/{urllib.parse.quote(claim_id, safe='')}"),
-        headers={
-            "X-Bunnyland-Client-Id": client_id,
-            "X-Bunnyland-Claim-Secret": claim_secret,
-        },
-        method="DELETE",
-    )
-    with urllib.request.urlopen(request, timeout=20):
-        return
-
-
 def choose_character(base: str, wanted: str, client_id: str = "") -> tuple[str, str]:
-    data = get_json(base, "/play/characters", client_id)
+    data = get_json(base, "/profile/characters", client_id)
     characters = data.get("characters") or []
     if not characters:
         raise RuntimeError("no characters are available")
@@ -172,6 +142,19 @@ def append_exchange(state: dict, message: str, reply: str) -> None:
     state["messages"] = messages[-HISTORY_LIMIT:]
 
 
+def wait_for_job(base: str, character_id: str, client_id: str, job: dict) -> dict:
+    while job.get("status") in {"queued", "running"}:
+        time.sleep(0.5)
+        job = get_json(
+            base,
+            "/chat/characters/"
+            f"{urllib.parse.quote(character_id, safe='')}/jobs/"
+            f"{urllib.parse.quote(str(job.get('id') or ''), safe='')}",
+            client_id,
+        )
+    return job
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bunnyland chat", description=__doc__)
     parser.add_argument("--server", default="http://127.0.0.1:8765/v1")
@@ -183,49 +166,48 @@ def main(argv: list[str] | None = None) -> int:
     if not features.get("character_chat"):
         raise SystemExit("Character chat is not enabled on this server.")
     character_id, name = choose_character(args.server, args.character, client_id)
-    claim_id, claim_secret = create_claim(args.server, client_id, character_id)
     state = load_history(client_id, character_id)
     print(f"Chatting with {name}. Ctrl-D or /quit exits.")
-    try:
-        while True:
-            try:
-                message = input("> ").strip()
-            except EOFError:
-                print()
-                break
-            if not message:
-                continue
-            if message in {"/quit", "/exit"}:
-                break
-            response = post_json(
-                args.server,
-                f"/play/claims/{urllib.parse.quote(claim_id, safe='')}/jobs",
-                request_payload(client_id, state, message),
-                client_id=client_id,
-                claim_secret=claim_secret,
-            )
-            result = response.get("result") or {}
-            reply = result.get("reply") or ""
-            action = result.get("action") or {}
-            suffix = f" [{action.get('tool')} {action.get('status')}]" if action.get("tool") else ""
-            print(f"{name}: {reply}{suffix}")
-            append_exchange(state, message, reply)
-            save_history(client_id, character_id, state)
-    finally:
+    while True:
+        try:
+            message = input("> ").strip()
+        except EOFError:
+            print()
+            break
+        if not message:
+            continue
+        if message in {"/quit", "/exit"}:
+            break
+        response = post_json(
+            args.server,
+            f"/chat/characters/{urllib.parse.quote(character_id, safe='')}/jobs",
+            request_payload(client_id, state, message),
+            client_id=client_id,
+        )
+        response = wait_for_job(args.server, character_id, client_id, response)
+        if response.get("status") == "failed":
+            failure = response.get("failure") or {}
+            print(f"{name}: {failure.get('detail') or 'Chat failed.'}")
+            continue
+        result = response.get("result") or {}
+        reply = result.get("reply") or ""
+        action = result.get("action") or {}
+        suffix = f" [{action.get('tool')} {action.get('status')}]" if action.get("tool") else ""
+        print(f"{name}: {reply}{suffix}")
+        append_exchange(state, message, reply)
         save_history(client_id, character_id, state)
-        delete_claim(args.server, client_id, claim_id, claim_secret)
+    save_history(client_id, character_id, state)
     return 0
 
 
 __all__ = [
     "HISTORY_LIMIT",
     "append_exchange",
-    "create_claim",
-    "delete_claim",
     "choose_character",
     "history_path",
     "load_history",
     "persistent_client_id",
     "request_payload",
     "save_history",
+    "wait_for_job",
 ]

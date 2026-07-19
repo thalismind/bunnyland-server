@@ -2587,32 +2587,30 @@ async def test_character_chat_endpoint_maps_service_exceptions(scenario):
         async def chat(self, character_id, request):
             raise self.exc
 
-    for exc, status, detail in (
-        (PermissionError("not allowed"), 409, "not allowed"),
-        (TypeError("bad shape"), 400, "bad shape"),
-        (ValueError("entity is not a character"), 400, "entity is not a character"),
-        (ValueError("missing character"), 404, "missing character"),
+    for exc, detail in (
+        (PermissionError("not allowed"), "not allowed"),
+        (TypeError("bad shape"), "bad shape"),
+        (ValueError("entity is not a character"), "entity is not a character"),
+        (ValueError("missing character"), "missing character"),
     ):
         current = build_scenario()
         app = create_app(current.actor, character_chat=FakeChat(exc))
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://testserver"
         ) as client:
-            claimed = await client.post(
-                "/v1/play/claims",
-                headers={CLIENT_ID_HEADER: "client-a"},
-                json={"character_id": str(current.character)},
-            )
             response = await client.post(
-                f"/v1/play/claims/{claimed.json()['id']}/jobs",
-                headers={
-                    CLIENT_ID_HEADER: "client-a",
-                    "X-Bunnyland-Claim-Secret": claimed.headers["X-Bunnyland-Claim-Secret"],
-                },
+                f"/v1/chat/characters/{current.character}/jobs",
+                headers={CLIENT_ID_HEADER: "client-a"},
                 json={"kind": "chat", "message": "hello"},
             )
-        assert response.status_code == status
-        assert response.json()["detail"] == detail
+            await asyncio.sleep(0)
+            result = await client.get(
+                response.headers["Location"],
+                headers={CLIENT_ID_HEADER: "client-a"},
+            )
+        assert response.status_code == 202
+        assert result.json()["status"] == "failed"
+        assert result.json()["failure"]["detail"] == detail
 
 
 def test_fastapi_world_generation_status_endpoint_reports_idle(scenario):
@@ -3117,7 +3115,6 @@ def test_web_controller_claim_ignores_client_controller_claimed_for_other_charac
         scenario.actor.world,
         [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
     )
-
     first, _secret = _create_claim(
         client, ClaimCreateRequest(character_id=str(scenario.character), label="toon")
     )
@@ -4476,21 +4473,33 @@ def test_v1_claim_events_support_incremental_reads(scenario):
 
 
 def test_v1_player_jobs_get_list_and_isolate_claims(scenario):
-    class FakeChat:
-        allowed_tools: tuple[str, ...] = ()
+    class FakeImageService:
+        def __init__(self) -> None:
+            self.next_id = 0
+            self.jobs: dict[str, ImageGenJob] = {}
 
-        async def chat(self, character_id: str, request) -> CharacterChatResponse:
-            return CharacterChatResponse(
-                world_epoch=scenario.actor.epoch,
-                character_id=character_id,
-                reply=f"reply to {request.message}",
+        async def start(self, entity_id: str, purpose: ImagePurpose, **_kwargs) -> ImageGenJob:
+            self.next_id += 1
+            job = ImageGenJob(
+                job_id=f"scene-{self.next_id}",
+                entity_id=entity_id,
+                purpose=purpose,
+                status="complete",
             )
+            self.jobs[job.job_id] = job
+            return job
+
+        def job(self, job_id: str) -> ImageGenJob | None:
+            return None
 
     other = spawn_entity(
         scenario.actor.world,
         [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
     )
-    app = create_app(scenario.actor, character_chat=FakeChat())
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), other.id
+    )
+    app = create_app(scenario.actor, imagegen=FakeImageService())
     client = pytest.importorskip("fastapi.testclient").TestClient(app)
     first, first_secret = _create_claim(
         client, ClaimCreateRequest(character_id=str(scenario.character))
@@ -4500,12 +4509,12 @@ def test_v1_player_jobs_get_list_and_isolate_claims(scenario):
     first_job = client.post(
         f"/v1/play/claims/{first['id']}/jobs",
         headers=_claim_headers("client-a", first_secret),
-        json=ChatJobRequest(kind="chat", message="hello").model_dump(mode="json"),
+        json={"kind": "scene_image"},
     )
     second_job = client.post(
         f"/v1/play/claims/{second['id']}/jobs",
         headers=_claim_headers("client-a", second_secret),
-        json=ChatJobRequest(kind="chat", message="hi").model_dump(mode="json"),
+        json={"kind": "scene_image"},
     )
     listed = client.get(
         f"/v1/play/claims/{first['id']}/jobs",
@@ -4540,23 +4549,24 @@ def test_v1_chat_job_keeps_existing_llm_controller(scenario):
 
     app = create_app(scenario.actor, character_chat=FakeChat())
     client = pytest.importorskip("fastapi.testclient").TestClient(app)
-    claim, secret = _create_claim(client, ClaimCreateRequest(character_id=str(scenario.character)))
-    web = scenario.actor.world.get_entity(parse_entity_id(claim["controller_id"]))
     llm = spawn_entity(
         scenario.actor.world,
         [LLMControllerComponent(profile_name="idle", model="claim-model")],
     )
-    transfer_claim(web, llm)
     scenario.actor.assign_controller(scenario.character, llm.id)
 
     response = client.post(
-        f"/v1/play/claims/{claim['id']}/jobs",
-        headers=_claim_headers("client-a", secret),
+        f"/v1/chat/characters/{scenario.character}/jobs",
+        headers={CLIENT_ID_HEADER: "client-a"},
         json=ChatJobRequest(kind="chat", message="hello").model_dump(mode="json"),
     )
+    for _attempt in range(20):
+        result = client.get(response.headers["Location"], headers={CLIENT_ID_HEADER: "client-a"})
+        if result.json()["status"] == "succeeded":
+            break
 
     assert response.status_code == 202
-    assert response.json()["result"]["reply"] == "hello"
+    assert result.json()["result"]["reply"] == "hello"
     assert (
         current_controller(scenario.actor, scenario.actor.world.get_entity(scenario.character))[
             0
@@ -4601,19 +4611,26 @@ def test_v1_generation_jobs_normalize_status_and_refresh_absent_jobs(scenario):
         create_app(scenario.actor, imagegen=FakeImageService("mystery"), with_admin=True),
         headers=_ADMIN_HEADERS,
     ).post("/v1/admin/world/generation-jobs", json=request.model_dump(mode="json"))
-    absent = testclient.TestClient(
+    absent_client = testclient.TestClient(
         create_app(
             scenario.actor,
             imagegen=FakeImageService("queued", retain=False),
             with_admin=True,
         ),
         headers=_ADMIN_HEADERS,
-    ).post("/v1/admin/world/generation-jobs", json=request.model_dump(mode="json"))
+    )
+    absent = absent_client.post(
+        "/v1/admin/world/generation-jobs", json=request.model_dump(mode="json")
+    )
+    absent_refreshed = absent_client.get(
+        f"/v1/admin/world/generation-jobs/{absent.json()['id']}"
+    )
 
     assert completed.json()["status"] == "succeeded"
     assert failed.json()["status"] == "failed"
     assert failed.json()["failure"]["code"] == "job_failed"
     assert absent.json()["status"] == "queued"
+    assert absent_refreshed.json()["status"] == "queued"
 
 
 def test_v1_non_world_generation_job_is_stable_on_refresh(scenario, monkeypatch):

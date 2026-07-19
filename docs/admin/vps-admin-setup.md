@@ -14,7 +14,7 @@ bunnyland_auth_users:
   - username: player1
     password_hash: "$argon2id$..."
     enabled: true
-    scopes: [world:play]
+    scopes: [character:profile, character:chat, world:play]
 bunnyland_operator_token: "blt_..."
 ```
 

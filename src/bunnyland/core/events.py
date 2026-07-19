@@ -166,6 +166,11 @@ class CharacterClaimedEvent(DomainEvent):
     generation: int
 
 
+class CharacterChatRequestedEvent(DomainEvent):
+    job_id: str
+    message: str
+
+
 class WorldPauseStatusChangedEvent(DomainEvent):
     paused: bool
     state: str
@@ -895,6 +900,7 @@ __all__ = [
     "CharacterDefendedEvent",
     "CharacterPickpocketedEvent",
     "CharacterClaimedEvent",
+    "CharacterChatRequestedEvent",
     "CharacterRevivedEvent",
     "CombatChallengeEvent",
     "CommandAcceptedEvent",

@@ -163,31 +163,33 @@ def test_chat_client_post_json_success_and_error(monkeypatch):
         chat.post_json("http://server", "/chat", {"message": "hi"})
 
 
-def test_chat_client_claim_helpers_use_v1_identity_headers(monkeypatch):
-    requests = []
-
-    def fake_urlopen(request, timeout):
-        requests.append((request, timeout))
-        if request.method == "POST":
-            return FakeResponse(
-                {"id": "claim-1"},
-                headers={"X-Bunnyland-Claim-Secret": "secret-1"},
-            )
-        return FakeResponse({})
-
-    monkeypatch.setattr(chat.urllib.request, "urlopen", fake_urlopen)
-
-    assert chat.create_claim("http://server/v1", "client-1", "character-1") == (
-        "claim-1",
-        "secret-1",
+def test_chat_client_waits_for_async_job(monkeypatch):
+    responses = iter(
+        [
+            {"id": "job-1", "status": "running"},
+            {"id": "job-1", "status": "succeeded", "result": {"reply": "hello"}},
+        ]
     )
-    chat.delete_claim("http://server/v1", "client-1", "claim-1", "secret-1")
+    paths = []
+    monkeypatch.setattr(chat.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        chat,
+        "get_json",
+        lambda _base, path, _client_id: paths.append(path) or next(responses),
+    )
 
-    created, deleted = (request for request, _timeout in requests)
-    assert created.full_url == "http://server/v1/play/claims"
-    assert created.headers["X-bunnyland-client-id"] == "client-1"
-    assert deleted.full_url == "http://server/v1/play/claims/claim-1"
-    assert deleted.headers["X-bunnyland-claim-secret"] == "secret-1"
+    result = chat.wait_for_job(
+        "http://server/v1",
+        "character:1",
+        "client-1",
+        {"id": "job-1", "status": "queued"},
+    )
+
+    assert result["result"]["reply"] == "hello"
+    assert paths == [
+        "/chat/characters/character%3A1/jobs/job-1",
+        "/chat/characters/character%3A1/jobs/job-1",
+    ]
 
 
 def test_chat_client_main_disabled_server_exits(monkeypatch, tmp_path):
@@ -220,8 +222,6 @@ def test_chat_client_main_interactive_round_trip(monkeypatch, tmp_path, capsys):
 
     monkeypatch.setattr(chat, "get_json", fake_get_json)
     monkeypatch.setattr(chat, "post_json", fake_post_json)
-    monkeypatch.setattr(chat, "create_claim", lambda *_args: ("claim-1", "secret-1"))
-    monkeypatch.setattr(chat, "delete_claim", lambda *_args: None)
 
     with patch("builtins.input", lambda _prompt: next(inputs)):
         assert chat.main(["--server", "http://server", "--character", "Juniper"]) == 0
@@ -229,7 +229,31 @@ def test_chat_client_main_interactive_round_trip(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Chatting with Juniper" in out
     assert "Juniper: I am here. [look executed]" in out
-    assert posted[0][1] == "/play/claims/claim-1/jobs"
+    assert posted[0][1] == "/chat/characters/char%3A1/jobs"
+
+
+def test_chat_client_main_reports_failed_job(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    def fake_get_json(_base, path, _client_id=""):
+        if path == "/public/features":
+            return {"character_chat": True}
+        return {"characters": [{"id": "char:1", "name": "Juniper"}]}
+
+    monkeypatch.setattr(chat, "get_json", fake_get_json)
+    monkeypatch.setattr(
+        chat,
+        "post_json",
+        lambda *_args, **_kwargs: {
+            "status": "failed",
+            "failure": {"detail": "Juniper is unavailable."},
+        },
+    )
+
+    with patch("builtins.input", side_effect=["hello", "/quit"]):
+        assert chat.main(["--server", "http://server"]) == 0
+
+    assert "Juniper: Juniper is unavailable." in capsys.readouterr().out
 
 
 def test_chat_client_main_exits_on_eof(monkeypatch, tmp_path, capsys):
@@ -241,9 +265,6 @@ def test_chat_client_main_exits_on_eof(monkeypatch, tmp_path, capsys):
         return {"characters": [{"id": "char:1", "name": "Juniper"}]}
 
     monkeypatch.setattr(chat, "get_json", fake_get_json)
-    monkeypatch.setattr(chat, "create_claim", lambda *_args: ("claim-1", "secret-1"))
-    monkeypatch.setattr(chat, "delete_claim", lambda *_args: None)
-
     with patch("builtins.input", side_effect=EOFError):
         assert chat.main(["--server", "http://server"]) == 0
 

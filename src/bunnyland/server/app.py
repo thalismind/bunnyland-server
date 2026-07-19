@@ -48,8 +48,11 @@ from ..core import (
 from ..core.claim_timeout import apply_claim_timeout_settings, record_claim_activity
 from ..core.controllers import ClaimedComponent, ClaimTimeoutComponent
 from ..core.events import (
+    CharacterChatRequestedEvent,
     CharacterClaimedEvent,
     ControllerChangedEvent,
+    EventVisibility,
+    event_base,
     serialized_event_visible_to,
 )
 from ..core.perspective import PerspectiveQueryResult
@@ -77,6 +80,8 @@ from ..worldgen import GenOptions, collect_generators
 from .admin import idle_generation_status, save_configured_world, start_world_generation
 from .auth import (
     AUTH_COOKIE_NAME,
+    CHARACTER_CHAT_SCOPE,
+    CHARACTER_PROFILE_SCOPE,
     WORLD_ADMIN_SCOPE,
     WORLD_PLAY_SCOPE,
     AuthMeResponse,
@@ -153,8 +158,11 @@ from .serialization import (
 from .subscriptions import EventStream
 from .v1_models import (
     CatalogResource,
+    CharacterChatReplyRequest,
     CharacterCollection,
+    CharacterProfileResource,
     CharacterResource,
+    ChatJobRequest,
     CheckpointRequest,
     ClaimCommandRequest,
     ClaimCreateRequest,
@@ -168,9 +176,9 @@ from .v1_models import (
     EventCollection,
     GenerationJobRequest,
     JobResource,
-    PlayerJobRequest,
     ProblemDetails,
     RuntimePatchRequest,
+    SceneImageJobRequest,
 )
 from .worldgen import (
     generate_character_patch,
@@ -239,13 +247,17 @@ class AuthorizationSurface(StrEnum):
     PUBLIC = "public"
     AUTH_LOGIN = "auth-login"
     AUTH = "auth"
+    PROFILE = "profile"
+    CHAT = "chat"
     PLAY = "play"
     ADMIN = "admin"
     MCP = "mcp"
 
 
 SURFACE_SCOPES = {
-    AuthorizationSurface.AUTH: WORLD_PLAY_SCOPE,
+    AuthorizationSurface.AUTH: None,
+    AuthorizationSurface.PROFILE: CHARACTER_PROFILE_SCOPE,
+    AuthorizationSurface.CHAT: CHARACTER_CHAT_SCOPE,
     AuthorizationSurface.PLAY: WORLD_PLAY_SCOPE,
     AuthorizationSurface.ADMIN: WORLD_ADMIN_SCOPE,
     AuthorizationSurface.MCP: WORLD_PLAY_SCOPE,
@@ -259,6 +271,8 @@ def classify_authorization_surface(path: str) -> AuthorizationSurface | None:
     for prefix, surface in (
         ("/v1/public", AuthorizationSurface.PUBLIC),
         ("/v1/auth", AuthorizationSurface.AUTH),
+        ("/v1/profile", AuthorizationSurface.PROFILE),
+        ("/v1/chat", AuthorizationSurface.CHAT),
         ("/v1/play", AuthorizationSurface.PLAY),
         ("/v1/admin", AuthorizationSurface.ADMIN),
         ("/v1/mcp", AuthorizationSurface.MCP),
@@ -465,6 +479,7 @@ def create_app(
 
     mcp_session_manager = None
     mcp_event_bridge = None
+    chat_tasks: set[asyncio.Task[None]] = set()
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -479,6 +494,10 @@ def create_app(
                 imagegen.start_backfill()
             yield
         finally:
+            for task in chat_tasks:
+                task.cancel()
+            if chat_tasks:
+                await asyncio.gather(*chat_tasks, return_exceptions=True)
             if mcp_session_context is not None:
                 await mcp_session_context.__aexit__(None, None, None)
             if mcp_event_bridge is not None:
@@ -611,6 +630,9 @@ def create_app(
     generation_job = None
     player_jobs: dict[str, JobResource] = {}
     player_job_claims: dict[str, str] = {}
+    character_chat_jobs: dict[str, JobResource] = {}
+    character_chat_job_clients: dict[str, str] = {}
+    character_chat_job_characters: dict[str, str] = {}
     generation_jobs: dict[str, JobResource] = {}
     memory_store = memory_store or getattr(actor, "memory_store", None)
     media_store = (
@@ -691,7 +713,7 @@ def create_app(
         active_authenticator.authenticate_values(
             authorization=header_auth,
             cookie_token=websocket.cookies.get(AUTH_COOKIE_NAME),
-            required_scopes=(SURFACE_SCOPES[surface],),
+            required_scopes=(cast(str, SURFACE_SCOPES[surface]),),
         )
         if surface is AuthorizationSurface.ADMIN:
             _require_allowed_admin_client_id(
@@ -856,7 +878,10 @@ def create_app(
         else:
             required_scope = SURFACE_SCOPES[surface]
             try:
-                authenticator.authenticate_request(request, required_scopes=(required_scope,))
+                authenticator.authenticate_request(
+                    request,
+                    required_scopes=(required_scope,) if required_scope else (),
+                )
             except HTTPException as exc:
                 allowed, retry_after = token_failure_rate_limiter.check(_client_host(request))
                 if not allowed:
@@ -1041,13 +1066,14 @@ def create_app(
         raise HTTPException(status_code=400, detail="fallback_controller is not a controller")
 
     async def world_character_chat(
+        service: CharacterChatService,
         id: str,
         request: CharacterChatRequest,
     ) -> CharacterChatResponse:
         try:
             with telemetry.span("character.chat", {"character.id": id}) as span:
                 try:
-                    response = await character_chat.chat(id, request)
+                    response = await service.chat(id, request)
                 except Exception as exc:
                     span.record_exception(exc)
                     telemetry.mark_span_error(str(exc), span)
@@ -1749,6 +1775,8 @@ def create_app(
     # are no compatibility aliases at runtime.
     public_v1 = APIRouter(prefix="/v1/public", tags=["public"])
     auth_v1 = APIRouter(prefix="/v1/auth", tags=["auth"])
+    profile_v1 = APIRouter(prefix="/v1/profile", tags=["profile"])
+    chat_v1 = APIRouter(prefix="/v1/chat", tags=["chat"])
     play_v1 = APIRouter(prefix="/v1/play", tags=["play"])
     admin_v1 = APIRouter(prefix="/v1/admin", tags=["admin"])
 
@@ -1778,9 +1806,7 @@ def create_app(
         return data
 
     def _refresh_image_job_v1(job: JobResource) -> JobResource:
-        if imagegen is None or job.kind not in {"image", "scene_image"}:
-            return job
-        current = imagegen.job(job.id)
+        current = _require_imagegen().job(job.id)
         if current is None:
             return job
         status = _job_status_v1(str(current.status))
@@ -1924,6 +1950,205 @@ def create_app(
             ],
         )
 
+    @profile_v1.get("/characters", response_model=CharacterCollection)
+    async def v1_profile_characters() -> CharacterCollection:
+        return await v1_characters()
+
+    @profile_v1.get("/characters/{character_id}", response_model=CharacterProfileResource)
+    async def v1_character_profile(character_id: str) -> CharacterProfileResource:
+        try:
+            projection = serialize_character_projection(actor, character_id)
+        except ValueError as exc:
+            detail = str(exc)
+            status = 400 if detail == "entity is not a character" else 404
+            raise HTTPException(status_code=status, detail=detail) from exc
+        room = projection.room.model_copy(update={"entities": [], "exits": []})
+        return CharacterProfileResource(
+            **_world_fields(),
+            character_id=projection.character_id,
+            character_name=projection.character_name,
+            portrait=projection.portrait,
+            room=room,
+            points=projection.points,
+            controller=projection.controller,
+            sheet=projection.sheet,
+        )
+
+    def _chat_job_for_client(job_id: str, character_id: str, client_id: str) -> JobResource:
+        job = character_chat_jobs.get(job_id)
+        if (
+            job is None
+            or character_chat_job_characters.get(job_id) != character_id
+            or character_chat_job_clients.get(job_id) != client_id
+        ):
+            raise HTTPException(status_code=404, detail="chat job does not exist")
+        return job
+
+    def _chat_job_failure(character_id: str, job_id: str, detail: str) -> None:
+        job = character_chat_jobs[job_id]
+        character_chat_jobs[job_id] = job.model_copy(
+            update={
+                "status": "failed",
+                "updated_at": datetime.now(UTC),
+                "failure": ProblemDetails(
+                    title="Chat failed",
+                    status=409,
+                    detail=detail,
+                    code="chat_unavailable",
+                    instance=f"/v1/chat/characters/{character_id}/jobs/{job_id}",
+                ),
+            }
+        )
+
+    async def _run_character_chat_job(
+        service: CharacterChatService,
+        character_id: str,
+        job_id: str,
+        body: ChatJobRequest,
+        client_id: str,
+    ) -> None:
+        job = character_chat_jobs[job_id]
+        character_chat_jobs[job_id] = job.model_copy(
+            update={"status": "running", "updated_at": datetime.now(UTC)}
+        )
+        try:
+            result = await world_character_chat(
+                service,
+                character_id,
+                CharacterChatRequest(
+                    client_id=client_id,
+                    message=body.message,
+                    history_summary=body.history_summary,
+                    history=body.history,
+                ),
+            )
+        except Exception as exc:
+            detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            _chat_job_failure(character_id, job_id, str(detail))
+            return
+        final_result = result
+        if result.action.status == "queued" and result.action.command_id:
+            character_chat_jobs[job_id] = character_chat_jobs[job_id].model_copy(
+                update={
+                    "updated_at": datetime.now(UTC),
+                    "result": _without_preview_fields(result),
+                }
+            )
+            while True:
+                await asyncio.sleep(0.25)
+                try:
+                    pending = await service.pending_result(
+                        character_id,
+                        client_id,
+                        result.action.command_id,
+                    )
+                except Exception as exc:
+                    _chat_job_failure(character_id, job_id, str(exc))
+                    return
+                character_chat_jobs[job_id] = character_chat_jobs[job_id].model_copy(
+                    update={
+                        "updated_at": datetime.now(UTC),
+                        "result": _without_preview_fields(pending),
+                    }
+                )
+                if pending.complete:
+                    final_result = pending
+                    break
+        character_chat_jobs[job_id] = character_chat_jobs[job_id].model_copy(
+            update={
+                "status": "succeeded",
+                "updated_at": datetime.now(UTC),
+                "result": _without_preview_fields(final_result),
+            }
+        )
+
+    @chat_v1.post(
+        "/characters/{character_id}/jobs",
+        response_model=JobResource,
+        status_code=202,
+    )
+    async def v1_submit_character_chat_job(
+        character_id: str,
+        body: ChatJobRequest,
+        response: Response,
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> JobResource:
+        parsed = parse_entity_id(character_id)
+        if parsed is None or not actor.world.has_entity(parsed):
+            raise HTTPException(status_code=404, detail="character does not exist")
+        character = actor.world.get_entity(parsed)
+        if not character.has_component(CharacterComponent):
+            raise HTTPException(status_code=400, detail="entity is not a character")
+        normalized_client_id = _client_id_header_value(client_id)
+        if normalized_client_id is None:
+            raise HTTPException(status_code=403, detail=f"{CLIENT_ID_HEADER} header is required")
+        active = current_controller(actor, character)
+        if active is None:
+            raise HTTPException(status_code=409, detail="character has no controller")
+        controller, _edge = active
+        controller_kind = actor._controller_kind(controller.id)
+        created = datetime.now(UTC)
+        job = JobResource(
+            **_world_fields(),
+            id=uuid4().hex,
+            kind="chat",
+            status="queued",
+            created_at=created,
+            updated_at=created,
+        )
+        character_chat_jobs[job.id] = job
+        character_chat_job_clients[job.id] = normalized_client_id
+        character_chat_job_characters[job.id] = character_id
+        response.headers["Location"] = f"/v1/chat/characters/{character_id}/jobs/{job.id}"
+        if controller_kind == "llm":
+            if character_chat is None:
+                _chat_job_failure(character_id, job.id, "character chat is not enabled")
+            else:
+                task = asyncio.create_task(
+                    _run_character_chat_job(
+                        character_chat,
+                        character_id,
+                        job.id,
+                        body,
+                        normalized_client_id,
+                    )
+                )
+                chat_tasks.add(task)
+                task.add_done_callback(chat_tasks.discard)
+        elif controller_kind in {"discord", "mcp", "web"}:
+            await actor.bus.publish(
+                CharacterChatRequestedEvent(
+                    **event_base(
+                        actor.epoch,
+                        default_visibility=EventVisibility.PRIVATE,
+                        target_ids=(character_id,),
+                    ),
+                    job_id=job.id,
+                    message=body.message,
+                )
+            )
+        else:
+            _chat_job_failure(
+                character_id,
+                job.id,
+                f"{controller_kind} character is not available to chat",
+            )
+        return character_chat_jobs[job.id].model_copy(deep=True)
+
+    @chat_v1.get(
+        "/characters/{character_id}/jobs/{job_id}",
+        response_model=JobResource,
+    )
+    async def v1_character_chat_job(
+        character_id: str,
+        job_id: str,
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> JobResource:
+        normalized_client_id = _client_id_header_value(client_id)
+        if normalized_client_id is None:
+            raise HTTPException(status_code=403, detail=f"{CLIENT_ID_HEADER} header is required")
+        return _chat_job_for_client(job_id, character_id, normalized_client_id)
+
     @play_v1.get("/catalog", response_model=CatalogResource)
     async def v1_catalog() -> CatalogResource:
         schema = world_schema(actor)
@@ -2053,6 +2278,39 @@ def create_app(
         _with_claim_secret(request, claim_secret)
         await _release_web_claim_request(request, (character, _controller, _edge, claim))
         return Response(status_code=204)
+
+    @play_v1.post(
+        "/claims/{claim_id}/chat-jobs/{job_id}",
+        response_model=JobResource,
+    )
+    async def v1_reply_to_character_chat_job(
+        claim_id: str,
+        job_id: str,
+        body: CharacterChatReplyRequest,
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
+        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+    ) -> JobResource:
+        character, _controller, _edge, _claim = _claim_context_v1(
+            claim_id, claim_secret, client_id
+        )
+        job = character_chat_jobs.get(job_id)
+        if job is None or character_chat_job_characters.get(job_id) != str(character.id):
+            raise HTTPException(status_code=404, detail="chat job does not exist")
+        if job.status not in {"queued", "running"}:
+            raise HTTPException(status_code=409, detail="chat job is already complete")
+        result = CharacterChatResponse(
+            world_epoch=actor.epoch,
+            character_id=str(character.id),
+            reply=body.reply,
+        )
+        character_chat_jobs[job_id] = job.model_copy(
+            update={
+                "status": "succeeded",
+                "updated_at": datetime.now(UTC),
+                "result": _without_preview_fields(result),
+            }
+        )
+        return character_chat_jobs[job_id]
 
     @play_v1.get("/claims/{claim_id}/projection", response_model=ClaimProjectionResource)
     async def v1_claim_projection(
@@ -2187,59 +2445,27 @@ def create_app(
     @play_v1.post("/claims/{claim_id}/jobs", response_model=JobResource, status_code=202)
     async def v1_submit_player_job(
         claim_id: str,
-        body: PlayerJobRequest,
+        body: SceneImageJobRequest,
         response: Response,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
         client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
     ) -> JobResource:
-        character, controller, _edge, claim = _claim_context_v1(claim_id, claim_secret, client_id)
+        character, _controller, _edge, _claim = _claim_context_v1(
+            claim_id, claim_secret, client_id
+        )
         created = datetime.now(UTC)
-        if body.kind == "chat":
-            if character_chat is None:
-                raise HTTPException(status_code=409, detail="character chat is not enabled")
-            if not controller.has_component(LLMControllerComponent):
-                fallback = WebControllerFallbackRequest(
-                    character_id=str(character.id),
-                    client_id=claim.client_id,
-                    claim_id=claim_id,
-                    fallback_controller="llm",
-                )
-                _with_claim_secret(fallback, claim_secret)
-                await _release_web_controller_to_fallback_request(
-                    fallback, (character, controller, _edge, claim)
-                )
-            chat_request = CharacterChatRequest(
-                client_id=client_id or "",
-                claim_id=claim_id,
-                message=body.message,
-                history_summary=body.history_summary,
-                history=body.history,
-            )
-            _with_claim_secret(chat_request, claim_secret)
-            result = await world_character_chat(str(character.id), chat_request)
-            job_id = uuid4().hex
-            job = JobResource(
-                **_world_fields(),
-                id=job_id,
-                kind=body.kind,
-                status="succeeded",
-                created_at=created,
-                updated_at=datetime.now(UTC),
-                result=_without_preview_fields(result),
-            )
-        else:
-            image = await _scene_image_request(str(character.id))
-            if image is None:
-                raise HTTPException(status_code=400, detail="character has no room to illustrate")
-            job = JobResource(
-                **_world_fields(),
-                id=image.job_id,
-                kind=body.kind,
-                status=_job_status_v1(image.status),
-                created_at=created,
-                updated_at=datetime.now(UTC),
-                result=_without_preview_fields(image),
-            )
+        image = await _scene_image_request(str(character.id))
+        if image is None:
+            raise HTTPException(status_code=400, detail="character has no room to illustrate")
+        job = JobResource(
+            **_world_fields(),
+            id=image.job_id,
+            kind=body.kind,
+            status=_job_status_v1(image.status),
+            created_at=created,
+            updated_at=datetime.now(UTC),
+            result=_without_preview_fields(image),
+        )
         player_jobs[job.id] = job
         player_job_claims[job.id] = claim_id
         response.headers["Location"] = f"/v1/play/claims/{claim_id}/jobs/{job.id}"
@@ -2501,7 +2727,7 @@ def create_app(
             "content_type": content_type,
         }
 
-    for router in (public_v1, auth_v1, play_v1, admin_v1):
+    for router in (public_v1, auth_v1, profile_v1, chat_v1, play_v1, admin_v1):
         app.include_router(router)
 
     @app.websocket("/v1/admin/world/stream")
