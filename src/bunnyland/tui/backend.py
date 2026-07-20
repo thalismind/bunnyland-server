@@ -691,11 +691,21 @@ class RemoteBackend(Backend):
         self._rotate_after: int | None = None
         self._rotation_task = None
         self._claims: dict[str, ControlClaim] = {}
+        self._claim_get_tasks: dict[tuple[str, str, str, str], asyncio.Task[dict | None]] = {}
 
     def _claim_for(self, character_id: str) -> ControlClaim | None:
         return self._claims.get(character_id) or load_claim_control(self.client_id, character_id)
 
-    def _forget_claim(self, character_id: str) -> None:
+    def _forget_claim(
+        self, character_id: str, expected: ControlClaim | None = None
+    ) -> None:
+        current = self._claim_for(character_id)
+        if expected is not None and (
+            current is None
+            or current.claim_id != expected.claim_id
+            or current.claim_secret != expected.claim_secret
+        ):
+            return
         self._claims.pop(character_id, None)
         clear_claim_control(self.client_id, character_id)
 
@@ -711,6 +721,41 @@ class RemoteBackend(Backend):
         if claim_headers:
             kwargs["headers"] = claim_headers
         return kwargs
+
+    async def _fetch_claim_resource(self, character_id: str, resource: str) -> dict | None:
+        claim = self._claim_for(character_id)
+        if claim is None or not claim.claim_id:
+            return None
+        key = (character_id, resource, claim.claim_id, claim.claim_secret)
+        task = self._claim_get_tasks.get(key)
+        if task is None:
+            task = asyncio.create_task(
+                self._fetch_claim_resource_once(character_id, resource, claim)
+            )
+            self._claim_get_tasks[key] = task
+        try:
+            return await asyncio.shield(task)
+        finally:
+            if task.done() and self._claim_get_tasks.get(key) is task:
+                self._claim_get_tasks.pop(key, None)
+
+    async def _fetch_claim_resource_once(
+        self, character_id: str, resource: str, claim: ControlClaim
+    ) -> dict | None:
+        kwargs = (
+            {"headers": {"X-Bunnyland-Claim-Secret": claim.claim_secret}}
+            if claim.claim_secret
+            else {}
+        )
+        res = await self._client.get(
+            f"{self.base}/play/claims/{urllib.parse.quote(claim.claim_id, safe='')}/{resource}",
+            **kwargs,
+        )
+        if getattr(res, "status_code", None) == 404:
+            self._forget_claim(character_id, claim)
+            return None
+        res.raise_for_status()
+        return res.json()
 
     async def start(self) -> None:
         import httpx
@@ -733,6 +778,12 @@ class RemoteBackend(Backend):
                 await self._rotation_task
             except asyncio.CancelledError:
                 pass
+        pending_claim_gets = tuple(self._claim_get_tasks.values())
+        for task in pending_claim_gets:
+            task.cancel()
+        if pending_claim_gets:
+            await asyncio.gather(*pending_claim_gets, return_exceptions=True)
+        self._claim_get_tasks.clear()
         if self._client is not None:
             await self._client.aclose()
 
@@ -817,47 +868,26 @@ class RemoteBackend(Backend):
         )
 
     async def fetch_character_projection(self, character_id: str) -> dict | None:
-        claim = self._claim_for(character_id)
-        if claim is None or not claim.claim_id:
+        data = await self._fetch_claim_resource(character_id, "projection")
+        if data is None:
             return None
-        res = await self._client.get(
-            f"{self.base}/play/claims/{urllib.parse.quote(claim.claim_id, safe='')}/projection",
-            **self._claim_request_kwargs(character_id),
-        )
-        if getattr(res, "status_code", None) == 404:
-            self._forget_claim(character_id)
-            return None
-        res.raise_for_status()
-        data = res.json()
         return {
             **data.get("character", {}),
             "world_epoch": data.get("world_epoch", 0),
             "sheet": data.get("sheet", {}),
             "actions": data.get("actions", []),
+            "queued_commands": data.get("commands", []),
         }
 
     async def fetch_room_projection(self, room_id: str, character_id: str) -> dict | None:
         del room_id
-        claim = self._claim_for(character_id)
-        if claim is None or not claim.claim_id:
-            return None
-        res = await self._client.get(
-            f"{self.base}/play/claims/{urllib.parse.quote(claim.claim_id, safe='')}/projection",
-            **self._claim_request_kwargs(character_id),
-        )
-        res.raise_for_status()
-        return res.json().get("scene")
+        data = await self._fetch_claim_resource(character_id, "projection")
+        return data.get("scene") if data is not None else None
 
     async def fetch_queued_commands(self, character_id: str) -> dict:
-        claim = self._claim_for(character_id)
-        if claim is None or not claim.claim_id:
+        data = await self._fetch_claim_resource(character_id, "projection")
+        if data is None:
             return {"character_id": character_id, "commands": []}
-        res = await self._client.get(
-            f"{self.base}/play/claims/{urllib.parse.quote(claim.claim_id, safe='')}/projection",
-            **self._claim_request_kwargs(character_id),
-        )
-        res.raise_for_status()
-        data = res.json()
         return {
             "character_id": character_id,
             "world_epoch": data.get("world_epoch", 0),
@@ -926,15 +956,8 @@ class RemoteBackend(Backend):
     async def recent_events(self, character_id: str = "") -> list[dict]:
         if not character_id:
             return []
-        claim = self._claim_for(character_id)
-        if claim is None or not claim.claim_id:
-            return []
-        res = await self._client.get(
-            f"{self.base}/play/claims/{urllib.parse.quote(claim.claim_id, safe='')}/events",
-            **self._claim_request_kwargs(character_id),
-        )
-        res.raise_for_status()
-        return res.json().get("events", [])
+        data = await self._fetch_claim_resource(character_id, "events")
+        return data.get("events", []) if data is not None else []
 
     def supports_live_updates(self) -> bool:
         try:

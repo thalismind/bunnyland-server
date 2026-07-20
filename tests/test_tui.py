@@ -2018,7 +2018,12 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
 
     assert snapshot == {"world_epoch": 7}
     assert character_list == []  # validated CharacterListResponse with no characters
-    assert character == {"world_epoch": 7, "sheet": {}, "actions": []}
+    assert character == {
+        "world_epoch": 7,
+        "sheet": {},
+        "actions": [],
+        "queued_commands": [],
+    }
     assert room == {}
     assert queued == {"character_id": PLAYER, "world_epoch": 7, "commands": []}
     assert submitted.accepted is False
@@ -2064,6 +2069,182 @@ async def test_remote_backend_close_without_client_is_noop():
     await backend.close()
 
     assert backend._client is None
+
+
+async def test_remote_backend_coalesces_claim_resource_reads():
+    class Response:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self): ...
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        def __init__(self):
+            self.calls = {"projection": 0, "events": 0}
+            self.started = {"projection": asyncio.Event(), "events": asyncio.Event()}
+            self.release = {"projection": asyncio.Event(), "events": asyncio.Event()}
+
+        async def get(self, url: str, **_kwargs):
+            resource = url.rsplit("/", 1)[-1]
+            self.calls[resource] += 1
+            self.started[resource].set()
+            await self.release[resource].wait()
+            if resource == "events":
+                return Response({"events": [{"event_type": "MovedEvent"}]})
+            return Response(
+                {
+                    "world_epoch": 7,
+                    "character": {"character_id": PLAYER},
+                    "scene": {"room": {"id": PARLOR}},
+                    "commands": [{"command_id": "cmd-1"}],
+                }
+            )
+
+    backend = RemoteBackend("https://server.example", client_id="remote-client")
+    backend._client = Client()
+    backend._claims[PLAYER] = ControlClaim("controller:1", 3, "claim-1", "secret-1")
+
+    projection_reads = [
+        asyncio.create_task(backend.fetch_character_projection(PLAYER)),
+        asyncio.create_task(backend.fetch_room_projection(PARLOR, PLAYER)),
+        asyncio.create_task(backend.fetch_queued_commands(PLAYER)),
+    ]
+    await backend._client.started["projection"].wait()
+    await asyncio.sleep(0)
+    assert backend._client.calls["projection"] == 1
+    backend._client.release["projection"].set()
+    character, room, queue = await asyncio.gather(*projection_reads)
+    assert character["character_id"] == PLAYER
+    assert room == {"room": {"id": PARLOR}}
+    assert queue["commands"] == [{"command_id": "cmd-1"}]
+
+    event_reads = [
+        asyncio.create_task(backend.recent_events(PLAYER)),
+        asyncio.create_task(backend.recent_events(PLAYER)),
+    ]
+    await backend._client.started["events"].wait()
+    await asyncio.sleep(0)
+    assert backend._client.calls["events"] == 1
+    backend._client.release["events"].set()
+    assert await asyncio.gather(*event_reads) == [
+        [{"event_type": "MovedEvent"}],
+        [{"event_type": "MovedEvent"}],
+    ]
+
+
+async def test_remote_backend_does_not_coalesce_across_claim_identity():
+    class Response:
+        def __init__(self, status_code, payload=None):
+            self.status_code = status_code
+            self.payload = payload or {}
+
+        def raise_for_status(self): ...
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        def __init__(self):
+            self.requests: list[tuple[str, dict]] = []
+            self.started = {"claim-old": asyncio.Event(), "claim-new": asyncio.Event()}
+            self.release = {"claim-old": asyncio.Event(), "claim-new": asyncio.Event()}
+
+        async def get(self, url: str, **kwargs):
+            claim_id = url.split("/claims/", 1)[1].split("/", 1)[0]
+            self.requests.append((url, kwargs))
+            self.started[claim_id].set()
+            await self.release[claim_id].wait()
+            if claim_id == "claim-old":
+                return Response(404)
+            return Response(200, {"character": {"character_id": PLAYER}})
+
+    backend = RemoteBackend("https://server.example", client_id="remote-client")
+    backend._client = Client()
+    old_claim = ControlClaim("controller:old", 1, "claim-old", "secret-old")
+    new_claim = ControlClaim("controller:new", 1, "claim-new", "secret-new")
+    backend._claims[PLAYER] = old_claim
+
+    old_read = asyncio.create_task(backend.fetch_character_projection(PLAYER))
+    await backend._client.started["claim-old"].wait()
+    backend._claims[PLAYER] = new_claim
+    new_read = asyncio.create_task(backend.fetch_character_projection(PLAYER))
+    await backend._client.started["claim-new"].wait()
+
+    assert len(backend._client.requests) == 2
+    assert backend._client.requests[0][1] == {
+        "headers": {"X-Bunnyland-Claim-Secret": "secret-old"}
+    }
+    assert backend._client.requests[1][1] == {
+        "headers": {"X-Bunnyland-Claim-Secret": "secret-new"}
+    }
+
+    backend._client.release["claim-old"].set()
+    assert await old_read is None
+    assert backend._claims[PLAYER] == new_claim
+    backend._client.release["claim-new"].set()
+    assert (await new_read)["character_id"] == PLAYER
+
+
+async def test_remote_backend_close_cancels_pending_claim_reads():
+    class Client:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.cancelled = False
+            self.closed_after_cancel = False
+
+        async def get(self, _url: str, **_kwargs):
+            self.started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+        async def aclose(self):
+            self.closed_after_cancel = self.cancelled
+
+    backend = RemoteBackend("https://server.example", client_id="remote-client")
+    backend._client = Client()
+    backend._claims[PLAYER] = ControlClaim("controller:1", 1, "claim-1", "secret-1")
+    read = asyncio.create_task(backend.fetch_character_projection(PLAYER))
+    await backend._client.started.wait()
+
+    await backend.close()
+    await asyncio.gather(read, return_exceptions=True)
+
+    assert backend._client.cancelled is True
+    assert backend._client.closed_after_cancel is True
+    assert backend._claim_get_tasks == {}
+
+
+async def test_remote_backend_claim_read_omits_empty_secret_header():
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self): ...
+
+        def json(self):
+            return {"character": {"character_id": PLAYER}}
+
+    class Client:
+        def __init__(self):
+            self.kwargs = None
+
+        async def get(self, _url: str, **kwargs):
+            self.kwargs = kwargs
+            return Response()
+
+    backend = RemoteBackend("https://server.example", client_id="remote-client")
+    backend._client = Client()
+    backend._claims[PLAYER] = ControlClaim("controller:1", 1, "claim-1", "")
+
+    assert (await backend.fetch_character_projection(PLAYER))["character_id"] == PLAYER
+    assert backend._client.kwargs == {}
 
 
 async def test_remote_backend_submit_reports_rejection_reason():
@@ -3207,6 +3388,19 @@ async def test_app_renders_empty_and_keeps_last_queue_on_fetch_failure():
         assert await fallback_app._fetch_queued_commands() == [
             _queued_command(command_id="cmd-last")
         ]
+
+
+async def test_app_reuses_commands_from_character_projection():
+    backend = RecordingBackend(_snapshot())
+    app = BunnylandTUI(backend)
+    app.player_id = PLAYER
+    projection = {
+        **_client_view(),
+        "queued_commands": [_queued_command()],
+    }
+
+    assert await app._fetch_queued_commands(projection) == [_queued_command()]
+    assert backend.queued_requests == []
 
 
 async def test_app_selecting_queued_command_cancels_it():

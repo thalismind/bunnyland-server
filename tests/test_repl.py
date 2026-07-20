@@ -1226,6 +1226,75 @@ async def test_app_throttles_repeated_refresh_errors_then_reports_recovery():
         assert "reconnected" in _log_text(app)
 
 
+async def test_app_coalesces_overlapping_event_refreshes():
+    class BlockingEventBackend(RecordingBackend):
+        def __init__(self):
+            super().__init__()
+            self.block_events = False
+            self.event_calls = 0
+            self.event_started = asyncio.Event()
+            self.release_events = asyncio.Event()
+
+        async def recent_events(self, character_id: str = "") -> list[dict]:
+            if not self.block_events:
+                return []
+            self.event_calls += 1
+            self.event_started.set()
+            await self.release_events.wait()
+            return []
+
+    backend = BlockingEventBackend()
+    app = BunnylandReplApp(backend)
+    async with app.run_test():
+        app.repl.player_id = PLAYER
+        backend.block_events = True
+        first = asyncio.create_task(app._safe_refresh())
+        await backend.event_started.wait()
+        second = asyncio.create_task(app._safe_refresh())
+        await asyncio.sleep(0)
+
+        assert backend.event_calls == 1
+
+        backend.release_events.set()
+        await asyncio.gather(first, second)
+        assert backend.event_calls == 1
+
+
+async def test_app_unmount_cancels_refresh_before_closing_backend():
+    class BlockingEventBackend(RecordingBackend):
+        def __init__(self):
+            super().__init__()
+            self.block_events = False
+            self.event_started = asyncio.Event()
+            self.event_cancelled = False
+            self.closed_after_cancel = False
+
+        async def recent_events(self, character_id: str = "") -> list[dict]:
+            if not self.block_events:
+                return []
+            self.event_started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                self.event_cancelled = True
+                raise
+
+        async def close(self) -> None:
+            self.closed_after_cancel = self.event_cancelled
+
+    backend = BlockingEventBackend()
+    app = BunnylandReplApp(backend)
+    async with app.run_test():
+        app.repl.player_id = PLAYER
+        backend.block_events = True
+        refresh = asyncio.create_task(app._safe_refresh())
+        await backend.event_started.wait()
+
+    await asyncio.gather(refresh, return_exceptions=True)
+    assert backend.event_cancelled is True
+    assert backend.closed_after_cancel is True
+
+
 async def test_app_quit_exits():
     app = BunnylandReplApp(RecordingBackend())
     exits: list[bool] = []
