@@ -348,6 +348,7 @@ class BunnylandTUI(App[None]):
         self._event_image_url = ""
         self._event_image_failure_epoch = -1
         self._refresh_error: str | None = None
+        self._refresh_task: asyncio.Task[None] | None = None
         self._live_task: asyncio.Task | None = None
         self._live_ready = False
         self.show_generator_selector = False
@@ -428,6 +429,9 @@ class BunnylandTUI(App[None]):
 
     async def on_unmount(self) -> None:
         self._stop_live_updates()
+        if self._refresh_task is not None:
+            self._refresh_task.cancel()
+            await asyncio.gather(self._refresh_task, return_exceptions=True)
         await self.backend.close()
 
     async def _poll_refresh_world(self) -> None:
@@ -476,6 +480,17 @@ class BunnylandTUI(App[None]):
 
     # ── data ────────────────────────────────────────────────────────────────
     async def refresh_world(self) -> None:
+        task = self._refresh_task
+        if task is None:
+            task = asyncio.create_task(self._refresh_world_once())
+            self._refresh_task = task
+        try:
+            await asyncio.shield(task)
+        finally:
+            if task.done() and self._refresh_task is task:
+                self._refresh_task = None
+
+    async def _refresh_world_once(self) -> None:
         # The picker is sourced from the claim lobby; the world is only ever the player's
         # own perceived room (their character projection), never the full map.
         try:

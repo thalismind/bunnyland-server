@@ -18,6 +18,7 @@ into "insert this name into the input" actions.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -156,9 +157,21 @@ class BunnylandRepl:
         self._events = tui_events.EventNarrator()
         self._event_image_url = ""
         self._event_image_failure_epoch = -1
+        self._refresh_task: asyncio.Task[None] | None = None
 
     # ── data ──────────────────────────────────────────────────────────────────
     async def refresh(self) -> None:
+        task = self._refresh_task
+        if task is None:
+            task = asyncio.create_task(self._refresh_once())
+            self._refresh_task = task
+        try:
+            await asyncio.shield(task)
+        finally:
+            if task.done() and self._refresh_task is task:
+                self._refresh_task = None
+
+    async def _refresh_once(self) -> None:
         # The picker comes from the claim lobby; the world is only ever the player's own
         # perceived room (their character projection), never the admin-gated full snapshot.
         self.character_list = await self.backend.fetch_character_list()

@@ -2656,6 +2656,67 @@ async def test_app_returns_expired_claim_to_reclaimable_state():
         )
 
 
+async def test_app_coalesces_overlapping_projection_refreshes():
+    class BlockingProjectionBackend(RecordingBackend):
+        def __init__(self):
+            super().__init__(_snapshot())
+            self.projection_calls = 0
+            self.projection_started = asyncio.Event()
+            self.release_projection = asyncio.Event()
+
+        async def fetch_character_projection(self, character_id: str) -> dict | None:
+            self.projection_calls += 1
+            self.projection_started.set()
+            await self.release_projection.wait()
+            return await super().fetch_character_projection(character_id)
+
+    backend = BlockingProjectionBackend()
+    app = BunnylandTUI(backend)
+    async with app.run_test():
+        app.player_id = PLAYER
+        first = asyncio.create_task(app.refresh_world())
+        await backend.projection_started.wait()
+        second = asyncio.create_task(app.refresh_world())
+        await asyncio.sleep(0)
+
+        assert backend.projection_calls == 1
+
+        backend.release_projection.set()
+        await asyncio.gather(first, second)
+        assert backend.projection_calls == 1
+
+
+async def test_app_unmount_cancels_refresh_before_closing_backend():
+    class BlockingProjectionBackend(RecordingBackend):
+        def __init__(self):
+            super().__init__(_snapshot())
+            self.projection_started = asyncio.Event()
+            self.projection_cancelled = False
+            self.closed_after_cancel = False
+
+        async def fetch_character_projection(self, character_id: str) -> dict | None:
+            self.projection_started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                self.projection_cancelled = True
+                raise
+
+        async def close(self) -> None:
+            self.closed_after_cancel = self.projection_cancelled
+
+    backend = BlockingProjectionBackend()
+    app = BunnylandTUI(backend)
+    async with app.run_test():
+        app.player_id = PLAYER
+        refresh = asyncio.create_task(app.refresh_world())
+        await backend.projection_started.wait()
+
+    await asyncio.gather(refresh, return_exceptions=True)
+    assert backend.projection_cancelled is True
+    assert backend.closed_after_cancel is True
+
+
 async def test_app_renders_room_and_actions():
     from textual.widgets import OptionList, Static
 

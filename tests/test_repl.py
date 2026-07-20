@@ -883,6 +883,35 @@ async def test_refresh_clears_claim_when_projection_missing():
     assert repl.world.get(PARLOR) is None
 
 
+async def test_refresh_coalesces_overlapping_projection_requests():
+    class BlockingProjectionBackend(RecordingBackend):
+        def __init__(self):
+            super().__init__(_snapshot())
+            self.projection_calls = 0
+            self.projection_started = asyncio.Event()
+            self.release_projection = asyncio.Event()
+
+        async def fetch_character_projection(self, character_id: str) -> dict | None:
+            self.projection_calls += 1
+            self.projection_started.set()
+            await self.release_projection.wait()
+            return await super().fetch_character_projection(character_id)
+
+    backend = BlockingProjectionBackend()
+    repl = BunnylandRepl(backend)
+    repl.player_id = PLAYER
+    first = asyncio.create_task(repl.refresh())
+    await backend.projection_started.wait()
+    second = asyncio.create_task(repl.refresh())
+    await asyncio.sleep(0)
+
+    assert backend.projection_calls == 1
+
+    backend.release_projection.set()
+    await asyncio.gather(first, second)
+    assert backend.projection_calls == 1
+
+
 async def test_refresh_resets_world_when_projection_id_mismatches():
     # projection returns a view for a different character -> empty World (152)
     class MismatchedBackend(RecordingBackend):
