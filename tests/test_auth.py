@@ -811,7 +811,7 @@ async def test_login_rotation_logout_and_rate_limit(tmp_path) -> None:
         assert int(limited.headers["retry-after"]) >= 1
 
         now = int(time.time())
-        old_token, _principal = tokens.issue(
+        old_token, principal = tokens.issue(
             "player",
             [WORLD_PLAY_SCOPE],
             automatic_rotation=True,
@@ -823,8 +823,13 @@ async def test_login_rotation_logout_and_rate_limit(tmp_path) -> None:
         assert rotated.status_code == 200, rotated.text
         replacement = rotated.json()["token"]
         assert replacement.startswith("blt_")
-        assert tokens.verify(old_token, now=now + ROTATION_GRACE_SECONDS - 1)
-        assert tokens.verify(old_token, now=now + ROTATION_GRACE_SECONDS) is None
+        source = next(
+            row for row in tokens.list_metadata() if row["token_id"] == principal.token_id
+        )
+        grace_until = source["grace_until"]
+        assert isinstance(grace_until, int)
+        assert tokens.verify(old_token, now=grace_until - 1)
+        assert tokens.verify(old_token, now=grace_until) is None
 
         logged_out = await client.delete(
             "/v1/auth/session", headers={"Authorization": f"Bearer {replacement}"}
