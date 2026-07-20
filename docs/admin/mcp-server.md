@@ -1,6 +1,6 @@
 # MCP server authentication
 
-Bunnyland mounts streamable HTTP MCP at `/mcp` when `bunnyland serve --mcp` is enabled.
+Bunnyland mounts streamable HTTP MCP at `/v1/mcp` when `bunnyland serve --mcp` is enabled.
 The MCP transport uses the same opaque bearer tokens as every other API client; there is no
 MCP-specific credential or tool argument.
 

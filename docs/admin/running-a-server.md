@@ -67,7 +67,7 @@ uv run --extra server --extra mcp bunnyland serve \
   --token-db data/auth-tokens.sqlite3
 ```
 
-This exposes the MCP Streamable HTTP endpoint at `http://127.0.0.1:8765/mcp`.
+This exposes the MCP Streamable HTTP endpoint at `http://127.0.0.1:8765/v1/mcp/`.
 Agent tools can list and claim characters, inspect snapshots, and queue normal world
 commands. World patching and generation tools require a bearer token with `world:admin`.
 
@@ -148,7 +148,7 @@ uv run bunnyland serve --config bunnyland.yml
 | `--time-scale`   | `3600.0`       | Game seconds that pass per round.                              |
 | `--api-host`     | `127.0.0.1`    | Host for the optional HTTP/websocket client API.                |
 | `--api-port`     | (none)         | Port for the optional HTTP/websocket client API.                |
-| `--mcp`          | off            | Mount the MCP endpoint at `/mcp` on the existing API server.    |
+| `--mcp`          | off            | Mount MCP at `/v1/mcp` on the existing API server.              |
 | `--auth-users-file` | `data/auth-users.yml` | Deployment-rendered Argon2 user credentials. |
 | `--token-db` | `data/auth-tokens.sqlite3` | Private SQLite opaque-token and revocation store. |
 | `--player-client-id` | env        | Allow one player `client_id`; repeat or pass comma-separated values. Defaults to `BUNNYLAND_PLAYER_CLIENT_IDS`; unset allows any player client ID. |

@@ -18,7 +18,7 @@ bunnyland auth provision-token \
 ```
 
 Add `--scope world:admin` only when the agent needs privileged projections or admin tools.
-Configure the MCP endpoint as `http://127.0.0.1:8765/mcp` (or the hosted `/api/mcp` URL) and
+Configure the MCP endpoint as `http://127.0.0.1:8765/v1/mcp/` (or the hosted `/api/v1/mcp/` URL) and
 set `Authorization: Bearer <printed-token>` using the agent client's protected secret store.
 
 The token never appears in an MCP tool schema or argument. Character claim IDs and claim

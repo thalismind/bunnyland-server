@@ -700,7 +700,9 @@ async def _run_api_runtime(
 
     print(f"Serving client API at http://{args.api_host}:{args.api_port}.")
     if args.mcp:
-        print(f"Serving MCP at http://{args.api_host}:{args.api_port}/mcp.")
+        from .mcp.server import MCP_MOUNT_PATH
+
+        print(f"Serving MCP at http://{args.api_host}:{args.api_port}{MCP_MOUNT_PATH}/.")
     try:
         return await _run_with_optional_discord(
             run_loop_with_api(

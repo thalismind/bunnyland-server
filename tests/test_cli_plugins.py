@@ -1740,6 +1740,39 @@ async def test_run_api_runtime_without_mcp_uses_default_auth_paths(monkeypatch, 
     assert "Serving MCP" not in capsys.readouterr().out
 
 
+async def test_run_api_runtime_reports_versioned_mcp_endpoint(monkeypatch, tmp_path, capsys):
+    import bunnyland.server.runtime as runtime
+
+    async def fake_run_loop_with_api(*args, **kwargs):
+        del args, kwargs
+        return 3
+
+    actor = WorldActor()
+    meta = WorldMeta(seed="moss", generator="empty")
+    args = _serve_args(
+        api_port=8765,
+        mcp=True,
+        save=str(tmp_path / "world.json"),
+    )
+    loop = type("Loop", (), {"run": lambda self, *, max_ticks: asyncio.sleep(0, result=1)})()
+
+    monkeypatch.setattr(runtime, "run_loop_with_api", fake_run_loop_with_api)
+
+    await cli._run_api_runtime(
+        loop,
+        actor,
+        meta,
+        args,
+        select_plugins([WORLDGEN]),
+        None,
+        cli.ServeCredentials(worldgen_provider="ollama", worldgen_api_key="worldgen-key"),
+        cli.ServeModels(worldgen_model="world-model", character_model="character-model"),
+        3,
+    )
+
+    assert "Serving MCP at http://127.0.0.1:8765/v1/mcp/." in capsys.readouterr().out
+
+
 def test_load_rejects_saved_plugin_that_is_no_longer_available(tmp_path):
     path = tmp_path / "world.json"
     save_world(

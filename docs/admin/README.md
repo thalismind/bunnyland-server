@@ -206,7 +206,7 @@ cleanly removes its surface.
 
 The MCP plugin is disabled by default. Prefer `--mcp` when running the HTTP API; it adds
 `bunnyland.mcp` to the selected plugin set and mounts the MCP app on the same FastAPI
-server under `/mcp`.
+server under `/v1/mcp`.
 
 ### Loading external plugins
 
