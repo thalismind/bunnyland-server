@@ -65,6 +65,8 @@ docker run --rm -it ghcr.io/thalismind/bunnyland-server tui \
   --server https://your-bunnyland.example
 docker run --rm -it ghcr.io/thalismind/bunnyland-server repl \
   --server https://your-bunnyland.example
+docker run --rm -it ghcr.io/thalismind/bunnyland-server chat \
+  --server https://your-bunnyland.example/v1
 ```
 
 Use `-it` for the terminal clients. The web repo publishes
@@ -308,6 +310,7 @@ observe it.
 | MCP endpoint                      | Playable  | | ✓ | ✓ | | | |
 | Terminal TUI (`uv run --all-extras bunnyland tui`)   | Playable  | ✓ | ✓ | | | ✓ | ✓ |
 | Terminal REPL (`uv run --all-extras bunnyland repl`) | Playable  | ✓ | ✓ | | | ✓ | ✓ |
+| Terminal chat (`uv run --all-extras bunnyland chat`) | Playable  | ✓ | ✓ | | | ✓ | ✓ |
 
 † Implemented in the frontend/web repo; capabilities summarized here.
 ‡ The Discord bot hosts the world in its own process.

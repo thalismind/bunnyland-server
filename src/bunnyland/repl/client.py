@@ -56,6 +56,7 @@ META_COMMANDS = (
 )
 IMAGE_COMMANDS = ("image", "img")
 SHEET_COMMANDS = ("sheet", "profile")
+CHAT_COMMANDS = ("chat",)
 
 
 def _humanize_event_type(event_type: str) -> str:
@@ -85,6 +86,29 @@ class ParsedCommand:
 
     tool: str
     arguments: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class OpenSheetIntent:
+    character_id: str
+    character_name: str
+
+    @property
+    def plain(self) -> str:
+        return f"Open sheet: {self.character_name}"
+
+
+@dataclass(frozen=True)
+class OpenChatIntent:
+    character_id: str
+    character_name: str
+
+    @property
+    def plain(self) -> str:
+        return f"Open chat: {self.character_name}"
+
+
+ReplCommandResult = Text | OpenSheetIntent | OpenChatIntent
 
 
 def parse_line(line: str, definitions: dict[str, ActionDefinition]) -> ParsedCommand | None:
@@ -331,7 +355,7 @@ class BunnylandRepl:
         return out
 
     # ── dispatch ──────────────────────────────────────────────────────────────
-    async def dispatch(self, line: str) -> Text:
+    async def dispatch(self, line: str) -> ReplCommandResult:
         line = line.strip()
         if not line:
             return Text("")
@@ -364,6 +388,8 @@ class BunnylandRepl:
             return await self._request_image()
         if verb in SHEET_COMMANDS:
             return await self._open_sheet(rest)
+        if verb in CHAT_COMMANDS:
+            return self._open_chat(rest)
         return await self._act(line, verb)
 
     async def _request_image(self) -> Text:
@@ -393,7 +419,7 @@ class BunnylandRepl:
         ids.update(entity["id"] for entity in self.world.characters())
         return resolved if resolved in ids else None
 
-    async def _open_sheet(self, name: str = "") -> Text:
+    async def _open_sheet(self, name: str = "") -> ReplCommandResult:
         if not self.backend.supports_character_sheets:
             return Text("Character sheets require a remote server URL.", style="yellow")
         character_id = self._sheet_target(name)
@@ -401,10 +427,26 @@ class BunnylandRepl:
             if name.strip():
                 return Text(f"No character sheet target: {name!r}. Try 'who'.")
             return Text("Pick a player first: play <name>.")
-        result = await self.backend.open_character_sheet(character_id)
-        if result.ok:
-            return Text(f"Opened sheet: {result.url}", style="cyan")
-        return Text(result.reason, style="yellow")
+        if type(self.backend).fetch_character_profile is Backend.fetch_character_profile:
+            result = await self.backend.open_character_sheet(character_id)
+            if result.ok:
+                return Text(f"Opened sheet: {result.url}", style="cyan")
+            return Text(result.reason, style="yellow")
+        summary = next(
+            (item for item in self.character_list if item.character_id == character_id), None
+        )
+        return OpenSheetIntent(character_id, summary.name if summary else character_id)
+
+    def _open_chat(self, name: str = "") -> ReplCommandResult:
+        character_id = self._sheet_target(name)
+        if character_id is None:
+            if name.strip():
+                return Text(f"No character chat target: {name!r}. Try 'who'.")
+            return Text("Usage: chat <character name>. Pick a player or name a character.")
+        summary = next(
+            (item for item in self.character_list if item.character_id == character_id), None
+        )
+        return OpenChatIntent(character_id, summary.name if summary else character_id)
 
     async def _act(self, line: str, verb: str) -> Text:
         parsed = parse_line(line, self._defs)
@@ -604,6 +646,8 @@ class BunnylandRepl:
             commands.extend(IMAGE_COMMANDS)
         if self.backend.supports_character_sheets:
             commands.extend(SHEET_COMMANDS)
+        if self.backend.supports_character_chat:
+            commands.extend(CHAT_COMMANDS)
         return tuple(commands)
 
     def complete(self, line: str) -> list[str]:

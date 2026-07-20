@@ -17,7 +17,7 @@ import urllib.parse
 import webbrowser
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -42,7 +42,12 @@ from ..core import (
 )
 from ..core.claim_timeout import apply_claim_timeout_settings
 from ..core.ecs import parse_entity_id
-from ..server.models import CharacterListResponse, CharacterSummaryView
+from ..server.models import (
+    CharacterChatActionResult,
+    CharacterChatRequest,
+    CharacterListResponse,
+    CharacterSummaryView,
+)
 from ..server.serialization import (
     serialize_character_list,
     serialize_character_projection,
@@ -50,6 +55,8 @@ from ..server.serialization import (
     serialize_room_projection,
     serialize_world,
 )
+from ..server.v1_models import CharacterProfileResource, JobResource
+from ..terminal_config import ResolvedTerminalChatConfig, build_terminal_chat_agent
 from .model import World
 
 logger = logging.getLogger("bunnyland.tui")
@@ -132,7 +139,17 @@ def persistent_client_id(path: Path | None = None) -> str:
         except OSError:
             logger.warning("Could not read TUI client id from %s", path, exc_info=True)
 
-    client_id = str(uuid4())
+    client_id = ""
+    # Releases before terminal.yml gave standalone chat a separate identity. Adopt it
+    # when possible so saved conversations continue under the shared terminal client id.
+    legacy_path = path.parent / "chat-client-id"
+    if path == _client_id_path() and legacy_path.exists():
+        try:
+            client_id = str(UUID(legacy_path.read_text(encoding="utf-8").strip()))
+        except (OSError, ValueError):
+            client_id = ""
+    if not client_id:
+        client_id = str(uuid4())
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{client_id}\n", encoding="utf-8")
@@ -216,6 +233,26 @@ class SheetOpenResult:
 
 
 @dataclass(frozen=True)
+class CharacterChatJob:
+    """Backend-neutral state for an asynchronous character-chat exchange."""
+
+    id: str
+    status: str
+    character_id: str
+    reply: str = ""
+    action: CharacterChatActionResult = field(default_factory=CharacterChatActionResult)
+    failure: str = ""
+
+    @property
+    def pending(self) -> bool:
+        return self.status in {"queued", "running"}
+
+    @property
+    def complete(self) -> bool:
+        return self.status in {"succeeded", "failed"}
+
+
+@dataclass(frozen=True)
 class SubmitResult:
     """Outcome of submitting a command: accepted for queuing, or rejected at submit.
 
@@ -235,6 +272,7 @@ class Backend(ABC):
 
     label: str = ""
     supports_character_sheets: bool = False
+    supports_character_chat: bool = False
     supports_image_requests: bool = False
 
     @abstractmethod
@@ -325,6 +363,31 @@ class Backend(ABC):
         """Open the web character-sheet deep link for a character."""
         return SheetOpenResult(ok=False, reason="Character sheets require a remote server URL")
 
+    async def fetch_character_profile(self, character_id: str) -> CharacterProfileResource:
+        raise RuntimeError("Character sheets are not available for this session")
+
+    async def character_chat_availability(self) -> tuple[bool, str]:
+        if self.supports_character_chat:
+            return True, ""
+        return False, "Character chat is not available for this session"
+
+    async def submit_character_chat(
+        self,
+        character_id: str,
+        message: str,
+        *,
+        history_summary: str = "",
+        history: list[dict] | None = None,
+    ) -> CharacterChatJob:
+        del character_id, message, history_summary, history
+        raise RuntimeError("Character chat is not available for this session")
+
+    async def poll_character_chat(self, job: CharacterChatJob) -> CharacterChatJob:
+        return job
+
+    async def cancel_character_chat(self, job: CharacterChatJob) -> None:
+        del job
+
 
 def frontend_base_for_api(api_base: str) -> str:
     """Best-effort frontend origin for an API base URL.
@@ -354,6 +417,8 @@ def character_sheet_url(api_base: str, character_id: str) -> str:
 class LocalBackend(Backend):
     """Generate an offline world and tick it in-process, the TUI as a real player."""
 
+    supports_character_sheets = True
+
     def __init__(
         self,
         *,
@@ -365,6 +430,7 @@ class LocalBackend(Backend):
         client_id: str | None = None,
         fallback_controller: str | None = None,
         timeout_seconds: int | None = None,
+        chat_config: ResolvedTerminalChatConfig | None = None,
     ) -> None:
         self.seed = seed
         self.generator_name = generator
@@ -383,6 +449,12 @@ class LocalBackend(Backend):
         self.fallback_controller = fallback_controller
         self.timeout_seconds = timeout_seconds
         self.imagegen = None
+        self.chat_config = chat_config
+        self.character_chat = None
+
+    @property
+    def supports_character_chat(self) -> bool:
+        return bool(self.chat_config and self.chat_config.enabled)
 
     @property
     def supports_image_requests(self) -> bool:
@@ -430,6 +502,14 @@ class LocalBackend(Backend):
             persona_providers=collect_persona_fragments(plugins),
         )
         dispatch = ControllerDispatch(self.actor, builder, ScriptedAgent([]))
+        if self.supports_character_chat:
+            from ..server.character_chat import CharacterChatService
+
+            self.character_chat = CharacterChatService(
+                self.actor,
+                builder,
+                build_terminal_chat_agent(self.chat_config),
+            )
         self._loop = GameLoop(
             self.actor, dispatch, tick_seconds=self.tick_seconds, time_scale=self.time_scale
         )
@@ -450,6 +530,71 @@ class LocalBackend(Backend):
 
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         return serialize_character_projection(self.actor, character_id).model_dump(mode="json")
+
+    async def fetch_character_profile(self, character_id: str) -> CharacterProfileResource:
+        projection = serialize_character_projection(self.actor, character_id)
+        return CharacterProfileResource(
+            world_id=self.meta.world_id,
+            world_epoch=self.actor.epoch,
+            character_id=projection.character_id,
+            character_name=projection.character_name,
+            portrait=projection.portrait,
+            room=projection.room.model_copy(update={"entities": [], "exits": []}),
+            points=projection.points,
+            controller=projection.controller,
+            sheet=projection.sheet,
+        )
+
+    async def submit_character_chat(
+        self,
+        character_id: str,
+        message: str,
+        *,
+        history_summary: str = "",
+        history: list[dict] | None = None,
+    ) -> CharacterChatJob:
+        if self.character_chat is None:
+            raise RuntimeError("Character chat is disabled for this local session")
+        response = await self.character_chat.chat(
+            character_id,
+            CharacterChatRequest(
+                client_id=self.client_id,
+                message=message,
+                history_summary=history_summary,
+                history=history or [],
+            ),
+        )
+        pending = response.action.status == "queued" and bool(response.action.command_id)
+        return CharacterChatJob(
+            id=response.action.command_id or uuid4().hex,
+            status="running" if pending else "succeeded",
+            character_id=character_id,
+            reply=response.reply,
+            action=response.action,
+        )
+
+    async def poll_character_chat(self, job: CharacterChatJob) -> CharacterChatJob:
+        if not job.pending or not job.action.command_id:
+            return job
+        if self.character_chat is None:
+            return CharacterChatJob(
+                id=job.id,
+                status="failed",
+                character_id=job.character_id,
+                failure="Character chat is disabled for this local session",
+            )
+        response = await self.character_chat.pending_result(
+            job.character_id,
+            self.client_id,
+            job.action.command_id,
+        )
+        return CharacterChatJob(
+            id=job.id,
+            status="succeeded" if response.complete else "running",
+            character_id=job.character_id,
+            reply=response.reply or job.reply,
+            action=response.action,
+        )
 
     async def fetch_room_projection(self, room_id: str, character_id: str) -> dict | None:
         character = self.actor.world.get_entity(parse_entity_id(character_id))
@@ -663,6 +808,7 @@ class RemoteBackend(Backend):
     """Poll a running server over HTTP for snapshots and post commands to it."""
 
     supports_character_sheets = True
+    supports_character_chat = True
     supports_image_requests = True
 
     def __init__(
@@ -696,9 +842,7 @@ class RemoteBackend(Backend):
     def _claim_for(self, character_id: str) -> ControlClaim | None:
         return self._claims.get(character_id) or load_claim_control(self.client_id, character_id)
 
-    def _forget_claim(
-        self, character_id: str, expected: ControlClaim | None = None
-    ) -> None:
+    def _forget_claim(self, character_id: str, expected: ControlClaim | None = None) -> None:
         current = self._claim_for(character_id)
         if expected is not None and (
             current is None
@@ -878,6 +1022,68 @@ class RemoteBackend(Backend):
             "actions": data.get("actions", []),
             "queued_commands": data.get("commands", []),
         }
+
+    async def fetch_character_profile(self, character_id: str) -> CharacterProfileResource:
+        res = await self._client.get(
+            f"{self.base}/profile/characters/{urllib.parse.quote(character_id, safe='')}"
+        )
+        res.raise_for_status()
+        return CharacterProfileResource.model_validate(res.json())
+
+    async def character_chat_availability(self) -> tuple[bool, str]:
+        res = await self._client.get(f"{self.base}/public/features")
+        res.raise_for_status()
+        if res.json().get("character_chat"):
+            return True, ""
+        return False, "Character chat is not enabled on this server"
+
+    @staticmethod
+    def _character_chat_job(resource: JobResource, character_id: str) -> CharacterChatJob:
+        result = resource.result or {}
+        action = CharacterChatActionResult.model_validate(result.get("action") or {})
+        failure = resource.failure.detail if resource.failure is not None else ""
+        return CharacterChatJob(
+            id=resource.id,
+            status=resource.status,
+            character_id=character_id,
+            reply=str(result.get("reply") or ""),
+            action=action,
+            failure=failure,
+        )
+
+    async def submit_character_chat(
+        self,
+        character_id: str,
+        message: str,
+        *,
+        history_summary: str = "",
+        history: list[dict] | None = None,
+    ) -> CharacterChatJob:
+        res = await self._client.post(
+            f"{self.base}/chat/characters/{urllib.parse.quote(character_id, safe='')}/jobs",
+            json={
+                "kind": "chat",
+                "message": message,
+                "history_summary": history_summary,
+                "history": (history or [])[-24:],
+            },
+        )
+        res.raise_for_status()
+        return self._character_chat_job(JobResource.model_validate(res.json()), character_id)
+
+    async def poll_character_chat(self, job: CharacterChatJob) -> CharacterChatJob:
+        if not job.pending:
+            return job
+        res = await self._client.get(
+            f"{self.base}/chat/characters/"
+            f"{urllib.parse.quote(job.character_id, safe='')}/jobs/"
+            f"{urllib.parse.quote(job.id, safe='')}"
+        )
+        res.raise_for_status()
+        return self._character_chat_job(
+            JobResource.model_validate(res.json()),
+            job.character_id,
+        )
 
     async def fetch_room_projection(self, room_id: str, character_id: str) -> dict | None:
         del room_id

@@ -937,6 +937,10 @@ def main(argv: list[str] | None = None) -> int:
         from .repl import main as repl_main
 
         return repl_main(raw_argv[1:])
+    if raw_argv and raw_argv[0] == "chat":
+        from .chat import main as chat_main
+
+        return chat_main(raw_argv[1:])
 
     parser = argparse.ArgumentParser(prog="bunnyland")
     sub = parser.add_subparsers(dest="command")
@@ -1382,14 +1386,6 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         finally:
             token_store.close()
-
-    if args.command == "chat":
-        from .chat import main as chat_main
-
-        chat_args = ["--server", args.server]
-        if args.character:
-            chat_args.extend(["--character", args.character])
-        return chat_main(chat_args)
 
     if args.command == "config-wizard":
         from .config_wizard import main as config_wizard_main

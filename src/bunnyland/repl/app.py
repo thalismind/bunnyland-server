@@ -21,14 +21,28 @@ from textual.binding import Binding
 from textual.widgets import Footer, Header, Input, RichLog
 
 from ..core.claim_timeout import normalize_claim_timeout
+from ..terminal_config import (
+    TerminalConfigError,
+    load_terminal_config,
+    resolve_terminal_chat_config,
+    save_terminal_config,
+)
 from ..tui.backend import Backend, LocalBackend, RemoteBackend
 from ..tui.generator_selector import (
     DEFAULT_LOCAL_GENERATOR,
     DEFAULT_LOCAL_SEED,
     WorldGeneratorSelector,
 )
+from ..tui.screens import CharacterSheetScreen, ConversationScreen, TerminalSetupScreen
 from ..tui.splash import IntroSplash
-from .client import BunnylandRepl, available_generators, format_generator_lines, history_path
+from .client import (
+    BunnylandRepl,
+    OpenChatIntent,
+    OpenSheetIntent,
+    available_generators,
+    format_generator_lines,
+    history_path,
+)
 
 REFRESH_SECONDS = 1.0
 HISTORY_LIMIT = 1000
@@ -113,6 +127,7 @@ class BunnylandReplApp(App[None]):
         self._live_player_id = ""
         self._live_ready = False
         self.show_generator_selector = False
+        self.needs_chat_setup = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -121,6 +136,12 @@ class BunnylandReplApp(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
+        if self.needs_chat_setup and isinstance(self.repl.backend, LocalBackend):
+            if self.show_intro:
+                self.push_screen(IntroSplash(), callback=lambda _: self._show_chat_setup())
+            else:
+                self._show_chat_setup()
+            return
         if self.show_generator_selector and isinstance(self.repl.backend, LocalBackend):
             if self.show_intro:
                 self.push_screen(IntroSplash(), callback=lambda _: self._show_generator_selector())
@@ -130,6 +151,28 @@ class BunnylandReplApp(App[None]):
         if self.show_intro:
             self.push_screen(IntroSplash())
         await self._start_backend()
+
+    def _show_chat_setup(self) -> None:
+        self.push_screen(TerminalSetupScreen(), callback=self._chat_setup_selected)
+
+    def _chat_setup_selected(self, config) -> None:
+        if config is None:
+            self.exit()
+            return
+        try:
+            save_terminal_config(config)
+            settings = resolve_terminal_chat_config(config)
+            settings.validate_credentials()
+        except TerminalConfigError as exc:
+            self.notify(str(exc), severity="error", timeout=8)
+            self._show_chat_setup()
+            return
+        self.repl.backend.chat_config = settings
+        self.needs_chat_setup = False
+        if self.show_generator_selector:
+            self._show_generator_selector()
+        else:
+            self.run_worker(self._start_backend(), exclusive=True)
 
     def _show_generator_selector(self) -> None:
         self.push_screen(
@@ -258,7 +301,23 @@ class BunnylandReplApp(App[None]):
             output = await self.repl.dispatch(line)
         except Exception as exc:  # keep the REPL alive through a bad command
             output = Text(f"⚠ {exc}", style="red")
-        self.write_log(output)
+        if isinstance(output, OpenSheetIntent):
+            try:
+                profile = await self.repl.backend.fetch_character_profile(output.character_id)
+            except Exception as exc:
+                self.write_log(Text(f"⚠ Could not load character sheet: {exc}", style="red"))
+            else:
+                self.push_screen(CharacterSheetScreen(profile))
+        elif isinstance(output, OpenChatIntent):
+            self.push_screen(
+                ConversationScreen(
+                    self.repl.backend,
+                    output.character_id,
+                    output.character_name,
+                )
+            )
+        else:
+            self.write_log(output)
         self._sync_live_updates()
         self.sub_title = self.repl.status_text()
 
@@ -307,6 +366,15 @@ def main(argv: list[str] | None = None) -> int:
         help="list the available world generators (demo worlds) for local play and exit",
     )
     parser.add_argument("--no-icons", action="store_true", help="hide action and event icons")
+    parser.add_argument(
+        "--chat-provider",
+        choices=("ollama-local", "ollama-cloud", "openrouter"),
+        default=None,
+    )
+    parser.add_argument("--chat-model", default=None)
+    parser.add_argument("--ollama-host", default=None)
+    parser.add_argument("--openrouter-server-url", default=None)
+    parser.add_argument("--no-chat", action="store_true")
     args = parser.parse_args(argv)
 
     if args.list_generators:
@@ -328,7 +396,42 @@ def main(argv: list[str] | None = None) -> int:
 
             password = getpass("Bunnyland password: ")
 
+    try:
+        saved_chat = None if args.server else load_terminal_config()
+    except TerminalConfigError as exc:
+        raise SystemExit(str(exc)) from exc
+    explicit_chat = any(
+        (
+            args.chat_provider,
+            args.chat_model,
+            args.ollama_host,
+            args.openrouter_server_url,
+            args.no_chat,
+        )
+    )
+    chat_settings = resolve_terminal_chat_config(
+        saved_chat,
+        chat_provider=args.chat_provider,
+        chat_model=args.chat_model,
+        ollama_host=args.ollama_host,
+        openrouter_server_url=args.openrouter_server_url,
+        no_chat=args.no_chat,
+    )
+    if not args.server and (saved_chat is not None or explicit_chat):
+        try:
+            chat_settings.validate_credentials()
+        except TerminalConfigError as exc:
+            raise SystemExit(str(exc)) from exc
+
     show_generator_selector = not args.server and args.generator is None
+    local_kwargs = {
+        "seed": args.seed or DEFAULT_LOCAL_SEED,
+        "generator": args.generator or DEFAULT_LOCAL_GENERATOR,
+        "fallback_controller": args.claim_fallback,
+        "timeout_seconds": timeout_seconds,
+    }
+    if saved_chat is not None or explicit_chat:
+        local_kwargs["chat_config"] = chat_settings
     backend: Backend = (
         RemoteBackend(
             args.server,
@@ -339,15 +442,11 @@ def main(argv: list[str] | None = None) -> int:
             token_file=args.token_file,
         )
         if args.server
-        else LocalBackend(
-            seed=args.seed or DEFAULT_LOCAL_SEED,
-            generator=args.generator or DEFAULT_LOCAL_GENERATOR,
-            fallback_controller=args.claim_fallback,
-            timeout_seconds=timeout_seconds,
-        )
+        else LocalBackend(**local_kwargs)
     )
     app = BunnylandReplApp(backend)
     app.show_generator_selector = show_generator_selector
+    app.needs_chat_setup = not args.server and saved_chat is None and not explicit_chat
     if hasattr(app, "repl"):
         app.repl.show_icons = not args.no_icons
     app.show_intro = True

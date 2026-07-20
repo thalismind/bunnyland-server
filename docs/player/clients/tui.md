@@ -29,6 +29,13 @@ uv run --all-extras bunnyland tui --list-generators
 Useful local options include `--seed`, `--generator`, `--claim-fallback`, and
 `--claim-timeout-minutes`.
 
+On the first local launch, the TUI asks whether character chat should use local Ollama,
+Ollama Cloud, OpenRouter, or remain disabled. The choice and model are saved in
+`$XDG_CONFIG_HOME/bunnyland/terminal.yml` (normally
+`~/.config/bunnyland/terminal.yml`). API keys are never written there. See
+[Terminal character chat](chat.md) for provider setup and command-line overrides. Remote
+sessions use the server's chat provider and skip this setup screen.
+
 ## Pick a player
 
 Use the player menu at the top of the right panel. Selecting a character claims control for
@@ -88,13 +95,27 @@ the selected character, including their lane, cost, and payload details when ava
 Queued commands are character-scoped. Switching players updates the queue panel to the new
 character's queue.
 
+## Character sheets and chat
+
+Select a visible character, then choose **Sheet** or press `s` to open a scrollable native
+character sheet. With no character target, the current player is used. The sheet includes
+identity and biography, status and metrics, profile details, skills, traits, relationships,
+injuries, and notes. It works in both local and remote sessions without opening a browser.
+
+Choose **Chat** or press `c` to open a conversation. The TUI uses the selected visible
+character, then the current player, and otherwise presents a character picker. Provider
+work runs asynchronously: the transcript stays usable while a reply or game action is
+pending, and the screen reports queued tools, action outcomes, and provider errors.
+
 ## Keyboard controls
 
 | Key | Effect |
 |-----|--------|
 | `r` | refresh your view now |
+| `s` | open the selected or current character sheet |
+| `c` | chat with the selected or current character |
 | `q` | quit |
-| `Esc` | close the action form |
+| `Esc` | close the current form, sheet, or conversation |
 
 ## Example session
 
