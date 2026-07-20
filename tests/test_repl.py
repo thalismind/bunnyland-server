@@ -867,16 +867,18 @@ def test_render_room_includes_clickable_inventory():
     assert {KEY, APPLE} <= clicked
 
 
-async def test_refresh_resets_world_when_projection_missing():
-    # player_id is a known character but the projection comes back None -> empty World (152)
+async def test_refresh_clears_claim_when_projection_missing():
+    # A missing claim projection means the persisted remote claim has expired.
     class NoProjectionBackend(RecordingBackend):
         async def fetch_character_projection(self, character_id: str) -> dict | None:
             return None
 
     repl = BunnylandRepl(NoProjectionBackend())
     repl.player_id = PLAYER
+    repl.control = ("controller:1", 2)
     await repl.refresh()
-    assert repl.player_id == PLAYER  # still claimed; only the world was reset
+    assert repl.player_id == PLAYER
+    assert repl.control is None
     assert repl.world.get(PLAYER) is None
     assert repl.world.get(PARLOR) is None
 

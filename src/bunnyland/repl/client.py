@@ -180,6 +180,8 @@ class BunnylandRepl:
                         self.control = None
             else:
                 self.world = World()
+                if projection is None:
+                    self.control = None
         else:
             self.world = World()
 

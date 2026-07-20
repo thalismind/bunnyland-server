@@ -1345,6 +1345,99 @@ async def test_remote_backend_reclaim_uses_stored_claim_secret(monkeypatch, tmp_
     ]
 
 
+async def test_remote_backend_reclaim_replaces_expired_stored_claim(monkeypatch, tmp_path):
+    monkeypatch.setattr(tui_backend, "CONFIG_DIR", tmp_path / "config")
+    save_claim_control(
+        "remote-client",
+        PLAYER,
+        ControlClaim("controller:old", 2, "claim-expired", "secret-expired"),
+    )
+
+    class Response:
+        text = ""
+
+        def __init__(self, status_code, payload=None, headers=None):
+            self.status_code = status_code
+            self.is_success = status_code < 400
+            self.payload = payload or {}
+            self.headers = headers or {}
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        def __init__(self) -> None:
+            self.requests: list[tuple[str, str, dict]] = []
+
+        async def put(self, url: str, **kwargs):
+            self.requests.append(("PUT", url, kwargs))
+            return Response(404)
+
+        async def post(self, url: str, **kwargs):
+            self.requests.append(("POST", url, kwargs))
+            return Response(
+                200,
+                {
+                    "controller_id": "controller:new",
+                    "controller_generation": 1,
+                    "id": "claim-new",
+                    "control": "active",
+                },
+                {"X-Bunnyland-Claim-Secret": "secret-new"},
+            )
+
+    backend = RemoteBackend("https://server.example", client_id="remote-client")
+    backend._client = Client()
+
+    control = await backend.claim(PLAYER, World.parse(_snapshot()))
+
+    assert control == ControlClaim("controller:new", 1, "claim-new", "secret-new")
+    assert load_claim_control("remote-client", PLAYER) == control
+    assert backend._client.requests == [
+        (
+            "PUT",
+            "https://server.example/play/claims/claim-expired",
+            {"headers": {"X-Bunnyland-Claim-Secret": "secret-expired"}},
+        ),
+        (
+            "POST",
+            "https://server.example/play/claims",
+            {
+                "json": {
+                    "character_id": PLAYER,
+                    "label": "tui",
+                    "fallback_controller": None,
+                    "timeout_seconds": None,
+                }
+            },
+        ),
+    ]
+
+
+async def test_remote_backend_projection_expiry_clears_saved_claim(monkeypatch, tmp_path):
+    monkeypatch.setattr(tui_backend, "CONFIG_DIR", tmp_path / "config")
+    control = ControlClaim("controller:old", 2, "claim-expired", "secret-expired")
+    save_claim_control("remote-client", PLAYER, control)
+
+    class Response:
+        status_code = 404
+
+        def raise_for_status(self):
+            raise AssertionError("expired claims should be handled before raise_for_status")
+
+    class Client:
+        async def get(self, _url: str, **_kwargs):
+            return Response()
+
+    backend = RemoteBackend("https://server.example", client_id="remote-client")
+    backend._client = Client()
+    backend._claims[PLAYER] = control
+
+    assert await backend.fetch_character_projection(PLAYER) is None
+    assert PLAYER not in backend._claims
+    assert load_claim_control("remote-client", PLAYER) is None
+
+
 async def test_remote_backend_uses_claim_headers(monkeypatch, tmp_path):
     monkeypatch.setattr(tui_backend, "CONFIG_DIR", tmp_path / "config")
 
@@ -2538,6 +2631,29 @@ async def test_app_reports_refresh_errors():
         await app.refresh_world()
         assert activity.option_count == 2
         assert "reconnected" in str(activity.get_option_at_index(1).prompt)
+
+
+async def test_app_returns_expired_claim_to_reclaimable_state():
+    from textual.widgets import Button, OptionList, Select
+
+    backend = RecordingBackend(_snapshot())
+    app = BunnylandTUI(backend)
+    async with app.run_test() as pilot:
+        await _select_player(app, pilot)
+        assert app.control is not None
+
+        backend.character_projection = None
+        await app.refresh_world()
+
+        assert app.player_id == PLAYER
+        assert app.control is None
+        assert app.query_one("#player", Select).value == PLAYER
+        assert str(app.query_one("#character-release", Button).label) == "Claim"
+        activity = app.query_one("#activity", OptionList)
+        assert any(
+            "Claim expired. Claim this character again." in prompt
+            for prompt in _activity_prompts(activity)
+        )
 
 
 async def test_app_renders_room_and_actions():

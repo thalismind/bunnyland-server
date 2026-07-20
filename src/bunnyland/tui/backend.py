@@ -695,6 +695,10 @@ class RemoteBackend(Backend):
     def _claim_for(self, character_id: str) -> ControlClaim | None:
         return self._claims.get(character_id) or load_claim_control(self.client_id, character_id)
 
+    def _forget_claim(self, character_id: str) -> None:
+        self._claims.pop(character_id, None)
+        clear_claim_control(self.client_id, character_id)
+
     def _claim_headers(self, character_id: str) -> dict[str, str]:
         claim = self._claim_for(character_id)
         return (
@@ -820,6 +824,9 @@ class RemoteBackend(Backend):
             f"{self.base}/play/claims/{urllib.parse.quote(claim.claim_id, safe='')}/projection",
             **self._claim_request_kwargs(character_id),
         )
+        if getattr(res, "status_code", None) == 404:
+            self._forget_claim(character_id)
+            return None
         res.raise_for_status()
         data = res.json()
         return {
@@ -1066,6 +1073,18 @@ class RemoteBackend(Backend):
         )
         operation = self._client.put if stored is not None else self._client.post
         res = await operation(f"{self.base}{claim_path}", **kwargs)
+        if stored is not None and getattr(res, "status_code", None) == 404:
+            self._forget_claim(player_id)
+            stored = None
+            res = await self._client.post(
+                f"{self.base}/play/claims",
+                json={
+                    "character_id": player_id,
+                    "label": "tui",
+                    "fallback_controller": self.fallback_controller,
+                    "timeout_seconds": self.timeout_seconds,
+                },
+            )
         if not res.is_success:
             logger.warning(
                 "Remote web controller claim failed for %s: HTTP %s %s",

@@ -535,6 +535,12 @@ class BunnylandTUI(App[None]):
             self.world = projected_world
             self.action_views = list(projection.get("actions") or [])
         else:
+            if self.player_id and projection is None and self.control is not None:
+                self._stop_live_updates()
+                self.control = None
+                self._append_activity(
+                    Text("Claim expired. Claim this character again.", style="dark_orange")
+                )
             self.world = World()
             self.action_views = []
         try:
