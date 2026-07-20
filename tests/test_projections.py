@@ -145,6 +145,22 @@ def test_render_summary_is_deterministic_template():
     assert "Exits: north." in text
 
 
+def test_render_summary_names_destinations_for_codirectional_exits():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    market = spawn_entity(world, [RoomComponent(title="Clover Market")])
+    world.get_entity(scenario.room_a).add_relationship(
+        ExitTo(direction="north"), market.id
+    )
+
+    facts = build_room_facts(world, scenario.room_a)
+    from bunnyland.projections import render_summary
+
+    assert render_summary(facts).endswith(
+        "Exits: north to Clover Market, north to North Tunnel."
+    )
+
+
 def test_room_summary_projection_accepts_custom_renderer():
     scenario = build_scenario()
 

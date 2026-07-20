@@ -9,6 +9,7 @@ instead of raw numbers so tiny changes don't churn the summary (spec 17.3).
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 
@@ -67,6 +68,7 @@ class RoomExit:
     direction: str
     to_room_id: str
     locked: bool = False
+    destination: str = ""
 
 
 @dataclass(frozen=True)
@@ -137,10 +139,22 @@ def build_room_facts(world: World, room_id: EntityId) -> RoomFacts:
                 RoomObject(id=str(child_id), name=_name(child), states=_object_states(child))
             )
 
-    exits = tuple(
-        RoomExit(direction=edge.direction, to_room_id=str(target), locked=edge.locked)
-        for edge, target in room.get_relationships(ExitTo)
-    )
+    exits: list[RoomExit] = []
+    for edge, target in room.get_relationships(ExitTo):
+        destination = world.get_entity(target)
+        destination_name = (
+            destination.get_component(RoomComponent).title
+            if destination.has_component(RoomComponent)
+            else _name(destination)
+        )
+        exits.append(
+            RoomExit(
+                direction=edge.direction,
+                to_room_id=str(target),
+                locked=edge.locked,
+                destination=destination_name,
+            )
+        )
 
     bands: dict[str, str] = {}
     if room.has_component(LightComponent):
@@ -154,7 +168,7 @@ def build_room_facts(world: World, room_id: EntityId) -> RoomFacts:
         biome=room_component.biome if room_component else "unknown",
         occupants=tuple(sorted(occupants)),
         objects=tuple(sorted(objects, key=lambda o: o.name)),
-        exits=tuple(sorted(exits, key=lambda e: e.direction)),
+        exits=tuple(sorted(exits, key=lambda e: (e.direction, e.destination, e.to_room_id))),
         bands=bands,
     )
 
@@ -173,7 +187,16 @@ def render_summary(facts: RoomFacts) -> str:
             rendered.append(f"{obj.name} ({', '.join(obj.states)})" if obj.states else obj.name)
         lines.append("You see: " + ", ".join(rendered) + ".")
     if facts.exits:
-        lines.append("Exits: " + ", ".join(e.direction for e in facts.exits) + ".")
+        direction_counts = Counter(exit_.direction for exit_ in facts.exits)
+        rendered_exits = [
+            (
+                f"{exit_.direction} to {exit_.destination or exit_.to_room_id}"
+                if direction_counts[exit_.direction] > 1
+                else exit_.direction
+            )
+            for exit_ in facts.exits
+        ]
+        lines.append("Exits: " + ", ".join(rendered_exits) + ".")
     return "\n".join(lines)
 
 

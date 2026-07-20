@@ -103,12 +103,14 @@ returns an outcome hint. Items marked FOLLOW-UP remain.
     `satiety` is 0 the meter genuinely will not move -- that is a content value, separate
     from legibility; `examine`/`perceived_events` expose the numeric change.)
 
-13. **[PARTIAL] Duplicate / co-directional exits are confusing.**
+13. **[DONE] Duplicate / co-directional exits are distinguishable.**
     With `include_entity_ids` the prompt's `move` lines and `character_view.target_groups`
-    now carry destination ids, so same-named exits are distinguishable. FOLLOW-UP: the
-    narrative `Exits:` list still repeats `south, south` without destinations.
-    → builder.py exit rendering.
+    carry destination ids. When multiple exits share a direction, the shared room narrative
+    now names their destinations instead of repeating `south, south`; unique directions keep
+    the concise compass-only form.
+    → `src/bunnyland/projections/room_summary.py`.
 
-14. **[FOLLOW-UP] Player docs for MCP play.**
-    Now that actions are structured, add a `docs/player/` (or `docs/admin/`) guide for
-    driving a character through the MCP tools end to end.
+14. **[DONE] Player docs for MCP play.**
+    `docs/player/clients/mcp.md` documents the complete connect, claim, look, action
+    discovery, command submission, asynchronous observation, rejection recovery, and
+    release loop without requiring server internals or raw snapshots.

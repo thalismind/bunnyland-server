@@ -12,6 +12,8 @@ that fits how you want to play:
 - **[Web REPL](https://sandbox.bunnyland.dev/web-repl.html)** - a browser command line
   with the same typed command style as the terminal REPL.
 - **[Toon client](../toonsim.md)** - the sprite-based web client from the web repo.
+- **[MCP-controlled play](mcp.md)** - an agent-oriented tool loop for discovering actions,
+  resolving entity ids, submitting commands, and observing asynchronous outcomes.
 
 The clients can present different controls, but submitted commands still go through the
 same authoritative server checks. A menu entry or clickable target is a convenience, not a
@@ -37,6 +39,7 @@ action state rather than an outdated built-in verb list.
 | Web TUI | Web | browsing a room and picking actions from a browser | choose a player, search or select an action, then fill its argument form in the browser |
 | Web REPL | Web | keyboard-first play from a browser | type commands against a live server, with clickable visible names |
 | Toon client | Web | visual room play with sprites and mouse movement | click in the room or use the web action menu |
+| MCP | Agent client | structured, autonomous play without reading server internals | discover actions and target ids, submit a command, then observe its later outcome |
 
 ## Running local or remote
 

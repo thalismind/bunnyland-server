@@ -42,3 +42,5 @@ picture.
   renewable water sources, and need decay.
 - [Focus, notes, and memories](focus-notes-and-memories.md) covers private notes,
   remembering, reflecting, contextual recall, and forgetting.
+- [MCP-controlled play](clients/mcp.md) covers the end-to-end character claim, action
+  discovery, command submission, and asynchronous outcome loop for agent clients.
