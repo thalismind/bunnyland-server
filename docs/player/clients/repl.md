@@ -32,6 +32,11 @@ Useful options mirror the TUI: `--seed`, `--generator`, `--claim-fallback`, and
 `--claim-timeout-minutes`. It is a full-screen terminal app, so run it in a real terminal,
 not through a pipe.
 
+The first local launch also opens the shared terminal chat setup. It saves only the
+provider, model, endpoints, and enabled state in
+`$XDG_CONFIG_HOME/bunnyland/terminal.yml`; credentials remain in environment variables.
+Remote sessions skip local provider setup. See [Terminal character chat](chat.md).
+
 ## Pick a player
 
 List the characters in the world, then take control of one:
@@ -89,8 +94,28 @@ Press Tab to complete, in order:
   enumerated choices for others.
 
 When several completions are possible, the line fills in as far as they agree and the
-choices are listed in the log. `help` completes command names and `play` completes player
-names.
+choices are listed in the log. `help` completes command names; `play`, `sheet`, `profile`,
+and `chat` complete character names.
+
+## Character sheets and chat
+
+Open the current player's native sheet, or name another character from the lobby:
+
+```text
+> sheet
+> profile Marlow
+```
+
+The command emits a UI intent rather than printing a browser URL, so the REPL opens the
+same scrollable sheet used by the panel TUI. Start a conversation the same way:
+
+```text
+> chat Marlow
+```
+
+The conversation opens as a Textual screen over the REPL. Closing it returns to the command
+log. Replies, pending actions, tool results, and provider failures are shown in the screen
+without blocking refreshes or command history.
 
 ## Live narration
 
@@ -127,6 +152,8 @@ Up/Down walk previous commands, and history is saved to
 | `play <name>` | take control of a character |
 | `help [command]` | list commands, or show one command's parameters |
 | `refresh` | refresh your view now |
+| `sheet [name]` / `profile [name]` | open a native character sheet |
+| `chat <name>` | open a character conversation |
 | `quit` / `exit` | leave; Ctrl-C also quits |
 
 ## Example session

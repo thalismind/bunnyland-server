@@ -85,7 +85,7 @@ def complete_line(
     command, _, rest = line.partition(" ")
     if command == "help":
         return [f"{command} {word}" for word in sorted(commands) if word.startswith(rest)]
-    if command == "play":
+    if command in {"play", "sheet", "profile", "chat"}:
         return [f"{command} {name}" for name in sorted(players) if name.startswith(rest)]
 
     definition = definitions.get(command)

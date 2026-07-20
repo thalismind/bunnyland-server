@@ -7,6 +7,8 @@ that fits how you want to play:
   menu, action search, an action form for arguments, and a queued-action panel.
 - **[Terminal REPL](repl.md)** - a compact terminal command line with clickable targets,
   command history, and tab completion.
+- **[Terminal character chat](chat.md)** - a focused local-or-remote character picker and
+  conversation client, with an optional line-oriented mode.
 - **[Web TUI](https://sandbox.bunnyland.dev/web-tui.html)** - a browser version of the
   panel-based TUI with room lists, action search, target pickers, and queued actions.
 - **[Web REPL](https://sandbox.bunnyland.dev/web-repl.html)** - a browser command line
@@ -36,6 +38,7 @@ action state rather than an outdated built-in verb list.
 |--------|-----------|----------|-------------|
 | Terminal TUI | Terminal | browsing a room and picking actions without memorizing command syntax | choose a player, search or select an action, then fill its argument form |
 | Terminal REPL | Terminal | keyboard-first play, scripts, and fast command entry | type canonical or natural commands, with tab completion and clickable names |
+| Terminal chat | Terminal | focused conversations and native character sheets | choose a character, type a message, and observe any game action it chooses |
 | Web TUI | Web | browsing a room and picking actions from a browser | choose a player, search or select an action, then fill its argument form in the browser |
 | Web REPL | Web | keyboard-first play from a browser | type commands against a live server, with clickable visible names |
 | Toon client | Web | visual room play with sprites and mouse movement | click in the room or use the web action menu |
@@ -49,9 +52,11 @@ running Bunnyland server:
 ```bash
 uv run --all-extras bunnyland tui --generator apartment-demo
 uv run --all-extras bunnyland repl --generator apartment-demo
+uv run --all-extras bunnyland chat --generator apartment-demo
 
 uv run --all-extras bunnyland tui --server http://localhost:8765
 uv run --all-extras bunnyland repl --server http://localhost:8765
+uv run --all-extras bunnyland chat --server http://localhost:8765/v1
 ```
 
 Use `--list-generators` in either terminal client to see grouped demo worlds and

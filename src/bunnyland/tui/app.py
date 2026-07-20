@@ -24,11 +24,23 @@ from ..core.claim_timeout import normalize_claim_timeout
 from ..imagegen.affordance import DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
 from ..imagegen.feed import latest_image_completion, latest_image_failure
 from ..server.models import CharacterSummaryView
+from ..terminal_config import (
+    TerminalConfigError,
+    load_terminal_config,
+    resolve_terminal_chat_config,
+    save_terminal_config,
+)
 from ..terminal_generators import available_generators, format_generator_lines
 from .backend import Backend, ControlClaim, LocalBackend, RemoteBackend
 from .events import EventNarrator
 from .generator_selector import DEFAULT_LOCAL_GENERATOR, DEFAULT_LOCAL_SEED, WorldGeneratorSelector
 from .model import Target, World, entity_icon, entity_name, fmt_points, has
+from .screens import (
+    CharacterPickerScreen,
+    CharacterSheetScreen,
+    ConversationScreen,
+    TerminalSetupScreen,
+)
 from .splash import IntroSplash
 
 REFRESH_SECONDS = 1.0
@@ -245,7 +257,8 @@ class HelpScreen(ModalScreen[None]):
         "\n"
         "  r   Refresh the world now\n"
         f"  i   {REQUEST_EMOJI} Request an image of your current scene\n"
-        "  s   Open the selected (or your own) character sheet in a browser\n"
+        "  s   Open the selected (or your own) character sheet\n"
+        "  c   Chat with the selected (or your own) character\n"
         "  x   Clear the selected action target\n"
         "  ?   Show this help\n"
         "  q   Quit\n"
@@ -315,6 +328,7 @@ class BunnylandTUI(App[None]):
         ("r", "refresh", "Refresh"),
         ("i", "request_image", f"{REQUEST_EMOJI} Image"),
         ("s", "open_sheet", "Open Sheet"),
+        ("c", "open_chat", "Chat"),
         ("x", "clear_target", "Clear Target"),
         ("question_mark", "help", "Help"),
         ("q", "quit", "Quit"),
@@ -352,6 +366,7 @@ class BunnylandTUI(App[None]):
         self._live_task: asyncio.Task | None = None
         self._live_ready = False
         self.show_generator_selector = False
+        self.needs_chat_setup = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -381,6 +396,8 @@ class BunnylandTUI(App[None]):
                         yield Button(f"{REQUEST_EMOJI} Image", id="request-image")
                     if self.backend.supports_character_sheets:
                         yield Button("▣ Sheet", id="open-sheet")
+                    if self.backend.supports_character_chat or self.needs_chat_setup:
+                        yield Button("Chat", id="open-chat")
                 yield Static("Select a character to play as.", id="play-hint")
                 yield Static("", id="points")
                 with Horizontal(id="target-row"):
@@ -395,6 +412,12 @@ class BunnylandTUI(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
+        if self.needs_chat_setup and isinstance(self.backend, LocalBackend):
+            if self.show_intro:
+                self.push_screen(IntroSplash(), callback=lambda _: self._show_chat_setup())
+            else:
+                self._show_chat_setup()
+            return
         if self.show_generator_selector and isinstance(self.backend, LocalBackend):
             if self.show_intro:
                 self.push_screen(IntroSplash(), callback=lambda _: self._show_generator_selector())
@@ -404,6 +427,28 @@ class BunnylandTUI(App[None]):
         if self.show_intro:
             self.push_screen(IntroSplash())
         await self._start_backend()
+
+    def _show_chat_setup(self) -> None:
+        self.push_screen(TerminalSetupScreen(), callback=self._chat_setup_selected)
+
+    def _chat_setup_selected(self, config) -> None:
+        if config is None:
+            self.exit()
+            return
+        try:
+            save_terminal_config(config)
+            settings = resolve_terminal_chat_config(config)
+            settings.validate_credentials()
+        except TerminalConfigError as exc:
+            self.notify(str(exc), severity="error", timeout=8)
+            self._show_chat_setup()
+            return
+        self.backend.chat_config = settings
+        self.needs_chat_setup = False
+        if self.show_generator_selector:
+            self._show_generator_selector()
+        else:
+            self.run_worker(self._start_backend(), exclusive=True)
 
     def _show_generator_selector(self) -> None:
         self.push_screen(
@@ -956,6 +1001,10 @@ class BunnylandTUI(App[None]):
     async def _open_sheet_pressed(self, _event: Button.Pressed) -> None:
         await self.action_open_sheet()
 
+    @on(Button.Pressed, "#open-chat")
+    async def _open_chat_pressed(self, _event: Button.Pressed) -> None:
+        await self.action_open_chat()
+
     @on(Button.Pressed, "#target-clear")
     def _target_clear_pressed(self, _event: Button.Pressed) -> None:
         self.action_clear_target()
@@ -988,7 +1037,7 @@ class BunnylandTUI(App[None]):
             self._append_activity(Text(f"{REQUEST_EMOJI} {result.reason}", style="yellow"))
 
     async def action_open_sheet(self) -> None:
-        """Open the selected or current character's browser sheet."""
+        """Open the selected or current character's native terminal sheet."""
         if not self.player_id:
             self._append_activity(Text("Select a character before opening a sheet."))
             return
@@ -1002,11 +1051,48 @@ class BunnylandTUI(App[None]):
                 self._append_activity(Text("Select a visible character or clear the target."))
                 return
             character_id = self.selected_id
-        result = await self.backend.open_character_sheet(character_id)
-        if result.ok:
-            self._append_activity(Text(f"Opened sheet: {result.url}", style="cyan"))
-        else:
-            self._append_activity(Text(result.reason, style="yellow"))
+        # Compatibility for third-party backends that only implement the former browser
+        # operation; built-in local and remote backends always use the typed profile.
+        if type(self.backend).fetch_character_profile is Backend.fetch_character_profile:
+            result = await self.backend.open_character_sheet(character_id)
+            if result.ok:
+                self._append_activity(Text(f"Opened sheet: {result.url}", style="cyan"))
+            else:
+                self._append_activity(Text(result.reason, style="yellow"))
+            return
+        try:
+            profile = await self.backend.fetch_character_profile(character_id)
+        except Exception as exc:
+            self._append_activity(Text(f"Could not load character sheet: {exc}", style="yellow"))
+            return
+        self.push_screen(CharacterSheetScreen(profile))
+
+    async def action_open_chat(self) -> None:
+        """Open chat for the selected character, current character, or a picker choice."""
+        character_id = ""
+        if self.selected_id:
+            selected = self.world.get(self.selected_id)
+            if selected is not None and has(selected, "CharacterComponent"):
+                character_id = self.selected_id
+        if not character_id:
+            character_id = self.player_id
+        if character_id:
+            self._open_conversation(character_id)
+            return
+        if not self.character_list:
+            self._append_activity(Text("No characters are available to chat."))
+            return
+        self.push_screen(
+            CharacterPickerScreen(self.character_list, title="Choose a character to chat with"),
+            callback=lambda chosen: self._open_conversation(chosen) if chosen else None,
+        )
+
+    def _open_conversation(self, character_id: str) -> None:
+        summary = next(
+            (item for item in self.character_list if item.character_id == character_id), None
+        )
+        name = summary.name if summary is not None else entity_name(self.world.get(character_id))
+        self.push_screen(ConversationScreen(self.backend, character_id, name or character_id))
 
     @on(OptionList.OptionSelected, "#members")
     def _member_selected(self, event: OptionList.OptionSelected) -> None:
@@ -1207,6 +1293,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="hide action and activity icons",
     )
+    parser.add_argument(
+        "--chat-provider",
+        choices=("ollama-local", "ollama-cloud", "openrouter"),
+        default=None,
+    )
+    parser.add_argument("--chat-model", default=None)
+    parser.add_argument("--ollama-host", default=None)
+    parser.add_argument("--openrouter-server-url", default=None)
+    parser.add_argument("--no-chat", action="store_true")
     args = parser.parse_args(argv)
     if args.list_generators:
         for line in format_generator_lines(available_generators()):
@@ -1227,7 +1322,42 @@ def main(argv: list[str] | None = None) -> int:
 
             password = getpass("Bunnyland password: ")
 
+    try:
+        saved_chat = None if args.server else load_terminal_config()
+    except TerminalConfigError as exc:
+        raise SystemExit(str(exc)) from exc
+    explicit_chat = any(
+        (
+            args.chat_provider,
+            args.chat_model,
+            args.ollama_host,
+            args.openrouter_server_url,
+            args.no_chat,
+        )
+    )
+    chat_settings = resolve_terminal_chat_config(
+        saved_chat,
+        chat_provider=args.chat_provider,
+        chat_model=args.chat_model,
+        ollama_host=args.ollama_host,
+        openrouter_server_url=args.openrouter_server_url,
+        no_chat=args.no_chat,
+    )
+    if not args.server and (saved_chat is not None or explicit_chat):
+        try:
+            chat_settings.validate_credentials()
+        except TerminalConfigError as exc:
+            raise SystemExit(str(exc)) from exc
+
     show_generator_selector = not args.server and args.generator is None
+    local_kwargs = {
+        "seed": args.seed or DEFAULT_LOCAL_SEED,
+        "generator": args.generator or DEFAULT_LOCAL_GENERATOR,
+        "fallback_controller": args.claim_fallback,
+        "timeout_seconds": timeout_seconds,
+    }
+    if saved_chat is not None or explicit_chat:
+        local_kwargs["chat_config"] = chat_settings
     backend: Backend = (
         RemoteBackend(
             args.server,
@@ -1238,15 +1368,11 @@ def main(argv: list[str] | None = None) -> int:
             token_file=args.token_file,
         )
         if args.server
-        else LocalBackend(
-            seed=args.seed or DEFAULT_LOCAL_SEED,
-            generator=args.generator or DEFAULT_LOCAL_GENERATOR,
-            fallback_controller=args.claim_fallback,
-            timeout_seconds=timeout_seconds,
-        )
+        else LocalBackend(**local_kwargs)
     )
     app = BunnylandTUI(backend)
     app.show_generator_selector = show_generator_selector
+    app.needs_chat_setup = not args.server and saved_chat is None and not explicit_chat
     app.show_icons = not args.no_icons
     app.show_intro = True
     app.run()
