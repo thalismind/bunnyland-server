@@ -16,6 +16,7 @@ from bunnyland.core import (
     Contains,
     DeadComponent,
     DownedComponent,
+    Holding,
     IdentityComponent,
     MemoryProfileComponent,
     PortableComponent,
@@ -269,6 +270,44 @@ def test_include_entity_ids_annotates_entities_and_commands_when_enabled():
     assert "three berries" in plain.visible_objects
     assert "move north" in plain.commands
     assert f"[{item.id}]" not in " ".join(plain.commands)
+
+
+def test_prompt_surfaces_others_held_items_without_offering_take():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    add_item(scenario, scenario.room_a, "floor pebble")
+    holder = spawn_entity(
+        world, [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()]
+    )
+    body = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Marlow", kind="character"),
+            CharacterComponent(),
+            DeadComponent(died_at_epoch=0, cause="test"),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), holder.id
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), body.id
+    )
+    held = spawn_entity(world, [IdentityComponent(name="steamed bun", kind="food")])
+    pocketed = spawn_entity(world, [IdentityComponent(name="pocket key", kind="item")])
+    holder.add_relationship(Contains(mode=ContainmentMode.INVENTORY), held.id)
+    holder.add_relationship(Contains(mode=ContainmentMode.INVENTORY), pocketed.id)
+    holder.add_relationship(Holding(slot="hand"), held.id)
+
+    context = PromptBuilder(world, include_entity_ids=True).build(
+        scenario.character, epoch=scenario.actor.epoch
+    )
+    rendered = render_prompt(context)
+
+    assert context.other_held == (f"Hazel: steamed bun [{held.id}]",)
+    assert "Others are holding:\n- Hazel: steamed bun" in rendered
+    assert all(str(held.id) not in command for command in context.commands)
+    assert "pocket key" not in rendered
 
 
 def test_build_context_has_stable_persona_surface_from_plugins():

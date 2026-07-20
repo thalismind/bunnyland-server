@@ -1302,6 +1302,49 @@ def test_target_groups_separate_perceived_characters_from_room_items(scenario):
     assert "rock" in [target["label"] for target in groups["roomItems"]]
 
 
+def test_target_groups_separate_living_held_items_from_takeable_body_contents(scenario):
+    world = scenario.actor.world
+    holder = spawn_entity(
+        world, [CharacterComponent(), IdentityComponent(name="Hazel", kind="character")]
+    )
+    body = spawn_entity(
+        world,
+        [
+            CharacterComponent(),
+            DeadComponent(died_at_epoch=0, cause="test"),
+            IdentityComponent(name="Marlow", kind="character"),
+        ],
+    )
+    room = world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), holder.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), body.id)
+    held = spawn_entity(
+        world, [IdentityComponent(name="steamed bun", kind="food"), PortableComponent()]
+    )
+    pocketed = spawn_entity(
+        world, [IdentityComponent(name="pocket key", kind="item"), PortableComponent()]
+    )
+    body_item = spawn_entity(
+        world, [IdentityComponent(name="brass key", kind="item"), PortableComponent()]
+    )
+    holder.add_relationship(Contains(mode=ContainmentMode.INVENTORY), held.id)
+    holder.add_relationship(Contains(mode=ContainmentMode.INVENTORY), pocketed.id)
+    holder.add_relationship(Holding(slot="hand"), held.id)
+    body.add_relationship(Contains(mode=ContainmentMode.INVENTORY), body_item.id)
+
+    view = serialize_character_projection(scenario.actor, str(scenario.character)).model_dump(
+        mode="json"
+    )
+    groups = view["target_groups"]
+
+    assert groups["heldItems"] == [
+        {"id": str(held.id), "label": "steamed bun (held by Hazel)", "kind": "object"}
+    ]
+    assert str(held.id) not in {target["id"] for target in groups["reachableItems"]}
+    assert str(pocketed.id) not in json.dumps(view)
+    assert str(body_item.id) in {target["id"] for target in groups["reachableItems"]}
+
+
 def test_sprite_bounds_view_falls_back_to_default_when_no_bounds(scenario):
     # An entity with neither explicit SpriteBoundsComponent nor a kind that maps to default bounds
     # forces the ``bounds = SpriteBoundsComponent()`` fallback in ``_sprite_bounds_view``.

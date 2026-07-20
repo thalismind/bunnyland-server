@@ -53,6 +53,7 @@ class PromptContext:
     exits: tuple[str, ...] = ()
     inventory: tuple[str, ...] = ()
     held: tuple[str, ...] = ()
+    other_held: tuple[str, ...] = ()
     worn: tuple[str, ...] = ()
     persona: tuple[str, ...] = ()
     conditions: tuple[str, ...] = ()  # domain fragments: needs, weather, relationships, ...
@@ -160,6 +161,7 @@ class PromptBuilder:
         )
 
         inventory, held, worn = self._equipment(character)
+        other_held = self._other_held(perception.entities)
         feelings = (
             tuple(sorted(character.get_component(AffectComponent).labels))
             if character.has_component(AffectComponent)
@@ -218,6 +220,7 @@ class PromptBuilder:
             exits=exits,
             inventory=inventory,
             held=held,
+            other_held=other_held,
             worn=worn,
             persona=tuple(dict.fromkeys(persona)),
             conditions=tuple(conditions),
@@ -302,6 +305,19 @@ class PromptBuilder:
             for _edge, item_id in character.get_relationships(Wearing)
         ]
         return tuple(sorted(inventory)), tuple(sorted(held)), tuple(sorted(worn))
+
+    def _other_held(self, entities) -> tuple[str, ...]:
+        held: list[str] = []
+        for holder in entities:
+            if not holder.is_character:
+                continue
+            holder_entity = self.world.get_entity(parse_entity_id(holder.id))
+            if holder_entity.has_component(DeadComponent):
+                continue
+            held.extend(
+                f"{holder.name}: {self._label(item.name, item.id)}" for item in holder.contents
+            )
+        return tuple(sorted(held))
 
     def _notes(self, character: Entity) -> tuple[str, ...]:
         if self.memory_store is None or not character.has_component(MemoryProfileComponent):
@@ -486,6 +502,7 @@ def render_prompt(context: PromptContext) -> str:
     section("Exits", context.exits)
     section("You are carrying", context.inventory)
     section("You are holding", context.held)
+    section("Others are holding", context.other_held)
     section("You are wearing", context.worn)
     section("Persona", context.persona)
     section("You feel", context.feelings)

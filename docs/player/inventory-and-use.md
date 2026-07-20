@@ -6,8 +6,8 @@ from your inventory as the tool.
 
 ## Take, drop, and put
 
-Pick up portable items from the current room, your inventory, or an open reachable
-container:
+Pick up portable items from the current room, an open reachable inanimate container, or a
+dead body:
 
 ```text
 !take a scrap of paper
@@ -31,8 +31,14 @@ Inventory rules:
 
 - non-portable items cannot be picked up;
 - closed containers do not allow removal or adding;
+- `take` never reaches into a living character's inventory, even when the character is
+  visibly holding the item;
 - an item must be in your inventory before you can drop or put it;
 - name matching is case-insensitive and supports prefixes when the client resolves names.
+
+Reaching into another character's inventory is a different physical and policy-sensitive
+action. Worlds that enable the appropriate mechanic expose a separate `pickpocket` verb;
+they do not change the meaning of ordinary `take`.
 
 ## Hold, wear, and remove
 

@@ -147,6 +147,19 @@ def test_required_target_tracks_candidate_lists():
     assert present.available is True
 
 
+def test_pickpocket_uses_visible_held_items_instead_of_take_targets():
+    definition = _definition(
+        command_type="pickpocket",
+        arguments={
+            "target_id": ActionArgument(kind="entity", required=True),
+            "item_id": ActionArgument(kind="entity", required=True),
+        },
+    )
+
+    assert target_group_for_argument(definition, "target_id") == "reachable"
+    assert target_group_for_argument(definition, "item_id") == "heldItems"
+
+
 def test_requirement_met_via_character_component():
     scenario = build_scenario()
     character = _character(scenario)

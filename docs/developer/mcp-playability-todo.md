@@ -11,7 +11,7 @@ target file.
 are live on the sandbox. See the items marked DONE.
 New MCP tools: `character_view`, `room_view`, `character_commands`, `component_schema`,
 `perceived_events`; `agent_prompt` gained an opt-in `include_entity_ids`; `send_command`
-returns an outcome hint. Items marked FOLLOW-UP remain.
+returns an outcome hint. All follow-up items from the live play session are complete.
 
 ## Fix (blocking — a pure-MCP player hits a wall)
 
@@ -59,10 +59,14 @@ returns an outcome hint. Items marked FOLLOW-UP remain.
    → `serialize_examine` in `src/bunnyland/server/serialization.py`, tool in
    `src/bunnyland/mcp/server.py`.
 
-7. **[FOLLOW-UP] Inventory-aware action surface (NPC-held items).**
-   Own-inventory items are surfaced, but items held by *other* characters (the bun in the
-   vendor) still are not listed; `take` reachability and projection differ.
-   → builder.py reachability + `core/handlers/inventory.py` parity.
+7. **[DONE] Inventory-aware action surface (NPC-held items).**
+   Items visibly held by living characters are listed with their holder in
+   `target_groups.heldItems` and the prompt, and can be examined. Pocket inventory remains
+   private. Held items are deliberately excluded from `reachableItems`: core `take` only
+   picks up room contents or removes items from inanimate containers such as open boxes and
+   dead bodies. The separate, policy-gated `pickpocket` action uses `heldItems` when its
+   package is enabled, keeping the physical and legal affordances explicit.
+   → `projections/perception.py`, `server/serialization.py`, `core/availability.py`.
 
 8. **[DONE] Action-result / outcome resource.**
    `perceived_events(agent_id, since, limit)` returns events the character caused or

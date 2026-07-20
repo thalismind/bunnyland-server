@@ -704,7 +704,30 @@ def _target_groups(
     exits: list[ClientExitView],
 ) -> dict[str, list[ClientTargetView]]:
     inventory = _inventory_targets(actor, character)
-    visible = [_target_for_perceived(entity) for entity in _flatten_perceived(entities)]
+    held_by: dict[str, str] = {}
+    for entity in entities:
+        if not entity.is_character:
+            continue
+        holder = actor.world.get_entity(parse_entity_id(entity.id))
+        if holder.has_component(DeadComponent):
+            continue
+        held_by.update({item.id: entity.name for item in entity.contents})
+
+    visible: list[ClientTargetView] = []
+    held_items: list[ClientTargetView] = []
+    for entity in _flatten_perceived(entities):
+        target = _target_for_perceived(entity)
+        holder_name = held_by.get(target.id)
+        if holder_name is not None:
+            held_items.append(
+                ClientTargetView(
+                    id=target.id,
+                    label=f"{target.label} (held by {holder_name})",
+                    kind=target.kind,
+                )
+            )
+        else:
+            visible.append(target)
     visible_by_id = {target.id: target for target in visible}
     carried_by_id = {target.id: target for target in inventory}
     room_items: list[ClientTargetView] = []
@@ -720,6 +743,7 @@ def _target_groups(
         "exits": [ClientTargetView(id=exit.id, label=exit.label, kind="exit") for exit in exits],
         "roomItems": sorted(room_items, key=lambda target: target.label.lower()),
         "inventory": inventory,
+        "heldItems": sorted(held_items, key=lambda target: target.label.lower()),
         "characters": sorted(characters, key=lambda target: target.label.lower()),
         "reachable": sorted(reachable, key=lambda target: target.label.lower()),
         "reachableItems": sorted(

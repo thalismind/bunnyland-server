@@ -13,8 +13,10 @@ from bunnyland.core import (
     ContainerComponent,
     ContainmentMode,
     Contains,
+    DeadComponent,
     DoorComponent,
     ExitTo,
+    Holding,
     IdentityComponent,
     Lane,
     LightComponent,
@@ -377,6 +379,63 @@ def test_open_container_reveals_contents():
     perception = perceive(world, world.get_entity(scenario.character))
     crate_view = next(e for e in perception.entities if e.name == "open crate")
     assert any(c.name == "ruby" for c in crate_view.contents)
+
+
+def test_perceive_shows_held_items_but_not_living_character_inventory():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    holder = spawn_entity(
+        world, [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()]
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), holder.id
+    )
+    held = spawn_entity(world, [IdentityComponent(name="steamed bun", kind="food")])
+    pocketed = spawn_entity(world, [IdentityComponent(name="pocket key", kind="item")])
+    concealed = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="hidden card", kind="item"),
+            StealthComponent(visibility_level=0.05, hidden_threshold=0.1, hiding=True),
+        ],
+    )
+    holder.add_relationship(Contains(mode=ContainmentMode.INVENTORY), held.id)
+    holder.add_relationship(Contains(mode=ContainmentMode.INVENTORY), pocketed.id)
+    holder.add_relationship(Contains(mode=ContainmentMode.INVENTORY), concealed.id)
+    holder.add_relationship(Holding(slot="hand"), held.id)
+    holder.add_relationship(Holding(slot="hand"), concealed.id)
+
+    perception = perceive(world, world.get_entity(scenario.character))
+    holder_view = next(entity for entity in perception.entities if entity.id == str(holder.id))
+
+    assert [(item.id, item.name) for item in holder_view.contents] == [
+        (str(held.id), "steamed bun")
+    ]
+
+
+def test_perceive_shows_dead_character_inventory_as_container_contents():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    body = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Hazel", kind="character"),
+            CharacterComponent(),
+            DeadComponent(died_at_epoch=0, cause="test"),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), body.id
+    )
+    item = spawn_entity(world, [IdentityComponent(name="brass key", kind="item")])
+    body.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+
+    perception = perceive(world, world.get_entity(scenario.character))
+    body_view = next(entity for entity in perception.entities if entity.id == str(body.id))
+
+    assert [(child.id, child.name) for child in body_view.contents] == [
+        (str(item.id), "brass key")
+    ]
 
 
 def test_sleeping_character_perceives_nothing():

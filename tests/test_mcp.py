@@ -2720,7 +2720,7 @@ def test_play_get_projection_exposes_actions_and_resolved_target_ids(monkeypatch
 
 
 def test_examine_inspects_perceivable_entity_and_self(monkeypatch, scenario):
-    from bunnyland.core import ContainmentMode, Contains
+    from bunnyland.core import ContainmentMode, Contains, Holding
     from bunnyland.core.components import PortableComponent
     from bunnyland.foundation.consumables.components import FoodComponent
 
@@ -2736,6 +2736,22 @@ def test_examine_inspects_perceivable_entity_and_self(monkeypatch, scenario):
     world.get_entity(scenario.room_a).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), bun.id
     )
+    holder = spawn_entity(
+        world, [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()]
+    )
+    held = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="berry tart", kind="food"),
+            PortableComponent(),
+            FoodComponent(nutrition=3.0, satiety=4.0),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), holder.id
+    )
+    holder.add_relationship(Contains(mode=ContainmentMode.INVENTORY), held.id)
+    holder.add_relationship(Holding(slot="hand"), held.id)
     tools = _capture_mcp_tools(monkeypatch, scenario.actor)
     claimed = asyncio.run(tools["play_claim_character"](client_id="a", character_name="Juniper"))
 
@@ -2746,6 +2762,12 @@ def test_examine_inspects_perceivable_entity_and_self(monkeypatch, scenario):
     assert item["details"]["food"]["satiety"] == 10.0
     assert "portable" in item["details"]
     assert item["points"] is None
+
+    held_item = tools["play_examine"](
+        client_id="a", entity_id=str(held.id), **_claim_args(claimed)
+    )
+    assert held_item["name"] == "berry tart"
+    assert held_item["details"]["food"]["satiety"] == 4.0
 
     # Examining yourself (default target) adds points + the is_self flag.
     me = tools["play_examine"](client_id="a", **_claim_args(claimed))

@@ -23,7 +23,7 @@ from ..core.components import (
     SuspendedComponent,
 )
 from ..core.ecs import container_of
-from ..core.edges import Contains, ExitTo
+from ..core.edges import Contains, ExitTo, Holding
 from .room_summary import RoomExit
 
 
@@ -66,6 +66,22 @@ def _is_hidden(entity: Entity) -> bool:
     return stealth.hiding and stealth.visibility_level <= stealth.hidden_threshold
 
 
+def _held_items(world: World, character: Entity) -> tuple[PerceivedEntity, ...]:
+    perceived: list[PerceivedEntity] = []
+    for _edge, item_id in character.get_relationships(Holding):
+        item = world.get_entity(item_id)
+        if _is_hidden(item):
+            continue
+        perceived.append(
+            PerceivedEntity(
+                id=str(item_id),
+                name=_name(item),
+                is_character=item.has_component(CharacterComponent),
+            )
+        )
+    return tuple(sorted(perceived, key=lambda item: (item.name, item.id)))
+
+
 def _visible_children(
     world: World, entity: Entity, *, recurse: bool
 ) -> tuple[PerceivedEntity, ...]:
@@ -77,7 +93,13 @@ def _visible_children(
         if _is_hidden(child):
             continue
         nested: tuple[PerceivedEntity, ...] = ()
-        if recurse and _reveals_contents(child):
+        if recurse and child.has_component(CharacterComponent):
+            nested = (
+                _visible_children(world, child, recurse=False)
+                if child.has_component(DeadComponent)
+                else _held_items(world, child)
+            )
+        elif recurse and _reveals_contents(child):
             nested = _visible_children(world, child, recurse=False)
         perceived.append(
             PerceivedEntity(

@@ -53,6 +53,12 @@ Start with `play_look` for a concise room summary. Use `play_get_projection` whe
 machine-readable room, inventory, points, exits, and `target_groups`. Each target entry supplies
 the exact entity id expected by action payloads.
 
+Items visibly held by living characters appear in `target_groups.heldItems` with the holder's
+name. They are examinable but never appear in `reachableItems`, so the ordinary `take` action
+cannot reach into another character's inventory. If an enabled world provides `pickpocket`, its
+item argument uses `heldItems` and remains subject to that mechanic's policy checks. Contents of
+dead characters and open inanimate containers use the normal takeable target groups.
+
 Call `play_examine` with an interesting visible entity id to inspect public details such as food
 value, portability, or container state. Omit `entity_id` to inspect your own detailed status,
 needs, and action/focus points.

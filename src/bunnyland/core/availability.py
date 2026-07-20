@@ -141,6 +141,8 @@ def target_group_for_argument(definition: ActionDefinition, key: str) -> str | N
     if key == "target_id" and definition.command_type == "tell":
         return "characters"
     if key == "item_id":
+        if definition.command_type == "pickpocket":
+            return "heldItems"
         return "inventory" if definition.command_type in {"drop", "put"} else "reachableItems"
     if key == "source_id":
         return "reachableItems"
