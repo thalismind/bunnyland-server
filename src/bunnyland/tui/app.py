@@ -563,7 +563,7 @@ class BunnylandTUI(App[None]):
             self._render_play_state()
         except NoMatches:
             return
-        self.queued_commands = await self._fetch_queued_commands()
+        self.queued_commands = await self._fetch_queued_commands(projection)
         self.view_room_id = self.world.room_of(self.player_id)
 
         epoch = self.world.epoch
@@ -578,15 +578,22 @@ class BunnylandTUI(App[None]):
         self._drain_activity(events, prime=not self._events_primed)
         self._events_primed = True
 
-    async def _fetch_queued_commands(self) -> list[dict]:
+    async def _fetch_queued_commands(self, projection: dict | None = None) -> list[dict]:
         if not self.player_id:
             return []
-        try:
-            data = await self.backend.fetch_queued_commands(self.player_id)
-        except Exception:
-            # The projection world carries no queue, so keep the last-known one on a
-            # transient fetch failure rather than blanking it.
-            return self.queued_commands
+        if projection is not None and "queued_commands" in projection:
+            data = {
+                "character_id": projection.get("character_id"),
+                "world_epoch": projection.get("world_epoch", 0),
+                "commands": projection.get("queued_commands") or [],
+            }
+        else:
+            try:
+                data = await self.backend.fetch_queued_commands(self.player_id)
+            except Exception:
+                # Keep the last-known queue on a transient fetch failure rather than
+                # blanking it.
+                return self.queued_commands
         if data.get("character_id") != self.player_id:
             return []
         self.queue_timing = {

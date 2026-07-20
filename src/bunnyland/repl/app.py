@@ -108,6 +108,7 @@ class BunnylandReplApp(App[None]):
             id="cmd", placeholder="type a command — 'help' for a list, 'quit' to exit"
         )
         self._refresh_error: str | None = None  # last reported refresh failure, for throttling
+        self._refresh_task: asyncio.Task[None] | None = None
         self._live_task: asyncio.Task | None = None
         self._live_player_id = ""
         self._live_ready = False
@@ -162,6 +163,9 @@ class BunnylandReplApp(App[None]):
 
     async def on_unmount(self) -> None:
         self._stop_live_updates()
+        if self._refresh_task is not None:
+            self._refresh_task.cancel()
+            await asyncio.gather(self._refresh_task, return_exceptions=True)
         self._save_history()
         await self.repl.backend.close()
 
@@ -209,6 +213,17 @@ class BunnylandReplApp(App[None]):
         self.log_view.write(renderable)
 
     async def _safe_refresh(self, prime: bool = False) -> None:
+        task = self._refresh_task
+        if task is None:
+            task = asyncio.create_task(self._safe_refresh_once(prime))
+            self._refresh_task = task
+        try:
+            await asyncio.shield(task)
+        finally:
+            if task.done() and self._refresh_task is task:
+                self._refresh_task = None
+
+    async def _safe_refresh_once(self, prime: bool = False) -> None:
         try:
             await self.repl.refresh()
             events = await self.repl.backend.recent_events(self.repl.player_id)
