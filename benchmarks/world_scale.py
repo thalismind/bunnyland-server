@@ -20,8 +20,9 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import NotRequired, TypedDict
 
+from pydantic import TypeAdapter
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from relics import Component, Edge, EntityId
 
@@ -106,6 +107,71 @@ class Measurement:
     detail: str = ""
 
 
+class MeasurementRow(TypedDict):
+    schema_version: int
+    entities: int
+    edges: int
+    topology: str
+    operation: str
+    status: str
+    median_ns: int | None
+    p95_ns: int | None
+    iterations: int
+    operations_per_second: float | None
+    rss_bytes: int
+    peak_rss_bytes: int
+    detail: str
+
+
+class SlopeRecord(TypedDict):
+    topology: str
+    operation: str
+    axis: str
+    slope: float
+
+
+class ProblemRecord(TypedDict):
+    severity: str
+    operation: str
+    topology: str
+    reason: str
+    axis: NotRequired[str]
+    slope: NotRequired[float]
+    entities: NotRequired[int]
+    edges: NotRequired[int]
+
+
+class WorkerFailure(TypedDict):
+    entities: int
+    topology: str
+    returncode: int
+
+
+class Analysis(TypedDict):
+    slopes: list[SlopeRecord]
+    problems: list[ProblemRecord]
+    regressions: list[ProblemRecord]
+    failures: list[MeasurementRow]
+    worker_failures: NotRequired[list[WorkerFailure]]
+    impossible_points: NotRequired[tuple[tuple[int, int], ...]]
+
+
+class EnvironmentMetadata(TypedDict):
+    schema_version: int
+    commit: str
+    python: str
+    platform: str
+    machine: str
+    processor: str
+    cpu_count: int | None
+    page_size: int
+    relics_version: str
+
+
+PointRow = dict[str, int | float | str]
+_MEASUREMENT_ADAPTER = TypeAdapter(Measurement)
+
+
 @dataclass(frozen=True)
 class BuiltWorld:
     actor: WorldActor
@@ -188,7 +254,7 @@ def percentile(values: list[int], fraction: float) -> int:
 def measure(
     point: MatrixPoint,
     operation: str,
-    function: Callable[[], Any],
+    function: Callable[[], object],
     *,
     samples: int = 7,
     target_batch_seconds: float = 0.025,
@@ -333,7 +399,7 @@ def _remove_tick_knowledge(built: BuiltWorld) -> None:
 
 
 def _timed_once(
-    point: MatrixPoint, operation: str, function: Callable[[], Any]
+    point: MatrixPoint, operation: str, function: Callable[[], object]
 ) -> Measurement:
     gc.collect()
     try:
@@ -361,7 +427,7 @@ def _timed_once(
 def _isolated_timed_once(
     point: MatrixPoint,
     operation: str,
-    function: Callable[[], Any],
+    function: Callable[[], object],
     *,
     output_dir: Path,
 ) -> Measurement:
@@ -683,12 +749,34 @@ def run_worker(args: argparse.Namespace) -> int:
     return 0
 
 
-def load_measurements(paths: Iterable[Path]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+def _measurement_row(measurement: Measurement) -> MeasurementRow:
+    return {
+        "schema_version": measurement.schema_version,
+        "entities": measurement.entities,
+        "edges": measurement.edges,
+        "topology": measurement.topology,
+        "operation": measurement.operation,
+        "status": measurement.status,
+        "median_ns": measurement.median_ns,
+        "p95_ns": measurement.p95_ns,
+        "iterations": measurement.iterations,
+        "operations_per_second": measurement.operations_per_second,
+        "rss_bytes": measurement.rss_bytes,
+        "peak_rss_bytes": measurement.peak_rss_bytes,
+        "detail": measurement.detail,
+    }
+
+
+def load_measurements(paths: Iterable[Path]) -> list[MeasurementRow]:
+    rows: list[MeasurementRow] = []
     for path in paths:
         if not path.exists():
             continue
-        rows.extend(json.loads(line) for line in path.read_text().splitlines() if line)
+        rows.extend(
+            _measurement_row(_MEASUREMENT_ADAPTER.validate_json(line))
+            for line in path.read_text().splitlines()
+            if line
+        )
     return rows
 
 
@@ -737,12 +825,12 @@ KNOWN_SCALING_LIMITS = {
 }
 
 
-def analyze(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def analyze(rows: list[MeasurementRow]) -> Analysis:
     ok = [row for row in rows if row["status"] == "ok" and row["median_ns"]]
     operations = sorted({row["operation"] for row in ok})
     topologies = sorted({row["topology"] for row in ok})
-    slopes: list[dict[str, Any]] = []
-    problems: list[dict[str, Any]] = []
+    slopes: list[SlopeRecord] = []
+    problems: list[ProblemRecord] = []
     for topology in topologies:
         for operation in operations:
             entity_points = [
@@ -755,7 +843,7 @@ def analyze(rows: list[dict[str, Any]]) -> dict[str, Any]:
             slope = log_slope(entity_points)
             if slope is None:
                 continue
-            record = {
+            record: SlopeRecord = {
                 "topology": topology,
                 "operation": operation,
                 "axis": "entities_at_one_edge",
@@ -764,11 +852,11 @@ def analyze(rows: list[dict[str, Any]]) -> dict[str, Any]:
             slopes.append(record)
             if operation in CONSTANT_WORLD_OPERATIONS and slope > 0.35:
                 problems.append(
-                    {
+                    ProblemRecord(
                         **record,
-                        "severity": "high" if slope > 0.75 else "medium",
-                        "reason": "local/lookup work scales with unrelated world entities",
-                    }
+                        severity="high" if slope > 0.75 else "medium",
+                        reason="local/lookup work scales with unrelated world entities",
+                    )
                 )
             largest_entities = max(row["entities"] for row in ok)
             edge_points = [
@@ -781,7 +869,7 @@ def analyze(rows: list[dict[str, Any]]) -> dict[str, Any]:
             edge_slope = log_slope(edge_points)
             if edge_slope is None:
                 continue
-            edge_record = {
+            edge_record: SlopeRecord = {
                 "topology": topology,
                 "operation": operation,
                 "axis": "edges_at_largest_world",
@@ -790,23 +878,23 @@ def analyze(rows: list[dict[str, Any]]) -> dict[str, Any]:
             slopes.append(edge_record)
             if operation in CONSTANT_EDGE_OPERATIONS and edge_slope > 0.35:
                 problems.append(
-                    {
+                    ProblemRecord(
                         **edge_record,
-                        "severity": "high" if edge_slope > 0.75 else "medium",
-                        "reason": "bounded work scales with unrelated world edges",
-                    }
+                        severity="high" if edge_slope > 0.75 else "medium",
+                        reason="bounded work scales with unrelated world edges",
+                    )
                 )
     failures = [row for row in rows if row["status"] == "failed"]
     for row in failures:
         problems.append(
-            {
-                "severity": "high",
-                "operation": row["operation"],
-                "topology": row["topology"],
-                "entities": row["entities"],
-                "edges": row["edges"],
-                "reason": row["detail"],
-            }
+            ProblemRecord(
+                severity="high",
+                operation=row["operation"],
+                topology=row["topology"],
+                entities=row["entities"],
+                edges=row["edges"],
+                reason=row["detail"],
+            )
         )
     regressions = [
         problem
@@ -825,7 +913,7 @@ def analyze(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def write_outputs(output: Path, rows: list[dict[str, Any]], analysis: dict[str, Any]) -> None:
+def write_outputs(output: Path, rows: list[MeasurementRow], analysis: Analysis) -> None:
     output.mkdir(parents=True, exist_ok=True)
     (output / "results.jsonl").write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows)
@@ -836,12 +924,12 @@ def write_outputs(output: Path, rows: list[dict[str, Any]], analysis: dict[str, 
             writer.writeheader()
             writer.writerows(rows)
         operations = sorted({row["operation"] for row in rows})
-        point_rows: list[dict[str, Any]] = []
+        point_rows: list[PointRow] = []
         point_keys = sorted(
             {(row["entities"], row["edges"], row["topology"]) for row in rows}
         )
         for entities, edges, topology in point_keys:
-            point = {
+            point: PointRow = {
                 "entities": entities,
                 "edges": edges,
                 "topology": topology,
@@ -903,7 +991,7 @@ def write_outputs(output: Path, rows: list[dict[str, Any]], analysis: dict[str, 
     (output / "report.md").write_text("\n".join(lines) + "\n")
 
 
-def environment_metadata() -> dict[str, Any]:
+def environment_metadata() -> EnvironmentMetadata:
     try:
         commit = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -922,7 +1010,7 @@ def environment_metadata() -> dict[str, Any]:
         "processor": platform.processor(),
         "cpu_count": os.cpu_count(),
         "page_size": os.sysconf("SC_PAGE_SIZE"),
-        "relics_version": importlib.metadata.version("relics"),
+        "relics_version": importlib.metadata.version("relics-ecs"),
     }
 
 
@@ -934,7 +1022,7 @@ def run_parent(args: argparse.Namespace) -> int:
     (output / "environment.json").write_text(
         json.dumps(environment_metadata(), indent=2, sort_keys=True) + "\n"
     )
-    worker_failures: list[dict[str, Any]] = []
+    worker_failures: list[WorkerFailure] = []
     for entities in POWERS_OF_TEN:
         if entities > args.max_entities:
             continue
@@ -1000,7 +1088,7 @@ def run_profile(args: argparse.Namespace) -> int:
     )
     graph_executor = GraphQueryExecutor(PluginRegistry((BENCHMARK_PLUGIN,)))
     snapshot = output / "profile-world.json"
-    operations: dict[str, Callable[[], Any]] = {
+    operations: dict[str, Callable[[], object]] = {
         "bounded_graph_query": lambda: graph_executor.execute(
             built.actor.world, graph_spec
         ),

@@ -1225,9 +1225,12 @@ def build_textual_wizard_app(
                         yield Input(value=initial.imagegen.enhancer, id="image-enhancer")
                         yield field_label("Image model", "image-model")
                         yield Input(value=initial.imagegen.model, id="image-model")
-                    with Vertical(id="page-review", classes="page"):
-                        yield Label("Review", classes="page-title")
-                        yield Static("", id="review")
+                    yield Vertical(
+                        Label("Review", classes="page-title"),
+                        Static("", id="review"),
+                        id="page-review",
+                        classes="page",
+                    )
             with Horizontal(id="buttons"):
                 advanced = Button("Advanced", id="advanced-toggle")
                 advanced.tooltip = _format_field_help(FIELD_HELP["show-advanced"])

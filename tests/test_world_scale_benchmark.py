@@ -17,6 +17,7 @@ from benchmarks.world_scale import (
     build_world,
     count_edges,
     edge_pair,
+    environment_metadata,
     feasible_points,
     impossible_points,
     load_measurements,
@@ -200,3 +201,16 @@ def test_results_round_trip_and_report(tmp_path):
     assert "point_lookup" in (tmp_path / "summary.csv").read_text()
     assert "point_lookup_median_ms" in (tmp_path / "points.csv").read_text()
     assert "No automatic complexity violations" in (tmp_path / "report.md").read_text()
+
+
+def test_environment_metadata_uses_published_relics_distribution(monkeypatch):
+    requested: list[str] = []
+    monkeypatch.setattr(
+        "benchmarks.world_scale.importlib.metadata.version",
+        lambda name: requested.append(name) or "0.1.1",
+    )
+
+    metadata = environment_metadata()
+
+    assert requested == ["relics-ecs"]
+    assert metadata["relics_version"] == "0.1.1"
