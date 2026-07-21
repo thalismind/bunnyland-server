@@ -263,7 +263,7 @@ FIELD_HELP_TEXT = {
     "home-domain": "Optional static homepage domain. Examples: bunnyland.example.com.",
     "home-dir": "Host directory for homepage files. Examples: /opt/bunnyland/home.",
     "home-cert-name": "Homepage certificate name. Examples: bunnyland.example.com.",
-    "web-theme": "Default web theme value. Examples: purple-blue-dark, server-night.",
+    "web-theme": "Default web theme value. Examples: midnight-dark, server-night.",
     "web-themes": "Replacement theme list. Examples: night=Night:/opt/themes/night.css.",
     "llm-enabled": "Enable LLM controllers. Examples: enabled live, disabled smoke.",
     "llm-provider": "Default LLM provider. Examples: ollama, openrouter.",
