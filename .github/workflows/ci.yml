@@ -205,7 +205,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8
+        uses: astral-sh/setup-uv@v8.1.0
 
       - name: Download exact workflow distributions
         uses: actions/download-artifact@v8
