@@ -2462,6 +2462,18 @@ async def _select_player(app, pilot):
     await pilot.pause()
 
 
+async def _wait_for_action_view(app, pilot, command_type: str) -> dict:
+    for _ in range(20):
+        action = next(
+            (item for item in app.action_views if item["command_type"] == command_type),
+            None,
+        )
+        if action is not None:
+            return action
+        await pilot.pause(0.05)
+    raise AssertionError(f"action view did not appear: {command_type}")
+
+
 async def _wait_for_widget(root, pilot, selector: str, expect_type=None):
     from textual.css.query import NoMatches
 
@@ -3789,7 +3801,7 @@ async def test_app_surfaces_submit_rejection_reason():
     app = BunnylandTUI(RejectingBackend(_snapshot(), character_projection=projection))
     async with app.run_test() as pilot:
         await _select_player(app, pilot)
-        await app._do_action(next(a for a in app.action_views if a["command_type"] == "wait"))
+        await app._do_action(await _wait_for_action_view(app, pilot, "wait"))
         assert any("character is asleep" in line.plain for line in app.activity_lines)
 
 
