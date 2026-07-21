@@ -8,6 +8,11 @@ The goal is to confirm that a new player can learn the rules in Apple Crossing, 
 understand Bell Green as the shared small-town sandbox, and Clover City as the larger
 dense-world showcase.
 
+For model reasoning through these same tutorial objectives, use the
+[Ollama tutorial-ladder benchmark](../developer/tutorial-benchmark.md). That harness measures
+validated character-tool decisions in fresh worlds; it does not replace the browser,
+Discord, multi-client, or human-usability checks in this guide.
+
 ## Shared setup
 
 Record for every pass:
