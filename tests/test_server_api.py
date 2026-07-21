@@ -4742,12 +4742,22 @@ def test_world_schema_includes_available_types_and_live_usage(scenario):
     assert schema.world_epoch == scenario.actor.epoch
     assert "RoomComponent" in schema.components
     assert "IdentityComponent" in schema.components
+    assert "WorldInfoComponent" in schema.components
     assert "Contains" in schema.edges
     room_schema = schema.components["RoomComponent"].json_schema
     assert room_schema["properties"]["title"]["type"] == "string"
     assert "title" in room_schema["required"]
     assert schema.components["RoomComponent"].used is True
     assert schema.components["RoomComponent"].count == 2
+    world_info_schema = schema.components["WorldInfoComponent"].json_schema
+    assert world_info_schema["properties"]["content_flags"] == {
+        "default": [],
+        "items": {"type": "string"},
+        "title": "Content Flags",
+        "type": "array",
+        "uniqueItems": True,
+    }
+    assert schema.components["WorldInfoComponent"].count == 1
     assert schema.edges["Contains"].used is True
     assert schema.edges["Contains"].count == 1
 

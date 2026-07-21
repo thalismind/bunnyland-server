@@ -5,7 +5,8 @@
       "GET": [
         "/v1/public/features",
         "/v1/public/health",
-        "/v1/public/media/{namespace}/{name}"
+        "/v1/public/media/{namespace}/{name}",
+        "/v1/public/world"
       ]
     },
     "auth": {

@@ -62,12 +62,13 @@ and runs plugin invariants against that scope. Full-world validation is an expli
 load-time, persistence, test, or administrative diagnostic operation; it is not part of
 event delivery, reactions, ticks, or ordinary command execution.
 
-Core invariants are: exactly one world clock; monotonic time; at most one physical
-`Contains` parent; legal, acyclic containment; existing edge endpoints; at most one active
-`ControlledBy` relationship; bounded AP/FP and mechanic meters; and projections that
-contain only facts allowed for their viewer. Mutation plans check these constraints within
-their affected relationship neighborhood; explicit full-world validation checks the whole
-database. Violations fail closed.
+Core invariants are: exactly one world clock; exactly one `WorldInfoComponent` stored on
+the clock entity; monotonic time; at most one physical `Contains` parent; legal, acyclic
+containment; existing edge endpoints; at most one active `ControlledBy` relationship;
+bounded AP/FP and mechanic meters; and projections that contain only facts allowed for
+their viewer. Mutation plans check these constraints within their affected relationship
+neighborhood; explicit full-world validation checks the whole database. Violations fail
+closed.
 
 ## Persistence and recovery
 

@@ -769,7 +769,6 @@ async def test_http_login_cookie_header_conflicts_and_scope_boundaries(tmp_path)
             await client.get(
                 "/v1/admin/world/snapshot",
                 headers={"Authorization": f"Bearer {operator_token}"},
-                cookies={},
             )
         ).status_code == 401
 

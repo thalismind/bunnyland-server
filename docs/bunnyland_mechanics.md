@@ -220,6 +220,7 @@ The game is asynchronous and real-time-ish, not fixed-turn. Characters regenerat
 ### Components
 
 ```python
+WorldInfoComponent
 WorldClockComponent
 CalendarComponent
 TimeOfDayComponent

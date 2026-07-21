@@ -28,6 +28,7 @@ from ..claims import (
     remove_claim,
     transfer_claim,
 )
+from ..content_warnings import world_content_flags
 from ..core import (
     CommandCost,
     Lane,
@@ -55,7 +56,12 @@ from ..server.serialization import (
     serialize_room_projection,
     serialize_world,
 )
-from ..server.v1_models import CharacterProfileResource, JobResource
+from ..server.v1_models import (
+    CharacterProfileResource,
+    ChatJobResult,
+    JobResource,
+    PublicWorldResource,
+)
 from ..terminal_config import ResolvedTerminalChatConfig, build_terminal_chat_agent
 from .model import World
 
@@ -290,6 +296,9 @@ class Backend(ABC):
         re-validate the server JSON back into the shared model, so the client owns
         validation of its server interaction layer."""
         return []
+
+    async def fetch_content_flags(self) -> tuple[str, ...]:
+        return ()
 
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         return None
@@ -527,6 +536,9 @@ class LocalBackend(Backend):
 
     async def fetch_character_list(self) -> list[CharacterSummaryView]:
         return list(serialize_character_list(self.actor).characters)
+
+    async def fetch_content_flags(self) -> tuple[str, ...]:
+        return world_content_flags(self.actor)
 
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         return serialize_character_projection(self.actor, character_id).model_dump(mode="json")
@@ -1011,6 +1023,11 @@ class RemoteBackend(Backend):
             ).characters
         )
 
+    async def fetch_content_flags(self) -> tuple[str, ...]:
+        res = await self._client.get(f"{self.base}/public/world")
+        res.raise_for_status()
+        return tuple(PublicWorldResource.model_validate(res.json()).content_flags)
+
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         data = await self._fetch_claim_resource(character_id, "projection")
         if data is None:
@@ -1039,14 +1056,21 @@ class RemoteBackend(Backend):
 
     @staticmethod
     def _character_chat_job(resource: JobResource, character_id: str) -> CharacterChatJob:
-        result = resource.result or {}
-        action = CharacterChatActionResult.model_validate(result.get("action") or {})
+        result = resource.result
+        if result is None:
+            reply = ""
+            action = CharacterChatActionResult()
+        elif isinstance(result, ChatJobResult):
+            reply = result.reply
+            action = result.action
+        else:
+            raise ValueError("chat job returned a non-chat result")
         failure = resource.failure.detail if resource.failure is not None else ""
         return CharacterChatJob(
             id=resource.id,
             status=resource.status,
             character_id=character_id,
-            reply=str(result.get("reply") or ""),
+            reply=reply,
             action=action,
             failure=failure,
         )

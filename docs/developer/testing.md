@@ -40,6 +40,17 @@ uv run ruff check src tests
 git diff --check
 ```
 
+Unexpected warnings fail the test suite. The narrow third-party allowlist covers:
+
+- the exact `discord.py` import warning for Python 3.12's deprecated `audioop`
+  standard-library module, imported by `discord.player`; and
+- MCP SDK streamable-HTTP cleanup leaving an internal AnyIO
+  `MemoryObjectReceiveStream` for finalization after all client-owned streams have been
+  explicitly closed.
+
+Project-owned resource, API, collection, and deprecation warnings must be fixed rather than
+filtered.
+
 ## World-scale performance
 
 `scripts/test-performance` is the routine CI complexity gate. It compares bounded
@@ -82,5 +93,5 @@ both the test and package jobs.
 
 External addons should test against that wheel artifact in an isolated environment. Do not
 add sibling checkout paths to `sys.path` or `PYTHONPATH`; checking out server source is
-acceptable only to build the artifact. PyPI publication remains deliberately disabled until
-a signed release/tag policy and Trusted Publisher are configured.
+acceptable only to build the artifact. Signed version tags publish the previously validated
+artifacts through PyPI Trusted Publishing; release jobs do not rebuild them.

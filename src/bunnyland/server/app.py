@@ -15,9 +15,11 @@ from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from pydantic import TypeAdapter
+
 from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 
-from .. import telemetry
+from .. import __version__, telemetry
 from ..claims import (
     CLIENT_KIND_WEB,
     ClaimSecretRegistry,
@@ -32,6 +34,7 @@ from ..claims import (
     transfer_claim,
 )
 from ..content import load_content_library
+from ..content_warnings import world_content_flags
 from ..core import (
     CharacterComponent,
     IdentityComponent,
@@ -51,6 +54,7 @@ from ..core.events import (
     CharacterChatRequestedEvent,
     CharacterClaimedEvent,
     ControllerChangedEvent,
+    DomainEvent,
     EventVisibility,
     event_base,
     serialized_event_visible_to,
@@ -142,6 +146,7 @@ from .models import (
     WorldRuntimeResponse,
     WorldSaveResponse,
 )
+from .onboarding import OnboardingTracker
 from .patches import WorldPatchError, apply_world_patch
 from .rate_limit import FixedWindowRateLimiter
 from .schema import world_schema
@@ -164,19 +169,25 @@ from .v1_models import (
     CharacterResource,
     ChatJobRequest,
     CheckpointRequest,
+    ClaimCharacterResource,
     ClaimCommandRequest,
     ClaimCreateRequest,
     ClaimProjectionResource,
     ClaimQueryRequest,
     ClaimResource,
+    ClaimSceneResource,
     ClaimUpdateRequest,
     CommandResource,
     ControllerAssignment,
     ControllerDefinitionRequest,
+    ControllerDefinitionsResource,
     EventCollection,
     GenerationJobRequest,
+    GeneratorCollection,
     JobResource,
+    JobResult,
     ProblemDetails,
+    PublicWorldResource,
     RuntimePatchRequest,
     SceneImageJobRequest,
 )
@@ -195,6 +206,7 @@ UPLOAD_IMAGE_TYPES = {
     "image/webp": "webp",
 }
 MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024
+JOB_RESULT_ADAPTER = TypeAdapter(JobResult)
 
 if TYPE_CHECKING:
     from ..engine import GameLoop
@@ -484,6 +496,12 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app):
         mcp_session_context = None
+        actor.bus.subscribe(
+            DomainEvent,
+            onboarding.record_event,
+            reaction_id="bunnyland.server:onboarding",
+            external=True,
+        )
         try:
             if mcp_session_manager is not None:
                 mcp_session_context = mcp_session_manager.run()
@@ -494,6 +512,7 @@ def create_app(
                 imagegen.start_backfill()
             yield
         finally:
+            actor.bus.unsubscribe(DomainEvent, onboarding.record_event)
             for task in chat_tasks:
                 task.cancel()
             if chat_tasks:
@@ -508,6 +527,7 @@ def create_app(
     trusted_origins = _configured_cors_origins(cors_origins)
     app = FastAPI(
         title=title,
+        version=__version__,
         lifespan=lifespan,
         docs_url="/v1/admin/docs",
         redoc_url="/v1/admin/redoc",
@@ -630,6 +650,7 @@ def create_app(
     generation_job = None
     player_jobs: dict[str, JobResource] = {}
     player_job_claims: dict[str, str] = {}
+    onboarding = OnboardingTracker(actor)
     character_chat_jobs: dict[str, JobResource] = {}
     character_chat_job_clients: dict[str, str] = {}
     character_chat_job_characters: dict[str, str] = {}
@@ -1815,7 +1836,9 @@ def create_app(
                 "world_epoch": actor.epoch,
                 "status": status,
                 "updated_at": datetime.now(UTC),
-                "result": _without_preview_fields(_image_response(current)),
+                "result": JOB_RESULT_ADAPTER.validate_python(
+                    _without_preview_fields(_image_response(current))
+                ),
                 "failure": (
                     _problem_for_job_v1(str(current.error or "image generation failed"))
                     if status == "failed"
@@ -1836,7 +1859,7 @@ def create_app(
                 "world_epoch": actor.epoch,
                 "status": status,
                 "updated_at": datetime.now(UTC),
-                "result": _without_preview_fields(current),
+                "result": JOB_RESULT_ADAPTER.validate_python(_without_preview_fields(current)),
                 "failure": (
                     _problem_for_job_v1(str(current.error or "world generation failed"))
                     if status == "failed"
@@ -1901,6 +1924,15 @@ def create_app(
     @public_v1.get("/features", response_model=FeatureStatusResponse)
     async def v1_features() -> FeatureStatusResponse:
         return _feature_status()
+
+    @public_v1.get("/world", response_model=PublicWorldResource)
+    async def v1_public_world() -> PublicWorldResource:
+        return PublicWorldResource(
+            **_world_fields(),
+            title=actor.world_info.title,
+            description=actor.world_info.description,
+            content_flags=list(world_content_flags(actor)),
+        )
 
     @auth_v1.post("/session", response_model=TokenResponse)
     async def v1_create_session(
@@ -2031,7 +2063,9 @@ def create_app(
             character_chat_jobs[job_id] = character_chat_jobs[job_id].model_copy(
                 update={
                     "updated_at": datetime.now(UTC),
-                    "result": _without_preview_fields(result),
+                    "result": JOB_RESULT_ADAPTER.validate_python(
+                        _without_preview_fields(result)
+                    ),
                 }
             )
             while True:
@@ -2048,7 +2082,9 @@ def create_app(
                 character_chat_jobs[job_id] = character_chat_jobs[job_id].model_copy(
                     update={
                         "updated_at": datetime.now(UTC),
-                        "result": _without_preview_fields(pending),
+                        "result": JOB_RESULT_ADAPTER.validate_python(
+                            _without_preview_fields(pending)
+                        ),
                     }
                 )
                 if pending.complete:
@@ -2058,7 +2094,9 @@ def create_app(
             update={
                 "status": "succeeded",
                 "updated_at": datetime.now(UTC),
-                "result": _without_preview_fields(final_result),
+                "result": JOB_RESULT_ADAPTER.validate_python(
+                    _without_preview_fields(final_result)
+                ),
             }
         )
 
@@ -2154,13 +2192,11 @@ def create_app(
         schema = world_schema(actor)
         return CatalogResource(
             **_world_fields(),
-            components={
-                key: value.model_dump(mode="json") for key, value in schema.components.items()
-            },
-            edges={key: value.model_dump(mode="json") for key, value in schema.edges.items()},
-            content=load_content_library().model_dump(mode="json"),
+            components=schema.components,
+            edges=schema.edges,
+            content=load_content_library(),
             queries=[definition.name for definition in actor.perspective_queries.definitions()],
-            capabilities=_feature_status().model_dump(mode="json"),
+            capabilities=_feature_status(),
         )
 
     @play_v1.post("/claims", response_model=ClaimResource, status_code=201)
@@ -2189,6 +2225,7 @@ def create_app(
         character, controller, edge, claim = _claim_context_v1(
             claimed.claim_id, claimed.claim_secret, client_id
         )
+        onboarding.claimed(claimed.claim_id, str(character.id))
         return _claim_resource_v1(character, controller, edge, claim)
 
     @play_v1.put("/claims/{claim_id}", response_model=ClaimResource)
@@ -2307,7 +2344,7 @@ def create_app(
             update={
                 "status": "succeeded",
                 "updated_at": datetime.now(UTC),
-                "result": _without_preview_fields(result),
+                "result": JOB_RESULT_ADAPTER.validate_python(_without_preview_fields(result)),
             }
         )
         return character_chat_jobs[job_id]
@@ -2321,22 +2358,30 @@ def create_app(
         character, controller, edge, claim = _claim_context_v1(claim_id, claim_secret, client_id)
         projection = serialize_character_projection(actor, str(character.id))
         room_id = projection.room.id
-        scene = serialize_room_projection(actor, room_id).model_dump(mode="json") if room_id else {}
-        scene.pop("ok", None)
-        scene.pop("schema_version", None)
+        room_projection = serialize_room_projection(actor, room_id) if room_id else None
+        scene = (
+            ClaimSceneResource(
+                world_epoch=room_projection.world_epoch,
+                room=room_projection.room,
+            )
+            if room_projection is not None
+            else None
+        )
         queued = serialize_character_queued_commands(actor, str(character.id), **_runtime_timing())
-        character_data = _without_preview_fields(projection)
-        sheet = character_data.pop("sheet", {})
-        actions = projection.actions
-        character_data.pop("actions", None)
+        character_data = ClaimCharacterResource.model_validate(
+            projection.model_dump(
+                exclude={"ok", "schema_version", "sheet", "actions"},
+                mode="json",
+            )
+        )
         return ClaimProjectionResource(
             **_world_fields(),
             claim=_claim_resource_v1(character, controller, edge, claim),
             character=character_data,
             scene=scene,
-            commands=[item.model_dump(mode="json") for item in queued.commands],
-            sheet=sheet,
-            actions=actions,
+            commands=queued.commands,
+            sheet=projection.sheet,
+            actions=projection.actions,
         )
 
     @play_v1.post(
@@ -2368,6 +2413,7 @@ def create_app(
         )
         _with_claim_secret(request, claim_secret)
         result = await _submit_command_request(request, (character, controller, _claim))
+        onboarding.command_submitted(claim_id, result.command_id, body.command_type)
         response.headers["Location"] = f"/v1/play/claims/{claim_id}/commands/{result.command_id}"
         return CommandResource(
             **_world_fields(),
@@ -2464,7 +2510,7 @@ def create_app(
             status=_job_status_v1(image.status),
             created_at=created,
             updated_at=datetime.now(UTC),
-            result=_without_preview_fields(image),
+            result=JOB_RESULT_ADAPTER.validate_python(_without_preview_fields(image)),
         )
         player_jobs[job.id] = job
         player_job_claims[job.id] = claim_id
@@ -2552,14 +2598,25 @@ def create_app(
         )
         return {**_world_fields(), **_without_preview_fields(result)}
 
-    @admin_v1.get("/controller-definitions")
-    async def v1_controller_definitions() -> dict:
-        return _without_preview_fields(_controller_definitions_response())
+    @admin_v1.get("/controller-definitions", response_model=ControllerDefinitionsResource)
+    async def v1_controller_definitions() -> ControllerDefinitionsResource:
+        result = _controller_definitions_response()
+        return ControllerDefinitionsResource(
+            **_world_fields(),
+            scripts=result.scripts,
+            behaviors=result.behaviors,
+            condition_library=result.condition_library,
+            action_library=result.action_library,
+            stored=result.stored,
+        )
 
-    @admin_v1.put("/controller-definitions/{kind}/{name}")
+    @admin_v1.put(
+        "/controller-definitions/{kind}/{name}",
+        response_model=ControllerDefinitionsResource,
+    )
     async def v1_put_controller_definition(
         kind: str, name: str, body: ControllerDefinitionRequest
-    ) -> dict:
+    ) -> ControllerDefinitionsResource:
         data = {**body.definition, "name": name}
         if kind == "script":
             result = await _register_script_request(ScriptSpec.model_validate(data))
@@ -2567,11 +2624,19 @@ def create_app(
             result = await _register_behavior_request(BehaviorTreeSpec.model_validate(data))
         else:
             raise HTTPException(status_code=400, detail="kind must be script or behavior")
-        return _without_preview_fields(result)
+        return ControllerDefinitionsResource(
+            **_world_fields(),
+            scripts=result.scripts,
+            behaviors=result.behaviors,
+            condition_library=result.condition_library,
+            action_library=result.action_library,
+            stored=result.stored,
+        )
 
-    @admin_v1.get("/world/generators")
-    async def v1_generators() -> dict:
-        return _without_preview_fields(_list_world_generators_response())
+    @admin_v1.get("/world/generators", response_model=GeneratorCollection)
+    async def v1_generators() -> GeneratorCollection:
+        result = _list_world_generators_response()
+        return GeneratorCollection(**_world_fields(), generators=result.generators)
 
     @admin_v1.post("/world/generation-jobs", response_model=JobResource, status_code=202)
     async def v1_submit_generation_job(
@@ -2613,7 +2678,7 @@ def create_app(
             status=status,
             created_at=created,
             updated_at=datetime.now(UTC),
-            result=result_data,
+            result=JOB_RESULT_ADAPTER.validate_python(result_data),
         )
         generation_jobs[job.id] = job
         response.headers["Location"] = f"/v1/admin/world/generation-jobs/{job.id}"
@@ -2691,14 +2756,19 @@ def create_app(
         if target_kind != "character" or purpose not in {"portrait", "sprite"}:
             raise HTTPException(status_code=400, detail="unsupported media upload target")
         form = await request.form()
-        upload = form.get("file")
-        if upload is None or not hasattr(upload, "read"):
-            raise HTTPException(status_code=400, detail="multipart file field is required")
-        content_type = str(getattr(upload, "content_type", "")).lower()
-        extension = UPLOAD_IMAGE_TYPES.get(content_type)
-        if extension is None:
-            raise HTTPException(status_code=400, detail="upload must be a PNG, JPEG, or WebP image")
-        data = await upload.read()
+        try:
+            upload = form.get("file")
+            if upload is None or not hasattr(upload, "read"):
+                raise HTTPException(status_code=400, detail="multipart file field is required")
+            content_type = str(getattr(upload, "content_type", "")).lower()
+            extension = UPLOAD_IMAGE_TYPES.get(content_type)
+            if extension is None:
+                raise HTTPException(
+                    status_code=400, detail="upload must be a PNG, JPEG, or WebP image"
+                )
+            data = await upload.read()
+        finally:
+            await form.close()
         if not data:
             raise HTTPException(status_code=400, detail="upload body is empty")
         if len(data) > MAX_UPLOAD_IMAGE_BYTES:
@@ -2831,6 +2901,7 @@ def create_app(
             await websocket.close(code=1008)
             return
         character_id = str(claim_context[0].id)
+        onboarding.connected(claim_id)
         subscription = stream.subscribe()
 
         async def send_frame(frame: dict) -> bool:

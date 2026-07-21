@@ -1,8 +1,9 @@
 # Bunnyland Executive Review — Consolidated Implementation Update
 
-**Date:** July 14, 2026
+**Date:** July 20, 2026
 
-**Evidence cutoff:** `79bd2b1`, including implementation through `ec487c0`
+**Evidence cutoff:** July 16 hosted validation plus the v1.0 release-candidate hardening
+work described in the compatibility and technical-results records.
 
 This addendum reconciles the consolidated executive review with the server implementation from `804df40` through `ec487c0`. The architectural diagnosis has moved again: Bunnyland now has an executable World Contract, a plan-based mutation boundary across command handlers and non-handler phases, perspective-safe queries, hardened projections and traces, and the first reproducible Clover City systemic story. These are implemented and tested contracts, not proposed infrastructure.
 
@@ -36,7 +37,7 @@ The release recommendation remains an invite-only controlled sandbox preview. Th
 | Passive/reaction/control execution semantics | **Implemented.** Passive and reaction phases are ordered and fail stop. Atomic work explicitly uses a mutation plan; no implicit transaction or live-world snapshot exists. |
 | Central invariants | **Substantially implemented.** Ordinary plans validate their affected relationship neighborhood; full-world validation remains an explicit load, persistence, test, or diagnostic gate. |
 | Crash-safe canonical snapshots | **Implemented.** Temporary write, flush/`fsync`, checksum, atomic rename, three-backup rotation, checksum verification, and compatible JSON/YAML restoration are present. |
-| Journal and memory checkpoint coordination | **Partial.** The bounded journal, memory manifest, watermarks, and quarantine primitive exist; automatic backend checkpoint/quarantine and clean-host world/memory/media drills remain. |
+| Journal and memory checkpoint coordination | **Implemented and drilled.** The bounded journal, memory manifest, watermarks, quarantine behavior, encrypted backup, clean-host restore, rollback, and revoked-token persistence have passed. The 72-hour release-candidate soak remains a release gate. |
 | Versioned character streaming and claim revalidation | **Implemented.** |
 | At-least-once WebSocket delivery | **Not implemented by design.** Delivery is ordered and best-effort with event-ID deduplication, gap detection, overflow `resync`, and fresh-projection recovery. |
 | Bounded graph query engine | **Implemented.** |
@@ -45,27 +46,33 @@ The release recommendation remains an invite-only controlled sandbox preview. Th
 | Private contextual memory and reflection | **Implemented.** |
 | Goals, obligations, and routines | **Implemented.** Unified causal scoring and long-horizon behavioral evidence remain evaluation work. |
 | Controller evaluation benchmark | **Implemented for scripted, behavior-tree, goal-directed, and LLM contracts.** RL remains future work. |
-| Three Clover City systemic outcomes | **One of three demonstrated.** Missing parcel is persistent and cross-controller; shortage/conflict and disruption/repair remain. |
-| Real 40-WebSocket validation and soak | **Partial.** The deterministic in-process fan-out/overflow harness and an exact-container test with 40 distinct characters, scoped credentials, client identities, and claims now pass, including disconnect-gap recovery and mid-stream revocation. The post-deploy hosted rerun and multi-day soak remain. |
-| Security/trace hardening and measured release gates | **Partial.** Trace redaction and room authorization are implemented; adversarial memory/guard tests, governance artifacts, live drills, and fresh-player measurements remain. |
+| Three Clover City systemic outcomes | **Implemented.** Missing parcel, water shortage, and elevator disruption all run through ordinary validated actions with persistent outcome probes and reload evidence. |
+| Real 40-WebSocket validation and soak | **Hosted stream gate passed; soak pending.** The exact deployed image passed 40 distinct authenticated streams, reconnect resynchronization, invalidation, and mid-stream revocation. The 72-hour release-candidate soak remains. |
+| Security/trace hardening and measured release gates | **Automated and operational gates implemented.** Claim/memory isolation, instruction-like memories, provider failures, request/rate limits, revocation, redaction, restore, and rollback have evidence. Ten fresh-player sessions and the 72-hour soak remain manual release gates. |
 
 ## Updated implementation TODO
 
 Completed review items are removed from the active queue: handler and non-handler transaction migration, trace redaction, room-projection authorization, honest history/gap semantics, perspective-query typing/policy enforcement, audited semantic-edge migration, and the fixed-snapshot receipt benchmark.
 
-The remaining work is ordered by controlled-preview risk:
+The remaining work is ordered by v1 release risk:
 
-1. [ ] Complete the shortage/conflict Clover City story with ordinary actions, a recoverable failure, cross-controller outcome probes, visible aftermath, and mid-story save/reload.
-2. [ ] Complete the disruption/repair Clover City story to the same standard.
-3. [ ] Instrument Apple Crossing lightly and run ten fresh-player comprehension sessions; fix recurring action, target, rejection, and persistence confusion.
-4. [ ] Rerun the authenticated 40-client stream gate after deployment and complete the multi-day restart/restore soak.
-5. [ ] Automate coordinated world/memory/media checkpoint and restore behavior, including future-memory quarantine, namespace/clone checks, and clean-host restoration.
-6. [ ] Red-team cross-character memory isolation, instruction-like memories, claim boundaries, provider/guard failure, rate limits, and secret handling.
-7. [ ] Publish proportionate sandbox rules, privacy notice, security contact, model-safety failure behavior, operator runbooks, compatibility statement, and preview release notes.
-8. [ ] Expand the controller scorecard with rejection recovery, commitment completion, persona consistency, memory relevance, repetition/deadlock, latency/cost, and trace completeness; add RL later through the same contracts.
-9. [ ] Improve player-visible causality—away summaries, relationship/obligation explanations, incident aftermath, and appropriately scoped “why” views—using observed story and onboarding gaps.
-10. [ ] Continue bounded semantic-edge and query-catalogue work only where a shipped mechanic, controller, or client demonstrates a need; defer new sim-pack breadth and speculative infrastructure.
+1. [ ] Run ten fresh-player Apple Crossing sessions; require at least eight independent
+   completions under ten minutes and retest every blocker seen by two players.
+2. [ ] Run the immutable v1.0 release candidate for 72 hours with scheduled restart,
+   checkpoint, encrypted backup, clean-host restore, rollback, and revoked-token checks.
+3. [ ] Publish `relics-ecs==0.1.0`, replace the temporary Git dependency, and rerun the
+   clean wheel/sdist, dependency-audit, migration, SBOM, and provenance gates.
+4. [ ] Validate the browser adapter's deterministic Apple Crossing golden path and the
+   apple-consumed, letter-taken, ignored-quest, reconnect, and save/reload branches in its
+   client-owned contract run.
+5. [ ] Expand experience and controller scorecards only from observed onboarding or hosted
+   deployment failures; defer new sim-pack breadth and speculative infrastructure.
 
 ## Validation state
 
-At `ec487c0`, the all-extras server regression suite reports **3,186 tests, zero failures or errors, 28 non-release-critical skips, and 100% line and branch coverage**. Full Ruff validation and repository diff checks pass. This supports a narrower updated verdict: Bunnyland has a credible authoritative database contract and one demonstrated persistent systemic story; controlled-preview readiness now depends on completing the remaining stories and proving the operational and player-experience gates under sustained load.
+The historical `ec487c0` aggregate reported 3,186 tests and 100% line and branch coverage.
+The current release candidate must satisfy the repository's warning-as-error aggregate,
+Python 3.12–3.14 CI, package-install, compatibility, migration, security, and performance
+gates before that historical result can be treated as current. Bunnyland now has three
+demonstrated persistent systemic stories; v1 readiness depends on the Relics publication,
+72-hour operational soak, and measured fresh-player gate above.

@@ -4171,6 +4171,9 @@ class SelectorLocalBackend(LocalBackend):
     async def start(self) -> None:
         self.started = True
 
+    async def fetch_content_flags(self):
+        return ()
+
 
 async def test_tui_mount_uses_local_generator_selection(monkeypatch):
     backend = SelectorLocalBackend()

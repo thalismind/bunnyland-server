@@ -81,6 +81,7 @@ async def run_loop_with_api(
             log_level="info",
             proxy_headers=True,
             forwarded_allow_ips=forwarded_allow_ips,
+            ws="websockets-sansio",
         )
     )
     game_task = asyncio.create_task(loop.run(max_ticks=max_ticks))

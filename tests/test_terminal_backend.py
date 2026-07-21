@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from bunnyland.server.models import CharacterChatActionResult
+from bunnyland.server.v1_models import ImageJobResult, JobResource
 from bunnyland.terminal_config import resolve_terminal_chat_config
 from bunnyland.tui.backend import (
     Backend,
@@ -51,6 +52,9 @@ async def test_local_backend_builds_typed_character_profile():
     backend = LocalBackend(generator="apartment-demo", autorun=False, client_id="local-client")
     await backend.start()
     try:
+        content_flags = await backend.fetch_content_flags()
+        assert content_flags == tuple(sorted(content_flags))
+        assert "pvp" in content_flags
         character = (await backend.fetch_character_list())[0]
         profile = await backend.fetch_character_profile(character.character_id)
         assert profile.character_id == character.character_id
@@ -73,6 +77,26 @@ async def test_remote_backend_validates_character_profile():
     profile = await backend.fetch_character_profile("character:1")
     assert profile.sheet.species == "rabbit"
     assert profile.sheet.skills[0].label == "Cooking"
+
+
+async def test_remote_backend_validates_public_content_flags():
+    class Client:
+        async def get(self, url):
+            assert url.endswith("/public/world")
+            return Response(
+                {
+                    "world_id": "world-1",
+                    "world_epoch": 42,
+                    "title": "Clover City",
+                    "description": "Mind the foxes after dark.",
+                    "content_flags": ["adult:violence", "pvp"],
+                }
+            )
+
+    backend = RemoteBackend("https://server.example")
+    backend._client = Client()
+
+    assert await backend.fetch_content_flags() == ("adult:violence", "pvp")
 
 
 async def test_remote_backend_rejects_invalid_character_profile():
@@ -144,6 +168,12 @@ async def test_local_backend_surfaces_chat_service_errors():
 
 def job_payload(*, status="queued", result=None, failure=None):
     now = datetime.now(UTC).isoformat()
+    if result is not None:
+        result = {
+            "world_epoch": 42,
+            "character_id": "character:1",
+            **result,
+        }
     return {
         "world_id": "world-1",
         "world_epoch": 42,
@@ -192,9 +222,7 @@ async def test_remote_backend_submits_and_polls_chat_job():
 
 async def test_remote_backend_preserves_pending_reply_and_failure():
     pending_resource = RemoteBackend._character_chat_job(
-        __import__(
-            "bunnyland.server.v1_models", fromlist=["JobResource"]
-        ).JobResource.model_validate(
+        JobResource.model_validate(
             job_payload(
                 status="running",
                 result={
@@ -209,9 +237,7 @@ async def test_remote_backend_preserves_pending_reply_and_failure():
     assert pending_resource.reply == "I will try that when I can."
 
     failed = RemoteBackend._character_chat_job(
-        __import__(
-            "bunnyland.server.v1_models", fromlist=["JobResource"]
-        ).JobResource.model_validate(
+        JobResource.model_validate(
             job_payload(
                 status="failed",
                 failure={
@@ -225,6 +251,26 @@ async def test_remote_backend_preserves_pending_reply_and_failure():
         "character:1",
     )
     assert failed.failure == "provider unavailable"
+
+
+def test_remote_backend_rejects_non_chat_job_results() -> None:
+    resource = JobResource(
+        world_id="world-1",
+        world_epoch=42,
+        id="job-image",
+        kind="image",
+        status="succeeded",
+        result=ImageJobResult(
+            world_epoch=42,
+            job_id="image-1",
+            status="succeeded",
+            entity_id="character:1",
+            purpose="portrait",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="non-chat result"):
+        RemoteBackend._character_chat_job(resource, "character:1")
 
 
 async def test_character_chat_cancellation_is_safe():

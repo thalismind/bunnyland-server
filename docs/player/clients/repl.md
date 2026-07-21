@@ -30,7 +30,9 @@ uv run --all-extras bunnyland repl --list-generators
 
 Useful options mirror the TUI: `--seed`, `--generator`, `--claim-fallback`, and
 `--claim-timeout-minutes`. It is a full-screen terminal app, so run it in a real terminal,
-not through a pipe.
+not through a pipe. Before loading a local plugin world or joining a flagged remote world,
+the REPL requires you to accept its content warning. See
+[Content warnings](README.md#content-warnings) for saved and command-line ignore options.
 
 The first local launch also opens the shared terminal chat setup. It saves only the
 provider, model, endpoints, and enabled state in

@@ -12,6 +12,7 @@ from bunnyland.tui.backend import CharacterChatJob
 from bunnyland.tui.screens import (
     CharacterPickerScreen,
     CharacterSheetScreen,
+    ContentWarningScreen,
     ConversationScreen,
     TerminalSetupScreen,
     render_character_profile,
@@ -135,6 +136,23 @@ async def test_character_picker_selects_and_cancels():
         await pilot.click("#character-picker-cancel")
         await pilot.pause()
         assert cancelled.result is None
+
+
+async def test_content_warning_requires_acceptance_or_decline():
+    accepted = ScreenHost(ContentWarningScreen(("adult:violence", "pvp")))
+    async with accepted.run_test() as pilot:
+        assert "adult:violence" in accepted.screen_to_push.query_one(
+            "#content-warning-flags Static", Static
+        ).render().plain
+        await pilot.click("#content-warning-accept")
+        await pilot.pause()
+        assert accepted.result is True
+
+    declined = ScreenHost(ContentWarningScreen(("theft",)))
+    async with declined.run_test() as pilot:
+        await pilot.click("#content-warning-decline")
+        await pilot.pause()
+        assert declined.result is False
 
 
 async def test_terminal_setup_saves_provider_and_no_chat():

@@ -153,6 +153,51 @@ class CharacterPickerScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class ContentWarningScreen(ModalScreen[bool]):
+    """Require explicit acceptance before a terminal client enters a flagged world."""
+
+    BINDINGS = [("escape", "decline", "Leave")]
+
+    CSS = """
+    ContentWarningScreen { align: center middle; }
+    #content-warning-panel {
+        width: 72; height: auto; max-height: 85%; border: thick $warning;
+        background: $surface; padding: 1 2;
+    }
+    #content-warning-flags { height: auto; max-height: 14; margin: 1 0; }
+    #content-warning-buttons { height: auto; }
+    #content-warning-accept { margin-right: 1; }
+    """
+
+    def __init__(self, content_flags: Sequence[str]) -> None:
+        super().__init__()
+        self.content_flags = tuple(content_flags)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="content-warning-panel"):
+            yield Label("Content warning", id="content-warning-title")
+            yield Static(
+                "This world may contain the following content. "
+                "You must accept this warning before joining."
+            )
+            with VerticalScroll(id="content-warning-flags"):
+                yield Static("\n".join(f"• {flag}" for flag in self.content_flags))
+            with Horizontal(id="content-warning-buttons"):
+                yield Button("Accept and Join", id="content-warning-accept", variant="primary")
+                yield Button("Leave", id="content-warning-decline")
+
+    @on(Button.Pressed, "#content-warning-accept")
+    def _accept_pressed(self, _event: Button.Pressed) -> None:
+        self.dismiss(True)
+
+    @on(Button.Pressed, "#content-warning-decline")
+    def _decline_pressed(self, _event: Button.Pressed) -> None:
+        self.action_decline()
+
+    def action_decline(self) -> None:
+        self.dismiss(False)
+
+
 class ConversationScreen(ModalScreen[None]):
     BINDINGS = [("escape", "close", "Close")]
 
@@ -365,6 +410,7 @@ class TerminalSetupScreen(ModalScreen[TerminalConfig | None]):
 __all__ = [
     "CharacterPickerScreen",
     "CharacterSheetScreen",
+    "ContentWarningScreen",
     "ConversationScreen",
     "TerminalSetupScreen",
     "render_character_profile",

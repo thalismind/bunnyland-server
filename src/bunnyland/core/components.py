@@ -155,8 +155,17 @@ class ThoughtComponent(Component):
 
 
 # --------------------------------------------------------------------------------------
-# World clock (spec 11.2)
+# World state (spec 11.2)
 # --------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WorldInfoComponent(Component):
+    """Singleton player-facing identity and welcome text for this world."""
+
+    title: str = ""
+    description: str = ""
+    content_flags: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -549,6 +558,7 @@ __all__ = [
     "TemperatureComponent",
     "ThoughtComponent",
     "WorldClockComponent",
+    "WorldInfoComponent",
     "WritableComponent",
     "WeightComponent",
     "WearableComponent",

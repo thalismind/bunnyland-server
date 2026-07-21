@@ -11,6 +11,7 @@ from bunnyland.terminal_config import (
     build_terminal_chat_agent,
     load_terminal_config,
     persisted_terminal_config,
+    resolve_ignored_content_flags,
     resolve_terminal_chat_config,
     save_terminal_config,
     terminal_config_path,
@@ -34,9 +35,18 @@ def test_terminal_config_round_trip_all_providers(tmp_path, provider):
         chat_model="example/model",
         ollama_host="https://ollama.example",
         openrouter_server_url="https://router.example/v1",
+        ignored_content_flags=("pvp", "adult:violence"),
     )
     assert save_terminal_config(expected, path) == path
     assert load_terminal_config(path) == expected
+
+
+def test_ignored_content_flags_merge_saved_repeatable_and_comma_separated_values():
+    saved = TerminalConfig(ignored_content_flags=("pvp",))
+    assert resolve_ignored_content_flags(
+        saved, ["adult:violence,theft", "pvp"]
+    ) == ("adult:violence", "pvp", "theft")
+    assert resolve_ignored_content_flags(None) == ()
 
 
 def test_terminal_config_never_serializes_credentials(tmp_path):

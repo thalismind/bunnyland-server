@@ -2035,7 +2035,15 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
             "Origin": f"http://127.0.0.1:{port}",
         }
     )
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+            ws="websockets-sansio",
+        )
+    )
     server_task = asyncio.create_task(server.serve())
     try:
         for _ in range(100):
@@ -2168,6 +2176,8 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
                 assert scenario.actor.world.get_entity(scenario.character).has_component(
                     SuspendedComponent
                 )
+            await read_stream.aclose()
+            await write_stream.aclose()
 
         admin_http_client = httpx.AsyncClient(
             headers={
@@ -2180,12 +2190,13 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
                 f"http://127.0.0.1:{port}/v1/mcp/",
                 http_client=admin_http_client,
             ) as (read_stream, write_stream, _get_session_id):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-                    characters = await session.call_tool("play_list_characters", {})
-                    overview = await session.call_tool("admin_world_overview", {})
-                    assert characters.isError is False
-                    assert overview.isError is False
+                async with read_stream, write_stream:
+                    async with ClientSession(read_stream, write_stream) as session:
+                        await session.initialize()
+                        characters = await session.call_tool("play_list_characters", {})
+                        overview = await session.call_tool("admin_world_overview", {})
+                        assert characters.isError is False
+                        assert overview.isError is False
         finally:
             await admin_http_client.aclose()
     finally:

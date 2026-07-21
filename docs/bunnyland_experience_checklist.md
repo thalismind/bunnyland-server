@@ -9,6 +9,13 @@ translate it into Bunnyland-shaped work: ECS state, component-owned prompt fragm
 projections, command handlers, scripts, plugin-owned mechanics, validated worldgen, and
 deterministic harnesses.
 
+Current v1 evidence lives in the [playtesting guide](player/playtesting.md),
+[technical results](developer/technical-results.md), and
+[compatibility policy](developer/compatibility.md). Apple Crossing is the canonical first
+session. Its server milestones record connection, claim, first useful action, rejection,
+completion, and elapsed time without retaining private text. The ten-player completion gate
+and browser-owned branch journeys remain release work.
+
 ## How to Use This Checklist
 
 - Treat each checklist item as a focused PR or short PR sequence.
@@ -380,16 +387,17 @@ deterministic harnesses.
 
 ## Stage 5 - Onboarding, Scenarios, and Admin Packaging
 
-- [ ] **Valid actions endpoint**
+- [x] **Valid actions query and projection**
   - **Goal:** expose currently relevant verbs for a character and world state.
   - **Depends on:** action definitions, reachability/query helpers, loaded plugins.
   - **Implementation notes:** do not decide AP/FP affordability here; clients can disable
     unaffordable actions separately.
   - **Acceptance check:** endpoint returns core actions and plugin actions relevant to the
     current room and character.
-  - **Verification:** server API and plugin parity tests.
+  - **Verification:** perspective-query, server API, action availability, and plugin parity
+    tests.
 
-- [ ] **Valid targets endpoint**
+- [x] **Valid targets query and projection**
   - **Goal:** expose reachable/selectable targets per action.
   - **Depends on:** valid actions, reachability, containment, doors/items/characters.
   - **Implementation notes:** target resolution should use the same helpers handlers use
@@ -406,14 +414,15 @@ deterministic harnesses.
     context/use.
   - **Verification:** frontend or API tests depending on implementation layer.
 
-- [ ] **Context-aware help and nudges**
+- [x] **Context-aware help and nudges**
   - **Goal:** stalled or failed players receive specific in-context guidance.
   - **Depends on:** command rejection reasons, recent context, onboarding state.
   - **Implementation notes:** use exact handler rejection reasons and visible state; avoid
     generic manuals as primary help.
   - **Acceptance check:** after a failed action or idle window, help references the
     current room/action and suggests a valid next step.
-  - **Verification:** command/API tests and playtest script.
+  - **Verification:** exact command-rejection tests, `why_not` perspective-query tests,
+    suggested-action tests, and Apple Crossing playtest scripts.
 
 - [ ] **New-player safe window**
   - **Goal:** first-session players have a safe spawn and gentler early pressure.
@@ -481,7 +490,7 @@ deterministic harnesses.
     behavior.
   - **Verification:** provider/mock tests and load-oriented harness checks.
 
-- [ ] **Deterministic experience harness**
+- [x] **Deterministic experience harness**
   - **Goal:** test fun-adjacent quality without relying on live model nondeterminism.
   - **Depends on:** deterministic worlds, scripts, mocked controller/narrator output.
   - **Implementation notes:** evaluate grounding, recall, persona consistency,
@@ -499,7 +508,7 @@ deterministic harnesses.
     context.
   - **Verification:** client/API tests.
 
-- [ ] **Persistence and restore audit**
+- [x] **Persistence and restore audit**
   - **Goal:** experience features survive autosave/reload without state drift.
   - **Depends on:** memory, history, scenario scripts, world persistence.
   - **Implementation notes:** document what is ECS persisted, what is script state, and
@@ -508,7 +517,7 @@ deterministic harnesses.
     obligations intact.
   - **Verification:** persistence tests and scenario replay tests.
 
-- [ ] **Public checklist maintenance**
+- [x] **Public checklist maintenance**
   - **Goal:** keep this checklist aligned with implementation status.
   - **Depends on:** all experience milestones.
   - **Implementation notes:** update this file when a milestone ships or when architecture

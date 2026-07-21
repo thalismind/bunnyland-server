@@ -86,6 +86,11 @@ World policy can disable or restrict categories such as romance, pregnancy, PvP,
 pickpocketing. If a command says a mechanic is disabled or someone has not consented, use
 ordinary speech or another non-restricted action instead.
 
+Player clients show the union of plugin-declared boundary tags and administrator-added
+world-policy tags before joining. Accepting that content warning acknowledges the listed
+possibilities; it does not grant consent, enable a disabled mechanic, or override any
+character boundary.
+
 Plugins may add validated, namespaced boundary scopes such as `adult:violence` or
 `adult:bondage`. `adult` is an umbrella denial, not blanket permission: disabling or denying
 `adult` blocks every `adult:*` scope, while enabling or allowing `adult` grants none of its

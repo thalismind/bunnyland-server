@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass, replace
 from types import ModuleType
-from typing import Any
 
 import pytest
 from relics import EntityId
@@ -28,7 +27,7 @@ from bunnyland.core import (
     execute_mutation_plan,
     spawn_entity,
 )
-from bunnyland.plugins import PluginRegistry, bunnyland_plugins
+from bunnyland.plugins import Plugin, PluginRegistry, bunnyland_plugins
 
 
 @dataclass
@@ -119,7 +118,7 @@ def scenario() -> Scenario:
     return build_scenario()
 
 
-def install_plugin_module(monkeypatch, name: str, plugins: list[Any]) -> None:
+def install_plugin_module(monkeypatch, name: str, plugins: list[Plugin]) -> None:
     module = ModuleType(name)
     module.bunnyland_plugins = lambda: plugins
     monkeypatch.setitem(sys.modules, name, module)

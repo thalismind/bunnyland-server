@@ -167,6 +167,8 @@ metric/span reference and the Tempo setup.
 
 - **[The Vision](docs/developer/vision.md)** — what bunnyland is trying to be, and what belongs in
   core, plugins, clients, scripts, and content libraries.
+- **[Bunnyland 1.x compatibility](docs/developer/compatibility.md)** — supported Python,
+  transport, MCP, public import, and persisted-world guarantees.
 - **[World Contract v1](docs/developer/world-contract-v1.md)** — normative tick, mutation,
   persistence, perspective, and streaming boundaries for the controlled preview.
 - **[Authorization surfaces](docs/developer/authorization-surfaces.md)** — shared scope,

@@ -20,10 +20,12 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer, Header, Input, RichLog
 
+from ..content_warnings import visible_content_flags
 from ..core.claim_timeout import normalize_claim_timeout
 from ..terminal_config import (
     TerminalConfigError,
     load_terminal_config,
+    resolve_ignored_content_flags,
     resolve_terminal_chat_config,
     save_terminal_config,
 )
@@ -33,7 +35,12 @@ from ..tui.generator_selector import (
     DEFAULT_LOCAL_SEED,
     WorldGeneratorSelector,
 )
-from ..tui.screens import CharacterSheetScreen, ConversationScreen, TerminalSetupScreen
+from ..tui.screens import (
+    CharacterSheetScreen,
+    ContentWarningScreen,
+    ConversationScreen,
+    TerminalSetupScreen,
+)
 from ..tui.splash import IntroSplash
 from .client import (
     BunnylandRepl,
@@ -112,11 +119,17 @@ class BunnylandReplApp(App[None]):
     BINDINGS = [Binding("ctrl+c", "quit", "Quit")]
 
     def __init__(
-        self, backend: Backend, *, show_intro: bool = False, show_icons: bool = True
+        self,
+        backend: Backend,
+        *,
+        ignored_content_flags: tuple[str, ...] = (),
+        show_intro: bool = False,
+        show_icons: bool = True,
     ) -> None:
         super().__init__()
         self.repl = BunnylandRepl(backend, show_icons=show_icons)
         self.show_intro = show_intro
+        self.ignored_content_flags = ignored_content_flags
         self.log_view = RichLog(id="log", wrap=True)
         self.command = ReplInput(
             id="cmd", placeholder="type a command — 'help' for a list, 'quit' to exit"
@@ -193,6 +206,21 @@ class BunnylandReplApp(App[None]):
 
     async def _start_backend(self) -> None:
         await self.repl.backend.start()
+        flags = visible_content_flags(
+            await self.repl.backend.fetch_content_flags(), self.ignored_content_flags
+        )
+        if flags:
+            self.push_screen(ContentWarningScreen(flags), callback=self._content_warning_decided)
+            return
+        await self._finish_backend_start()
+
+    def _content_warning_decided(self, accepted: bool) -> None:
+        if not accepted:
+            self.exit()
+            return
+        self.run_worker(self._finish_backend_start(), exclusive=True)
+
+    async def _finish_backend_start(self) -> None:
         self._load_history()
         await self._safe_refresh(prime=True)  # seed event history without dumping the backlog
         self.write_log(
@@ -375,6 +403,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ollama-host", default=None)
     parser.add_argument("--openrouter-server-url", default=None)
     parser.add_argument("--no-chat", action="store_true")
+    parser.add_argument(
+        "--ignore-content-flag",
+        action="append",
+        default=[],
+        help="suppress a content flag; repeat or provide a comma-separated list",
+    )
     args = parser.parse_args(argv)
 
     if args.list_generators:
@@ -397,9 +431,13 @@ def main(argv: list[str] | None = None) -> int:
             password = getpass("Bunnyland password: ")
 
     try:
-        saved_chat = None if args.server else load_terminal_config()
+        saved_config = load_terminal_config()
     except TerminalConfigError as exc:
         raise SystemExit(str(exc)) from exc
+    saved_chat = None if args.server else saved_config
+    ignored_content_flags = resolve_ignored_content_flags(
+        saved_config, args.ignore_content_flag
+    )
     explicit_chat = any(
         (
             args.chat_provider,
@@ -445,6 +483,7 @@ def main(argv: list[str] | None = None) -> int:
         else LocalBackend(**local_kwargs)
     )
     app = BunnylandReplApp(backend)
+    app.ignored_content_flags = ignored_content_flags
     app.show_generator_selector = show_generator_selector
     app.needs_chat_setup = not args.server and saved_chat is None and not explicit_chat
     if hasattr(app, "repl"):

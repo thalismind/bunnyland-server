@@ -250,6 +250,21 @@ An async interface must be async in every implementation and at every call site.
 - Update implementations, direct callers, test doubles, and tests together when migrating
   an interface.
 
+## 11. Do Not Use `Any`
+
+Do not introduce Python `typing.Any` or TypeScript `any`. If you encounter either while
+working in a file, replace it with a type that states the actual contract. If we cannot
+explain a value to the compiler, the code will not behave reliably enough for production.
+
+- Prefer named models, protocols, bounded generics, and discriminated unions.
+- At JSON boundaries, use an explicit recursive JSON value type and validate into a named
+  DTO before using the data.
+- In TypeScript, accept `unknown` at genuinely untrusted boundaries and narrow it before
+  access.
+- Do not hide an `Any`/`any` hole with casts, blanket ignores, or permissive linter rules.
+- Use concrete `dict` types when callers rely on a mutable dictionary. `Mapping` includes
+  read-only and custom implementations and is not a drop-in synonym for `dict`.
+
 These guidelines are working if diffs stay focused, implementation follows existing
 mechanics patterns, and test failures point to real behavior rather than avoidable
 fixture or command mistakes.

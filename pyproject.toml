@@ -1,15 +1,46 @@
 [project]
 name = "bunnyland"
-version = "0.2.1"
+version = "1.0.0rc1"
 description = "An asynchronous social sandbox where humans and LLM agents share persistent characters in an emergent ECS simulation."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.15"
+license = "AGPL-3.0-or-later"
+authors = [
+    { name = "Thalis Mind" },
+]
+keywords = [
+    "agent",
+    "ecs",
+    "game",
+    "llm",
+    "simulation",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Games/Entertainment :: Simulation",
+    "Typing :: Typed",
+]
 dependencies = [
-    "relics @ git+https://github.com/ssube/relics.git@c6d10fa6674b550022a617599f0c9c73106ebc9d",
+    "relics-ecs>=0.1.0,<0.2.0",
     "pydantic>=2.0",
     "pwdlib[argon2]>=0.3",
     "PyYAML>=6.0",
 ]
+
+[project.urls]
+Documentation = "https://github.com/thalismind/bunnyland-server#readme"
+Issues = "https://github.com/thalismind/bunnyland-server/issues"
+Repository = "https://github.com/thalismind/bunnyland-server"
 
 [project.optional-dependencies]
 chroma = ["chromadb>=0.5"]
@@ -70,9 +101,6 @@ dev = [
     "Pillow>=10",
 ]
 
-[tool.uv.sources]
-relics = { git = "https://github.com/ssube/relics.git" }
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -86,6 +114,11 @@ allow-direct-references = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    "error",
+    "ignore:'audioop' is deprecated and slated for removal in Python 3.13:DeprecationWarning:discord.player",
+    "ignore:Unclosed <MemoryObjectReceiveStream at .*:ResourceWarning:anyio.streams.memory",
+]
 markers = [
     "live_llm: optional live LLM integration tests; skipped unless BUNNYLAND_LIVE_LLM=1 and provider credentials are set",
     "live_imagegen_comfy: optional live ComfyUI tests; requires BUNNYLAND_LIVE_IMAGEGEN_COMFY=1 and COMFYUI_SERVER_URL",

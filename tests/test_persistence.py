@@ -22,8 +22,10 @@ from bunnyland.core import (
     RegionComponent,
     RoomComponent,
     WorldActor,
+    WorldInfoComponent,
     build_submitted_command,
     container_of,
+    replace_component,
     spawn_entity,
 )
 from bunnyland.core.components import IdentityComponent, MemoryProfileComponent
@@ -1607,6 +1609,14 @@ def test_format_for_path_respects_explicit_format_and_suffixes(tmp_path):
 
 async def test_save_reload_preserves_world(tmp_path):
     actor, result = await _build_and_play()
+    replace_component(
+        actor._clock_entity,
+        WorldInfoComponent(
+            title="Clover City",
+            description="Mind the foxes after dark.",
+            content_flags=frozenset({"adult:violence"}),
+        ),
+    )
     hazel = result.characters["hazel"]
     before_room = container_of(actor.world.get_entity(hazel))
     before_inventory = _inventory(actor, hazel)
@@ -1622,6 +1632,11 @@ async def test_save_reload_preserves_world(tmp_path):
     assert _inventory(actor2, hazel) == before_inventory
     assert "a scrap of paper" in before_inventory
     assert actor2.epoch == before_epoch
+    assert actor2.world_info == WorldInfoComponent(
+        title="Clover City",
+        description="Mind the foxes after dark.",
+        content_flags=frozenset({"adult:violence"}),
+    )
     hunger = actor2.world.get_entity(hazel).get_component(HungerComponent)
     assert hunger.meter.value == before_hunger  # Meter is a nested value object
 

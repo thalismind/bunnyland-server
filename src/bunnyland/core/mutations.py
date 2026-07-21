@@ -8,7 +8,12 @@ from typing import Any, Protocol
 
 from relics import Component, Edge, Entity, EntityId, World
 
-from .components import ActionPointsComponent, FocusPointsComponent, WorldClockComponent
+from .components import (
+    ActionPointsComponent,
+    FocusPointsComponent,
+    WorldClockComponent,
+    WorldInfoComponent,
+)
 from .ecs import parse_entity_id, replace_component, spawn_entity
 from .edges import Contains, ControlledBy
 
@@ -431,6 +436,11 @@ def validate_core_invariants(
     clocks = list(world.query().with_all([WorldClockComponent]).execute_entities())
     if len(clocks) != 1:
         raise MutationError(f"expected exactly one world clock, found {len(clocks)}")
+    infos = list(world.query().with_all([WorldInfoComponent]).execute_entities())
+    if len(infos) != 1:
+        raise MutationError(f"expected exactly one world info component, found {len(infos)}")
+    if infos[0].id != clocks[0].id:
+        raise MutationError("world info component must be stored on the world clock entity")
     if entity_ids is None:
         entities = world.query().execute_entities()
         scope = None

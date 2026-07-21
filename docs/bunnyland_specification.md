@@ -960,6 +960,13 @@ class TagComponent(Component):
 
 ```python
 @dataclass(frozen=True)
+class WorldInfoComponent(Component):
+    title: str = ""
+    description: str = ""
+    content_flags: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class WorldClockComponent(Component):
     game_time_seconds: int = 0
     tick_index: int = 0
@@ -978,6 +985,11 @@ class WorldSeedComponent(Component):
     seed: str
     rng_counter: int = 0
 ```
+
+`WorldInfoComponent` is singleton state stored on the same world entity as
+`WorldClockComponent`. Its description is the player-facing world summary or message of
+the day. Administrators add world-specific content warnings to `content_flags`; clients
+combine those with the flags declared by enabled plugins before a player joins.
 
 ### 11.3 Rooms and zones
 

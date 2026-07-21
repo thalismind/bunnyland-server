@@ -25,6 +25,7 @@ from bunnyland.core import (
     SetComponentFactory,
     SleepingComponent,
     WorldClockComponent,
+    WorldInfoComponent,
     execute_mutation_plan,
     replace_single_edge_operations,
     spawn_entity,
@@ -34,7 +35,7 @@ from bunnyland.core.handlers.base import planned
 
 
 @dataclass(frozen=True)
-class TestLink(Edge):
+class SampleLink(Edge):
     value: int = 0
 
 
@@ -44,21 +45,21 @@ def test_replace_single_edge_operations_adds_replaces_and_removes(scenario):
 
     execute_mutation_plan(
         world,
-        MutationPlan(replace_single_edge_operations(source, scenario.room_a, TestLink(value=1))),
+        MutationPlan(replace_single_edge_operations(source, scenario.room_a, SampleLink(value=1))),
     )
-    assert source.get_relationships(TestLink) == [(TestLink(value=1), scenario.room_a)]
+    assert source.get_relationships(SampleLink) == [(SampleLink(value=1), scenario.room_a)]
 
     execute_mutation_plan(
         world,
-        MutationPlan(replace_single_edge_operations(source, scenario.room_b, TestLink(value=2))),
+        MutationPlan(replace_single_edge_operations(source, scenario.room_b, SampleLink(value=2))),
     )
-    assert source.get_relationships(TestLink) == [(TestLink(value=2), scenario.room_b)]
+    assert source.get_relationships(SampleLink) == [(SampleLink(value=2), scenario.room_b)]
 
     execute_mutation_plan(
         world,
-        MutationPlan(replace_single_edge_operations(source, None, TestLink())),
+        MutationPlan(replace_single_edge_operations(source, None, SampleLink())),
     )
-    assert source.get_relationships(TestLink) == []
+    assert source.get_relationships(SampleLink) == []
 
 
 def test_plan_preflights_every_operation_before_mutating(scenario):
@@ -203,6 +204,22 @@ def test_core_invariants_reject_clock_controller_and_meter_violations(scenario):
     world.remove(clock.id)
     with pytest.raises(MutationError, match="exactly one world clock"):
         validate_core_invariants(world)
+
+    missing_info_scenario = build_scenario()
+    missing_info_scenario.actor._clock_entity.remove_component(WorldInfoComponent)
+    with pytest.raises(MutationError, match="exactly one world info"):
+        validate_core_invariants(missing_info_scenario.actor.world)
+
+    misplaced_info_scenario = build_scenario()
+    misplaced_info_scenario.actor._clock_entity.remove_component(WorldInfoComponent)
+    spawn_entity(misplaced_info_scenario.actor.world, [WorldInfoComponent()])
+    with pytest.raises(MutationError, match="stored on the world clock"):
+        validate_core_invariants(misplaced_info_scenario.actor.world)
+
+    duplicate_info_scenario = build_scenario()
+    spawn_entity(duplicate_info_scenario.actor.world, [WorldInfoComponent()])
+    with pytest.raises(MutationError, match="exactly one world info"):
+        validate_core_invariants(duplicate_info_scenario.actor.world)
 
     # Each violation uses a fresh scenario because the invariant checker is fail-fast.
     controller_scenario = build_scenario()

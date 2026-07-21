@@ -27,7 +27,9 @@ uv run --all-extras bunnyland tui --list-generators
 ```
 
 Useful local options include `--seed`, `--generator`, `--claim-fallback`, and
-`--claim-timeout-minutes`.
+`--claim-timeout-minutes`. Before loading a local plugin world or joining a flagged remote
+world, the TUI requires you to accept its content warning. See
+[Content warnings](README.md#content-warnings) for saved and command-line ignore options.
 
 On the first local launch, the TUI asks whether character chat should use local Ollama,
 Ollama Cloud, OpenRouter, or remain disabled. The choice and model are saved in

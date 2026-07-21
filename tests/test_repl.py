@@ -1437,6 +1437,9 @@ class SelectorReplLocalBackend(LocalBackend):
     async def start(self) -> None:
         self.started = True
 
+    async def fetch_content_flags(self):
+        return ()
+
 
 async def test_repl_mount_uses_local_generator_selection(monkeypatch):
     backend = SelectorReplLocalBackend()

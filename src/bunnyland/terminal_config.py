@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -12,7 +12,9 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .cli_defaults import OLLAMA_CLOUD_HOST
+from .content_warnings import normalize_content_flags
 from .llm_agents import DEFAULT_MODEL
+from .plugins.policy import BoundaryScope
 
 TERMINAL_CONFIG_VERSION = 1
 LOCAL_OLLAMA_HOST = "http://127.0.0.1:11434"
@@ -36,6 +38,7 @@ class TerminalConfig(BaseModel):
     chat_model: str = Field(default=DEFAULT_MODEL, min_length=1)
     ollama_host: str | None = None
     openrouter_server_url: str | None = None
+    ignored_content_flags: tuple[BoundaryScope, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -163,6 +166,18 @@ def persisted_terminal_config(settings: ResolvedTerminalChatConfig) -> TerminalC
     )
 
 
+def resolve_ignored_content_flags(
+    saved: TerminalConfig | None,
+    cli_values: Sequence[str] = (),
+) -> tuple[str, ...]:
+    """Merge saved flags with repeatable or comma-separated CLI values."""
+
+    configured: list[object] = list(saved.ignored_content_flags if saved else ())
+    for value in cli_values:
+        configured.extend(part.strip() for part in value.split(",") if part.strip())
+    return normalize_content_flags(configured)
+
+
 def build_terminal_chat_agent(settings: ResolvedTerminalChatConfig):
     """Create the provider used only by direct terminal character chat."""
 
@@ -224,6 +239,7 @@ __all__ = [
     "load_terminal_config",
     "persisted_terminal_config",
     "resolve_terminal_chat_config",
+    "resolve_ignored_content_flags",
     "save_terminal_config",
     "terminal_config_path",
 ]

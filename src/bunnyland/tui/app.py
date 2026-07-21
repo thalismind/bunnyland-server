@@ -19,6 +19,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
+from ..content_warnings import visible_content_flags
 from ..core.actions import action_icon_for
 from ..core.claim_timeout import normalize_claim_timeout
 from ..imagegen.affordance import DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
@@ -27,6 +28,7 @@ from ..server.models import CharacterSummaryView
 from ..terminal_config import (
     TerminalConfigError,
     load_terminal_config,
+    resolve_ignored_content_flags,
     resolve_terminal_chat_config,
     save_terminal_config,
 )
@@ -38,6 +40,7 @@ from .model import Target, World, entity_icon, entity_name, fmt_points, has
 from .screens import (
     CharacterPickerScreen,
     CharacterSheetScreen,
+    ContentWarningScreen,
     ConversationScreen,
     TerminalSetupScreen,
 )
@@ -335,12 +338,18 @@ class BunnylandTUI(App[None]):
     ]
 
     def __init__(
-        self, backend: Backend, *, show_intro: bool = False, show_icons: bool = True
+        self,
+        backend: Backend,
+        *,
+        ignored_content_flags: tuple[str, ...] = (),
+        show_intro: bool = False,
+        show_icons: bool = True,
     ) -> None:
         super().__init__()
         self.backend = backend
         self.show_intro = show_intro
         self.show_icons = show_icons
+        self.ignored_content_flags = ignored_content_flags
         self.world = World()
         self.player_id = ""
         self.control: ControlClaim | None = None
@@ -469,6 +478,21 @@ class BunnylandTUI(App[None]):
 
     async def _start_backend(self) -> None:
         await self.backend.start()
+        flags = visible_content_flags(
+            await self.backend.fetch_content_flags(), self.ignored_content_flags
+        )
+        if flags:
+            self.push_screen(ContentWarningScreen(flags), callback=self._content_warning_decided)
+            return
+        await self._finish_backend_start()
+
+    def _content_warning_decided(self, accepted: bool) -> None:
+        if not accepted:
+            self.exit()
+            return
+        self.run_worker(self._finish_backend_start(), exclusive=True)
+
+    async def _finish_backend_start(self) -> None:
         await self.refresh_world()
         self.set_interval(REFRESH_SECONDS, self._poll_refresh_world)
 
@@ -1302,6 +1326,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ollama-host", default=None)
     parser.add_argument("--openrouter-server-url", default=None)
     parser.add_argument("--no-chat", action="store_true")
+    parser.add_argument(
+        "--ignore-content-flag",
+        action="append",
+        default=[],
+        help="suppress a content flag; repeat or provide a comma-separated list",
+    )
     args = parser.parse_args(argv)
     if args.list_generators:
         for line in format_generator_lines(available_generators()):
@@ -1323,9 +1353,13 @@ def main(argv: list[str] | None = None) -> int:
             password = getpass("Bunnyland password: ")
 
     try:
-        saved_chat = None if args.server else load_terminal_config()
+        saved_config = load_terminal_config()
     except TerminalConfigError as exc:
         raise SystemExit(str(exc)) from exc
+    saved_chat = None if args.server else saved_config
+    ignored_content_flags = resolve_ignored_content_flags(
+        saved_config, args.ignore_content_flag
+    )
     explicit_chat = any(
         (
             args.chat_provider,
@@ -1371,6 +1405,7 @@ def main(argv: list[str] | None = None) -> int:
         else LocalBackend(**local_kwargs)
     )
     app = BunnylandTUI(backend)
+    app.ignored_content_flags = ignored_content_flags
     app.show_generator_selector = show_generator_selector
     app.needs_chat_setup = not args.server and saved_chat is None and not explicit_chat
     app.show_icons = not args.no_icons

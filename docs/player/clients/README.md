@@ -32,6 +32,43 @@ Action menus are built from the server's installed action registry and current t
 groups. If that metadata is temporarily unavailable, clients show an empty or disabled
 action state rather than an outdated built-in verb list.
 
+## Content warnings
+
+The Terminal TUI and REPL, Web TUI and REPL, Toon client, and 3D player show a content
+warning before joining a flagged world. The warning combines the tags declared by every
+installed world plugin with tags added to the world's policy by its administrators. The
+client does not claim a character until you choose **Accept and Join**.
+
+The same public world resource includes the world's title and descriptive welcome or
+message-of-the-day text. Administrators store those values in the world's singleton
+`WorldInfoComponent`, along with any additional `content_flags`, so they travel with saved
+and transferred worlds.
+
+Browser clients can remember the displayed flags after acceptance. That preference is
+shared by Bunnyland clients in the same browser profile. If the world's flag set changes,
+the client checks the new set before the next claim and shows any flags that are not
+ignored.
+
+Terminal users can ignore known flags in
+`$XDG_CONFIG_HOME/bunnyland/terminal.yml` (normally
+`~/.config/bunnyland/terminal.yml`):
+
+```yaml
+ignored_content_flags:
+  - adult:violence
+  - pvp
+```
+
+For a one-off launch, repeat `--ignore-content-flag` or pass a comma-separated list:
+
+```bash
+uv run --all-extras bunnyland tui --ignore-content-flag adult:violence --ignore-content-flag pvp
+uv run --all-extras bunnyland repl --ignore-content-flag adult:violence,pvp
+```
+
+Saved and command-line ignores are combined. Ignoring a flag suppresses its warning; it
+does not enable a mechanic or change the world's boundary policy.
+
 ## Quick comparison
 
 | Client | Played in | Best for | How you act |

@@ -81,6 +81,7 @@ from .components import (
     WearableComponent,
     WeightComponent,
     WorldClockComponent,
+    WorldInfoComponent,
     WritableComponent,
 )
 from .contracts import ActorContext, EntityLike, QueryLike, WorldLike
@@ -403,6 +404,7 @@ __all__ = [
     "WeightComponent",
     "WorldActor",
     "WorldClockComponent",
+    "WorldInfoComponent",
     "ValidTargetsOutput",
     "WhatChangedSinceOutput",
     "WhyNotOutput",

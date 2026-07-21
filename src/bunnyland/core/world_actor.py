@@ -53,6 +53,7 @@ from .components import (
     SleepingComponent,
     SuspendedComponent,
     WorldClockComponent,
+    WorldInfoComponent,
 )
 from .consequences import (
     AttentionConsequence,
@@ -191,8 +192,11 @@ class WorldActor:
         self.world.register_system(ActionRegenSystem())
         self.world.register_system(FocusRegenSystem())
 
-        # World singleton holds the authoritative clock.
-        self._clock_entity = spawn_entity(self.world, [WorldClockComponent()])
+        # One world-state entity owns singleton metadata and the authoritative clock.
+        self._clock_entity = spawn_entity(
+            self.world,
+            [WorldInfoComponent(), WorldClockComponent()],
+        )
 
     # -- registration -------------------------------------------------------------------
 
@@ -256,6 +260,12 @@ class WorldActor:
     def epoch(self) -> int:
         return self._clock_entity.get_component(WorldClockComponent).game_time_seconds
 
+    @property
+    def world_info(self) -> WorldInfoComponent:
+        """Return the singleton player-facing metadata for this world."""
+
+        return self._clock_entity.get_component(WorldInfoComponent)
+
     def bind_clock(self) -> None:
         """Re-point ``_clock_entity`` at the world's clock entity.
 
@@ -266,6 +276,13 @@ class WorldActor:
         if len(clocks) != 1:
             raise RuntimeError(f"expected exactly one world clock, found {len(clocks)}")
         self._clock_entity = clocks[0]
+        infos = list(self.world.query().with_all([WorldInfoComponent]).execute_entities())
+        if not infos:
+            self._clock_entity.add_component(WorldInfoComponent())
+        elif len(infos) != 1:
+            raise RuntimeError(f"expected exactly one world info component, found {len(infos)}")
+        elif infos[0].id != self._clock_entity.id:
+            raise RuntimeError("world info component must be stored on the world clock entity")
 
     # -- submission ---------------------------------------------------------------------
 

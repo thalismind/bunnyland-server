@@ -1,0 +1,3481 @@
+{
+  "$defs": {
+    "AddComponentPatchRequest": {
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/ComponentPatchSpec"
+        },
+        "entity_id": {
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "op": {
+          "const": "add_component",
+          "title": "Op",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "entity_id",
+        "component"
+      ],
+      "title": "AddComponentPatchRequest",
+      "type": "object"
+    },
+    "AddEntityPatchRequest": {
+      "properties": {
+        "client_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Id"
+        },
+        "components": {
+          "items": {
+            "$ref": "#/$defs/ComponentPatchSpec"
+          },
+          "title": "Components",
+          "type": "array"
+        },
+        "op": {
+          "const": "add_entity",
+          "title": "Op",
+          "type": "string"
+        },
+        "prefab": {
+          "default": "entity",
+          "title": "Prefab",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "title": "AddEntityPatchRequest",
+      "type": "object"
+    },
+    "AuthMeResponse": {
+      "properties": {
+        "expires_at": {
+          "title": "Expires At",
+          "type": "integer"
+        },
+        "rotate_after": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rotate After"
+        },
+        "rotation_eligible": {
+          "title": "Rotation Eligible",
+          "type": "boolean"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scopes",
+          "type": "array"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "scopes",
+        "expires_at",
+        "rotate_after",
+        "rotation_eligible"
+      ],
+      "title": "AuthMeResponse",
+      "type": "object"
+    },
+    "CatalogResource": {
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/FeatureStatusResponse"
+        },
+        "components": {
+          "additionalProperties": {
+            "$ref": "#/$defs/EcsTypeSchema"
+          },
+          "title": "Components",
+          "type": "object"
+        },
+        "content": {
+          "$ref": "#/$defs/ContentLibrary"
+        },
+        "edges": {
+          "additionalProperties": {
+            "$ref": "#/$defs/EcsTypeSchema"
+          },
+          "title": "Edges",
+          "type": "object"
+        },
+        "queries": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Queries",
+          "type": "array"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        },
+        "world_id": {
+          "title": "World Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "world_id",
+        "world_epoch",
+        "content"
+      ],
+      "title": "CatalogResource",
+      "type": "object"
+    },
+    "CharacterChatActionResult": {
+      "properties": {
+        "command_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Command Id"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "result_events": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Result Events",
+          "type": "array"
+        },
+        "status": {
+          "default": "none",
+          "enum": [
+            "none",
+            "queued",
+            "executed",
+            "rejected",
+            "unresolved",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Tool"
+        }
+      },
+      "title": "CharacterChatActionResult",
+      "type": "object"
+    },
+    "CharacterChatHistoryMessage": {
+      "properties": {
+        "role": {
+          "enum": [
+            "user",
+            "character"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
+      "title": "CharacterChatHistoryMessage",
+      "type": "object"
+    },
+    "CharacterChatReplyRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "reply": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Reply",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reply"
+      ],
+      "title": "CharacterChatReplyRequest",
+      "type": "object"
+    },
+    "CharacterCollection": {
+      "properties": {
+        "characters": {
+          "items": {
+            "$ref": "#/$defs/CharacterResource"
+          },
+          "title": "Characters",
+          "type": "array"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        },
+        "world_id": {
+          "title": "World Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "world_id",
+        "world_epoch"
+      ],
+      "title": "CharacterCollection",
+      "type": "object"
+    },
+    "CharacterGenerationJobResult": {
+      "additionalProperties": false,
+      "properties": {
+        "generated_name": {
+          "title": "Generated Name",
+          "type": "string"
+        },
+        "patch": {
+          "$ref": "#/$defs/WorldPatchRequest"
+        },
+        "room_entity_id": {
+          "title": "Room Entity Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "room_entity_id",
+        "generated_name",
+        "patch"
+      ],
+      "title": "CharacterGenerationJobResult",
+      "type": "object"
+    },
+    "CharacterProfileResource": {
+      "properties": {
+        "character_id": {
+          "title": "Character Id",
+          "type": "string"
+        },
+        "character_name": {
+          "title": "Character Name",
+          "type": "string"
+        },
+        "controller": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClientControllerView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "points": {
+          "$ref": "#/$defs/ClientPointsView"
+        },
+        "portrait": {
+          "$ref": "#/$defs/ClientImageView"
+        },
+        "projection_version": {
+          "default": 1,
+          "title": "Projection Version",
+          "type": "integer"
+        },
+        "room": {
+          "$ref": "#/$defs/ClientRoomView"
+        },
+        "sheet": {
+          "$ref": "#/$defs/ClientCharacterSheetView"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        },
+        "world_id": {
+          "title": "World Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "world_id",
+        "world_epoch",
+        "character_id",
+        "character_name"
+      ],
+      "title": "CharacterProfileResource",
+      "type": "object"
+    },
+    "CharacterResource": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "default": "character",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "suspended": {
+          "default": false,
+          "title": "Suspended",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "CharacterResource",
+      "type": "object"
+    },
+    "ChatJobRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "history": {
+          "items": {
+            "$ref": "#/$defs/CharacterChatHistoryMessage"
+          },
+          "maxItems": 24,
+          "title": "History",
+          "type": "array"
+        },
+        "history_summary": {
+          "default": "",
+          "maxLength": 12000,
+          "title": "History Summary",
+          "type": "string"
+        },
+        "kind": {
+          "const": "chat",
+          "title": "Kind",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ],
+      "title": "ChatJobRequest",
+      "type": "object"
+    },
+    "ChatJobResult": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/CharacterChatActionResult"
+        },
+        "character_id": {
+          "title": "Character Id",
+          "type": "string"
+        },
+        "command_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Command Id"
+        },
+        "complete": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Complete"
+        },
+        "reply": {
+          "default": "",
+          "title": "Reply",
+          "type": "string"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "world_epoch",
+        "character_id"
+      ],
+      "title": "ChatJobResult",
+      "type": "object"
+    },
+    "CheckpointRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "default": "requested through v1",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "title": "CheckpointRequest",
+      "type": "object"
+    },
+    "ClaimCharacterResource": {
+      "properties": {
+        "can_perceive": {
+          "title": "Can Perceive",
+          "type": "boolean"
+        },
+        "character_id": {
+          "title": "Character Id",
+          "type": "string"
+        },
+        "character_name": {
+          "title": "Character Name",
+          "type": "string"
+        },
+        "checklist": {
+          "items": {
+            "$ref": "#/$defs/ClientChecklistItemView"
+          },
+          "title": "Checklist",
+          "type": "array"
+        },
+        "controller": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClientControllerView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "current_goal": {
+          "default": "",
+          "title": "Current Goal",
+          "type": "string"
+        },
+        "inventory": {
+          "items": {
+            "$ref": "#/$defs/ClientTargetView"
+          },
+          "title": "Inventory",
+          "type": "array"
+        },
+        "known_rooms": {
+          "items": {
+            "$ref": "#/$defs/KnownRoomView"
+          },
+          "title": "Known Rooms",
+          "type": "array"
+        },
+        "points": {
+          "$ref": "#/$defs/ClientPointsView"
+        },
+        "portrait": {
+          "$ref": "#/$defs/ClientImageView"
+        },
+        "room": {
+          "$ref": "#/$defs/ClientRoomView"
+        },
+        "suggested_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Suggested Actions",
+          "type": "array"
+        },
+        "target_groups": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/ClientTargetView"
+            },
+            "type": "array"
+          },
+          "title": "Target Groups",
+          "type": "object"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "world_epoch",
+        "character_id",
+        "character_name",
+        "can_perceive"
+      ],
+      "title": "ClaimCharacterResource",
+      "type": "object"
+    },
+    "ClaimCommandRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "command_type": {
+          "title": "Command Type",
+          "type": "string"
+        },
+        "cost": {
+          "$ref": "#/$defs/CommandCostRequest"
+        },
+        "expected_epoch": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Expected Epoch"
+        },
+        "expires_at_epoch": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Expires At Epoch"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id"
+        },
+        "lane": {
+          "$ref": "#/$defs/Lane",
+          "default": "world"
+        },
+        "on_insufficient_points": {
+          "$ref": "#/$defs/OnInsufficientPoints",
+          "default": "queue"
+        },
+        "payload": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Payload",
+          "type": "object"
+        }
+      },
+      "required": [
+        "command_type"
+      ],
+      "title": "ClaimCommandRequest",
+      "type": "object"
+    },
+    "ClaimControlUpdate": {
+      "additionalProperties": false,
+      "properties": {
+        "desired": {
+          "enum": [
+            "active",
+            "fallback"
+          ],
+          "title": "Desired",
+          "type": "string"
+        },
+        "kind": {
+          "const": "control",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "desired"
+      ],
+      "title": "ClaimControlUpdate",
+      "type": "object"
+    },
+    "ClaimCreateRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "character_id": {
+          "title": "Character Id",
+          "type": "string"
+        },
+        "fallback_controller": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Fallback Controller"
+        },
+        "fallback_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Fallback Reason"
+        },
+        "label": {
+          "default": "web",
+          "maxLength": 128,
+          "title": "Label",
+          "type": "string"
+        },
+        "llm_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Llm Model"
+        },
+        "llm_profile_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Llm Profile Name"
+        },
+        "llm_provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Llm Provider"
+        },
+        "timeout_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Timeout Seconds"
+        }
+      },
+      "required": [
+        "character_id"
+      ],
+      "title": "ClaimCreateRequest",
+      "type": "object"
+    },
+    "ClaimFallbackUpdate": {
+      "additionalProperties": false,
+      "properties": {
+        "fallback_controller": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Fallback Controller"
+        },
+        "fallback_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Fallback Reason"
+        },
+        "kind": {
+          "const": "fallback",
+          "title": "Kind",
+          "type": "string"
+        },
+        "llm_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Llm Model"
+        },
+        "llm_profile_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Llm Profile Name"
+        },
+        "llm_provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Llm Provider"
+        },
+        "timeout_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Timeout Seconds"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "ClaimFallbackUpdate",
+      "type": "object"
+    },
+    "ClaimProjectionResource": {
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/ClientActionView"
+          },
+          "title": "Actions",
+          "type": "array"
+        },
+        "character": {
+          "$ref": "#/$defs/ClaimCharacterResource"
+        },
+        "claim": {
+          "$ref": "#/$defs/ClaimResource"
+        },
+        "commands": {
+          "items": {
+            "$ref": "#/$defs/QueuedCommandView"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
+        "projection_version": {
+          "default": 1,
+          "title": "Projection Version",
+          "type": "integer"
+        },
+        "scene": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClaimSceneResource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sheet": {
+          "$ref": "#/$defs/ClientCharacterSheetView"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        },
+        "world_id": {
+          "title": "World Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "world_id",
+        "world_epoch",
+        "claim",
+        "character"
+      ],
+      "title": "ClaimProjectionResource",
+      "type": "object"
+    },
+    "ClaimQueryRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "arguments": {
+          "additionalProperties": true,
+          "title": "Arguments",
+          "type": "object"
+        },
+        "query": {
+          "title": "Query",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "ClaimQueryRequest",
+      "type": "object"
+    },
+    "ClaimResource": {
+      "properties": {
+        "character_id": {
+          "title": "Character Id",
+          "type": "string"
+        },
+        "client_id": {
+          "title": "Client Id",
+          "type": "string"
+        },
+        "control": {
+          "enum": [
+            "active",
+            "fallback"
+          ],
+          "title": "Control",
+          "type": "string"
+        },
+        "controller_generation": {
+          "title": "Controller Generation",
+          "type": "integer"
+        },
+        "controller_id": {
+          "title": "Controller Id",
+          "type": "string"
+        },
+        "fallback_controller": {
+          "title": "Fallback Controller",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        },
+        "world_id": {
+          "title": "World Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "world_id",
+        "world_epoch",
+        "id",
+        "character_id",
+        "client_id",
+        "controller_id",
+        "controller_generation",
+        "control",
+        "fallback_controller",
+        "timeout_seconds"
+      ],
+      "title": "ClaimResource",
+      "type": "object"
+    },
+    "ClaimSceneResource": {
+      "properties": {
+        "room": {
+          "$ref": "#/$defs/RoomProjectionRoomView"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "world_epoch",
+        "room"
+      ],
+      "title": "ClaimSceneResource",
+      "type": "object"
+    },
+    "ClientActionArgumentView": {
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "kind": {
+          "default": "string",
+          "title": "Kind",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "target_group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Target Group"
+        },
+        "title": {
+          "default": "",
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "title": "ClientActionArgumentView",
+      "type": "object"
+    },
+    "ClientActionView": {
+      "properties": {
+        "arguments": {
+          "items": {
+            "$ref": "#/$defs/ClientActionArgumentView"
+          },
+          "title": "Arguments",
+          "type": "array"
+        },
+        "available": {
+          "default": true,
+          "title": "Available",
+          "type": "boolean"
+        },
+        "command_type": {
+          "title": "Command Type",
+          "type": "string"
+        },
+        "cost": {
+          "$ref": "#/$defs/CommandCostRequest"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "enough_action_points": {
+          "default": true,
+          "title": "Enough Action Points",
+          "type": "boolean"
+        },
+        "enough_focus_points": {
+          "default": true,
+          "title": "Enough Focus Points",
+          "type": "boolean"
+        },
+        "has_required_target": {
+          "default": true,
+          "title": "Has Required Target",
+          "type": "boolean"
+        },
+        "icon": {
+          "default": "",
+          "title": "Icon",
+          "type": "string"
+        },
+        "lane": {
+          "$ref": "#/$defs/Lane",
+          "default": "world"
+        },
+        "meets_requirements": {
+          "default": true,
+          "title": "Meets Requirements",
+          "type": "boolean"
+        },
+        "natural_patterns": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Natural Patterns",
+          "type": "array"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "tool_name": {
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "unavailable_reason": {
+          "default": "",
+          "title": "Unavailable Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_type",
+        "tool_name",
+        "title"
+      ],
+      "title": "ClientActionView",
+      "type": "object"
+    },
+    "ClientCharacterSheetView": {
+      "properties": {
+        "affect": {
+          "items": {
+            "$ref": "#/$defs/ClientSheetMetricView"
+          },
+          "title": "Affect",
+          "type": "array"
+        },
+        "appearance": {
+          "default": "",
+          "title": "Appearance",
+          "type": "string"
+        },
+        "biography": {
+          "default": "",
+          "title": "Biography",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "injuries": {
+          "items": {
+            "$ref": "#/$defs/ClientSheetEntryView"
+          },
+          "title": "Injuries",
+          "type": "array"
+        },
+        "kind": {
+          "default": "character",
+          "title": "Kind",
+          "type": "string"
+        },
+        "needs": {
+          "items": {
+            "$ref": "#/$defs/ClientSheetMetricView"
+          },
+          "title": "Needs",
+          "type": "array"
+        },
+        "notes": {
+          "items": {
+            "$ref": "#/$defs/ClientSheetEntryView"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "profile": {
+          "items": {
+            "$ref": "#/$defs/ClientSheetEntryView"
+          },
+          "title": "Profile",
+          "type": "array"
+        },
+        "relations": {
+          "items": {
+            "$ref": "#/$defs/ClientSheetEntryView"
+          },
+          "title": "Relations",
+          "type": "array"
+        },
+        "skills": {
+          "items": {
+            "$ref": "#/$defs/ClientSheetEntryView"
+          },
+          "title": "Skills",
+          "type": "array"
+        },
+        "species": {
+          "default": "",
+          "title": "Species",
+          "type": "string"
+        },
+        "status": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Status",
+          "type": "array"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "traits": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Traits",
+          "type": "array"
+        },
+        "vitals": {
+          "items": {
+            "$ref": "#/$defs/ClientSheetMetricView"
+          },
+          "title": "Vitals",
+          "type": "array"
+        }
+      },
+      "title": "ClientCharacterSheetView",
+      "type": "object"
+    },
+    "ClientChecklistItemView": {
+      "properties": {
+        "completed": {
+          "default": false,
+          "title": "Completed",
+          "type": "boolean"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "title": "ClientChecklistItemView",
+      "type": "object"
+    },
+    "ClientControllerView": {
+      "properties": {
+        "controller_id": {
+          "title": "Controller Id",
+          "type": "string"
+        },
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "generation": {
+          "title": "Generation",
+          "type": "integer"
+        },
+        "kind": {
+          "default": "",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "controller_id",
+        "generation"
+      ],
+      "title": "ClientControllerView",
+      "type": "object"
+    },
+    "ClientEntityView": {
+      "properties": {
+        "contents": {
+          "items": {
+            "$ref": "#/$defs/ClientEntityView"
+          },
+          "title": "Contents",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "is_character": {
+          "default": false,
+          "title": "Is Character",
+          "type": "boolean"
+        },
+        "kind": {
+          "default": "other",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "ClientEntityView",
+      "type": "object"
+    },
+    "ClientExitView": {
+      "properties": {
+        "direction": {
+          "title": "Direction",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "locked": {
+          "default": false,
+          "title": "Locked",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "direction",
+        "label"
+      ],
+      "title": "ClientExitView",
+      "type": "object"
+    },
+    "ClientImageView": {
+      "properties": {
+        "alpha_url": {
+          "default": "",
+          "title": "Alpha Url",
+          "type": "string"
+        },
+        "url": {
+          "default": "",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "title": "ClientImageView",
+      "type": "object"
+    },
+    "ClientPointsView": {
+      "properties": {
+        "action": {
+          "default": 0.0,
+          "title": "Action",
+          "type": "number"
+        },
+        "action_max": {
+          "default": 0.0,
+          "title": "Action Max",
+          "type": "number"
+        },
+        "focus": {
+          "default": 0.0,
+          "title": "Focus",
+          "type": "number"
+        },
+        "focus_max": {
+          "default": 0.0,
+          "title": "Focus Max",
+          "type": "number"
+        }
+      },
+      "title": "ClientPointsView",
+      "type": "object"
+    },
+    "ClientRoomView": {
+      "properties": {
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/ClientEntityView"
+          },
+          "title": "Entities",
+          "type": "array"
+        },
+        "exits": {
+          "items": {
+            "$ref": "#/$defs/ClientExitView"
+          },
+          "title": "Exits",
+          "type": "array"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id"
+        },
+        "title": {
+          "default": "",
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "title": "ClientRoomView",
+      "type": "object"
+    },
+    "ClientSheetEntryView": {
+      "properties": {
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "value": {
+          "default": "",
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "title": "ClientSheetEntryView",
+      "type": "object"
+    },
+    "ClientSheetMetricView": {
+      "properties": {
+        "band": {
+          "default": "",
+          "title": "Band",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Maximum"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "label",
+        "value"
+      ],
+      "title": "ClientSheetMetricView",
+      "type": "object"
+    },
+    "ClientSpriteBoundsView": {
+      "properties": {
+        "height": {
+          "default": 4.0,
+          "title": "Height",
+          "type": "number"
+        },
+        "solid": {
+          "default": false,
+          "title": "Solid",
+          "type": "boolean"
+        },
+        "width": {
+          "default": 4.0,
+          "title": "Width",
+          "type": "number"
+        }
+      },
+      "title": "ClientSpriteBoundsView",
+      "type": "object"
+    },
+    "ClientSpritePositionView": {
+      "properties": {
+        "x": {
+          "default": 0.0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "default": 0.0,
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "title": "ClientSpritePositionView",
+      "type": "object"
+    },
+    "ClientSpriteView": {
+      "properties": {
+        "bounds": {
+          "$ref": "#/$defs/ClientSpriteBoundsView"
+        },
+        "emoji": {
+          "default": "",
+          "title": "Emoji",
+          "type": "string"
+        },
+        "image_data": {
+          "default": "",
+          "title": "Image Data",
+          "type": "string"
+        },
+        "image_url": {
+          "default": "",
+          "title": "Image Url",
+          "type": "string"
+        },
+        "layer": {
+          "default": 20,
+          "title": "Layer",
+          "type": "integer"
+        },
+        "position": {
+          "$ref": "#/$defs/ClientSpritePositionView"
+        },
+        "scale": {
+          "default": 1.0,
+          "title": "Scale",
+          "type": "number"
+        }
+      },
+      "title": "ClientSpriteView",
+      "type": "object"
+    },
+    "ClientTargetView": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "default": "other",
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "title": "ClientTargetView",
+      "type": "object"
+    },
+    "CommandCostRequest": {
+      "properties": {
+        "action": {
+          "default": 0,
+          "title": "Action",
+          "type": "integer"
+        },
+        "focus": {
+          "default": 0,
+          "title": "Focus",
+          "type": "integer"
+        }
+      },
+      "title": "CommandCostRequest",
+      "type": "object"
+    },
+    "CommandResource": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "queued",
+            "rejected",
+            "cancelled"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        },
+        "world_id": {
+          "title": "World Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "world_id",
+        "world_epoch",
+        "id",
+        "status"
+      ],
+      "title": "CommandResource",
+      "type": "object"
+    },
+    "ComponentPatchSpec": {
+      "properties": {
+        "fields": {
+          "additionalProperties": true,
+          "title": "Fields",
+          "type": "object"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ComponentPatchSpec",
+      "type": "object"
+    },
+    "ContentFragment": {
+      "properties": {
+        "attach_edge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FragmentEdge"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "operations": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Operations",
+          "type": "array"
+        },
+        "root_client_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Root Client Id"
+        },
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "tags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "kind"
+      ],
+      "title": "ContentFragment",
+      "type": "object"
+    },
+    "ContentLibrary": {
+      "properties": {
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "fragments": {
+          "items": {
+            "$ref": "#/$defs/ContentFragment"
+          },
+          "title": "Fragments",
+          "type": "array"
+        },
+        "library_id": {
+          "title": "Library Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "library_id",
+        "title"
+      ],
+      "title": "ContentLibrary",
+      "type": "object"
+    },
+    "ControllerAssignment": {
+      "additionalProperties": false,
+      "properties": {
+        "controller_id": {
+          "title": "Controller Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "controller_id"
+      ],
+      "title": "ControllerAssignment",
+      "type": "object"
+    },
+    "ControllerDefinitionRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "definition": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Definition",
+          "type": "object"
+        }
+      },
+      "required": [
+        "definition"
+      ],
+      "title": "ControllerDefinitionRequest",
+      "type": "object"
+    },
+    "ControllerDefinitionsResource": {
+      "properties": {
+        "action_library": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Action Library",
+          "type": "array"
+        },
+        "behaviors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Behaviors",
+          "type": "array"
+        },
+        "condition_library": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Condition Library",
+          "type": "array"
+        },
+        "scripts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scripts",
+          "type": "array"
+        },
+        "stored": {
+          "$ref": "#/$defs/StoredControllerDefinitions"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        },
+        "world_id": {
+          "title": "World Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "world_id",
+        "world_epoch"
+      ],
+      "title": "ControllerDefinitionsResource",
+      "type": "object"
+    },
+    "DeleteEntityPatchRequest": {
+      "properties": {
+        "entity_id": {
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "op": {
+          "const": "delete_entity",
+          "title": "Op",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "entity_id"
+      ],
+      "title": "DeleteEntityPatchRequest",
+      "type": "object"
+    },
+    "DomainEventResource": {
+      "additionalProperties": true,
+      "description": "Stable event header plus explicitly plugin-owned event data.",
+      "properties": {
+        "actor_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Actor Id"
+        },
+        "causation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Causation Id"
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Correlation Id"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "room_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Room Id"
+        },
+        "target_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Ids",
+          "type": "array"
+        },
+        "visibility": {
+          "$ref": "#/$defs/EventVisibility",
+          "default": "system"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_id",
+        "world_epoch",
+        "created_at"
+      ],
+      "title": "DomainEventResource",
+      "type": "object"
+    },
+    "EcsTypeSchema": {
+      "properties": {
+        "count": {
+          "default": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "json_schema": {
+          "additionalProperties": true,
+          "title": "Json Schema",
+          "type": "object"
+        },
+        "module": {
+          "title": "Module",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "qualname": {
+          "title": "Qualname",
+          "type": "string"
+        },
+        "schema_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Schema Error"
+        },
+        "used": {
+          "default": false,
+          "title": "Used",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "module",
+        "qualname",
+        "json_schema"
+      ],
+      "title": "EcsTypeSchema",
+      "type": "object"
+    },
+    "EdgePatchSpec": {
+      "properties": {
+        "fields": {
+          "additionalProperties": true,
+          "title": "Fields",
+          "type": "object"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "EdgePatchSpec",
+      "type": "object"
+    },
+    "EventCollection": {
+      "properties": {
+        "available_after_epoch": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Available After Epoch"
+        },
+        "complete": {
+          "default": true,
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "events": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "event": "#/$defs/EventFrameResource",
+                "invalidate": "#/$defs/InvalidationFrameResource"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/EventFrameResource"
+              },
+              {
+                "$ref": "#/$defs/InvalidationFrameResource"
+              }
+            ]
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        },
+        "world_id": {
+          "title": "World Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "world_id",
+        "world_epoch"
+      ],
+      "title": "EventCollection",
+      "type": "object"
+    },
+    "EventDataResource": {
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/DomainEventResource"
+        },
+        "event_key": {
+          "title": "Event Key",
+          "type": "string"
+        },
+        "event_type": {
+          "title": "Event Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_type",
+        "event_key",
+        "event"
+      ],
+      "title": "EventDataResource",
+      "type": "object"
+    },
+    "EventFrameResource": {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/EventDataResource"
+        },
+        "type": {
+          "const": "event",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "title": "EventFrameResource",
+      "type": "object"
+    },
+    "EventGenerationJobResult": {
+      "additionalProperties": false,
+      "properties": {
+        "generated_kind": {
+          "title": "Generated Kind",
+          "type": "string"
+        },
+        "generated_title": {
+          "title": "Generated Title",
+          "type": "string"
+        },
+        "patch": {
+          "$ref": "#/$defs/WorldPatchRequest"
+        },
+        "room_entity_id": {
+          "title": "Room Entity Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "room_entity_id",
+        "generated_title",
+        "generated_kind",
+        "patch"
+      ],
+      "title": "EventGenerationJobResult",
+      "type": "object"
+    },
+    "EventVisibility": {
+      "enum": [
+        "public",
+        "room",
+        "directed",
+        "private",
+        "system"
+      ],
+      "title": "EventVisibility",
+      "type": "string"
+    },
+    "FeatureStatusResponse": {
+      "properties": {
+        "character_chat": {
+          "default": false,
+          "title": "Character Chat",
+          "type": "boolean"
+        },
+        "character_sheets": {
+          "default": true,
+          "title": "Character Sheets",
+          "type": "boolean"
+        },
+        "image_generation": {
+          "default": false,
+          "title": "Image Generation",
+          "type": "boolean"
+        },
+        "mcp": {
+          "default": false,
+          "title": "Mcp",
+          "type": "boolean"
+        }
+      },
+      "title": "FeatureStatusResponse",
+      "type": "object"
+    },
+    "FragmentEdge": {
+      "properties": {
+        "fields": {
+          "additionalProperties": true,
+          "title": "Fields",
+          "type": "object"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "FragmentEdge",
+      "type": "object"
+    },
+    "GenerateCharacterRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "character",
+          "default": "character",
+          "title": "Kind",
+          "type": "string"
+        },
+        "prompt": {
+          "default": "",
+          "title": "Prompt",
+          "type": "string"
+        },
+        "room_entity_id": {
+          "title": "Room Entity Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "room_entity_id"
+      ],
+      "title": "GenerateCharacterRequest",
+      "type": "object"
+    },
+    "GenerateEventRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "event",
+          "default": "event",
+          "title": "Kind",
+          "type": "string"
+        },
+        "prompt": {
+          "default": "",
+          "title": "Prompt",
+          "type": "string"
+        },
+        "room_entity_id": {
+          "title": "Room Entity Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "room_entity_id"
+      ],
+      "title": "GenerateEventRequest",
+      "type": "object"
+    },
+    "GenerateImageRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha": {
+          "default": false,
+          "title": "Alpha",
+          "type": "boolean"
+        },
+        "entity_id": {
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "extra": {
+          "default": "",
+          "title": "Extra",
+          "type": "string"
+        },
+        "force": {
+          "default": false,
+          "title": "Force",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "image",
+          "default": "image",
+          "title": "Kind",
+          "type": "string"
+        },
+        "purpose": {
+          "default": "portrait",
+          "title": "Purpose",
+          "type": "string"
+        },
+        "template": {
+          "default": "",
+          "title": "Template",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id"
+      ],
+      "title": "GenerateImageRequest",
+      "type": "object"
+    },
+    "GenerateItemRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "container_entity_id": {
+          "title": "Container Entity Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "item",
+          "default": "item",
+          "title": "Kind",
+          "type": "string"
+        },
+        "prompt": {
+          "default": "",
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "container_entity_id"
+      ],
+      "title": "GenerateItemRequest",
+      "type": "object"
+    },
+    "GenerateRoomRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Direction"
+        },
+        "door_entity_id": {
+          "title": "Door Entity Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "room",
+          "default": "room",
+          "title": "Kind",
+          "type": "string"
+        },
+        "prompt": {
+          "default": "",
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "door_entity_id"
+      ],
+      "title": "GenerateRoomRequest",
+      "type": "object"
+    },
+    "GenerateWorldRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm_reset": {
+          "default": false,
+          "title": "Confirm Reset",
+          "type": "boolean"
+        },
+        "generator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Generator"
+        },
+        "kind": {
+          "const": "world",
+          "default": "world",
+          "title": "Kind",
+          "type": "string"
+        },
+        "max_rooms": {
+          "anyOf": [
+            {
+              "minimum": 1.0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Max Rooms"
+        },
+        "save": {
+          "default": false,
+          "title": "Save",
+          "type": "boolean"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Seed"
+        }
+      },
+      "title": "GenerateWorldRequest",
+      "type": "object"
+    },
+    "GeneratorCollection": {
+      "properties": {
+        "generators": {
+          "items": {
+            "$ref": "#/$defs/WorldGeneratorInfo"
+          },
+          "title": "Generators",
+          "type": "array"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        },
+        "world_id": {
+          "title": "World Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "world_id",
+        "world_epoch"
+      ],
+      "title": "GeneratorCollection",
+      "type": "object"
+    },
+    "HTTPValidationError": {
+      "properties": {
+        "detail": {
+          "items": {
+            "$ref": "#/$defs/ValidationError"
+          },
+          "title": "Detail",
+          "type": "array"
+        }
+      },
+      "title": "HTTPValidationError",
+      "type": "object"
+    },
+    "ImageJobResult": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha_url": {
+          "default": "",
+          "title": "Alpha Url",
+          "type": "string"
+        },
+        "entity_id": {
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        },
+        "generator": {
+          "default": "comfyui",
+          "title": "Generator",
+          "type": "string"
+        },
+        "job_id": {
+          "title": "Job Id",
+          "type": "string"
+        },
+        "purpose": {
+          "title": "Purpose",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "url": {
+          "default": "",
+          "title": "Url",
+          "type": "string"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "world_epoch",
+        "job_id",
+        "status",
+        "entity_id",
+        "purpose"
+      ],
+      "title": "ImageJobResult",
+      "type": "object"
+    },
+    "InvalidationDataResource": {
+      "properties": {
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "world_epoch"
+      ],
+      "title": "InvalidationDataResource",
+      "type": "object"
+    },
+    "InvalidationFrameResource": {
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/InvalidationDataResource"
+        },
+        "type": {
+          "const": "invalidate",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "title": "InvalidationFrameResource",
+      "type": "object"
+    },
+    "ItemGenerationJobResult": {
+      "additionalProperties": false,
+      "properties": {
+        "container_entity_id": {
+          "title": "Container Entity Id",
+          "type": "string"
+        },
+        "generated_name": {
+          "title": "Generated Name",
+          "type": "string"
+        },
+        "patch": {
+          "$ref": "#/$defs/WorldPatchRequest"
+        }
+      },
+      "required": [
+        "container_entity_id",
+        "generated_name",
+        "patch"
+      ],
+      "title": "ItemGenerationJobResult",
+      "type": "object"
+    },
+    "JobResource": {
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProblemDetails"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "chat",
+            "scene_image",
+            "world",
+            "room",
+            "character",
+            "item",
+            "event",
+            "image"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatJobResult"
+            },
+            {
+              "$ref": "#/$defs/ImageJobResult"
+            },
+            {
+              "$ref": "#/$defs/WorldGenerationJobResult"
+            },
+            {
+              "$ref": "#/$defs/RoomGenerationJobResult"
+            },
+            {
+              "$ref": "#/$defs/CharacterGenerationJobResult"
+            },
+            {
+              "$ref": "#/$defs/ItemGenerationJobResult"
+            },
+            {
+              "$ref": "#/$defs/EventGenerationJobResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Result"
+        },
+        "status": {
+          "enum": [
+            "queued",
+            "running",
+            "succeeded",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        },
+        "world_id": {
+          "title": "World Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "world_id",
+        "world_epoch",
+        "id",
+        "kind",
+        "status"
+      ],
+      "title": "JobResource",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "KnownRoomView": {
+      "properties": {
+        "first_seen_epoch": {
+          "title": "First Seen Epoch",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "last_seen_epoch": {
+          "title": "Last Seen Epoch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "first_seen_epoch",
+        "last_seen_epoch"
+      ],
+      "title": "KnownRoomView",
+      "type": "object"
+    },
+    "Lane": {
+      "description": "The two volatile command lanes per character (spec 5.3).",
+      "enum": [
+        "focus",
+        "world"
+      ],
+      "title": "Lane",
+      "type": "string"
+    },
+    "LoginRequest": {
+      "properties": {
+        "delivery": {
+          "default": "cookie",
+          "enum": [
+            "cookie",
+            "body"
+          ],
+          "title": "Delivery",
+          "type": "string"
+        },
+        "password": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Password",
+          "type": "string"
+        },
+        "username": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Username",
+          "type": "string"
+        }
+      },
+      "required": [
+        "username",
+        "password"
+      ],
+      "title": "LoginRequest",
+      "type": "object"
+    },
+    "MemoryDocumentUpdateRequest": {
+      "properties": {
+        "document": {
+          "title": "Document",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "document"
+      ],
+      "title": "MemoryDocumentUpdateRequest",
+      "type": "object"
+    },
+    "OnInsufficientPoints": {
+      "description": "What to do when a character cannot yet afford a command (spec 5.1).",
+      "enum": [
+        "deny",
+        "queue"
+      ],
+      "title": "OnInsufficientPoints",
+      "type": "string"
+    },
+    "PerspectiveQueryResult": {
+      "properties": {
+        "actor_id": {
+          "title": "Actor Id",
+          "type": "string"
+        },
+        "output_type": {
+          "title": "Output Type",
+          "type": "string"
+        },
+        "owner": {
+          "title": "Owner",
+          "type": "string"
+        },
+        "provenance": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Provenance",
+          "type": "array"
+        },
+        "query": {
+          "title": "Query",
+          "type": "string"
+        },
+        "result": {
+          "title": "Result"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "visibility": {
+          "title": "Visibility",
+          "type": "string"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "query",
+        "owner",
+        "actor_id",
+        "world_epoch",
+        "visibility",
+        "output_type",
+        "result"
+      ],
+      "title": "PerspectiveQueryResult",
+      "type": "object"
+    },
+    "ProblemDetails": {
+      "description": "RFC 9457 problem details with Bunnyland's stable machine-readable code.",
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "instance": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Instance"
+        },
+        "status": {
+          "title": "Status",
+          "type": "integer"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "type": {
+          "default": "about:blank",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "status",
+        "code"
+      ],
+      "title": "ProblemDetails",
+      "type": "object"
+    },
+    "PublicWorldResource": {
+      "properties": {
+        "content_flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Content Flags",
+          "type": "array"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        },
+        "world_id": {
+          "title": "World Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "world_id",
+        "world_epoch",
+        "title",
+        "description",
+        "content_flags"
+      ],
+      "title": "PublicWorldResource",
+      "type": "object"
+    },
+    "QueuedCommandView": {
+      "properties": {
+        "character_id": {
+          "title": "Character Id",
+          "type": "string"
+        },
+        "command_id": {
+          "title": "Command Id",
+          "type": "string"
+        },
+        "command_type": {
+          "title": "Command Type",
+          "type": "string"
+        },
+        "cost": {
+          "$ref": "#/$defs/CommandCostRequest"
+        },
+        "expires_at_epoch": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Expires At Epoch"
+        },
+        "lane": {
+          "$ref": "#/$defs/Lane",
+          "default": "world"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "submitted_at_epoch": {
+          "title": "Submitted At Epoch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command_id",
+        "character_id",
+        "command_type",
+        "submitted_at_epoch"
+      ],
+      "title": "QueuedCommandView",
+      "type": "object"
+    },
+    "RemoveComponentPatchRequest": {
+      "properties": {
+        "component_type": {
+          "title": "Component Type",
+          "type": "string"
+        },
+        "entity_id": {
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "op": {
+          "const": "remove_component",
+          "title": "Op",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "entity_id",
+        "component_type"
+      ],
+      "title": "RemoveComponentPatchRequest",
+      "type": "object"
+    },
+    "RemoveEdgePatchRequest": {
+      "properties": {
+        "edge_type": {
+          "title": "Edge Type",
+          "type": "string"
+        },
+        "op": {
+          "const": "remove_edge",
+          "title": "Op",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "target_id": {
+          "title": "Target Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "source_id",
+        "target_id",
+        "edge_type"
+      ],
+      "title": "RemoveEdgePatchRequest",
+      "type": "object"
+    },
+    "RoomGenerationJobResult": {
+      "additionalProperties": false,
+      "properties": {
+        "door_entity_id": {
+          "title": "Door Entity Id",
+          "type": "string"
+        },
+        "generated_title": {
+          "title": "Generated Title",
+          "type": "string"
+        },
+        "patch": {
+          "$ref": "#/$defs/WorldPatchRequest"
+        },
+        "source_room_id": {
+          "title": "Source Room Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_room_id",
+        "door_entity_id",
+        "generated_title",
+        "patch"
+      ],
+      "title": "RoomGenerationJobResult",
+      "type": "object"
+    },
+    "RoomProjectionEntityView": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "is_character": {
+          "default": false,
+          "title": "Is Character",
+          "type": "boolean"
+        },
+        "kind": {
+          "default": "other",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "portrait": {
+          "$ref": "#/$defs/ClientImageView"
+        },
+        "sprite": {
+          "$ref": "#/$defs/ClientSpriteView"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "RoomProjectionEntityView",
+      "type": "object"
+    },
+    "RoomProjectionRoomView": {
+      "properties": {
+        "default_start": {
+          "default": false,
+          "title": "Default Start",
+          "type": "boolean"
+        },
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/RoomProjectionEntityView"
+          },
+          "title": "Entities",
+          "type": "array"
+        },
+        "exits": {
+          "items": {
+            "$ref": "#/$defs/ClientExitView"
+          },
+          "title": "Exits",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "sprite": {
+          "$ref": "#/$defs/ClientSpriteView"
+        },
+        "title": {
+          "default": "",
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "RoomProjectionRoomView",
+      "type": "object"
+    },
+    "RuntimePatchRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "paused": {
+          "title": "Paused",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "paused"
+      ],
+      "title": "RuntimePatchRequest",
+      "type": "object"
+    },
+    "SceneImageJobRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "scene_image",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "SceneImageJobRequest",
+      "type": "object"
+    },
+    "SetComponentPatchRequest": {
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/ComponentPatchSpec"
+        },
+        "entity_id": {
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "op": {
+          "const": "set_component",
+          "title": "Op",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "entity_id",
+        "component"
+      ],
+      "title": "SetComponentPatchRequest",
+      "type": "object"
+    },
+    "SetEdgePatchRequest": {
+      "properties": {
+        "edge": {
+          "$ref": "#/$defs/EdgePatchSpec"
+        },
+        "op": {
+          "const": "set_edge",
+          "title": "Op",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "target_id": {
+          "title": "Target Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "source_id",
+        "target_id",
+        "edge"
+      ],
+      "title": "SetEdgePatchRequest",
+      "type": "object"
+    },
+    "StoredControllerDefinitions": {
+      "description": "Editor-loaded controller definitions persisted to the definition store.",
+      "properties": {
+        "behaviors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Behaviors",
+          "type": "array"
+        },
+        "scripts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scripts",
+          "type": "array"
+        }
+      },
+      "title": "StoredControllerDefinitions",
+      "type": "object"
+    },
+    "TokenResponse": {
+      "properties": {
+        "expires_at": {
+          "title": "Expires At",
+          "type": "integer"
+        },
+        "rotate_after": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rotate After"
+        },
+        "rotation_eligible": {
+          "title": "Rotation Eligible",
+          "type": "boolean"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scopes",
+          "type": "array"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        },
+        "token": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Token"
+        },
+        "token_type": {
+          "const": "bearer",
+          "default": "bearer",
+          "title": "Token Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "scopes",
+        "expires_at",
+        "rotate_after",
+        "rotation_eligible"
+      ],
+      "title": "TokenResponse",
+      "type": "object"
+    },
+    "ValidationError": {
+      "properties": {
+        "ctx": {
+          "title": "Context",
+          "type": "object"
+        },
+        "input": {
+          "title": "Input"
+        },
+        "loc": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "title": "Location",
+          "type": "array"
+        },
+        "msg": {
+          "title": "Message",
+          "type": "string"
+        },
+        "type": {
+          "title": "Error Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loc",
+        "msg",
+        "type"
+      ],
+      "title": "ValidationError",
+      "type": "object"
+    },
+    "WorldGenerationJobResult": {
+      "additionalProperties": false,
+      "properties": {
+        "characters": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Characters"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        },
+        "generator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Generator"
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Job Id"
+        },
+        "rooms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rooms"
+        },
+        "saved": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorldSaveResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Seed"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status",
+        "world_epoch"
+      ],
+      "title": "WorldGenerationJobResult",
+      "type": "object"
+    },
+    "WorldGeneratorInfo": {
+      "properties": {
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "group": {
+          "default": "custom",
+          "title": "Group",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "uses_seed": {
+          "default": true,
+          "title": "Uses Seed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "WorldGeneratorInfo",
+      "type": "object"
+    },
+    "WorldPatchRequest": {
+      "properties": {
+        "operations": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "add_component": "#/$defs/AddComponentPatchRequest",
+                "add_entity": "#/$defs/AddEntityPatchRequest",
+                "delete_entity": "#/$defs/DeleteEntityPatchRequest",
+                "remove_component": "#/$defs/RemoveComponentPatchRequest",
+                "remove_edge": "#/$defs/RemoveEdgePatchRequest",
+                "set_component": "#/$defs/SetComponentPatchRequest",
+                "set_edge": "#/$defs/SetEdgePatchRequest"
+              },
+              "propertyName": "op"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/AddEntityPatchRequest"
+              },
+              {
+                "$ref": "#/$defs/DeleteEntityPatchRequest"
+              },
+              {
+                "$ref": "#/$defs/AddComponentPatchRequest"
+              },
+              {
+                "$ref": "#/$defs/SetComponentPatchRequest"
+              },
+              {
+                "$ref": "#/$defs/RemoveComponentPatchRequest"
+              },
+              {
+                "$ref": "#/$defs/SetEdgePatchRequest"
+              },
+              {
+                "$ref": "#/$defs/RemoveEdgePatchRequest"
+              }
+            ]
+          },
+          "title": "Operations",
+          "type": "array"
+        }
+      },
+      "title": "WorldPatchRequest",
+      "type": "object"
+    },
+    "WorldSaveResponse": {
+      "properties": {
+        "ok": {
+          "default": true,
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "saved_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Saved At"
+        },
+        "saved_at_epoch": {
+          "title": "Saved At Epoch",
+          "type": "integer"
+        },
+        "world_epoch": {
+          "title": "World Epoch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "world_epoch",
+        "saved_at_epoch"
+      ],
+      "title": "WorldSaveResponse",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

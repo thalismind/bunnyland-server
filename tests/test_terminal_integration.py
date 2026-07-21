@@ -13,7 +13,12 @@ from bunnyland.tui.app import BunnylandTUI
 from bunnyland.tui.backend import Backend, LocalBackend, SubmitResult
 from bunnyland.tui.generator_selector import GeneratorSelection, WorldGeneratorSelector
 from bunnyland.tui.model import World
-from bunnyland.tui.screens import CharacterPickerScreen, ConversationScreen, TerminalSetupScreen
+from bunnyland.tui.screens import (
+    CharacterPickerScreen,
+    ContentWarningScreen,
+    ConversationScreen,
+    TerminalSetupScreen,
+)
 
 
 class EmptyBackend(Backend):
@@ -55,6 +60,57 @@ class EmptyBackend(Backend):
 
     async def character_chat_availability(self):
         return True, ""
+
+
+class FlaggedBackend(EmptyBackend):
+    async def fetch_content_flags(self):
+        return ("adult:violence", "pvp")
+
+
+async def test_terminal_player_clients_block_loading_until_content_warning_acceptance():
+    for app in (BunnylandTUI(FlaggedBackend()), BunnylandReplApp(FlaggedBackend())):
+        async with app.run_test() as pilot:
+            warning = next(
+                screen for screen in app.screen_stack if isinstance(screen, ContentWarningScreen)
+            )
+            assert warning.content_flags == ("adult:violence", "pvp")
+            await pilot.click("#content-warning-accept")
+            await pilot.pause()
+            assert not any(
+                isinstance(screen, ContentWarningScreen) for screen in app.screen_stack
+            )
+
+
+async def test_terminal_player_clients_skip_configured_ignored_content_flags():
+    for app in (
+        BunnylandTUI(
+            FlaggedBackend(), ignored_content_flags=("adult:violence", "pvp")
+        ),
+        BunnylandReplApp(
+            FlaggedBackend(), ignored_content_flags=("adult:violence", "pvp")
+        ),
+    ):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert not any(
+                isinstance(screen, ContentWarningScreen) for screen in app.screen_stack
+            )
+
+
+async def test_terminal_player_clients_leave_flagged_world_when_warning_is_declined(
+    monkeypatch,
+):
+    for app in (BunnylandTUI(FlaggedBackend()), BunnylandReplApp(FlaggedBackend())):
+        exits = []
+        monkeypatch.setattr(
+            app,
+            "exit",
+            lambda *args, exits=exits, **kwargs: exits.append(True),
+        )
+        async with app.run_test() as pilot:
+            await pilot.click("#content-warning-decline")
+            await pilot.pause()
+            assert exits == [True]
 
 
 async def test_repl_sheet_and_chat_commands_emit_typed_ui_intents():
@@ -138,6 +194,9 @@ class SetupLocalBackend(LocalBackend):
 
     async def fetch_character_list(self):
         return []
+
+    async def fetch_content_flags(self):
+        return ()
 
     async def fetch_character_projection(self, _character_id):
         return None
@@ -468,6 +527,7 @@ def test_tui_and_repl_main_report_config_errors_and_forward_chat_settings(
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
     created = []
+    created_apps = []
 
     class LocalStub:
         def __init__(self, **kwargs):
@@ -475,6 +535,7 @@ def test_tui_and_repl_main_report_config_errors_and_forward_chat_settings(
 
     class TuiAppStub:
         def __init__(self, _backend):
+            created_apps.append(self)
             self.show_generator_selector = False
             self.show_icons = True
             self.show_intro = False
@@ -484,6 +545,7 @@ def test_tui_and_repl_main_report_config_errors_and_forward_chat_settings(
 
     class ReplAppStub:
         def __init__(self, _backend):
+            created_apps.append(self)
             self.repl = SimpleNamespace(show_icons=True)
             self.show_generator_selector = False
             self.show_intro = False
@@ -505,11 +567,14 @@ def test_tui_and_repl_main_report_config_errors_and_forward_chat_settings(
                     "ollama-local",
                     "--chat-model",
                     "llama3.2",
+                    "--ignore-content-flag",
+                    "adult:violence,pvp",
                 ]
             )
             == 0
         )
         assert created[-1]["chat_config"].model == "llama3.2"
+        assert created_apps[-1].ignored_content_flags == ("adult:violence", "pvp")
 
 
 def test_tui_and_repl_main_report_missing_cloud_credentials(monkeypatch, tmp_path):
