@@ -14,7 +14,8 @@ from dataclasses import dataclass, replace
 from functools import lru_cache, wraps
 from pathlib import Path
 from threading import Lock
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal, ParamSpec, TypeVar
+from weakref import finalize
 
 import yaml
 from fastapi import Depends, HTTPException, Request
@@ -37,14 +38,18 @@ _TOKEN_RE = re.compile(r"^blt_([a-f0-9]{16})_([A-Za-z0-9_-]{32,})$")
 _bearer_scheme = HTTPBearer(auto_error=False)
 _cookie_scheme = APIKeyCookie(name=AUTH_COOKIE_NAME, auto_error=False)
 LOG = logging.getLogger(__name__)
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
-def _trace_token_mutation(operation: str, **attributes: object):
+def _trace_token_mutation(
+    operation: str, **attributes: object
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
     """Trace one token-store mutation without exposing token or subject values."""
 
-    def decorate(method: Callable[..., Any]):
+    def decorate(method: Callable[_P, _R]) -> Callable[_P, _R]:
         @wraps(method)
-        def traced(*args: Any, **kwargs: Any):
+        def traced(*args: _P.args, **kwargs: _P.kwargs) -> _R:
             with telemetry.span(
                 "auth.token.mutate", {"auth.operation": operation, **attributes}
             ) as mutation_span:
@@ -345,6 +350,7 @@ class TokenStore:
             if self.path != ":memory:":
                 Path(self.path).parent.mkdir(parents=True, exist_ok=True)
             self._connection = sqlite3.connect(self.path, check_same_thread=False)
+            self._finalizer = finalize(self, self._connection.close)
             if self.path != ":memory:":
                 Path(self.path).chmod(0o600)
             self._connection.row_factory = sqlite3.Row
@@ -385,7 +391,7 @@ class TokenStore:
 
     def close(self) -> None:
         with self._lock:
-            self._connection.close()
+            self._finalizer()
 
     @staticmethod
     def _digest(token: str) -> str:

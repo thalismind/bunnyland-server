@@ -84,7 +84,10 @@ def post_json(
         with urllib.request.urlopen(request, timeout=90) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        detail = json.loads(exc.read().decode("utf-8") or "{}").get("detail")
+        try:
+            detail = json.loads(exc.read().decode("utf-8") or "{}").get("detail")
+        finally:
+            exc.close()
         raise RuntimeError(detail or f"HTTP {exc.code}") from exc
 
 

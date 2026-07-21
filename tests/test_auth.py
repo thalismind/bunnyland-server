@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import sqlite3
 import stat
 import threading
 import time
+import weakref
+from contextlib import closing
 from pathlib import Path
 
 import httpx
@@ -65,6 +68,19 @@ def test_token_store_uses_digests_and_persists_revocation(tmp_path) -> None:
     assert reopened.revoke_token(principal.token_id, now=102)
     assert reopened.verify(token, now=102) is None
     reopened.close()
+
+
+def test_token_store_closes_connection_when_collected(tmp_path) -> None:
+    store = TokenStore(tmp_path / "tokens.sqlite3")
+    connection = store._connection
+    reference = weakref.ref(store)
+
+    del store
+    gc.collect()
+
+    assert reference() is None
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connection.execute("SELECT 1")
 
 
 def test_character_scopes_are_narrow_while_world_play_implies_both(tmp_path) -> None:
@@ -288,11 +304,12 @@ def test_expired_and_digest_mismatched_tokens_are_rejected(tmp_path) -> None:
         "short", [WORLD_PLAY_SCOPE], automatic_rotation=False, lifetime_seconds=1, now=100
     )
     assert store.verify(token, now=101) is None
-    with sqlite3.connect(path) as connection:
-        connection.execute(
-            "UPDATE auth_tokens SET digest = ? WHERE token_id = ?",
-            ("0" * 64, principal.token_id),
-        )
+    with closing(sqlite3.connect(path)) as connection:
+        with connection:
+            connection.execute(
+                "UPDATE auth_tokens SET digest = ? WHERE token_id = ?",
+                ("0" * 64, principal.token_id),
+            )
     assert store.verify(token, now=100) is None
     assert store.verify("not-a-token", now=100) is None
     store.close()
