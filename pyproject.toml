@@ -1,6 +1,6 @@
 [project]
 name = "bunnyland"
-version = "1.0.0rc1"
+version = "1.0.0rc2"
 description = "An asynchronous social sandbox where humans and LLM agents share persistent characters in an emergent ECS simulation."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -16,7 +16,7 @@ keywords = [
     "simulation",
 ]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Framework :: FastAPI",
     "Intended Audience :: Developers",
@@ -31,7 +31,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "relics-ecs>=0.1.0,<0.2.0",
+    "relics-ecs>=0.1.1,<0.2",
     "pydantic>=2.0",
     "pwdlib[argon2]>=0.3",
     "PyYAML>=6.0",

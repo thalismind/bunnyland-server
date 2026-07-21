@@ -9,7 +9,7 @@ import bunnyland
 
 
 def test_runtime_version_comes_from_distribution_metadata() -> None:
-    assert bunnyland.__version__ == version("bunnyland") == "1.0.0rc1"
+    assert bunnyland.__version__ == version("bunnyland") == "1.0.0rc2"
 
 
 def test_runtime_version_has_source_tree_fallback(monkeypatch) -> None:
@@ -30,10 +30,12 @@ def test_v1_distribution_metadata_declares_supported_runtime() -> None:
     assert package["License-Expression"] == "AGPL-3.0-or-later"
     assert set(package["Requires-Python"].split(",")) == {">=3.12", "<3.15"}
     assert {
+        "Development Status :: 4 - Beta",
         "Programming Language :: Python :: 3.12",
         "Programming Language :: Python :: 3.13",
         "Programming Language :: Python :: 3.14",
     } <= set(package.get_all("Classifier", []))
+    assert "relics-ecs<0.2,>=0.1.1" in package.get_all("Requires-Dist", [])
 
 
 def test_distribution_declares_pep561_typing_support() -> None:

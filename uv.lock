@@ -344,7 +344,7 @@ wheels = [
 
 [[package]]
 name = "bunnyland"
-version = "1.0.0rc1"
+version = "1.0.0rc2"
 source = { editable = "." }
 dependencies = [
     { name = "pwdlib", extra = ["argon2"] },
@@ -423,7 +423,7 @@ requires-dist = [
     { name = "pwdlib", extras = ["argon2"], specifier = ">=0.3" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "relics-ecs", specifier = ">=0.1.0,<0.2.0" },
+    { name = "relics-ecs", specifier = ">=0.1.1,<0.2" },
     { name = "textual", marker = "extra == 'repl'", specifier = ">=0.60" },
     { name = "textual", marker = "extra == 'tui'", specifier = ">=0.60" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.27" },

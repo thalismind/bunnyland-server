@@ -1,8 +1,10 @@
 # Bunnyland 1.x Compatibility Policy
 
-Bunnyland 1.x supports CPython 3.12, 3.13, and 3.14. The hosted API and the Python
-distribution use the same release version. Release-candidate versions may refine the v1
-surface before `1.0.0`; the guarantees below begin with the final `1.0.0` release.
+Bunnyland 1.x packages support CPython 3.12, 3.13, and 3.14. The hosted service uses the
+same Bunnyland release but deliberately runs the container's Python 3.12 baseline; package
+support does not imply that production runs all three interpreters. Release-candidate
+versions may refine the v1 surface before `1.0.0`; the guarantees below begin with the
+final `1.0.0` release.
 
 ## Stable transport surface
 

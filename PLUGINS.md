@@ -101,9 +101,6 @@ consequences, prompt fragments, worldgen hooks, and player/AI verbs). Each is ho
   a sanity dread meter and banishing rituals and wards.
 - **`bunnyland.wildsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-wildsim):
   wilderness survival — scent trails, cold/warmth exposure, campfires, and foraging.
-- **`bunnyland.hollowsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-hollowsim):
-  graphic cave-survival horror — finite portable light, deterministic mutant and cultist
-  hunters, fortified shelters, rescue escorts, artifact recovery, and night survival.
 - **`bunnyland.petsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-petsim):
   companion creatures — following, taming, bonding and loyalty, tricks, and danger reactions.
 - **`bunnyland.bardsim`** — [repo](https://github.com/thalismind/bunnyland-plugin-bardsim):
