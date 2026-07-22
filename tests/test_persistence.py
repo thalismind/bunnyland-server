@@ -43,6 +43,8 @@ from bunnyland.persistence import (
     WorldMeta,
     YAMLPersistenceDriver,
     _format_for_path,
+    _jsonable,
+    _snapshot,
     build_recovery_manifest,
     clone_world_identity,
     load_world,
@@ -207,6 +209,33 @@ def test_load_schema_v1_migrates_in_memory_and_next_save_is_v4(tmp_path):
     assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 4
 
 
+def test_schema_v4_load_drops_empty_relationship_bucket(tmp_path):
+    from bunnyland.simpacks.dinosim.mechanics import BuiltBy, EnclosureComponent
+
+    actor = WorldActor()
+    enclosure = spawn_entity(actor.world, [EnclosureComponent()])
+    builder = spawn_entity(actor.world, [])
+    enclosure.add_relationship(BuiltBy(), builder.id)
+    enclosure.remove_relationship(BuiltBy, builder.id)
+    enclosure.remove_component(EnclosureComponent)
+    assert actor.world.export_entity(enclosure.id)["relationships"]["BuiltBy"] == []
+
+    snapshot = _snapshot(actor, WorldMeta())
+    assert "BuiltBy" not in snapshot["relationships"]
+    snapshot["relationships"]["BuiltBy"] = {str(enclosure.id): []}
+    source = tmp_path / "world-v4-empty-edge.json"
+    source.write_text(json.dumps(snapshot))
+
+    loaded, meta = load_world(source, registry=PluginRegistry(bunnyland_plugins()))
+
+    assert loaded.world.has_entity(enclosure.id)
+    assert meta.schema_version == 4
+
+
+def test_jsonable_stringifies_non_json_boundary_values():
+    assert _jsonable(Path("worlds/example.json")) == "worlds/example.json"
+
+
 def test_schema_v1_regular_quest_collections_become_ordered_edges():
     snapshot = _schema_v1_generated_quest_snapshot()
     snapshot["components"].pop("GeneratedQuestComponent")
@@ -314,6 +343,8 @@ def test_schema_migration_validates_version_and_v2_sections():
         migrate_snapshot({"bunnyland": {"schema_version": 0}})
     with pytest.raises(WorldMigrationError, match="section 'entities'"):
         migrate_snapshot({"bunnyland": {"schema_version": 2}, "entities": []})
+    with pytest.raises(WorldMigrationError, match="section 'relationships'"):
+        migrate_snapshot({"bunnyland": {"schema_version": 2}, "relationships": []})
 
 
 def _lifesim_v2_snapshot(version: int = 2):
@@ -721,6 +752,16 @@ def test_schema_v4_world_database_validation_rejects_malformed_edges_and_endpoin
             "TamedBy source.*lacks TamingComponent",
         ),
         (
+            lambda value: value["relationships"]["BuiltBy"].update(
+                {"entity_2": [{"target": "entity_1", "edge": {}}]}
+            ),
+            "BuiltBy source.*lacks EnclosureComponent",
+        ),
+        (
+            lambda value: value["relationships"].update({"BuiltBy": []}),
+            "persisted type 'BuiltBy'.*mapping",
+        ),
+        (
             lambda value: value["relationships"]["TamedBy"].update({"entity_4": {}}),
             "TamedBy edges.*list",
         ),
@@ -797,6 +838,19 @@ def test_schema_v4_world_database_validation_rejects_malformed_edges_and_endpoin
     )
     for mutate, message in cases:
         check_error(mutate, message)
+
+
+def test_schema_v4_drops_empty_relationship_buckets_without_mutating_source():
+    source = migrate_snapshot(_world_database_v3_snapshot())
+    source["relationships"]["BuiltBy"]["entity_2"] = []
+
+    migrated = migrate_snapshot(source)
+
+    assert source["relationships"]["BuiltBy"]["entity_2"] == []
+    assert "entity_2" not in migrated["relationships"]["BuiltBy"]
+    assert migrated["relationships"]["BuiltBy"]["entity_3"] == [
+        {"target": "entity_1", "edge": {}}
+    ]
 
 
 def test_lifesim_v2_json_and_yaml_migrations_are_identical():

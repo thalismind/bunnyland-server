@@ -20,14 +20,15 @@ import hashlib
 import json
 import os
 import shutil
+from collections.abc import Mapping
 from dataclasses import is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue
 
 from . import telemetry
 from .core.queue import CommandQueues
@@ -40,6 +41,9 @@ from .plugins.registry import PluginRegistry
 
 SCHEMA_VERSION = CURRENT_SCHEMA_VERSION
 PersistenceFormat = Literal["json", "yaml"]
+type TupleTree = (
+    None | bool | int | float | str | dict[str, JsonValue] | tuple["TupleTree", ...]
+)
 CHECKSUM_SUFFIX = ".sha256"
 DEFAULT_BACKUP_COUNT = 3
 DEFAULT_JOURNAL_RECORDS = 5000
@@ -70,7 +74,7 @@ class WorldMeta(BaseModel):
     world_id: str = Field(default_factory=lambda: uuid4().hex)
     world_contract_version: int = 1
     memory: MemoryManifest = Field(default_factory=MemoryManifest)
-    rng_stream_state: dict[str, Any] = Field(default_factory=dict)
+    rng_stream_state: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class RecoveryManifest(BaseModel):
@@ -99,7 +103,7 @@ class OperationalJournal:
         self.path = save_path.with_name(f"{save_path.name}.journal.jsonl")
         self.max_records = max_records
 
-    def append(self, record_type: str, **fields: Any) -> None:
+    def append(self, record_type: str, **fields: object) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         record = {
             "journal_version": 1,
@@ -113,7 +117,7 @@ class OperationalJournal:
             os.fsync(handle.fileno())
         self._bound()
 
-    def records(self) -> list[dict[str, Any]]:
+    def records(self) -> list[dict[str, JsonValue]]:
         if not self.path.exists():
             return []
         return [json.loads(line) for line in self.path.read_text().splitlines() if line]
@@ -129,10 +133,10 @@ class OperationalJournal:
         _fsync_directory(self.path.parent)
 
 
-def _jsonable(value: Any) -> Any:
+def _jsonable(value: object) -> JsonValue:
     """Recursively convert a value to JSON-native form (dataclasses -> dicts, enums -> values)."""
     if isinstance(value, Enum):
-        return value.value
+        return _jsonable(value.value)
     if isinstance(value, BaseModel):
         return {k: _jsonable(v) for k, v in value.model_dump().items()}
     if is_dataclass(value) and not isinstance(value, type):
@@ -142,11 +146,15 @@ def _jsonable(value: Any) -> Any:
         return {
             name: _jsonable(getattr(value, name)) for name in fields if not name.startswith("_")
         }
-    if isinstance(value, dict):
-        return {key: _jsonable(item) for key, item in value.items()}
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
         return [_jsonable(item) for item in value]
-    return value
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
 
 
 def type_registries(
@@ -159,11 +167,11 @@ def type_registries(
     )
 
 
-def _snapshot(actor: WorldActor, meta: WorldMeta) -> dict[str, Any]:
+def _snapshot(actor: WorldActor, meta: WorldMeta) -> dict[str, JsonValue]:
     world = actor.world
-    entities: dict[str, Any] = {}
-    components: dict[str, dict[str, Any]] = {}
-    relationships: dict[str, dict[str, list]] = {}
+    entities: dict[str, JsonValue] = {}
+    components: dict[str, JsonValue] = {}
+    relationships: dict[str, JsonValue] = {}
 
     for entity in world.query().execute_entities():
         eid = str(entity.id)
@@ -172,6 +180,8 @@ def _snapshot(actor: WorldActor, meta: WorldMeta) -> dict[str, Any]:
         for type_name, fields in export.get("components", {}).items():
             components.setdefault(type_name, {})[eid] = _jsonable(fields)
         for edge_name, edges in export.get("relationships", {}).items():
+            if not edges:
+                continue
             bucket = relationships.setdefault(edge_name, {}).setdefault(eid, [])
             for edge in edges:
                 bucket.append({"target": edge["target"], "edge": _jsonable(edge["edge"])})
@@ -562,7 +572,7 @@ def _verify_checksum(path: Path) -> None:
         raise ValueError(f"checksum mismatch for {path}")
 
 
-def _tuples(value: Any) -> Any:
+def _tuples(value: JsonValue) -> TupleTree:
     if isinstance(value, list):
         return tuple(_tuples(item) for item in value)
     return value

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
+
+from pydantic import JsonValue
 
 CURRENT_SCHEMA_VERSION = 4
 
@@ -12,26 +13,44 @@ class WorldMigrationError(ValueError):
     """A saved world cannot be migrated without guessing at its meaning."""
 
 
-def _table(snapshot: dict[str, Any], section: str) -> dict[str, Any]:
+def _table(snapshot: dict[str, JsonValue], section: str) -> dict[str, JsonValue]:
     value = snapshot.setdefault(section, {})
     if not isinstance(value, dict):
         raise WorldMigrationError(f"world snapshot section {section!r} must be a mapping")
     return value
 
 
-def _records(table: dict[str, Any], type_name: str) -> dict[str, dict[str, Any]]:
+def _records(table: dict[str, JsonValue], type_name: str) -> dict[str, JsonValue]:
     value = table.setdefault(type_name, {})
     if not isinstance(value, dict):
         raise WorldMigrationError(f"persisted type {type_name!r} must contain a mapping")
     return value
 
 
+def _drop_empty_relationship_buckets(relationships: object) -> None:
+    """Discard source buckets that contain no persisted edges.
+
+    Older snapshots can contain these after the last edge of a type was removed from an
+    entity.  They carry no graph state, but schema-v4 source validation would otherwise
+    treat the source as owning an edge and require the edge's driving component.
+    """
+
+    if not isinstance(relationships, dict):
+        return
+    for sources in relationships.values():
+        if not isinstance(sources, dict):
+            continue
+        for source_id, records in tuple(sources.items()):
+            if isinstance(records, list) and not records:
+                del sources[source_id]
+
+
 def _add_edge(
-    relationships: dict[str, Any],
+    relationships: dict[str, JsonValue],
     edge_name: str,
     source_id: str,
     target_id: str,
-    fields: dict[str, Any] | None = None,
+    fields: dict[str, JsonValue] | None = None,
 ) -> None:
     sources = _records(relationships, edge_name)
     edges = sources.setdefault(source_id, [])
@@ -42,7 +61,7 @@ def _add_edge(
         edges.append(record)
 
 
-def _synthetic_id(entities: dict[str, Any], prefab: str, ordinal: int) -> str:
+def _synthetic_id(entities: dict[str, JsonValue], prefab: str, ordinal: int) -> str:
     sequence = ordinal
     while f"{prefab}_{sequence}" in entities:
         sequence += 1
@@ -50,7 +69,12 @@ def _synthetic_id(entities: dict[str, Any], prefab: str, ordinal: int) -> str:
 
 
 def _live_target(
-    entities: dict[str, Any], target_id: Any, *, owner_id: str, component: str, field: str
+    entities: dict[str, JsonValue],
+    target_id: JsonValue,
+    *,
+    owner_id: str,
+    component: str,
+    field: str,
 ) -> str:
     target = str(target_id or "")
     if target not in entities:
@@ -62,9 +86,9 @@ def _live_target(
 
 
 def _live_target_or_label(
-    entities: dict[str, Any],
-    components: dict[str, Any],
-    target_id: Any,
+    entities: dict[str, JsonValue],
+    components: dict[str, JsonValue],
+    target_id: JsonValue,
     *,
     owner_id: str,
     component: str,
@@ -102,7 +126,9 @@ def _live_target_or_label(
     )
 
 
-def _score_map(fields: Any, *, owner_id: str, component: str, field: str) -> dict[str, int]:
+def _score_map(
+    fields: JsonValue, *, owner_id: str, component: str, field: str
+) -> dict[str, int]:
     if not isinstance(fields, dict):
         raise WorldMigrationError(f"{component} fields for {owner_id!r} must be a mapping")
     scores = fields.get(field, {})
@@ -118,7 +144,9 @@ def _score_map(fields: Any, *, owner_id: str, component: str, field: str) -> dic
     return normalized
 
 
-def _canonical_decoration_role(value: Any, *, owner_id: str, persisted_type: str) -> str:
+def _canonical_decoration_role(
+    value: JsonValue, *, owner_id: str, persisted_type: str
+) -> str:
     role = str(value or "")
     if "/" in role:
         return role
@@ -130,7 +158,7 @@ def _canonical_decoration_role(value: Any, *, owner_id: str, persisted_type: str
     )
 
 
-def _quest_index(components: dict[str, Any]) -> dict[str, str]:
+def _quest_index(components: dict[str, JsonValue]) -> dict[str, str]:
     index: dict[str, str] = {}
     for type_name in ("QuestComponent", "GeneratedQuestComponent"):
         for entity_id, fields in _records(components, type_name).items():
@@ -148,7 +176,7 @@ def _quest_index(components: dict[str, Any]) -> dict[str, str]:
     return index
 
 
-def _resolve_quest(index: dict[str, str], quest_key: Any, owner_id: str) -> str:
+def _resolve_quest(index: dict[str, str], quest_key: JsonValue, owner_id: str) -> str:
     key = str(quest_key or "")
     try:
         return index[key]
@@ -158,7 +186,7 @@ def _resolve_quest(index: dict[str, str], quest_key: Any, owner_id: str) -> str:
         ) from exc
 
 
-def _migrate_v1(snapshot: dict[str, Any]) -> dict[str, Any]:
+def _migrate_v1(snapshot: dict[str, JsonValue]) -> dict[str, JsonValue]:
     components = _table(snapshot, "components")
     relationships = _table(snapshot, "relationships")
     entities = _table(snapshot, "entities")
@@ -822,7 +850,12 @@ def _migrate_v1(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def _v2_live_target(
-    entities: dict[str, Any], target_id: Any, *, owner_id: str, component: str, field: str
+    entities: dict[str, JsonValue],
+    target_id: JsonValue,
+    *,
+    owner_id: str,
+    component: str,
+    field: str,
 ) -> str:
     target = str(target_id or "")
     if target not in entities:
@@ -833,7 +866,7 @@ def _v2_live_target(
     return target
 
 
-def _migrate_v2(snapshot: dict[str, Any]) -> dict[str, Any]:
+def _migrate_v2(snapshot: dict[str, JsonValue]) -> dict[str, JsonValue]:
     components = _table(snapshot, "components")
     relationships = _table(snapshot, "relationships")
     entities = _table(snapshot, "entities")
@@ -957,12 +990,12 @@ def _migrate_v2(snapshot: dict[str, Any]) -> dict[str, Any]:
     return snapshot
 
 
-def _validate_v3(snapshot: dict[str, Any]) -> None:
+def _validate_v3(snapshot: dict[str, JsonValue]) -> None:
     components = _table(snapshot, "components")
     relationships = _table(snapshot, "relationships")
     entities = _table(snapshot, "entities")
 
-    def read_records(table: dict[str, Any], type_name: str) -> dict[str, Any]:
+    def read_records(table: dict[str, JsonValue], type_name: str) -> dict[str, JsonValue]:
         value = table.get(type_name, {})
         if not isinstance(value, dict):
             raise WorldMigrationError(f"persisted type {type_name!r} must contain a mapping")
@@ -1064,7 +1097,12 @@ def _validate_v3(snapshot: dict[str, Any]) -> None:
 
 
 def _v3_live_target(
-    entities: dict[str, Any], target_id: Any, *, owner_id: str, component: str, field: str
+    entities: dict[str, JsonValue],
+    target_id: JsonValue,
+    *,
+    owner_id: str,
+    component: str,
+    field: str,
 ) -> str:
     target = str(target_id or "")
     if target not in entities:
@@ -1076,9 +1114,9 @@ def _v3_live_target(
 
 
 def _migrate_live_field(
-    components: dict[str, Any],
-    relationships: dict[str, Any],
-    entities: dict[str, Any],
+    components: dict[str, JsonValue],
+    relationships: dict[str, JsonValue],
+    entities: dict[str, JsonValue],
     *,
     component: str,
     field: str,
@@ -1114,7 +1152,7 @@ def _migrate_live_field(
             _add_edge(relationships, edge, owner_id, target_id)
 
 
-def _migrate_v3(snapshot: dict[str, Any]) -> dict[str, Any]:
+def _migrate_v3(snapshot: dict[str, JsonValue]) -> dict[str, JsonValue]:
     components = _table(snapshot, "components")
     relationships = _table(snapshot, "relationships")
     entities = _table(snapshot, "entities")
@@ -1331,7 +1369,7 @@ def _migrate_v3(snapshot: dict[str, Any]) -> dict[str, Any]:
     return snapshot
 
 
-def _validate_v4(snapshot: dict[str, Any]) -> None:
+def _validate_v4(snapshot: dict[str, JsonValue]) -> None:
     _validate_v3(snapshot)
     components = _table(snapshot, "components")
     relationships = _table(snapshot, "relationships")
@@ -1593,13 +1631,14 @@ def _validate_v4(snapshot: dict[str, Any]) -> None:
             )
 
 
-def migrate_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+def migrate_snapshot(snapshot: object) -> dict[str, JsonValue]:
     """Return a validated schema-v4 copy of a raw JSON/YAML snapshot."""
 
     if not isinstance(snapshot, dict):
         raise WorldMigrationError("world snapshot must be a mapping")
-    migrated = deepcopy(snapshot)
+    migrated: dict[str, JsonValue] = deepcopy(snapshot)
     bunnyland = _table(migrated, "bunnyland")
+    _drop_empty_relationship_buckets(migrated.get("relationships"))
     version = bunnyland.get("schema_version", 1)
     if not isinstance(version, int):
         raise WorldMigrationError("bunnyland.schema_version must be an integer")
