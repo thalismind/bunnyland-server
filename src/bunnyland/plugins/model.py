@@ -13,10 +13,10 @@ Pragmatic conventions for MVP:
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from ..core.action_overrides import EntityActionCallbackDefinition
 from .policy import BoundaryScope
 
 
@@ -25,34 +25,35 @@ class EcsContribution(BaseModel):
 
     components: tuple[type, ...] = ()
     edges: tuple[type, ...] = ()
-    systems: tuple[Any, ...] = ()
-    observers: tuple[Any, ...] = ()
+    systems: tuple[object, ...] = ()
+    observers: tuple[object, ...] = ()
 
 
 class CommandContribution(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
     command_types: tuple[type, ...] = ()
-    action_handlers: tuple[Any, ...] = ()
-    action_definitions: tuple[Any, ...] = ()
+    action_handlers: tuple[object, ...] = ()
+    action_definitions: tuple[object, ...] = ()
     typed_events: tuple[type, ...] = ()
+    action_callbacks: tuple[EntityActionCallbackDefinition, ...] = ()
 
 
 class RuntimeContribution(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
-    controller_factories: tuple[Any, ...] = ()
-    generator_factories: tuple[Any, ...] = ()
-    service_factories: tuple[Any, ...] = ()
-    projection_factories: tuple[Any, ...] = ()
-    integration_factories: tuple[Any, ...] = ()
+    controller_factories: tuple[object, ...] = ()
+    generator_factories: tuple[object, ...] = ()
+    service_factories: tuple[object, ...] = ()
+    projection_factories: tuple[object, ...] = ()
+    integration_factories: tuple[object, ...] = ()
     #: Explicitly zoned HTTP contributions. Registrars receive only their zone router.
     http: tuple[HttpContribution, ...] = ()
     #: Cross-cutting MCP registrars. Each registered capability must declare its own policy.
     mcp: tuple[McpContribution, ...] = ()
-    perspective_queries: tuple[Any, ...] = ()
+    perspective_queries: tuple[object, ...] = ()
 
-    def all_factories(self) -> tuple[Any, ...]:
+    def all_factories(self) -> tuple[object, ...]:
         return (
             self.controller_factories
             + self.generator_factories
@@ -65,39 +66,39 @@ class RuntimeContribution(BaseModel):
 class ContentContribution(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
-    prefabs: tuple[Any, ...] = ()
-    prompt_parts: tuple[Any, ...] = ()
+    prefabs: tuple[object, ...] = ()
+    prompt_parts: tuple[object, ...] = ()
     #: Script definitions or paths contributed by the plugin.
-    scripts: tuple[Any, ...] = ()
+    scripts: tuple[object, ...] = ()
     #: Named ``WorldGenerator`` strategies, selectable at runtime by name.
-    world_generators: tuple[Any, ...] = ()
+    world_generators: tuple[object, ...] = ()
     #: Prompt fact providers ``(world, character) -> Sequence[PromptFact]`` (spec 16.3).
-    prompt_fragments: tuple[Any, ...] = ()
+    prompt_fragments: tuple[object, ...] = ()
     #: Stable persona fragment providers for identity, role, bonds, and boundaries.
-    persona_fragments: tuple[Any, ...] = ()
+    persona_fragments: tuple[object, ...] = ()
     #: Async post-render text filters contributed by plugins.
-    prompt_filters: tuple[Any, ...] = ()
+    prompt_filters: tuple[object, ...] = ()
     #: Image-prompt enhancers (``PromptEnhancer`` instances) for image generation (spec 27).
-    prompt_enhancers: tuple[Any, ...] = ()
+    prompt_enhancers: tuple[object, ...] = ()
     #: Named image-generator factories. Factories receive global and owner plugin config.
-    image_generators: tuple[Any, ...] = ()
+    image_generators: tuple[object, ...] = ()
     #: Namespaced capabilities this plugin can satisfy during generation.
     generation_capabilities: tuple[str, ...] = ()
     #: Pure request normalizers run before generation enrichers.
-    intent_normalizers: tuple[Any, ...] = ()
+    intent_normalizers: tuple[object, ...] = ()
     #: Declarative generation enrichers contributed by this plugin.
-    generation_enrichers: tuple[Any, ...] = ()
+    generation_enrichers: tuple[object, ...] = ()
     #: Storyteller incident definitions contributed by this plugin.
-    incident_definitions: tuple[Any, ...] = ()
+    incident_definitions: tuple[object, ...] = ()
     #: Plugin-owned completion predicates for spawned incident requirements.
-    incident_resolution_rules: tuple[Any, ...] = ()
+    incident_resolution_rules: tuple[object, ...] = ()
 
 
 class PolicyContribution(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
     boundary_tags: frozenset[BoundaryScope] = Field(default_factory=frozenset)
-    world_defaults: dict[str, Any] = Field(default_factory=dict)
+    world_defaults: dict[str, JsonValue] = Field(default_factory=dict)
     config_schema: type | None = None
 
 
@@ -135,13 +136,13 @@ class HttpContribution(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
     zone: HttpZone
-    registrars: tuple[Any, ...]
+    registrars: tuple[object, ...]
 
 
 class McpContribution(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
-    registrars: tuple[Any, ...]
+    registrars: tuple[object, ...]
 
 
 class Plugin(BaseModel):
@@ -166,11 +167,11 @@ class Plugin(BaseModel):
 class PluginRuntimeContext(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    plugin_config: dict[str, Any] = Field(default_factory=dict)
-    addon_config: dict[str, Any] = Field(default_factory=dict)
-    plugins: Any | None = None
+    plugin_config: dict[str, object] = Field(default_factory=dict)
+    addon_config: dict[str, object] = Field(default_factory=dict)
+    plugins: object | None = None
 
-    def config_for(self, plugin_id: str, default: Any = None) -> Any:
+    def config_for(self, plugin_id: str, default: object = None) -> object:
         return self.plugin_config.get(plugin_id, default)
 
 

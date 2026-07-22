@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from inspect import getmembers, isclass, iscoroutinefunction
 from types import MappingProxyType
-from typing import Any
+from typing import TypeVar
 
 from .model import Plugin, PluginPlacement
+
+RegistryValue = TypeVar("RegistryValue")
 
 _PLACEMENT_ORDER = {
     PluginPlacement.CORE: 0,
@@ -24,7 +26,7 @@ def placement_order(placement: PluginPlacement | str) -> int:
     return _PLACEMENT_ORDER[PluginPlacement(placement)]
 
 
-def _public_name(value: Any) -> str:
+def _public_name(value: object) -> str:
     for attribute in ("id", "name", "command_type"):
         candidate = getattr(value, attribute, None)
         if isinstance(candidate, str) and candidate:
@@ -42,23 +44,26 @@ class PluginRegistry:
         self._plugins: dict[str, Plugin] = {}
         self._events: dict[tuple[str, str], type] = {}
         self._event_owners: dict[type, tuple[str, str]] = {}
-        self._actions: dict[str, tuple[str, Any]] = {}
-        self._generators: dict[str, tuple[str, Any]] = {}
+        self._actions: dict[str, tuple[str, object]] = {}
+        self._action_callbacks: dict[str, tuple[str, object]] = {}
+        self._generators: dict[str, tuple[str, object]] = {}
         self._components: dict[str, tuple[str, type]] = {}
         self._edges: dict[str, tuple[str, type]] = {}
-        self._capabilities: dict[str, tuple[str, Any | None]] = {}
-        self._services: dict[tuple[str, str], Any] = {}
-        self._projections: dict[tuple[str, str], Any] = {}
-        self._incidents: dict[tuple[str, str], Any] = {}
-        self._incident_resolution_rules: dict[tuple[str, str], Any] = {}
-        self._prompt_filters: dict[str, tuple[str, Any]] = {}
-        self._prompt_filter_components: dict[type, tuple[str, Any]] = {}
-        self._integrations: dict[tuple[str, str], Any] = {}
+        self._capabilities: dict[str, tuple[str, object | None]] = {}
+        self._services: dict[tuple[str, str], object] = {}
+        self._projections: dict[tuple[str, str], object] = {}
+        self._incidents: dict[tuple[str, str], object] = {}
+        self._incident_resolution_rules: dict[tuple[str, str], object] = {}
+        self._prompt_filters: dict[str, tuple[str, object]] = {}
+        self._prompt_filter_components: dict[type, tuple[str, object]] = {}
+        self._integrations: dict[tuple[str, str], object] = {}
         self._boundary_tags: set[str] = set()
-        self._normalizers: list[tuple[str, Any]] = []
+        self._normalizers: list[tuple[str, object]] = []
         from ..core.generation import CoreGenerationEnricher
 
-        self._enrichers: list[tuple[str, Any]] = [("bunnyland.core", CoreGenerationEnricher())]
+        self._enrichers: list[tuple[str, object]] = [
+            ("bunnyland.core", CoreGenerationEnricher())
+        ]
         self._seed_core_contracts()
         for plugin in plugins:
             self.register(plugin)
@@ -105,6 +110,10 @@ class PluginRegistry:
         return MappingProxyType(self._actions)
 
     @property
+    def action_callbacks(self):
+        return MappingProxyType(self._action_callbacks)
+
+    @property
     def generators(self):
         return MappingProxyType(self._generators)
 
@@ -149,11 +158,11 @@ class PluginRegistry:
         return frozenset(self._boundary_tags)
 
     @property
-    def intent_normalizers(self) -> tuple[tuple[str, Any], ...]:
+    def intent_normalizers(self) -> tuple[tuple[str, object], ...]:
         return tuple(self._normalizers)
 
     @property
-    def generation_enrichers(self) -> tuple[tuple[str, Any], ...]:
+    def generation_enrichers(self) -> tuple[tuple[str, object], ...]:
         return tuple(self._enrichers)
 
     def enabled(self, plugin_id: str) -> bool:
@@ -172,7 +181,14 @@ class PluginRegistry:
             return PluginPlacement.CORE
         return self.plugin(plugin_id).placement
 
-    def _global(self, index: dict, name: str, plugin_id: str, value: Any, surface: str) -> None:
+    def _global(
+        self,
+        index: dict[str, tuple[str, RegistryValue]],
+        name: str,
+        plugin_id: str,
+        value: RegistryValue,
+        surface: str,
+    ) -> None:
         previous = index.get(name)
         if previous is not None:
             owner, _old_value = previous
@@ -183,7 +199,13 @@ class PluginRegistry:
             )
         index[name] = (plugin_id, value)
 
-    def _scoped(self, index: dict, plugin_id: str, value: Any, surface: str) -> None:
+    def _scoped(
+        self,
+        index: dict[tuple[str, str], RegistryValue],
+        plugin_id: str,
+        value: RegistryValue,
+        surface: str,
+    ) -> None:
         key = (plugin_id, _public_name(value))
         if key in index:
             from .loader import PluginError
@@ -225,6 +247,20 @@ class PluginRegistry:
                 plugin.id,
                 definition,
                 "action",
+            )
+        for definition in plugin.commands.action_callbacks:
+            if not definition.id.startswith(f"{plugin.id}."):
+                from .loader import PluginError
+
+                raise PluginError(
+                    f"action callback {definition.id!r} must be namespaced by {plugin.id!r}"
+                )
+            self._global(
+                self._action_callbacks,
+                definition.id,
+                plugin.id,
+                definition,
+                "action callback",
             )
         for generator in plugin.content.world_generators:
             self._global(self._generators, generator.name, plugin.id, generator, "generator")

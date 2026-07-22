@@ -14,6 +14,48 @@ from relics import Component
 
 from .edges import ContainmentMode
 
+
+@dataclass(frozen=True)
+class ActionOverrideEntry:
+    """Persistent routing data for one incoming entity action."""
+
+    source_action: str
+    destination_action: str | None = None
+    destination_argument: str | None = None
+    callback_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.source_action.strip():
+            raise ValueError("action override source action must not be empty")
+        has_alias_field = (
+            self.destination_action is not None or self.destination_argument is not None
+        )
+        if has_alias_field:
+            if not self.destination_action or not self.destination_argument:
+                raise ValueError(
+                    "action override aliases require a destination action and argument"
+                )
+            if self.callback_id is not None:
+                raise ValueError("action override must define either an alias or a callback")
+            return
+        if not self.callback_id:
+            raise ValueError("action override must define either an alias or a callback")
+
+
+@dataclass(frozen=True)
+class ActionOverrideComponent(Component):
+    """Singleton per-entity action routing state.
+
+    Executable callbacks remain plugin-owned; this component stores only stable names.
+    """
+
+    overrides: tuple[ActionOverrideEntry, ...] = ()
+
+    def __post_init__(self) -> None:
+        sources = tuple(entry.source_action for entry in self.overrides)
+        if len(sources) != len(set(sources)):
+            raise ValueError("action override source actions must be unique per entity")
+
 # --------------------------------------------------------------------------------------
 # Identity and lifecycle (spec 11.1)
 # --------------------------------------------------------------------------------------

@@ -4,6 +4,7 @@ This package wraps the synchronous Relics ECS with the async, event-driven,
 command-queue architecture described in the bunnyland specification.
 """
 
+from .action_overrides import EntityActionCallback, EntityActionCallbackDefinition
 from .actions import (
     ActionArgument,
     ActionDefinition,
@@ -16,8 +17,11 @@ from .actions import (
     reference_arg_keys,
 )
 from .commands import (
+    ActionOverrideKind,
+    ActionOverrideRoute,
     Command,
     CommandCost,
+    CommandPayload,
     CommitReceipt,
     CommitStatus,
     Lane,
@@ -31,6 +35,8 @@ from .commands import (
     build_submitted_command,
 )
 from .components import (
+    ActionOverrideComponent,
+    ActionOverrideEntry,
     ActionPointsComponent,
     AdminComponent,
     AffectComponent,
@@ -230,12 +236,18 @@ from .world_actor import WorldActor
 __all__ = [
     "AddComponent",
     "ActionPointsComponent",
+    "ActionOverrideComponent",
+    "ActionOverrideEntry",
+    "ActionOverrideKind",
+    "ActionOverrideRoute",
     "AdminComponent",
     "ActionArgument",
     "ActionDefinition",
     "ActionExample",
     "ActionPattern",
     "ActionRequirement",
+    "EntityActionCallback",
+    "EntityActionCallbackDefinition",
     "ActorContext",
     "action_definitions",
     "AffectComponent",
@@ -256,6 +268,7 @@ __all__ = [
     "CloseHandler",
     "Command",
     "CommandCost",
+    "CommandPayload",
     "CommitReceipt",
     "CommitStatus",
     "AddEdge",

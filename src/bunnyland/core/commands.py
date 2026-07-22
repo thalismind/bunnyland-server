@@ -8,10 +8,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any
+from typing import Literal
 from uuid import uuid4
 
 from pydantic.dataclasses import dataclass
+
+CommandPayload = Mapping[str, object]
 
 
 class Lane(StrEnum):
@@ -70,6 +72,20 @@ class Command:
     actor_id: str
 
 
+ActionOverrideKind = Literal["alias", "callback", "alias_callback"]
+
+
+@dataclass(frozen=True)
+class ActionOverrideRoute:
+    """Resolved volatile routing metadata carried with a queued command."""
+
+    requested_action: str
+    resolved_action: str
+    kind: ActionOverrideKind
+    owning_entity_id: str
+    callback_id: str | None = None
+
+
 @dataclass(frozen=True)
 class SubmittedCommand:
     """Envelope carrying a command through the queue and into execution (spec 13.2)."""
@@ -79,7 +95,7 @@ class SubmittedCommand:
     controller_id: str
     controller_generation: int
     command_type: str
-    payload: Mapping[str, Any]
+    payload: CommandPayload
     cost: CommandCost
     lane: Lane
     on_insufficient_points: OnInsufficientPoints
@@ -87,6 +103,7 @@ class SubmittedCommand:
     expires_at_epoch: int | None = None
     expected_epoch: int | None = None
     submission_sequence: int = 0
+    action_override: ActionOverrideRoute | None = None
 
 
 @dataclass(frozen=True)
@@ -145,7 +162,7 @@ def build_submitted_command(
     command_type: str,
     cost: CommandCost,
     lane: Lane,
-    payload: Mapping[str, Any] | None = None,
+    payload: CommandPayload | None = None,
     on_insufficient_points: OnInsufficientPoints = OnInsufficientPoints.QUEUE,
     submitted_at_epoch: int = 0,
     expires_at_epoch: int | None = None,
@@ -171,8 +188,11 @@ def build_submitted_command(
 
 __all__ = [
     "build_submitted_command",
+    "ActionOverrideKind",
+    "ActionOverrideRoute",
     "Command",
     "CommandCost",
+    "CommandPayload",
     "CommitReceipt",
     "CommitStatus",
     "Lane",

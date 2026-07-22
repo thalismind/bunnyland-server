@@ -11,7 +11,7 @@ import inspect
 import logging
 from collections.abc import Sequence
 from importlib.metadata import entry_points
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -154,14 +154,14 @@ def _call_runtime_factory(factory, actor: WorldActor, context: PluginRuntimeCont
 
 def validate_plugin_config(
     plugins: Sequence[Plugin],
-    raw_config: dict[str, Any] | None,
-) -> dict[str, Any]:
+    raw_config: dict[str, object] | None,
+) -> dict[str, object]:
     """Validate YAML plugin config blocks against enabled plugin schemas."""
     if not raw_config:
         return {}
 
     by_id = {plugin.id: plugin for plugin in plugins}
-    validated: dict[str, Any] = {}
+    validated: dict[str, object] = {}
     for requested_id, value in raw_config.items():
         plugin = _match_plugin_id(by_id, requested_id)
         model = plugin.config.model
@@ -210,6 +210,8 @@ def apply_plugin(
             for handler in plugin.commands.action_handlers:
                 instance = _instantiate(handler)
                 actor.register_handler(instance)
+            for definition in plugin.commands.action_callbacks:
+                actor.register_action_callback(definition)
             for definition in plugin.runtime.perspective_queries:
                 actor.perspective_queries.register(_instantiate(definition), owner=plugin.id)
             for factory in factories:

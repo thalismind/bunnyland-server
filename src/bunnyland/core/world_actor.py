@@ -15,17 +15,19 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import random
 import time
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 from relics import EntityId, World
 
 from .. import telemetry
+from .action_overrides import EntityActionCallbackDefinition
 from .actions import (
     ActionDefinition,
 )
@@ -36,6 +38,7 @@ from .availability import (
 )
 from .claim_timeout import record_claim_activity
 from .commands import (
+    ActionOverrideRoute,
     CommitReceipt,
     CommitStatus,
     Lane,
@@ -43,6 +46,8 @@ from .commands import (
     SubmittedCommand,
 )
 from .components import (
+    ActionOverrideComponent,
+    ActionOverrideEntry,
     ActionPointsComponent,
     CharacterComponent,
     DeadComponent,
@@ -106,13 +111,21 @@ from .perspective import PerspectiveQueryRegistry
 from .queue import CommandQueues
 from .systems import ActionRegenSystem, FocusRegenSystem, WorldClockSystem
 
+if TYPE_CHECKING:
+    from ..persistence import WorldMeta
+    from ..plugins.model import Plugin, PluginRuntimeContext
+    from ..plugins.registry import PluginRegistry
+    from ..prompts.facts import PromptFactLike
+
 #: Control verbs change the controller itself (spec 7.4); they carry no point cost and
 #: bypass generation/participation gates so handoff and resume always work.
 CONTROL_COMMANDS = frozenset({"take-control", "release-to-llm", "suspend", "resume"})
+LOG = logging.getLogger(__name__)
 
 #: A policy gate inspects a command against the world and returns ``(allowed, reason)``.
 CommandGate = Callable[[World, SubmittedCommand], tuple[bool, "str | None"]]
 AfterTickHook = Callable[["WorldActor"], None | Awaitable[None]]
+PromptFragmentProvider = Callable[..., Iterable["PromptFactLike"]]
 
 
 @dataclass(frozen=True)
@@ -138,9 +151,9 @@ class WorldPersistenceContext:
     """Runtime persistence wiring used by actor-bound plugin handlers."""
 
     save_path: str | Path | None = None
-    meta: Any | None = None
-    plugins: tuple[Any, ...] = ()
-    plugin_context: Any | None = None
+    meta: WorldMeta | None = None
+    plugins: tuple[Plugin, ...] = ()
+    plugin_context: PluginRuntimeContext | None = None
 
 
 class WorldActor:
@@ -158,6 +171,7 @@ class WorldActor:
         self.bus = EventBus()
         self.queues = CommandQueues()
         self._handlers: dict[str, list[CommandHandler]] = {}
+        self._action_callbacks: dict[str, EntityActionCallbackDefinition] = {}
         self._action_definitions: dict[str, ActionDefinition] = {}
         self._consequences: list[Consequence] = [
             EncumbranceConsequence(),
@@ -182,10 +196,10 @@ class WorldActor:
         self.persistence = WorldPersistenceContext()
         self.world_id = ""
         #: Populated by the plugin loader without making core import plugin modules.
-        self.plugins: Any | None = None
+        self.plugins: PluginRegistry | None = None
         #: Prompt providers are registered by the plugin loader. Core handlers access them
         #: through ``project_prompt_facts`` without importing plugin-owned mechanics.
-        self.prompt_fragment_providers: tuple[Any, ...] = ()
+        self.prompt_fragment_providers: tuple[PromptFragmentProvider, ...] = ()
         self.perspective_queries = PerspectiveQueryRegistry()
 
         self.world.register_system(WorldClockSystem())
@@ -206,6 +220,11 @@ class WorldActor:
     def register_action_definition(self, definition: ActionDefinition) -> None:
         self._action_definitions[definition.command_type] = definition
         self._definition_cache = None
+
+    def register_action_callback(self, definition: EntityActionCallbackDefinition) -> None:
+        if definition.id in self._action_callbacks:
+            raise ValueError(f"duplicate action callback id {definition.id!r}")
+        self._action_callbacks[definition.id] = definition
 
     def action_definitions(self) -> tuple[ActionDefinition, ...]:
         return tuple(self._action_definitions.values())
@@ -238,9 +257,9 @@ class WorldActor:
         self,
         *,
         save_path: str | Path | None,
-        meta: Any | None,
-        plugins: tuple[Any, ...] = (),
-        plugin_context: Any | None = None,
+        meta: WorldMeta | None,
+        plugins: tuple[Plugin, ...] = (),
+        plugin_context: PluginRuntimeContext | None = None,
     ) -> None:
         self.persistence = WorldPersistenceContext(
             save_path=save_path,
@@ -303,6 +322,8 @@ class WorldActor:
             "command.submit",
             {
                 "command.type": command.command_type,
+                "command.requested_action": command.command_type,
+                "command.resolved_action": command.command_type,
                 "command.id": command.command_id,
                 "character.id": command.character_id,
                 "command.lane": command.lane.value,
@@ -322,6 +343,21 @@ class WorldActor:
                     return SubmissionOutcome(accepted=True, command_id=command.command_id)
                 self._submission_sequence += 1
                 object.__setattr__(command, "submission_sequence", self._submission_sequence)
+                command, override_reason = self._resolve_action_override(command)
+                span.set_attribute("command.type", command.command_type)
+                span.set_attribute("command.lane", command.lane.value)
+                for key, value in self._override_attributes(command).items():
+                    span.set_attribute(key, value)
+                if override_reason is not None:
+                    span.set_attribute("command.accepted", False)
+                    span.set_attribute("command.reject_reason_text", override_reason)
+                    telemetry.mark_span_error(override_reason, span)
+                    await self._reject(command, override_reason)
+                    return SubmissionOutcome(
+                        accepted=False,
+                        command_id=command.command_id,
+                        reason=override_reason,
+                    )
                 reason = self._validate_submission(command)
                 if reason is not None:
                     span.set_attribute("command.accepted", False)
@@ -413,6 +449,141 @@ class WorldActor:
             }
         return self._definition_cache.get(command_type)
 
+    def _resolve_action_override(
+        self, command: SubmittedCommand
+    ) -> tuple[SubmittedCommand, str | None]:
+        """Resolve at most one alias followed by one callback before queueing."""
+
+        source_definition = self._definition_for(command.command_type)
+        if source_definition is None:
+            return command, None
+
+        claims: list[tuple[EntityId, ActionOverrideEntry]] = []
+        seen: set[EntityId] = set()
+        for argument in source_definition.reference_arg_keys:
+            entity_id = parse_entity_id(command.payload.get(argument))
+            if entity_id is None or entity_id in seen or not self.world.has_entity(entity_id):
+                continue
+            seen.add(entity_id)
+            entity = self.world.get_entity(entity_id)
+            if not entity.has_component(ActionOverrideComponent):
+                continue
+            component = entity.get_component(ActionOverrideComponent)
+            entry = next(
+                (
+                    candidate
+                    for candidate in component.overrides
+                    if candidate.source_action == command.command_type
+                ),
+                None,
+            )
+            if entry is not None:
+                claims.append((entity_id, entry))
+
+        if len(claims) > 1:
+            return command, f"multiple entities override action {command.command_type!r}"
+        if not claims:
+            return command, None
+
+        owning_entity_id, entry = claims[0]
+        if entry.callback_id is not None:
+            route = ActionOverrideRoute(
+                requested_action=command.command_type,
+                resolved_action=command.command_type,
+                kind="callback",
+                owning_entity_id=str(owning_entity_id),
+                callback_id=entry.callback_id,
+            )
+            resolved = replace(
+                command,
+                cost=source_definition.cost,
+                lane=source_definition.lane,
+                action_override=route,
+            )
+            self._record_override_resolution(resolved)
+            if entry.callback_id not in self._action_callbacks:
+                return resolved, f"action override callback {entry.callback_id!r} is unavailable"
+            return resolved, None
+
+        assert entry.destination_action is not None
+        assert entry.destination_argument is not None
+        destination = self._definition_for(entry.destination_action)
+        if destination is None:
+            return command, (
+                f"action override destination {entry.destination_action!r} is not registered"
+            )
+        destination_argument = (destination.arguments or {}).get(entry.destination_argument)
+        if destination_argument is None or destination_argument.kind != "entity":
+            return command, (
+                f"action override destination argument {entry.destination_argument!r} "
+                f"is not an entity argument for {entry.destination_action!r}"
+            )
+
+        payload = dict(command.payload)
+        payload[entry.destination_argument] = str(owning_entity_id)
+        route = ActionOverrideRoute(
+            requested_action=command.command_type,
+            resolved_action=entry.destination_action,
+            kind="alias",
+            owning_entity_id=str(owning_entity_id),
+        )
+        resolved = replace(
+            command,
+            command_type=entry.destination_action,
+            payload=payload,
+            cost=destination.cost,
+            lane=destination.lane,
+            action_override=route,
+        )
+
+        component = self.world.get_entity(owning_entity_id).get_component(ActionOverrideComponent)
+        next_entry = next(
+            (
+                candidate
+                for candidate in component.overrides
+                if candidate.source_action == entry.destination_action
+            ),
+            None,
+        )
+        if next_entry is not None:
+            if next_entry.callback_id is None:
+                self._record_override_resolution(resolved)
+                return resolved, "action override alias chains are not supported"
+            route = replace(
+                route,
+                kind="alias_callback",
+                callback_id=next_entry.callback_id,
+            )
+            resolved = replace(resolved, action_override=route)
+
+        self._record_override_resolution(resolved)
+        callback_id = route.callback_id
+        if callback_id is not None and callback_id not in self._action_callbacks:
+            return resolved, f"action override callback {callback_id!r} is unavailable"
+        return resolved, None
+
+    @staticmethod
+    def _override_attributes(command: SubmittedCommand) -> dict[str, str]:
+        route = command.action_override
+        attributes = {
+            "command.requested_action": (
+                route.requested_action if route is not None else command.command_type
+            ),
+            "command.resolved_action": command.command_type,
+        }
+        if route is not None:
+            attributes["command.override.kind"] = route.kind
+            attributes["command.override.entity_id"] = route.owning_entity_id
+            if route.callback_id is not None:
+                attributes["command.override.callback_id"] = route.callback_id
+        return attributes
+
+    def _record_override_resolution(self, command: SubmittedCommand) -> None:
+        LOG.info(
+            "entity action override resolved",
+            extra=self._override_attributes(command),
+        )
+
     def _validate_submission(self, command: SubmittedCommand) -> str | None:
         """Return a rejection reason for an obviously-invalid command, else ``None``.
 
@@ -427,7 +598,11 @@ class WorldActor:
         # Control verbs change the controller itself and bypass the action gates.
         if command.command_type in CONTROL_COMMANDS:
             return None
-        if command.command_type not in self._handlers:
+        callback_route = (
+            command.action_override is not None
+            and command.action_override.callback_id is not None
+        )
+        if not callback_route and command.command_type not in self._handlers:
             return f"no handler for {command.command_type}"
 
         character = self.world.get_entity(entity_id)
@@ -455,7 +630,7 @@ class WorldActor:
         return None
 
     def _validate_arguments(
-        self, definition: ActionDefinition, payload: Mapping[str, Any]
+        self, definition: ActionDefinition, payload: Mapping[str, object]
     ) -> str | None:
         """Reject only *structural* argument problems (a missing required argument).
 
@@ -644,6 +819,7 @@ class WorldActor:
                     "command.lane": lane.value,
                     "command.id": command.command_id,
                     "character.id": character_id,
+                    **self._override_attributes(command),
                 },
             ) as attempt_span:
                 outcome = await self._attempt(character_id, lane, command)
@@ -757,8 +933,20 @@ class WorldActor:
             # QUEUE: wait for regen. FIFO means we cannot skip ahead.
             return _LaneOutcome(executed=False, stop_lane=True)
 
+        callback_definition = None
+        if command.action_override is not None and command.action_override.callback_id is not None:
+            callback_definition = self._action_callbacks.get(command.action_override.callback_id)
+            if callback_definition is None:
+                self.queues.pop(character_id, lane)
+                await self._reject(
+                    command,
+                    f"action override callback {command.action_override.callback_id!r} "
+                    "is unavailable",
+                )
+                return _LaneOutcome(executed=False, stop_lane=False)
+
         handlers = self._handlers.get(command.command_type, [])
-        if not handlers:
+        if callback_definition is None and not handlers:
             self.queues.pop(character_id, lane)
             await self._reject(command, f"no handler for {command.command_type}")
             return _LaneOutcome(executed=False, stop_lane=False)
@@ -769,8 +957,8 @@ class WorldActor:
             epoch=self.epoch,
             actor=self,
         )
-        handler = self._handler_for(ctx, command, handlers)
-        if handler is None:
+        handler = self._handler_for(ctx, command, handlers) if callback_definition is None else None
+        if callback_definition is None and handler is None:
             self.queues.pop(character_id, lane)
             await self._reject(command, f"no handler accepted {command.command_type}")
             return _LaneOutcome(executed=False, stop_lane=False)
@@ -785,11 +973,23 @@ class WorldActor:
                     "command.type": command.command_type,
                     "command.id": command.command_id,
                     "character.id": character_id,
-                    "handler.kind": type(handler).__name__,
+                    "handler.kind": (
+                        callback_definition.id
+                        if callback_definition is not None
+                        else type(handler).__name__
+                    ),
+                    **self._override_attributes(command),
                 },
             ) as hspan,
         ):
-            result = handler.execute(ctx, command)
+            if callback_definition is not None:
+                assert command.action_override is not None
+                owning_entity_id = parse_entity_id(command.action_override.owning_entity_id)
+                assert owning_entity_id is not None
+                result = callback_definition.handler(ctx, command, owning_entity_id)
+            else:
+                assert handler is not None
+                result = handler.execute(ctx, command)
             if result.ok and result.plan is None:
                 result = replace(
                     result,
