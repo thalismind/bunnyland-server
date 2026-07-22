@@ -22,6 +22,22 @@ Connect to a running server:
 uv run --all-extras bunnyland repl --server http://localhost:8765
 ```
 
+For a server that requires player authentication, sign in from the REPL with `/login`.
+The username and password are collected in a secure modal, and the password is masked and
+never added to command history. The REPL opens the same modal automatically when the server
+reports that authentication is required. You can also provide credentials when launching:
+
+```bash
+uv run --all-extras bunnyland repl \
+  --server https://play.example/v1 \
+  --username player \
+  --token-file ~/.config/bunnyland/player-token
+```
+
+Without `--password-stdin`, the launch command prompts for the password before opening the
+REPL. `--token-file` is optional; when provided, the bearer token is stored in that explicit
+mode-0600 file and reused on the next launch.
+
 List the demo worlds and generators you can pass to `--generator`:
 
 ```bash
@@ -147,6 +163,7 @@ Up/Down walk previous commands, and history is saved to
 
 | Command | Effect |
 |---------|--------|
+| `/login` | securely sign in to a remote server, or sign in again |
 | `look` | show your current room, occupants, exits, and inventory |
 | `inventory` (`inv`) | show what you carry, grouped into worn, held, and carried |
 | `who` | list the characters you can play |

@@ -31,7 +31,7 @@ from .terminal_config import (
     save_terminal_config,
 )
 from .terminal_generators import available_generators, format_generator_lines
-from .tui.backend import Backend, LocalBackend, RemoteBackend
+from .tui.backend import Backend, CharacterChatAccess, LocalBackend, RemoteBackend
 from .tui.generator_selector import (
     DEFAULT_LOCAL_GENERATOR,
     DEFAULT_LOCAL_SEED,
@@ -246,6 +246,22 @@ class CharacterChatApp(App[None]):
         await self.backend.close()
 
 
+def _print_cli_history(state: dict, character_name: str) -> None:
+    for item in state.get("messages") or []:
+        label = "You" if item.get("role") == "user" else character_name
+        print(f"{label}: {item.get('text') or ''}")
+
+
+def _print_controller_choices(access: CharacterChatAccess) -> None:
+    if not access.controllers:
+        print("No assignable LLM controllers are available for this session.")
+        return
+    print("Assignable LLM controllers:")
+    for controller in access.controllers:
+        print(f"  {controller.controller_id} · {controller.label}")
+    print("Use /controller <id> to assign one.")
+
+
 async def _run_cli(backend: Backend, wanted: str) -> int:
     await backend.start()
     try:
@@ -270,6 +286,12 @@ async def _run_cli(backend: Backend, wanted: str) -> int:
             character = characters[0]
         state = load_history(backend.client_id, character.character_id)
         print(f"Chatting with {character.name}. Ctrl-D or /quit exits.")
+        _print_cli_history(state, character.name)
+        access = await backend.character_chat_access(character.character_id)
+        if not access.writable:
+            print(access.reason)
+            if access.can_assign:
+                _print_controller_choices(access)
         while True:
             try:
                 message = input("> ").strip()
@@ -280,6 +302,45 @@ async def _run_cli(backend: Backend, wanted: str) -> int:
                 continue
             if message in {"/quit", "/exit"}:
                 break
+            if message in {"/help", "/meta"}:
+                print("Meta: /controller <id>, /controllers, /help, /quit")
+                continue
+            if message == "/controllers":
+                access = await backend.character_chat_access(character.character_id)
+                _print_controller_choices(access)
+                continue
+            if message == "/controller" or message.startswith("/controller "):
+                controller_id = message.removeprefix("/controller").strip()
+                if not controller_id:
+                    print("Usage: /controller <id>")
+                    continue
+                access = await backend.character_chat_access(character.character_id)
+                if controller_id not in {
+                    controller.controller_id for controller in access.controllers
+                }:
+                    print(
+                        "That LLM controller is not assignable; use /controllers to list choices."
+                    )
+                    continue
+                try:
+                    access = await backend.assign_character_chat_controller(
+                        character.character_id,
+                        controller_id,
+                    )
+                except Exception as exc:
+                    print(f"Controller assignment failed: {exc}")
+                    continue
+                if access.writable:
+                    print(f"{character.name} is now assigned to an LLM controller.")
+                else:
+                    print(access.reason)
+                continue
+            access = await backend.character_chat_access(character.character_id)
+            if not access.writable:
+                print(access.reason)
+                if access.can_assign:
+                    print("Use /controllers to list assignable LLM controllers.")
+                continue
             try:
                 job = await backend.submit_character_chat(
                     character.character_id,

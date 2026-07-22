@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from rich.text import Text
 from textual import on
@@ -16,7 +17,80 @@ from textual.widgets.option_list import Option
 from ..server.v1_models import CharacterProfileResource
 from ..terminal_chat import load_history, save_history
 from ..terminal_config import TerminalConfig
-from .backend import Backend, CharacterChatJob
+from .backend import Backend, CharacterChatAccess, CharacterChatJob
+
+
+@dataclass(frozen=True)
+class SignInCredentials:
+    username: str
+    password: str
+
+
+class SignInScreen(ModalScreen[SignInCredentials | None]):
+    """Collect remote player credentials without exposing the password on screen."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    CSS = """
+    SignInScreen { align: center middle; }
+    #sign-in-panel {
+        width: 54; height: auto; border: thick $accent;
+        background: $surface; padding: 1 2;
+    }
+    #sign-in-title { text-style: bold; margin-bottom: 1; }
+    .sign-in-label { margin-top: 1; }
+    #sign-in-error { color: $error; height: auto; min-height: 1; margin-top: 1; }
+    #sign-in-buttons { height: auto; margin-top: 1; }
+    #sign-in-submit { margin-right: 1; }
+    """
+
+    def __init__(self, *, username: str = "", error: str = "") -> None:
+        super().__init__()
+        self.username = username
+        self.error = error
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="sign-in-panel"):
+            yield Label("Sign in to Bunnyland", id="sign-in-title")
+            yield Label("Username", classes="sign-in-label")
+            yield Input(value=self.username, id="sign-in-username")
+            yield Label("Password", classes="sign-in-label")
+            yield Input(password=True, id="sign-in-password")
+            yield Label(self.error, id="sign-in-error")
+            with Horizontal(id="sign-in-buttons"):
+                yield Button("Sign in", id="sign-in-submit", variant="primary")
+                yield Button("Cancel", id="sign-in-cancel")
+
+    def on_mount(self) -> None:
+        target = "#sign-in-password" if self.username else "#sign-in-username"
+        self.query_one(target, Input).focus()
+
+    @on(Input.Submitted)
+    def _input_submitted(self, _event: Input.Submitted) -> None:
+        self._try_submit()
+
+    @on(Button.Pressed, "#sign-in-submit")
+    def _submit_pressed(self, _event: Button.Pressed) -> None:
+        self._try_submit()
+
+    @on(Button.Pressed, "#sign-in-cancel")
+    def _cancel_pressed(self, _event: Button.Pressed) -> None:
+        self.action_cancel()
+
+    def _try_submit(self) -> None:
+        username = self.query_one("#sign-in-username", Input).value.strip()
+        password = self.query_one("#sign-in-password", Input).value
+        error = self.query_one("#sign-in-error", Label)
+        if not username:
+            error.update("Username is required.")
+            return
+        if not password:
+            error.update("Password is required.")
+            return
+        self.dismiss(SignInCredentials(username=username, password=password))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 def render_character_profile(profile: CharacterProfileResource) -> Text:
@@ -210,6 +284,8 @@ class ConversationScreen(ModalScreen[None]):
     #conversation-transcript-scroll { height: 1fr; margin: 1 0; }
     #conversation-status, #conversation-action { height: auto; min-height: 1; color: $text-muted; }
     #conversation-input { width: 1fr; }
+    #conversation-controller-row { height: auto; margin-top: 1; }
+    #conversation-controller { width: 1fr; margin-right: 1; }
     #conversation-buttons { height: auto; margin-top: 1; }
     #conversation-sheet { margin-right: 1; }
     """
@@ -222,6 +298,7 @@ class ConversationScreen(ModalScreen[None]):
         self.state = load_history(backend.client_id, character_id)
         self._job: CharacterChatJob | None = None
         self._send_task: asyncio.Task | None = None
+        self._access = CharacterChatAccess(writable=False, reason="Checking chat access…")
 
     def compose(self) -> ComposeResult:
         with Vertical(id="conversation-panel"):
@@ -234,18 +311,46 @@ class ConversationScreen(ModalScreen[None]):
                 placeholder=f"Say something to {self.character_name}",
                 id="conversation-input",
             )
+            with Horizontal(id="conversation-controller-row"):
+                yield Select(
+                    [],
+                    prompt="— choose an LLM controller —",
+                    allow_blank=True,
+                    id="conversation-controller",
+                )
+                yield Button(
+                    "Assign LLM",
+                    id="conversation-controller-assign",
+                    variant="warning",
+                    disabled=True,
+                )
             with Horizontal(id="conversation-buttons"):
                 yield Button("Sheet", id="conversation-sheet")
                 yield Button("Close", id="conversation-close", variant="primary")
 
     async def on_mount(self) -> None:
         self._render_transcript()
-        available, reason = await self.backend.character_chat_availability()
-        if not available:
-            self.query_one("#conversation-status", Static).update(reason)
-            self.query_one("#conversation-input", Input).disabled = True
-        else:
-            self.query_one("#conversation-input", Input).focus()
+        await self._refresh_access()
+
+    async def _refresh_access(self) -> CharacterChatAccess:
+        self._access = await self.backend.character_chat_access(self.character_id)
+        status = self.query_one("#conversation-status", Static)
+        input_widget = self.query_one("#conversation-input", Input)
+        select = self.query_one("#conversation-controller", Select)
+        assign = self.query_one("#conversation-controller-assign", Button)
+        row = self.query_one("#conversation-controller-row", Horizontal)
+        input_widget.disabled = not self._access.writable
+        status.update("" if self._access.writable else self._access.reason)
+        row.display = self._access.can_assign
+        select.set_options(
+            [(choice.label, choice.controller_id) for choice in self._access.controllers]
+        )
+        if self._access.controllers:
+            select.value = self._access.controllers[0].controller_id
+        assign.disabled = not self._access.can_assign
+        if self._access.writable:
+            input_widget.focus()
+        return self._access
 
     def _render_transcript(self) -> None:
         transcript = Text()
@@ -272,13 +377,16 @@ class ConversationScreen(ModalScreen[None]):
         input_widget = self.query_one("#conversation-input", Input)
         status = self.query_one("#conversation-status", Static)
         action_view = self.query_one("#conversation-action", Static)
-        input_widget.disabled = True
-        self.state.setdefault("messages", []).append({"role": "user", "text": message})
-        self.state["messages"] = self.state["messages"][-24:]
-        self._render_transcript()
-        status.update(f"Waiting for {self.character_name}…")
-        action_view.update("")
         try:
+            access = await self._refresh_access()
+            if not access.writable:
+                return
+            input_widget.disabled = True
+            self.state.setdefault("messages", []).append({"role": "user", "text": message})
+            self.state["messages"] = self.state["messages"][-24:]
+            self._render_transcript()
+            status.update(f"Waiting for {self.character_name}…")
+            action_view.update("")
             self._job = await self.backend.submit_character_chat(
                 self.character_id,
                 message,
@@ -314,8 +422,31 @@ class ConversationScreen(ModalScreen[None]):
             status.update(f"Chat error: {exc}")
         finally:
             self._send_task = None
-            input_widget.disabled = False
-            input_widget.focus()
+            input_widget.disabled = not self._access.writable
+            if self._access.writable:
+                input_widget.focus()
+
+    @on(Button.Pressed, "#conversation-controller-assign")
+    async def _assign_controller_pressed(self, _event: Button.Pressed) -> None:
+        select = self.query_one("#conversation-controller", Select)
+        assign = self.query_one("#conversation-controller-assign", Button)
+        selected = str(select.value)
+        if not selected or selected not in {
+            choice.controller_id for choice in self._access.controllers
+        }:
+            return
+        assign.disabled = True
+        status = self.query_one("#conversation-status", Static)
+        status.update("Assigning LLM controller…")
+        try:
+            self._access = await self.backend.assign_character_chat_controller(
+                self.character_id,
+                selected,
+            )
+            await self._refresh_access()
+        except Exception as exc:
+            status.update(f"Controller assignment failed: {exc}")
+            assign.disabled = False
 
     @on(Button.Pressed, "#conversation-sheet")
     async def _sheet_pressed(self, _event: Button.Pressed) -> None:

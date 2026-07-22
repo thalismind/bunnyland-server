@@ -29,7 +29,7 @@ from ..terminal_config import (
     resolve_terminal_chat_config,
     save_terminal_config,
 )
-from ..tui.backend import Backend, LocalBackend, RemoteBackend
+from ..tui.backend import Backend, LocalBackend, RemoteBackend, is_authentication_required
 from ..tui.generator_selector import (
     DEFAULT_LOCAL_GENERATOR,
     DEFAULT_LOCAL_SEED,
@@ -39,11 +39,14 @@ from ..tui.screens import (
     CharacterSheetScreen,
     ContentWarningScreen,
     ConversationScreen,
+    SignInCredentials,
+    SignInScreen,
     TerminalSetupScreen,
 )
 from ..tui.splash import IntroSplash
 from .client import (
     BunnylandRepl,
+    LoginIntent,
     OpenChatIntent,
     OpenSheetIntent,
     available_generators,
@@ -139,6 +142,8 @@ class BunnylandReplApp(App[None]):
         self._live_task: asyncio.Task | None = None
         self._live_player_id = ""
         self._live_ready = False
+        self._sign_in_prompt_open = False
+        self._automatic_sign_in_suppressed = False
         self.show_generator_selector = False
         self.needs_chat_setup = False
 
@@ -203,6 +208,53 @@ class BunnylandReplApp(App[None]):
             return
         self.repl.backend.configure_world(seed=selection.seed, generator=selection.generator)
         self.run_worker(self._start_backend(), exclusive=True)
+
+    def _show_sign_in(self, error: str = "", *, automatic: bool = False) -> None:
+        backend = self.repl.backend
+        if not isinstance(backend, RemoteBackend):
+            self.write_log(Text("Sign in requires a remote server URL.", style="yellow"))
+            return
+        if self._sign_in_prompt_open or (
+            automatic and self._automatic_sign_in_suppressed
+        ):
+            return
+        if not automatic:
+            self._automatic_sign_in_suppressed = False
+        self._sign_in_prompt_open = True
+        self.push_screen(
+            SignInScreen(username=backend.username, error=error),
+            callback=lambda credentials: self._sign_in_selected(backend, credentials),
+        )
+
+    def _sign_in_selected(
+        self,
+        backend: RemoteBackend,
+        credentials: SignInCredentials | None,
+    ) -> None:
+        self._sign_in_prompt_open = False
+        if credentials is None:
+            self._automatic_sign_in_suppressed = True
+            self.command.focus()
+            return
+        self.run_worker(self._sign_in(backend, credentials), exclusive=True)
+
+    async def _sign_in(
+        self,
+        backend: RemoteBackend,
+        credentials: SignInCredentials,
+    ) -> None:
+        self._stop_live_updates()
+        try:
+            await backend.sign_in(credentials.username, credentials.password)
+        except Exception as exc:
+            self._show_sign_in(str(exc))
+            return
+        self._automatic_sign_in_suppressed = False
+        self._refresh_error = None
+        await self._safe_refresh()
+        self.write_log(Text(f"Signed in as {backend.username}.", style="green"))
+        self._sync_live_updates()
+        self.command.focus()
 
     async def _start_backend(self) -> None:
         await self.repl.backend.start()
@@ -299,6 +351,11 @@ class BunnylandReplApp(App[None]):
             await self.repl.refresh()
             events = await self.repl.backend.recent_events(self.repl.player_id)
         except Exception as exc:  # network hiccup, server restart, …
+            if isinstance(self.repl.backend, RemoteBackend) and is_authentication_required(exc):
+                self._show_sign_in(
+                    "Sign in is required to join this server.",
+                    automatic=True,
+                )
             message = f"⚠ {self.repl.backend.label} — {exc}"
             if message != self._refresh_error:  # report a failure once, not every tick
                 self.write_log(Text(message, style="red"))
@@ -320,8 +377,11 @@ class BunnylandReplApp(App[None]):
         self.command.value = ""
         if not line:
             return
-        self.command.remember(line)
-        self.write_log(Text(f"> {line}", style="bold"))
+        # `/login` takes credentials only through the masked modal. Sanitize any accidental
+        # arguments before writing the transcript or persistent command history.
+        recorded_line = "/login" if line.partition(" ")[0] == "/login" else line
+        self.command.remember(recorded_line)
+        self.write_log(Text(f"> {recorded_line}", style="bold"))
         if line in {"quit", "exit"}:
             self.exit()
             return
@@ -329,7 +389,9 @@ class BunnylandReplApp(App[None]):
             output = await self.repl.dispatch(line)
         except Exception as exc:  # keep the REPL alive through a bad command
             output = Text(f"⚠ {exc}", style="red")
-        if isinstance(output, OpenSheetIntent):
+        if isinstance(output, LoginIntent):
+            self._show_sign_in()
+        elif isinstance(output, OpenSheetIntent):
             try:
                 profile = await self.repl.backend.fetch_character_profile(output.character_id)
             except Exception as exc:

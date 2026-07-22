@@ -20,6 +20,20 @@ Connect to a running server:
 uv run --all-extras bunnyland tui --server http://localhost:8765
 ```
 
+If the server requires player authentication, the TUI opens a sign-in screen with username
+and masked password fields. Successful sign-in resumes the connection automatically. For
+scripts or preconfigured terminals, the launch-time options remain available:
+
+```bash
+uv run --all-extras bunnyland tui --server https://play.example \
+  --username player --token-file ~/.config/bunnyland/player.token
+```
+
+With `--username`, the TUI asks for the password in the terminal before opening. Use
+`--password-stdin` for non-interactive input. `--token-file` is opt-in credential
+persistence: the client stores the issued bearer token there with mode `0600` and reuses
+and rotates it on later launches. Do not share that file.
+
 List available demo worlds and generators:
 
 ```bash

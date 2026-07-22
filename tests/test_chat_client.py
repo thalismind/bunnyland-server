@@ -8,7 +8,12 @@ import pytest
 
 from bunnyland import chat
 from bunnyland.server.models import CharacterChatActionResult, CharacterSummaryView
-from bunnyland.tui.backend import CharacterChatJob
+from bunnyland.tui.backend import (
+    CharacterChatAccess,
+    CharacterChatController,
+    CharacterChatJob,
+    RemoteBackend,
+)
 
 
 class FakeResponse:
@@ -196,13 +201,15 @@ def test_chat_client_waits_for_async_job(monkeypatch):
 
 
 class FakeChatBackend:
-    def __init__(self, *args, available=True, jobs=None, **kwargs):
+    def __init__(self, *args, available=True, jobs=None, access=None, **kwargs):
         self.args = args
         self.kwargs = kwargs
         self.client_id = "client-1"
         self.available = available
+        self.access = access or CharacterChatAccess(writable=True)
         self.jobs = list(jobs or [])
         self.submitted = []
+        self.assignments = []
         self.started = False
         self.closed = False
 
@@ -217,6 +224,14 @@ class FakeChatBackend:
 
     async def fetch_character_list(self):
         return [CharacterSummaryView(character_id="char:1", name="Juniper")]
+
+    async def character_chat_access(self, _character_id):
+        return self.access
+
+    async def assign_character_chat_controller(self, character_id, controller_id):
+        self.assignments.append((character_id, controller_id))
+        self.access = CharacterChatAccess(writable=True)
+        return self.access
 
     async def submit_character_chat(self, character_id, message, **kwargs):
         self.submitted.append((character_id, message, kwargs))
@@ -260,12 +275,7 @@ def test_chat_client_main_interactive_round_trip(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(chat, "RemoteBackend", lambda *_args, **_kwargs: backend)
 
     with patch("builtins.input", lambda _prompt: next(inputs)):
-        assert (
-            chat.main(
-                ["--server", "https://server", "--character", "Juniper", "--cli"]
-            )
-            == 0
-        )
+        assert chat.main(["--server", "https://server", "--character", "Juniper", "--cli"]) == 0
 
     out = capsys.readouterr().out
     assert "Chatting with Juniper" in out
@@ -473,14 +483,332 @@ async def test_line_chat_polls_pending_job_without_intermediate_reply(capsys):
     backend = FakeChatBackend(
         jobs=[
             CharacterChatJob(id="job-1", status="running", character_id="char:1"),
-            CharacterChatJob(
-                id="job-1", status="succeeded", character_id="char:1", reply="Done."
-            ),
+            CharacterChatJob(id="job-1", status="succeeded", character_id="char:1", reply="Done."),
         ]
     )
     with patch("builtins.input", side_effect=["hello", "/quit"]):
         assert await chat._run_cli(backend, "") == 0
     assert "Done." in capsys.readouterr().out
+
+
+async def test_line_chat_keeps_history_readable_and_assigns_before_sending(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    chat.save_history(
+        "client-1",
+        "char:1",
+        {
+            "summary": "",
+            "messages": [
+                {"role": "user", "text": "Are you there?"},
+                {"role": "character", "text": "I was."},
+            ],
+        },
+    )
+    backend = FakeChatBackend(
+        access=CharacterChatAccess(
+            writable=False,
+            reason="Juniper has suspended; existing chat history is read-only.",
+            controllers=(CharacterChatController("controller:llm", "default (ollama/qwen)"),),
+        ),
+        jobs=[
+            CharacterChatJob(
+                id="job-1",
+                status="succeeded",
+                character_id="char:1",
+                reply="I am back.",
+            )
+        ],
+    )
+    inputs = iter(
+        [
+            "blocked message",
+            "/meta",
+            "/controllers",
+            "/controller controller:missing",
+            "/controller controller:llm",
+            "hello again",
+            "/quit",
+        ]
+    )
+
+    with patch("builtins.input", lambda _prompt: next(inputs)):
+        assert await chat._run_cli(backend, "Juniper") == 0
+
+    output = capsys.readouterr().out
+    assert "You: Are you there?" in output
+    assert "Juniper: I was." in output
+    assert "existing chat history is read-only" in output
+    assert "Meta: /controller <id>, /controllers, /help, /quit" in output
+    assert "controller:llm · default (ollama/qwen)" in output
+    assert "That LLM controller is not assignable" in output
+    assert "Juniper is now assigned to an LLM controller" in output
+    assert backend.assignments == [("char:1", "controller:llm")]
+    assert [item[1] for item in backend.submitted] == ["hello again"]
+
+
+async def test_line_chat_read_only_without_assignable_controllers(capsys):
+    backend = FakeChatBackend(
+        access=CharacterChatAccess(
+            writable=False,
+            reason="Juniper has no controller; existing chat history is read-only.",
+        )
+    )
+    with patch(
+        "builtins.input",
+        side_effect=["/controllers", "/controller", "must not send", "/quit"],
+    ):
+        assert await chat._run_cli(backend, "Juniper") == 0
+
+    output = capsys.readouterr().out
+    assert output.count("No assignable LLM controllers") == 1
+    assert "Usage: /controller <id>" in output
+    assert "existing chat history is read-only" in output
+    assert "Use /controllers to list assignable" not in output
+    assert backend.submitted == []
+
+
+async def test_line_chat_reports_assignment_failure_and_still_read_only(capsys):
+    choice = CharacterChatController("controller:llm", "default")
+
+    class AssignmentBackend(FakeChatBackend):
+        def __init__(self):
+            super().__init__(
+                access=CharacterChatAccess(
+                    writable=False,
+                    reason="read-only",
+                    controllers=(choice,),
+                )
+            )
+            self.attempts = 0
+
+        async def assign_character_chat_controller(self, character_id, controller_id):
+            self.assignments.append((character_id, controller_id))
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError("assignment offline")
+            return CharacterChatAccess(
+                writable=False,
+                reason="controller changed before assignment completed",
+                controllers=(choice,),
+            )
+
+    backend = AssignmentBackend()
+    with patch(
+        "builtins.input",
+        side_effect=[
+            "/controller controller:llm",
+            "/controller controller:llm",
+            "/quit",
+        ],
+    ):
+        assert await chat._run_cli(backend, "Juniper") == 0
+
+    output = capsys.readouterr().out
+    assert "Controller assignment failed: assignment offline" in output
+    assert "controller changed before assignment completed" in output
+    assert backend.assignments == [
+        ("char:1", "controller:llm"),
+        ("char:1", "controller:llm"),
+    ]
+
+
+async def test_textual_chat_is_read_only_until_controller_assignment(tmp_path, monkeypatch):
+    from textual.app import App
+    from textual.widgets import Button, Input, Static
+
+    from bunnyland.tui.screens import ConversationScreen
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    chat.save_history(
+        "client-1",
+        "char:1",
+        {"summary": "", "messages": [{"role": "character", "text": "Earlier."}]},
+    )
+    backend = FakeChatBackend(
+        access=CharacterChatAccess(
+            writable=False,
+            reason="Juniper has web; existing chat history is read-only.",
+            controllers=(CharacterChatController("controller:llm", "default"),),
+        )
+    )
+
+    screen = ConversationScreen(backend, "char:1", "Juniper")
+
+    class ChatHarness(App[None]):
+        def on_mount(self) -> None:
+            self.push_screen(screen)
+
+    app = ChatHarness()
+    async with app.run_test() as pilot:
+        for _ in range(20):
+            if screen.query("#conversation-input"):
+                await pilot.pause(0.05)
+                break
+            await pilot.pause(0.05)
+        input_widget = screen.query_one("#conversation-input", Input)
+        assign = screen.query_one("#conversation-controller-assign", Button)
+        status = screen.query_one("#conversation-status", Static)
+        transcript = screen.query_one("#conversation-transcript", Static)
+        assert input_widget.disabled is True
+        assert assign.disabled is False
+        assert "read-only" in str(status.render())
+        assert "Earlier." in str(transcript.render())
+
+        await pilot.click("#conversation-controller-assign")
+        await pilot.pause()
+        assert backend.assignments == [("char:1", "controller:llm")]
+        assert input_widget.disabled is False
+        assert screen.query_one("#conversation-controller-row").display is False
+
+
+async def test_remote_chat_access_uses_profile_admin_snapshot_and_assignment_contracts():
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self): ...
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        def __init__(self):
+            self.assigned = False
+            self.puts = []
+            self.gets = []
+
+        async def get(self, url):
+            self.gets.append(url)
+            if url.endswith("/public/features"):
+                return Response({"character_chat": True})
+            if "/profile/characters/" in url:
+                return Response(
+                    {
+                        "world_id": "world:1",
+                        "world_epoch": 7,
+                        "character_id": "character:1",
+                        "character_name": "Juniper",
+                        "controller": {
+                            "controller_id": "controller:llm"
+                            if self.assigned
+                            else "controller:web",
+                            "generation": 3,
+                            "kind": "llm" if self.assigned else "web",
+                        },
+                    }
+                )
+            if url.endswith("/admin/world/snapshot"):
+                return Response(
+                    {
+                        "entities": [
+                            {
+                                "id": "controller:llm",
+                                "components": {
+                                    "LLMControllerComponent": {
+                                        "profile_name": "default",
+                                        "provider": "ollama",
+                                        "model": "qwen",
+                                    }
+                                },
+                            },
+                            {
+                                "id": "controller:web",
+                                "components": {"WebControllerComponent": {}},
+                            },
+                            {
+                                "id": "controller:invalid",
+                                "components": {"LLMControllerComponent": "invalid"},
+                            },
+                            {
+                                "id": "controller:unnamed",
+                                "components": {
+                                    "LLMControllerComponent": {
+                                        "profile_name": 7,
+                                        "provider": "",
+                                        "model": "",
+                                    }
+                                },
+                            },
+                        ]
+                    }
+                )
+            raise AssertionError(url)
+
+        async def put(self, url, *, json):
+            self.puts.append((url, json))
+            self.assigned = True
+            return Response({"world_epoch": 8})
+
+    backend = RemoteBackend("https://server.example/v1", client_id="client-1")
+    backend._client = Client()
+    backend._auth_scopes = frozenset({"world:admin"})
+
+    access = await backend.character_chat_access("character:1")
+    assert access == CharacterChatAccess(
+        writable=False,
+        reason="Juniper has web; existing chat history is read-only.",
+        controllers=(
+            CharacterChatController("controller:unnamed", "controller:unnamed"),
+            CharacterChatController("controller:llm", "default (ollama/qwen)"),
+        ),
+    )
+
+    refreshed = await backend.assign_character_chat_controller("character:1", "controller:llm")
+    assert refreshed == CharacterChatAccess(writable=True)
+    assert backend._client.puts == [
+        (
+            "https://server.example/v1/admin/characters/character%3A1/controller",
+            {"controller_id": "controller:llm"},
+        )
+    ]
+
+
+async def test_remote_chat_assignment_requires_admin_scope_without_snapshot_request():
+    backend = RemoteBackend("https://server.example/v1", client_id="client-1")
+    assert await backend.assignable_character_chat_controllers() == ()
+    with pytest.raises(PermissionError, match="Administrator scope"):
+        await backend.assign_character_chat_controller("character:1", "controller:llm")
+
+
+async def test_remote_auth_rejects_missing_login_and_rotation_tokens():
+    class Response:
+        status_code = 200
+
+        def __init__(self, *, rotate_after=None):
+            self.rotate_after = rotate_after
+
+        def raise_for_status(self): ...
+
+        def json(self):
+            return {
+                "token": None,
+                "subject": "player",
+                "scopes": ["world:admin"],
+                "expires_at": 999,
+                "rotate_after": self.rotate_after,
+                "rotation_eligible": True,
+            }
+
+    class Client:
+        async def post(self, _url, **_kwargs):
+            return Response()
+
+        async def patch(self, _url):
+            return Response()
+
+    backend = RemoteBackend("https://server.example/v1", client_id="client-1")
+    backend._client = Client()
+    backend.username = "player"
+    backend._password = "secret"
+    with pytest.raises(RuntimeError, match="login did not return"):
+        await backend._login()
+    assert backend._password == ""
+    with pytest.raises(RuntimeError, match="rotation did not return"):
+        await backend._rotate_token()
 
 
 def test_chat_main_reports_malformed_local_config(monkeypatch):

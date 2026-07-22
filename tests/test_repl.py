@@ -17,6 +17,7 @@ from bunnyland.repl import app as repl_app
 from bunnyland.repl.app import BunnylandReplApp, ReplInput
 from bunnyland.repl.client import (
     BunnylandRepl,
+    LoginIntent,
     ParsedCommand,
     _humanize_event_type,
     available_generators,
@@ -26,9 +27,10 @@ from bunnyland.repl.client import (
     resolve_name,
 )
 from bunnyland.repl.completion import complete_line, reference_candidates, value_candidates
-from bunnyland.tui.backend import Backend, LocalBackend, SubmitResult
+from bunnyland.tui.backend import Backend, LocalBackend, RemoteBackend, SubmitResult
 from bunnyland.tui.generator_selector import GeneratorSelection, WorldGeneratorSelector
 from bunnyland.tui.model import World, entity_name
+from bunnyland.tui.screens import SignInCredentials, SignInScreen
 from bunnyland.tui.splash import IntroSplash
 
 PLAYER = "character:1"
@@ -432,6 +434,17 @@ async def test_dispatch_meta_commands_render_text():
     assert "Commands" in (await repl.dispatch("help")).plain
     assert "Usage" in (await repl.dispatch("play")).plain
     assert "You are now Pib" in (await repl.dispatch("play Pib")).plain
+
+
+async def test_dispatch_login_returns_secure_ui_intent():
+    repl = _repl()
+
+    result = await repl.dispatch("/login")
+
+    assert isinstance(result, LoginIntent)
+    assert result.plain == "Sign in"
+    assert "/login" in repl.meta_commands()
+    assert repl.complete("/l") == ["/login"]
 
 
 async def test_drain_events_surfaces_scene_image_and_failure():
@@ -1092,6 +1105,122 @@ async def test_app_runs_meta_and_action_commands():
         assert "You are now Pib" in text
         assert "Parlor" in text
         assert app.repl.backend.commands[-1]["command_type"] == "take"
+
+
+async def test_app_login_uses_shared_modal_and_refreshes_remote_session(monkeypatch):
+    class LoginBackend(RemoteBackend):
+        def __init__(self) -> None:
+            super().__init__("https://play.example/v1", username="saved-player")
+            self.signed_in: list[tuple[str, str]] = []
+
+        async def sign_in(self, username: str, password: str) -> None:
+            self.username = username
+            self.signed_in.append((username, password))
+
+    backend = LoginBackend()
+    app = BunnylandReplApp(backend)
+    pushed = []
+    workers = []
+    refreshed = []
+    logged = []
+
+    def fake_push_screen(screen, callback=None):
+        pushed.append((screen, callback))
+
+    async def fake_refresh(prime=False):
+        refreshed.append(prime)
+
+    monkeypatch.setattr(app, "push_screen", fake_push_screen)
+    monkeypatch.setattr(app, "run_worker", lambda coroutine, **_kwargs: workers.append(coroutine))
+    monkeypatch.setattr(app, "_safe_refresh", fake_refresh)
+    monkeypatch.setattr(app, "write_log", lambda renderable: logged.append(renderable.plain))
+    monkeypatch.setattr(app.command, "focus", lambda: None)
+
+    app._show_sign_in()
+    screen, callback = pushed.pop()
+    assert isinstance(screen, SignInScreen)
+    assert screen.username == "saved-player"
+
+    callback(SignInCredentials(username="player", password="secret"))
+    await workers.pop()
+
+    assert backend.signed_in == [("player", "secret")]
+    assert refreshed == [False]
+    assert logged == ["Signed in as player."]
+
+
+async def test_app_failed_login_reopens_shared_modal_with_error(monkeypatch):
+    class LoginBackend(RemoteBackend):
+        async def sign_in(self, username: str, _password: str) -> None:
+            self.username = username
+            raise RuntimeError(f"Sign in failed for {username}")
+
+    backend = LoginBackend("https://play.example/v1")
+    app = BunnylandReplApp(backend)
+    pushed = []
+    refreshed = []
+
+    def fake_push_screen(screen, callback=None):
+        pushed.append((screen, callback))
+
+    async def fake_refresh(prime=False):
+        refreshed.append(prime)
+
+    monkeypatch.setattr(app, "push_screen", fake_push_screen)
+    monkeypatch.setattr(app, "_safe_refresh", fake_refresh)
+
+    await app._sign_in(
+        backend,
+        SignInCredentials(username="player", password="wrong"),
+    )
+
+    screen, _callback = pushed.pop()
+    assert isinstance(screen, SignInScreen)
+    assert screen.username == "player"
+    assert screen.error == "Sign in failed for player"
+    assert refreshed == []
+
+
+async def test_app_login_never_records_inline_credentials():
+    app = BunnylandReplApp(RecordingBackend())
+    async with app.run_test() as pilot:
+        await _submit(app, pilot, "/login player visible-secret")
+
+        assert app.command.history[-1] == "/login"
+        assert "visible-secret" not in _log_text(app)
+        assert "Sign in requires a remote server URL" in _log_text(app)
+
+
+async def test_app_auth_required_prompts_once_until_manual_login(monkeypatch):
+    class Unauthorized(RuntimeError):
+        response = SimpleNamespace(status_code=401)
+
+    backend = RemoteBackend("https://play.example/v1")
+    app = BunnylandReplApp(backend)
+    pushed = []
+
+    async def unauthorized_refresh():
+        raise Unauthorized("authentication required")
+
+    def fake_push_screen(screen, callback=None):
+        pushed.append((screen, callback))
+
+    monkeypatch.setattr(app.repl, "refresh", unauthorized_refresh)
+    monkeypatch.setattr(app, "push_screen", fake_push_screen)
+    monkeypatch.setattr(app, "write_log", lambda _renderable: None)
+    monkeypatch.setattr(app.command, "focus", lambda: None)
+
+    await app._safe_refresh_once()
+    screen, callback = pushed[-1]
+    assert isinstance(screen, SignInScreen)
+    assert screen.error == "Sign in is required to join this server."
+
+    callback(None)
+    await app._safe_refresh_once()
+    assert len(pushed) == 1
+
+    app._show_sign_in()
+    assert len(pushed) == 2
 
 
 async def test_intro_splash_fades_and_dismisses():

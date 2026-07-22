@@ -22,7 +22,6 @@ import asyncio
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from rich.style import Style
 from rich.text import Text
@@ -41,6 +40,7 @@ from ..tui.model import KIND_ICON, World, entity_icon, entity_name, fmt_points, 
 from .completion import complete_line, reference_candidates
 
 META_COMMANDS = (
+    "/login",
     "help",
     "who",
     "look",
@@ -108,7 +108,14 @@ class OpenChatIntent:
         return f"Open chat: {self.character_name}"
 
 
-ReplCommandResult = Text | OpenSheetIntent | OpenChatIntent
+@dataclass(frozen=True)
+class LoginIntent:
+    @property
+    def plain(self) -> str:
+        return "Sign in"
+
+
+ReplCommandResult = Text | LoginIntent | OpenSheetIntent | OpenChatIntent
 
 
 def parse_line(line: str, definitions: dict[str, ActionDefinition]) -> ParsedCommand | None:
@@ -361,6 +368,8 @@ class BunnylandRepl:
             return Text("")
         verb, _, rest = line.partition(" ")
         rest = rest.strip()
+        if verb == "/login":
+            return LoginIntent()
         if verb == "help":
             return self.render_help(rest)
         if verb == "who":
@@ -461,7 +470,7 @@ class BunnylandRepl:
         definition = self._defs[parsed.tool]
         candidates = reference_candidates(self.world, self.player_id)
 
-        payload: dict[str, Any] = {}
+        payload: dict[str, str] = {}
         for key, value in parsed.arguments.items():
             if key in definition.reference_arg_keys:
                 resolved = resolve_name(value, self.world, candidates)

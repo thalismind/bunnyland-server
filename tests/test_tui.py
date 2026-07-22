@@ -40,6 +40,7 @@ from bunnyland.tui.backend import (
     RemoteBackend,
     SubmitResult,
     clear_claim_control,
+    is_authentication_required,
     load_claim_control,
     persistent_client_id,
     save_claim_control,
@@ -52,6 +53,7 @@ from bunnyland.tui.generator_selector import (
     random_preset_seed,
 )
 from bunnyland.tui.model import Target, World, entity_icon, entity_name, entity_type
+from bunnyland.tui.screens import SignInCredentials, SignInScreen
 from bunnyland.tui.splash import IntroSplash
 from bunnyland.worldgen import GenOptions, InstantiatedWorld, WorldGenerator
 
@@ -1104,6 +1106,64 @@ async def test_local_backend_close_before_start_is_noop():
     assert backend._task is None
 
 
+async def test_local_backend_character_chat_controller_choices_and_assignment_guards():
+    pending = LocalBackend(generator="apartment-demo", autorun=False)
+    assert await pending.assignable_character_chat_controllers() == ()
+    with pytest.raises(RuntimeError, match="has not started"):
+        await pending.assign_character_chat_controller("character:1", "controller:1")
+
+    backend = LocalBackend(generator="apartment-demo", autorun=False, client_id="chat-admin")
+    await backend.start()
+    try:
+        player = (await backend.fetch_character_list())[0].character_id
+        empty_detail = spawn_entity(
+            backend.actor.world,
+            [LLMControllerComponent(profile_name="zeta", model="", provider="")],
+        )
+        selected = spawn_entity(
+            backend.actor.world,
+            [LLMControllerComponent(profile_name="alpha", model="qwen", provider="ollama")],
+        )
+        not_llm = spawn_entity(
+            backend.actor.world,
+            [IdentityComponent(name="not LLM", kind="controller")],
+        )
+
+        choices = await backend.assignable_character_chat_controllers()
+        assert tuple(choice.label for choice in choices) == tuple(
+            sorted((choice.label for choice in choices), key=str.lower)
+        )
+        assert any(
+            choice.controller_id == str(empty_detail.id) and choice.label == "zeta"
+            for choice in choices
+        )
+        assert any(
+            choice.controller_id == str(selected.id) and choice.label == "alpha (ollama/qwen)"
+            for choice in choices
+        )
+
+        with pytest.raises(ValueError, match="character does not exist"):
+            await backend.assign_character_chat_controller("not-an-id", str(selected.id))
+        with pytest.raises(ValueError, match="controller does not exist"):
+            await backend.assign_character_chat_controller(player, "not-an-id")
+        with pytest.raises(ValueError, match="not an LLM"):
+            await backend.assign_character_chat_controller(player, str(not_llm.id))
+
+        character = backend.actor.world.get_entity(parse_entity_id(player))
+        if not character.has_component(SuspendedComponent):
+            character.add_component(SuspendedComponent(reason="offline"))
+        access = await backend.assign_character_chat_controller(player, str(selected.id))
+        assert access.writable is False
+        assert "not available" in access.reason
+        assert backend.actor._controller_kind(selected.id) == "llm"
+        assert backend.actor.current_generation(character.id, selected.id) is not None
+        assert not character.has_component(SuspendedComponent)
+        await backend.assign_character_chat_controller(player, str(selected.id))
+        assert not character.has_component(SuspendedComponent)
+    finally:
+        await backend.close()
+
+
 async def test_remote_backend_cancel_command_returns_false_on_error():
     class Response:
         is_success = False
@@ -1790,17 +1850,43 @@ async def test_remote_backend_login_persistence_refresh_rotation_and_close(tmp_p
 
         async def post(self, url, **_kwargs):
             if url.endswith("/auth/session"):
-                return Response({"token": "login-token", "rotate_after": 123})
+                return Response(
+                    {
+                        "token": "login-token",
+                        "subject": "player",
+                        "scopes": ["world:play", "world:admin"],
+                        "expires_at": 999,
+                        "rotate_after": 123,
+                        "rotation_eligible": True,
+                    }
+                )
             raise AssertionError(url)
 
         async def patch(self, url, **_kwargs):
             assert url.endswith("/auth/session")
             if self.rotate_conflict:
                 return Response({}, 409)
-            return Response({"token": "rotated-token", "rotate_after": 456})
+            return Response(
+                {
+                    "token": "rotated-token",
+                    "subject": "player",
+                    "scopes": ["world:play", "world:admin"],
+                    "expires_at": 999,
+                    "rotate_after": 456,
+                    "rotation_eligible": True,
+                }
+            )
 
         async def get(self, _url):
-            return Response({"rotate_after": 321})
+            return Response(
+                {
+                    "subject": "player",
+                    "scopes": ["world:play", "world:admin"],
+                    "expires_at": 999,
+                    "rotate_after": 321,
+                    "rotation_eligible": True,
+                }
+            )
 
         async def aclose(self):
             self.closed = True
@@ -1838,6 +1924,76 @@ async def test_remote_backend_login_persistence_refresh_rotation_and_close(tmp_p
     await existing.start()
     assert second_client.headers["Authorization"] == "Bearer rotated-token"
     await existing.close()
+
+
+async def test_remote_backend_runtime_sign_in_and_auth_required_detection(monkeypatch):
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self): ...
+
+        def json(self):
+            return {
+                "token": "runtime-token",
+                "subject": "player",
+                "scopes": ["world:play"],
+                "expires_at": 999,
+                "rotate_after": None,
+                "rotation_eligible": True,
+            }
+
+    class Client:
+        def __init__(self, **_kwargs):
+            self.headers = {}
+            self.login = None
+            self.post_error = None
+
+        async def post(self, _url, *, json):
+            self.login = json
+            if self.post_error is not None:
+                raise self.post_error
+            return Response()
+
+        async def aclose(self): ...
+
+    client = Client()
+    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(AsyncClient=lambda **_kw: client))
+    backend = RemoteBackend("https://server/api")
+    with pytest.raises(RuntimeError, match="must be started"):
+        await backend.sign_in("player", "password")
+    await backend.start()
+    await backend.sign_in(" player ", "password")
+    assert client.login == {
+        "username": "player",
+        "password": "password",
+        "delivery": "body",
+    }
+    assert client.headers["Authorization"] == "Bearer runtime-token"
+    assert backend._password == ""
+
+    client.post_error = RuntimeError("login unavailable")
+    with pytest.raises(RuntimeError, match="login unavailable"):
+        await backend.sign_in("player", "another password")
+    assert backend._password == ""
+    client.post_error = None
+
+    completed_task = asyncio.create_task(asyncio.sleep(0))
+    await completed_task
+    active_rotation = backend._rotation_task
+    active_rotation.cancel()
+    await asyncio.gather(active_rotation, return_exceptions=True)
+    backend._rotation_task = completed_task
+    backend._start_rotation_loop()
+    assert backend._rotation_task is not completed_task
+    await backend.close()
+
+    auth_error = RuntimeError("unauthorized")
+    auth_error.response = SimpleNamespace(status_code=401)
+    other_error = RuntimeError("forbidden")
+    other_error.response = SimpleNamespace(status_code=403)
+    assert is_authentication_required(auth_error) is True
+    assert is_authentication_required(other_error) is False
+    assert is_authentication_required(RuntimeError("offline")) is False
 
 
 def test_remote_backend_rejects_insecure_servers_and_token_files(tmp_path) -> None:
@@ -2176,12 +2332,8 @@ async def test_remote_backend_does_not_coalesce_across_claim_identity():
     await backend._client.started["claim-new"].wait()
 
     assert len(backend._client.requests) == 2
-    assert backend._client.requests[0][1] == {
-        "headers": {"X-Bunnyland-Claim-Secret": "secret-old"}
-    }
-    assert backend._client.requests[1][1] == {
-        "headers": {"X-Bunnyland-Claim-Secret": "secret-new"}
-    }
+    assert backend._client.requests[0][1] == {"headers": {"X-Bunnyland-Claim-Secret": "secret-old"}}
+    assert backend._client.requests[1][1] == {"headers": {"X-Bunnyland-Claim-Secret": "secret-new"}}
 
     backend._client.release["claim-old"].set()
     assert await old_read is None
@@ -2498,6 +2650,171 @@ async def _push_action_form(app, pilot, screen: ActionForm, *, callback=None) ->
     await app.push_screen(screen, callback=callback)
     await _wait_for_widget(screen, pilot, "#form-submit")
     return screen
+
+
+async def test_sign_in_screen_masks_password_validates_and_submits():
+    from textual.widgets import Input, Label
+
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    results = []
+    async with app.run_test() as pilot:
+        await _wait_for_tui_ready(app, pilot)
+
+        blank = SignInScreen()
+        await app.push_screen(blank, callback=results.append)
+        await pilot.pause()
+        assert blank.query_one("#sign-in-username", Input).has_focus
+        blank.query_one("#sign-in-submit").press()
+        await pilot.pause()
+        assert "Username is required" in str(blank.query_one("#sign-in-error", Label).render())
+        blank.query_one("#sign-in-cancel").press()
+        await pilot.pause()
+        assert results == [None]
+
+        screen = SignInScreen(username="player")
+        await app.push_screen(screen, callback=results.append)
+        await pilot.pause()
+
+        username = screen.query_one("#sign-in-username", Input)
+        password = screen.query_one("#sign-in-password", Input)
+        assert username.value == "player"
+        assert password.password is True
+        assert password.has_focus
+
+        screen.query_one("#sign-in-submit").press()
+        await pilot.pause()
+        assert "Password is required" in str(screen.query_one("#sign-in-error", Label).render())
+        assert results == [None]
+
+        password.value = "secret"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert results == [None, SignInCredentials(username="player", password="secret")]
+
+
+async def test_tui_prompts_for_remote_auth_and_retries_after_sign_in(monkeypatch):
+    backend = RemoteBackend("https://server.example/v1")
+    app = BunnylandTUI(backend)
+    pushed = []
+    workers = []
+    fetches = []
+    continued = []
+
+    class Unauthorized(RuntimeError):
+        response = SimpleNamespace(status_code=401)
+
+    async def start(): ...
+
+    async def fetch_character_list():
+        fetches.append(True)
+        if len(fetches) == 1:
+            raise Unauthorized("authentication required")
+
+    async def continue_start():
+        continued.append("connected")
+
+    signed_in = []
+
+    async def sign_in(username, password):
+        signed_in.append((username, password))
+
+    def push_screen(screen, callback=None):
+        pushed.append((screen, callback))
+
+    monkeypatch.setattr(backend, "start", start)
+    monkeypatch.setattr(backend, "sign_in", sign_in)
+    monkeypatch.setattr(backend, "fetch_character_list", fetch_character_list)
+    monkeypatch.setattr(app, "_continue_backend_start", continue_start)
+    monkeypatch.setattr(app, "push_screen", push_screen)
+    monkeypatch.setattr(app, "run_worker", lambda coroutine, **_kwargs: workers.append(coroutine))
+
+    await app._start_backend()
+    screen, callback = pushed[-1]
+    assert isinstance(screen, SignInScreen)
+    assert screen.error == "Sign in is required to join this server."
+
+    callback(SignInCredentials(username="player", password="secret"))
+    await workers.pop()
+    assert signed_in == [("player", "secret")]
+    assert fetches == [True, True]
+    assert continued == ["connected"]
+
+
+async def test_tui_sign_in_handles_cancel_rejection_connection_error_and_local_backend(
+    monkeypatch,
+):
+    backend = RemoteBackend("https://server.example/v1")
+    app = BunnylandTUI(backend)
+    pushed = []
+    exits = []
+
+    def push_screen(screen, callback=None):
+        pushed.append((screen, callback))
+
+    monkeypatch.setattr(app, "push_screen", push_screen)
+    monkeypatch.setattr(app, "exit", lambda: exits.append(True))
+    app._show_sign_in()
+    pushed[-1][1](None)
+    assert exits == [True]
+
+    class Unauthorized(RuntimeError):
+        response = SimpleNamespace(status_code=401)
+
+    failures = [Unauthorized("no"), RuntimeError("offline")]
+
+    async def sign_in(_username, _password):
+        raise failures.pop(0)
+
+    monkeypatch.setattr(backend, "sign_in", sign_in)
+    credentials = SignInCredentials(username="player", password="secret")
+    await app._sign_in_and_retry(credentials)
+    assert pushed[-1][0].error == "The username or password was not accepted."
+    await app._sign_in_and_retry(credentials)
+    assert pushed[-1][0].error == "Could not sign in: offline"
+
+    local_app = BunnylandTUI(RecordingBackend(_snapshot()))
+    await local_app._sign_in_and_retry(credentials)
+    local_screens = []
+    monkeypatch.setattr(
+        local_app, "push_screen", lambda screen, callback=None: local_screens.append(screen)
+    )
+    local_app._show_sign_in()
+    assert local_screens[-1].username == ""
+
+
+async def test_tui_backend_start_reraises_non_auth_and_preserves_content_warning(monkeypatch):
+    backend = RecordingBackend(_snapshot())
+    app = BunnylandTUI(backend)
+
+    async def broken_start():
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(backend, "start", broken_start)
+    with pytest.raises(RuntimeError, match="offline"):
+        await app._start_backend()
+
+    pushed = []
+
+    async def fetch_content_flags():
+        return ("violence",)
+
+    monkeypatch.setattr(backend, "fetch_content_flags", fetch_content_flags)
+    monkeypatch.setattr(app, "push_screen", lambda screen, callback=None: pushed.append(screen))
+    await app._continue_backend_start()
+    assert pushed and pushed[-1].content_flags == ("violence",)
+
+    finished = []
+
+    async def no_content_flags():
+        return ()
+
+    async def finish_backend_start():
+        finished.append(True)
+
+    monkeypatch.setattr(backend, "fetch_content_flags", no_content_flags)
+    monkeypatch.setattr(app, "_finish_backend_start", finish_backend_start)
+    await app._continue_backend_start()
+    assert finished == [True]
 
 
 async def test_action_form_dropdown_selects_and_cancels():

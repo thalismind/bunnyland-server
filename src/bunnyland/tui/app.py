@@ -33,7 +33,13 @@ from ..terminal_config import (
     save_terminal_config,
 )
 from ..terminal_generators import available_generators, format_generator_lines
-from .backend import Backend, ControlClaim, LocalBackend, RemoteBackend
+from .backend import (
+    Backend,
+    ControlClaim,
+    LocalBackend,
+    RemoteBackend,
+    is_authentication_required,
+)
 from .events import EventNarrator
 from .generator_selector import DEFAULT_LOCAL_GENERATOR, DEFAULT_LOCAL_SEED, WorldGeneratorSelector
 from .model import Target, World, entity_icon, entity_name, fmt_points, has
@@ -42,6 +48,8 @@ from .screens import (
     CharacterSheetScreen,
     ContentWarningScreen,
     ConversationScreen,
+    SignInCredentials,
+    SignInScreen,
     TerminalSetupScreen,
 )
 from .splash import IntroSplash
@@ -477,7 +485,18 @@ class BunnylandTUI(App[None]):
         self.run_worker(self._start_backend(), exclusive=True)
 
     async def _start_backend(self) -> None:
-        await self.backend.start()
+        try:
+            await self.backend.start()
+            if isinstance(self.backend, RemoteBackend):
+                await self.backend.fetch_character_list()
+            await self._continue_backend_start()
+        except Exception as exc:
+            if isinstance(self.backend, RemoteBackend) and is_authentication_required(exc):
+                self._show_sign_in(error="Sign in is required to join this server.")
+                return
+            raise
+
+    async def _continue_backend_start(self) -> None:
         flags = visible_content_flags(
             await self.backend.fetch_content_flags(), self.ignored_content_flags
         )
@@ -485,6 +504,32 @@ class BunnylandTUI(App[None]):
             self.push_screen(ContentWarningScreen(flags), callback=self._content_warning_decided)
             return
         await self._finish_backend_start()
+
+    def _show_sign_in(self, *, error: str = "") -> None:
+        username = self.backend.username if isinstance(self.backend, RemoteBackend) else ""
+        self.push_screen(
+            SignInScreen(username=username, error=error), callback=self._sign_in_selected
+        )
+
+    def _sign_in_selected(self, credentials: SignInCredentials | None) -> None:
+        if credentials is None:
+            self.exit()
+            return
+        self.run_worker(self._sign_in_and_retry(credentials), exclusive=True)
+
+    async def _sign_in_and_retry(self, credentials: SignInCredentials) -> None:
+        if not isinstance(self.backend, RemoteBackend):
+            return
+        try:
+            await self.backend.sign_in(credentials.username, credentials.password)
+            await self.backend.fetch_character_list()
+            await self._continue_backend_start()
+        except Exception as exc:
+            if is_authentication_required(exc):
+                message = "The username or password was not accepted."
+            else:
+                message = f"Could not sign in: {exc}"
+            self._show_sign_in(error=message)
 
     def _content_warning_decided(self, accepted: bool) -> None:
         if not accepted:
@@ -1357,9 +1402,7 @@ def main(argv: list[str] | None = None) -> int:
     except TerminalConfigError as exc:
         raise SystemExit(str(exc)) from exc
     saved_chat = None if args.server else saved_config
-    ignored_content_flags = resolve_ignored_content_flags(
-        saved_config, args.ignore_content_flag
-    )
+    ignored_content_flags = resolve_ignored_content_flags(saved_config, args.ignore_content_flag)
     explicit_chat = any(
         (
             args.chat_provider,

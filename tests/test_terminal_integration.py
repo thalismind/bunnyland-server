@@ -47,7 +47,20 @@ class EmptyBackend(Backend):
         return None
 
     async def fetch_character_profile(self, _character_id):
-        raise AssertionError("profile fetch belongs to the Textual intent consumer")
+        return CharacterProfileResource.model_validate(
+            {
+                "world_id": "world-1",
+                "world_epoch": 0,
+                "character_id": "character:1",
+                "character_name": "Juniper",
+                "controller": {
+                    "controller_id": "controller:llm",
+                    "generation": 1,
+                    "kind": "llm",
+                    "name": "default",
+                },
+            }
+        )
 
     async def recent_events(self, _character_id=""):
         return []
@@ -76,25 +89,17 @@ async def test_terminal_player_clients_block_loading_until_content_warning_accep
             assert warning.content_flags == ("adult:violence", "pvp")
             await pilot.click("#content-warning-accept")
             await pilot.pause()
-            assert not any(
-                isinstance(screen, ContentWarningScreen) for screen in app.screen_stack
-            )
+            assert not any(isinstance(screen, ContentWarningScreen) for screen in app.screen_stack)
 
 
 async def test_terminal_player_clients_skip_configured_ignored_content_flags():
     for app in (
-        BunnylandTUI(
-            FlaggedBackend(), ignored_content_flags=("adult:violence", "pvp")
-        ),
-        BunnylandReplApp(
-            FlaggedBackend(), ignored_content_flags=("adult:violence", "pvp")
-        ),
+        BunnylandTUI(FlaggedBackend(), ignored_content_flags=("adult:violence", "pvp")),
+        BunnylandReplApp(FlaggedBackend(), ignored_content_flags=("adult:violence", "pvp")),
     ):
         async with app.run_test() as pilot:
             await pilot.pause()
-            assert not any(
-                isinstance(screen, ContentWarningScreen) for screen in app.screen_stack
-            )
+            assert not any(isinstance(screen, ContentWarningScreen) for screen in app.screen_stack)
 
 
 async def test_terminal_player_clients_leave_flagged_world_when_warning_is_declined(
@@ -320,9 +325,7 @@ async def test_standalone_setup_error_reopens_and_generator_selection(monkeypatc
     selector = CharacterChatApp(selector_backend, show_generator_selector=True)
     async with selector.run_test() as pilot:
         assert any(isinstance(s, WorldGeneratorSelector) for s in selector.screen_stack)
-        selector._generator_selected(
-            GeneratorSelection(generator="empty", seed="quiet clearing")
-        )
+        selector._generator_selected(GeneratorSelection(generator="empty", seed="quiet clearing"))
         await pilot.pause()
         assert selector_backend.started is True
 
@@ -370,8 +373,7 @@ async def test_repl_app_opens_sheet_and_reports_sheet_error(monkeypatch, tmp_pat
         await pilot.press("enter")
         await pilot.pause()
         text = "\n".join(
-            "".join(segment.text for segment in strip._segments)
-            for strip in broken.log_view.lines
+            "".join(segment.text for segment in strip._segments) for strip in broken.log_view.lines
         )
         assert "sheet offline" in text
 
@@ -438,9 +440,7 @@ async def test_tui_chat_prefers_selected_visible_character(monkeypatch, tmp_path
                 ],
             }
         )
-        app.character_list = [
-            CharacterSummaryView(character_id="character:2", name="Marlow")
-        ]
+        app.character_list = [CharacterSummaryView(character_id="character:2", name="Marlow")]
         app.selected_id = "character:2"
         await app.action_open_chat()
         await pilot.pause()
@@ -459,9 +459,7 @@ async def test_tui_chat_prefers_selected_visible_character(monkeypatch, tmp_path
         assert conversation.character_id == "character:2"
 
 
-async def test_tui_and_repl_setup_intro_cancel_error_and_generator_branch(
-    monkeypatch, tmp_path
-):
+async def test_tui_and_repl_setup_intro_cancel_error_and_generator_branch(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     from bunnyland.terminal_config import TerminalConfig
@@ -507,9 +505,7 @@ async def test_tui_and_repl_setup_intro_cancel_error_and_generator_branch(
             assert any(isinstance(s, WorldGeneratorSelector) for s in app.screen_stack)
 
 
-def test_tui_and_repl_main_report_config_errors_and_forward_chat_settings(
-    monkeypatch, tmp_path
-):
+def test_tui_and_repl_main_report_config_errors_and_forward_chat_settings(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     import bunnyland.repl.app as repl_module
     import bunnyland.tui.app as tui_module
@@ -585,6 +581,4 @@ def test_tui_and_repl_main_report_missing_cloud_credentials(monkeypatch, tmp_pat
 
     for module in (tui_module, repl_module):
         with __import__("pytest").raises(SystemExit, match="OPENROUTER_API_KEY"):
-            module.main(
-                ["--generator", "empty", "--chat-provider", "openrouter"]
-            )
+            module.main(["--generator", "empty", "--chat-provider", "openrouter"])

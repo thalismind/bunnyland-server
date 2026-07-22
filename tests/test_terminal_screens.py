@@ -3,12 +3,19 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Input, Select, Static
 
 from bunnyland.server.models import CharacterChatActionResult, CharacterSummaryView
 from bunnyland.server.v1_models import CharacterProfileResource
-from bunnyland.tui.backend import CharacterChatJob
+from bunnyland.terminal_chat import save_history
+from bunnyland.tui.backend import (
+    Backend,
+    CharacterChatAccess,
+    CharacterChatController,
+    CharacterChatJob,
+)
 from bunnyland.tui.screens import (
     CharacterPickerScreen,
     CharacterSheetScreen,
@@ -26,6 +33,12 @@ def _profile() -> CharacterProfileResource:
             "world_epoch": 12,
             "character_id": "character:1",
             "character_name": "Juniper",
+            "controller": {
+                "controller_id": "controller:llm",
+                "generation": 1,
+                "kind": "llm",
+                "name": "default",
+            },
             "sheet": {
                 "kind": "character",
                 "species": "rabbit",
@@ -125,9 +138,7 @@ async def test_character_picker_selects_and_cancels():
     character = CharacterSummaryView(character_id="character:1", name="Juniper")
     host = ScreenHost(CharacterPickerScreen([character]))
     async with host.run_test() as pilot:
-        host.screen_to_push._selected(
-            SimpleNamespace(option=SimpleNamespace(id="character:1"))
-        )
+        host.screen_to_push._selected(SimpleNamespace(option=SimpleNamespace(id="character:1")))
         await pilot.pause()
         assert host.result == "character:1"
 
@@ -141,9 +152,12 @@ async def test_character_picker_selects_and_cancels():
 async def test_content_warning_requires_acceptance_or_decline():
     accepted = ScreenHost(ContentWarningScreen(("adult:violence", "pvp")))
     async with accepted.run_test() as pilot:
-        assert "adult:violence" in accepted.screen_to_push.query_one(
-            "#content-warning-flags Static", Static
-        ).render().plain
+        assert (
+            "adult:violence"
+            in accepted.screen_to_push.query_one("#content-warning-flags Static", Static)
+            .render()
+            .plain
+        )
         await pilot.click("#content-warning-accept")
         await pilot.pause()
         assert accepted.result is True
@@ -195,15 +209,37 @@ class ConversationBackend:
     client_id = "client-1"
     supports_character_chat = True
 
-    def __init__(self, jobs=(), *, available=True, availability_reason="disabled"):
+    def __init__(
+        self,
+        jobs=(),
+        *,
+        available=True,
+        availability_reason="disabled",
+        controllers=(),
+        profile=None,
+    ):
         self.jobs = list(jobs)
         self.available = available
         self.availability_reason = availability_reason
         self.submitted = []
         self.cancelled = []
+        self.controllers = tuple(controllers)
+        self.assignments = []
+        self.profile = profile or _profile()
 
     async def character_chat_availability(self):
         return self.available, self.availability_reason
+
+    async def character_chat_access(self, character_id):
+        return await Backend.character_chat_access(self, character_id)
+
+    async def assignable_character_chat_controllers(self):
+        return self.controllers
+
+    async def assign_character_chat_controller(self, character_id, controller_id):
+        self.assignments.append((character_id, controller_id))
+        self.controllers = ()
+        return CharacterChatAccess(writable=True)
 
     async def submit_character_chat(self, character_id, message, **kwargs):
         self.submitted.append((character_id, message, kwargs))
@@ -222,7 +258,7 @@ class ConversationBackend:
         self.cancelled.append(job.id)
 
     async def fetch_character_profile(self, _character_id):
-        return _profile()
+        return self.profile
 
 
 def _job(status, *, reply="", action=None, failure=""):
@@ -269,9 +305,7 @@ async def test_conversation_screen_sends_pending_chat_and_renders_action(monkeyp
         transcript = screen.query_one("#conversation-transcript", Static).render().plain
         assert "You: What do you see?" in transcript
         assert "Juniper: There is a lantern here." in transcript
-        assert "look: executed" in screen.query_one(
-            "#conversation-action", Static
-        ).render().plain
+        assert "look: executed" in screen.query_one("#conversation-action", Static).render().plain
         assert backend.submitted[0][2]["history"] == []
         await pilot.click("#conversation-sheet")
         assert any(isinstance(item, CharacterSheetScreen) for item in host.screen_stack)
@@ -289,9 +323,10 @@ async def test_conversation_screen_disables_unavailable_chat_and_surfaces_errors
     host = ScreenHost(unavailable_screen)
     async with host.run_test():
         assert unavailable_screen.query_one("#conversation-input", Input).disabled is True
-        assert "server disabled" in unavailable_screen.query_one(
-            "#conversation-status", Static
-        ).render().plain
+        assert (
+            "server disabled"
+            in unavailable_screen.query_one("#conversation-status", Static).render().plain
+        )
 
     failed = ConversationBackend([RuntimeError("provider unavailable")])
     failed_screen = ConversationScreen(failed, "character:1", "Juniper")
@@ -300,9 +335,10 @@ async def test_conversation_screen_disables_unavailable_chat_and_surfaces_errors
         failed_screen.query_one("#conversation-input", Input).value = "Hello"
         await pilot.press("enter")
         await pilot.pause()
-        assert "provider unavailable" in failed_screen.query_one(
-            "#conversation-status", Static
-        ).render().plain
+        assert (
+            "provider unavailable"
+            in failed_screen.query_one("#conversation-status", Static).render().plain
+        )
         assert failed_screen.query_one("#conversation-input", Input).disabled is False
 
 
@@ -315,7 +351,6 @@ async def test_conversation_screen_handles_failed_job_blank_submissions_and_shee
     async def failed_profile(_character_id):
         raise RuntimeError("profile unavailable")
 
-    backend.fetch_character_profile = failed_profile
     screen = ConversationScreen(backend, "character:1", "Juniper")
     host = ScreenHost(screen)
     async with host.run_test() as pilot:
@@ -326,10 +361,11 @@ async def test_conversation_screen_handles_failed_job_blank_submissions_and_shee
         screen._send_task = None
         await screen._send("hello")
         assert "Chat failed" in screen.query_one("#conversation-status", Static).render().plain
+        backend.fetch_character_profile = failed_profile
         await screen._sheet_pressed(SimpleNamespace())
-        assert "profile unavailable" in screen.query_one(
-            "#conversation-status", Static
-        ).render().plain
+        assert (
+            "profile unavailable" in screen.query_one("#conversation-status", Static).render().plain
+        )
         await screen._close_pressed(SimpleNamespace())
         await pilot.pause()
 
@@ -341,9 +377,7 @@ async def test_conversation_screen_success_without_action_uses_ellipsis(monkeypa
     host = ScreenHost(screen)
     async with host.run_test():
         await screen._send("hello")
-        assert "Juniper: …" in screen.query_one(
-            "#conversation-transcript", Static
-        ).render().plain
+        assert "Juniper: …" in screen.query_one("#conversation-transcript", Static).render().plain
 
 
 async def test_conversation_cancellation_before_submission_completes(monkeypatch, tmp_path):
@@ -381,3 +415,57 @@ async def test_conversation_screen_cancels_pending_send(monkeypatch, tmp_path):
         await pilot.pause(0.3)
         await screen.action_close()
         assert backend.cancelled == ["job-1"]
+
+
+async def test_conversation_screen_read_only_and_assignment_error_branches(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    save_history(
+        "client-1",
+        "character:1",
+        {
+            "summary": "",
+            "messages": [
+                {"role": "user", "text": "Earlier question."},
+                {"role": "character", "text": "Earlier answer."},
+            ],
+        },
+    )
+    readonly_profile = _profile().model_copy(
+        update={
+            "controller": _profile().controller.model_copy(
+                update={"controller_id": "controller:web", "kind": "web"}
+            )
+        }
+    )
+    choice = CharacterChatController("controller:llm", "default")
+    backend = ConversationBackend(profile=readonly_profile, controllers=(choice,))
+
+    async def failed_assignment(_character_id, _controller_id):
+        raise RuntimeError("assignment offline")
+
+    backend.assign_character_chat_controller = failed_assignment
+    screen = ConversationScreen(backend, "character:1", "Juniper")
+    host = ScreenHost(screen)
+    async with host.run_test():
+        assert screen.query_one("#conversation-input", Input).disabled is True
+        await screen._send("must not send")
+        assert backend.submitted == []
+
+        select = screen.query_one("#conversation-controller", Select)
+        select.value = Select.NULL
+        await screen._assign_controller_pressed(SimpleNamespace())
+        assert "read-only" in screen.query_one("#conversation-status", Static).render().plain
+
+        select.value = choice.controller_id
+        await screen._assign_controller_pressed(SimpleNamespace())
+        assert (
+            "assignment offline" in screen.query_one("#conversation-status", Static).render().plain
+        )
+        assert screen.query_one("#conversation-controller-assign").disabled is False
+
+    with pytest.raises(PermissionError, match="cannot assign"):
+        await Backend.assign_character_chat_controller(backend, "character:1", choice.controller_id)
+
+    backend.profile = readonly_profile.model_copy(update={"controller": None})
+    access = await Backend.character_chat_access(backend, "character:1")
+    assert "has no controller" in access.reason

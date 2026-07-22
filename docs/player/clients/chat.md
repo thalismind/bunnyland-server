@@ -6,7 +6,10 @@ is needed. With `--server` it submits and polls the server's existing v1 chat jo
 
 Character chat is available only while the character's current controller is an LLM. A
 suspended, scripted, web-controlled, or otherwise unsupported character reports that state
-instead of inventing a second dialogue system.
+instead of inventing a second dialogue system. Saved history remains visible, but the message
+input becomes read-only. A signed-in administrator can choose one of the world's existing LLM
+controllers and assign it from the Textual conversation screen; successful assignment refreshes
+the screen and enables sending.
 
 ## Local Ollama
 
@@ -107,4 +110,8 @@ uv run --all-extras bunnyland chat --cli --server https://play.example/v1 --char
 
 Local `--cli` mode cannot open the setup screen, so it requires saved configuration or an
 explicit `--chat-provider` (and model when desired). Conversation history is shared with
-the Textual clients and bounded to the latest 24 messages.
+the Textual clients and bounded to the latest 24 messages. Line-oriented chat prints that
+history before the prompt and enforces the same controller rule as Textual chat. In read-only
+mode, administrators (and local world hosts) can use `/controllers` to list existing LLM
+controllers and `/controller <id>` to assign one. `/meta` or `/help` lists the available
+client-side commands; these commands never send their text as character dialogue.

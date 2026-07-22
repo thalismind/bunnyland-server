@@ -268,3 +268,19 @@ explain a value to the compiler, the code will not behave reliably enough for pr
 These guidelines are working if diffs stay focused, implementation follows existing
 mechanics patterns, and test failures point to real behavior rather than avoidable
 fixture or command mistakes.
+
+## 12. Keep Player Client Surfaces In Parity
+
+Equivalent player clients must enforce the same server-backed capabilities and state rules.
+
+- Keep Web TUI and Textual TUI flows aligned for authentication, character selection,
+  claims, actions, reconnects, and authorization failures.
+- Keep Web REPL and Textual REPL flows aligned. Use each surface's native interaction
+  model (for example, shared dialogs on the web and slash/meta commands plus masked Textual
+  screens in the terminal) without changing the underlying capability or security contract.
+- Keep character profile chat and terminal character chat aligned for history visibility,
+  controller eligibility, read-only states, admin-only controller assignment, and errors.
+- Preserve non-interactive CLI flags and token-file support for automation when adding
+  interactive sign-in flows.
+- Test parity at the client-adapter boundary and with focused end-to-end coverage for each
+  affected surface. A green test for one client does not substitute for its paired client.
