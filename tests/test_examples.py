@@ -9,7 +9,13 @@ import sys
 
 import pytest
 
-from bunnyland.core import SuspendedComponent, WorldActor, container_of
+from bunnyland.core import (
+    ActionOverrideComponent,
+    ActionOverrideEntry,
+    SuspendedComponent,
+    WorldActor,
+    container_of,
+)
 from bunnyland.core.components import (
     DescriptionComponent,
     IdentityComponent,
@@ -316,6 +322,18 @@ async def test_colonysim_demo_includes_stockpile_storage():
 
     await COLONYSIM_DEMO.generate(actor, "colonysim-demo", GenOptions())
 
+    resource_node = next(
+        actor.world.query().with_all([ResourceNodeComponent]).execute_entities()
+    )
+    assert resource_node.get_component(ActionOverrideComponent) == ActionOverrideComponent(
+        (
+            ActionOverrideEntry(
+                "harvest",
+                destination_action="gather-resource",
+                destination_argument="node_id",
+            ),
+        )
+    )
     assert _has(actor, StockpileComponent)
     assert _has(actor, PawnProfileComponent)
     assert _has(actor, PrisonerComponent)

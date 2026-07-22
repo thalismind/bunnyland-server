@@ -185,6 +185,18 @@
                 "maximum": 5,
                 "regen_per_day": 2.0
               }
+            },
+            {
+              "type": "ActionOverrideComponent",
+              "fields": {
+                "overrides": [
+                  {
+                    "source_action": "harvest",
+                    "destination_action": "gather-resource",
+                    "destination_argument": "node_id"
+                  }
+                ]
+              }
             }
           ]
         }

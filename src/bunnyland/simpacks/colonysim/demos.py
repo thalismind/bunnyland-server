@@ -11,7 +11,12 @@ from bunnyland.worldgen.proposal import CharacterSpec, ExitSpec, RoomSpec, World
 
 async def colonysim_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
     del options
-    from bunnyland.core.components import IdentityComponent, PortableComponent
+    from bunnyland.core.components import (
+        ActionOverrideComponent,
+        ActionOverrideEntry,
+        IdentityComponent,
+        PortableComponent,
+    )
     from bunnyland.simpacks.colonysim.mechanics import (
         BodyPartHealthComponent,
         ColonyIncidentComponent,
@@ -91,6 +96,15 @@ async def colonysim_example(actor, seed: str, options: GenOptions) -> Instantiat
                 IdentityComponent(name="a berry bush", kind="resource-node"),
                 ResourceNodeComponent(
                     resource_type="berries", current=20, maximum=20, regen_per_day=6.0
+                ),
+                ActionOverrideComponent(
+                    (
+                        ActionOverrideEntry(
+                            "harvest",
+                            destination_action="gather-resource",
+                            destination_argument="node_id",
+                        ),
+                    )
                 ),
             ],
         )
