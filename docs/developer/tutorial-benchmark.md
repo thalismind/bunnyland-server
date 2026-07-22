@@ -127,6 +127,24 @@ The default output directory is `artifacts/benchmarks/tutorials`; change it with
 - `report.md` is a human-readable model and per-tutorial comparison with instructions for
   rerunning the matrix with additional repeatable `--model` options.
 
+If a long matrix is resumed into more than one output directory, combine completed batches
+without copying or rewriting their full trace evidence:
+
+```bash
+scripts/compare-tutorial-benchmarks \
+  --input artifacts/benchmarks/tutorials/first-batch \
+  --input artifacts/benchmarks/tutorials/resumed-batch \
+  --output artifacts/benchmarks/tutorials/comparison
+```
+
+Add later batches with more repeatable `--input` options. The comparison command rejects
+missing or unequal model/tutorial cells and incompatible provider settings rather than
+silently producing an unfair ranking. Its report links each source directory, where full
+prompts, responses, thinking fields, traces, and logs remain unchanged. Traced attempts
+without a completed session row are listed as interrupted evidence and excluded from scores.
+If a mixed source contains superseded trials, select only one model from it with repeatable
+`--input-model 'model-name=artifact-directory'` options.
+
 Trace rows are flushed and synced after every completed turn. Session rows, the partial
 summary, and the report are checkpointed after every completed session, so an interruption
 retains all completed evidence instead of losing the whole matrix.
