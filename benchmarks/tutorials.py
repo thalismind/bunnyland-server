@@ -1317,6 +1317,43 @@ def render_report(
                     f"{row.get('recovered_rejections', 0)} |"
                 )
 
+    ladder_ranking = summary.get("full_ladder_ranking")
+    if isinstance(ladder_ranking, list) and ladder_ranking:
+        lines.extend(
+            (
+                "",
+                "## Full ladder",
+                "",
+                "| Rank | Model | Passes | Pass rate | Median seconds | Median turns | "
+                "Milestones | Valid | Rejected | Recovered |",
+                "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            )
+        )
+        for row in ladder_ranking:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"| {row.get('rank', '')} | `{row.get('model', '')}` | "
+                f"{row.get('completed_within_session_limit', 0)}/{row.get('sessions', 0)} | "
+                f"{_percent(row.get('pass_rate'))} | "
+                f"{_number(row.get('median_completion_seconds'))} | "
+                f"{_number(row.get('median_completion_turns'))} | "
+                f"{_percent(row.get('milestone_completion_rate'))} | "
+                f"{row.get('valid_actions', 0)} | {row.get('rejections', 0)} | "
+                f"{row.get('recovered_rejections', 0)} |"
+            )
+
+    thresholds = summary.get("smallest_model_reaching_8_of_10")
+    if isinstance(thresholds, dict):
+        lines.extend(("", "## Smallest model reaching 8/10", ""))
+        for tutorial in (*config.tutorials, "full_ladder"):
+            if tutorial == "full_ladder" and not ladder_ranking:
+                continue
+            value = thresholds.get(tutorial)
+            label = "Full ladder" if tutorial == "full_ladder" else tutorial.title()
+            result = f"`{value}`" if isinstance(value, str) else "Not established"
+            lines.append(f"- {label}: {result}")
+
     lines.extend(
         (
             "",

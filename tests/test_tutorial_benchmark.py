@@ -19,6 +19,7 @@ from benchmarks.tutorials import (
     SessionResult,
     TurnTrace,
     preflight_ollama_models,
+    render_report,
     run_benchmark,
     run_session,
     summarize,
@@ -316,6 +317,14 @@ def test_summary_ranks_each_tutorial_full_ladder_and_parameter_threshold():
         "clover": "small",
         "full_ladder": "small",
     }
+
+    report = render_report(
+        BenchmarkConfig(models=("small", "large")), summary, metadata
+    )
+    assert "## Full ladder" in report
+    assert "## Smallest model reaching 8/10" in report
+    assert "- Apple: `small`" in report
+    assert "- Full ladder: `small`" in report
 
 
 async def test_ollama_preflight_uses_show_without_pull_and_extracts_metadata(monkeypatch):
