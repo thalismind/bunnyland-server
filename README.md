@@ -1,25 +1,46 @@
-# bunnyland
+# Bunnyland
 
-An asynchronous social sandbox where humans and LLM agents share persistent characters in
-an emergent ECS simulation. Built on the [Relics](https://github.com/ssube/relics) ECS
-database.
+<p align="center">
+  <a href="https://bunnyland.dev/">
+    <img src="https://bunnyland.dev/assets/vector-style/logo-main.png" alt="Bunnyland" width="360">
+  </a>
+</p>
 
-Characters live in a world of rooms, items, and needs. They are driven by **controllers** —
-an Ollama- or OpenRouter-backed LLM agent, a Discord user, or a no-op "suspended" controller — and all of
-them act through the *same* verb surface (move, take, eat, say, take-note, …). The engine
-validates every action the same way no matter who sent it, so an LLM can't do anything a
-human couldn't, and vice versa.
+> Build a world, hand its characters to humans or AI agents, and watch a shared story take
+> on a life of its own.
 
+Bunnyland is an asynchronous social sandbox for persistent characters and emergent
+simulation. Start with a cozy town, a working colony, a doomed starship, or another
+ready-to-play world; then explore it through the web, a terminal, Discord, or an LLM agent.
+Every character inhabits the same world and plays by the same rules.
+
+Under the hood, human players and Ollama- or OpenRouter-backed agents act through one verb
+surface (`move`, `take`, `eat`, `say`, `take-note`, …). Bunnyland validates their actions
+identically, persists the results in the [Relics](https://github.com/ssube/relics) ECS
+database, and lets small plugin-owned systems turn those results into consequences.
+
+🌐 **Curious what that looks like?** [Visit bunnyland.dev](https://bunnyland.dev/) for the
+visual tour, playable clients, and player guides—or jump into the quickstart below to run
+your own world.
+
+### One world, one action surface
+
+```mermaid
+flowchart LR
+    controllers["Human players & LLM agents"]
+    actor["WorldActor"]
+    pipeline["Validate → resolve → handle"]
+    world[("Persistent ECS world")]
+    output["Events · projections · memory"]
+
+    controllers -->|"submit the same named actions"| actor
+    actor -->|"each tick"| pipeline
+    pipeline --> world
+    world --> output
+    output -. "context for the next turn" .-> controllers
 ```
-controllers (LLM / Discord / suspended)
-        │  submit commands by name ("take the marsh journal")
-        ▼
-   WorldActor  ──tick──▶  validate → resolve names → handlers → ECS mutation → events
-        │                                                              │
-   game loop                                                   projections / memory
-```
 
-## Quickstart
+## 🚀 Quickstart
 
 ```bash
 uv sync                     # core install
@@ -93,7 +114,7 @@ backend (`compose.tempo.yml`). See
 [Observability](docs/admin/running-a-server.md#observability-opentelemetry) for the full
 metric/span reference and the Tempo setup.
 
-## Documentation
+## 📚 Documentation
 
 ### Player guides
 
@@ -203,7 +224,7 @@ metric/span reference and the Tempo setup.
 
 The full design is in [`bunnyland_specification.md`](docs/bunnyland_specification.md).
 
-## Simulation packages
+## 🧩 Simulation packages
 
 Mechanics ship as **plugins** you enable per world, so a world is whatever bundle you turn
 on. Each sim package adds its own components, verbs, systems, and prompt fragments without
@@ -296,7 +317,7 @@ uv run -m pytest -m live_llm
 check it matches both the proposal and the agent's prompt, then play several rounds and
 assert each action is processed.
 
-## Clients
+## 🎮 Clients
 
 Bunnyland is played through several clients. The web graph and web toon clients ship from
 the separate frontend/web repo; the rest ship from this repo. *Offline* means the client can
