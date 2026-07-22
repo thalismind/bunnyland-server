@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -42,6 +43,7 @@ from bunnyland.plugins import bunnyland_plugins, collect_persona_fragments
 from bunnyland.projections import RecentContextProjection, RoomSummaryProjection
 from bunnyland.prompts import (
     ComponentPromptContext,
+    PerceivedPromptEvent,
     PerspectiveName,
     PerspectivePhrase,
     PromptAccess,
@@ -1121,6 +1123,31 @@ def test_recent_context_appears_in_prompt():
     ctx = builder.build(scenario.character, epoch=scenario.actor.epoch)
     assert "Hazel warned the water tasted strange." in ctx.recent
     assert "Recent context:" in render_prompt(ctx)
+
+
+def test_perceived_event_stream_and_overflow_are_distinct_prompt_sections():
+    scenario = build_scenario()
+    context = PromptBuilder(scenario.actor.world).build(scenario.character)
+    context = replace(
+        context,
+        perceived_events=(
+            PerceivedPromptEvent(
+                event_id="speech-1",
+                event_type="SpeechSaidEvent",
+                world_epoch=30,
+                summary='Hazel said, "Hello."',
+                salience=80,
+            ),
+        ),
+        omitted_perceived_events=2,
+        omitted_event_epoch_range=(10, 20),
+    )
+
+    prompt = render_prompt(context)
+
+    assert "Observed since your last prompt:" in prompt
+    assert "[SpeechSaidEvent speech-1] Hazel said" in prompt
+    assert "2 additional visible event(s) during epochs 10-20 were omitted" in prompt
 
 
 def test_unnamed_inventory_item_falls_back_to_something():

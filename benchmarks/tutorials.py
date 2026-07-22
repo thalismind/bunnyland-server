@@ -67,7 +67,7 @@ from bunnyland.worldgen.examples import (
 from bunnyland.worldgen.generators import WorldGenerator
 from bunnyland.worldgen.instantiate import InstantiatedWorld
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 DEFAULT_SESSIONS = 10
 DEFAULT_TIMEOUT_SECONDS = 600.0
 DEFAULT_TURN_LIMIT = 60
@@ -215,6 +215,8 @@ class TurnTrace:
     repeat_guard_warning: bool
     result_events: tuple[dict[str, object], ...]
     milestones: tuple[str, ...]
+    prompt_event_ids: tuple[str, ...] = ()
+    omitted_prompt_events: int = 0
 
 
 @dataclass(frozen=True)
@@ -912,6 +914,8 @@ async def run_session(
                     if event_id in receipt_events
                 ),
                 milestones=tuple(sorted(after)),
+                prompt_event_ids=decision.prompt_event_ids,
+                omitted_prompt_events=decision.omitted_prompt_events,
             )
             traces.append(trace)
             if on_trace_recorded is not None:

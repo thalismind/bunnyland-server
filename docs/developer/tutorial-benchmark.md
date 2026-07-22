@@ -118,8 +118,9 @@ The default output directory is `artifacts/benchmarks/tutorials`; change it with
   action/rejection/recovery counts, first confusion signal, and repeated blocker groups.
 - `traces.jsonl` contains each visible prompt, tool and arguments, decision latency,
   candidates, decision summary, policy rejection codes, submission outcome, command receipt,
-  provider error, consecutive-repeat count, guard warning, result events, and milestone
-  state. It does not contain or request hidden reasoning.
+  provider error, consecutive-repeat count, guard warning, result events, prompt-visible event
+  ids, event-buffer omission counts, and milestone state. It does not contain or request
+  hidden reasoning.
 - `responses.jsonl` contains the complete JSON response returned by Ollama for each turn,
   correlated by session and turn. It contains thinking text only with `--log-thinking`.
 - `benchmark.log` contains timestamped lifecycle, turn, session, retry, warning, and error

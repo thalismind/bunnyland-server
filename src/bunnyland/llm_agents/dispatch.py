@@ -39,8 +39,10 @@ from ..core.controllers import (
 )
 from ..core.ecs import container_of, contents, parse_entity_id, reachable_ids
 from ..core.edges import ControlledBy, ExitTo
+from ..core.events import DomainEvent
 from ..core.world_actor import WorldActor
-from ..prompts.builder import PromptBuilder, render_prompt
+from ..narration.projection import event_salience, event_summary, event_visible_to
+from ..prompts.builder import PerceivedPromptEvent, PromptBuilder, PromptContext, render_prompt
 from ..prompts.filters import PromptFilterRuntime, apply_prompt_filters
 from .agent import CharacterAgent, ScriptedAgent
 from .behavior_tree import BehaviorTree, BehaviorTreeAgent, resolve_behavior_tree
@@ -100,6 +102,9 @@ _CONTROLLER_AGENT_FACTORIES: dict[type, ControllerAgentFactory] = {
 }
 _AUTONOMOUS_COMPONENTS = tuple(_CONTROLLER_AGENT_FACTORIES)
 AutonomousController = object
+
+DEFAULT_MAX_BUFFERED_EVENTS = 100
+DEFAULT_MAX_BUFFERED_EVENT_CHARS = 8_000
 
 
 def register_autonomous_controller(
@@ -255,6 +260,8 @@ class Decision:
     receipt_status: str | None = None
     receipt_reason: str = ""
     result_event_ids: tuple[str, ...] = ()
+    prompt_event_ids: tuple[str, ...] = ()
+    omitted_prompt_events: int = 0
 
     def with_receipt(self, receipt: CommitReceipt | None) -> Decision:
         if receipt is None:
@@ -265,6 +272,100 @@ class Decision:
             receipt_reason=receipt.reason,
             result_event_ids=receipt.event_ids,
         )
+
+
+@dataclass(frozen=True)
+class _EventBatch:
+    events: tuple[PerceivedPromptEvent, ...] = ()
+    omitted: int = 0
+    omitted_epoch_range: tuple[int, int] | None = None
+
+    @property
+    def has_content(self) -> bool:
+        return bool(self.events or self.omitted)
+
+
+class _PerceivedEventBuffer:
+    def __init__(self, max_events: int, max_chars: int) -> None:
+        self.max_events = max(1, max_events)
+        self.max_chars = max(1, max_chars)
+        self.events: list[PerceivedPromptEvent] = []
+        self.omitted = 0
+        self.omitted_epoch_range: tuple[int, int] | None = None
+
+    @property
+    def has_content(self) -> bool:
+        return bool(self.events or self.omitted)
+
+    def append(self, event: PerceivedPromptEvent) -> None:
+        self.events.append(event)
+        self._trim()
+
+    def drain(self) -> _EventBatch:
+        batch = _EventBatch(
+            events=tuple(self.events),
+            omitted=self.omitted,
+            omitted_epoch_range=self.omitted_epoch_range,
+        )
+        self.events = []
+        self.omitted = 0
+        self.omitted_epoch_range = None
+        return batch
+
+    def restore(self, batch: _EventBatch) -> None:
+        self.events = [*batch.events, *self.events]
+        self.omitted += batch.omitted
+        if batch.omitted_epoch_range is not None:
+            self._record_omitted_range(*batch.omitted_epoch_range, increment=False)
+        self._trim()
+
+    def _trim(self) -> None:
+        while len(self.events) > self.max_events or self._chars() > self.max_chars:
+            index = min(
+                range(len(self.events)),
+                key=lambda candidate: (self.events[candidate].salience, candidate),
+            )
+            event = self.events.pop(index)
+            self._record_omitted_range(event.world_epoch, event.world_epoch)
+
+    def _chars(self) -> int:
+        return sum(
+            len(event.summary) + len(event.event_type) + len(event.event_id)
+            for event in self.events
+        )
+
+    def _record_omitted_range(
+        self, start: int, end: int, *, increment: bool = True
+    ) -> None:
+        if increment:
+            self.omitted += 1
+        if self.omitted_epoch_range is None:
+            self.omitted_epoch_range = (start, end)
+            return
+        self.omitted_epoch_range = (
+            min(self.omitted_epoch_range[0], start),
+            max(self.omitted_epoch_range[1], end),
+        )
+
+
+@dataclass(frozen=True)
+class _PromptProjection:
+    context: PromptContext
+    schemas: tuple[dict, ...]
+    controller_id: EntityId
+    generation: int
+    agent: CharacterAgent
+    model: str | None
+    provider: str | None
+    prompted: bool
+
+
+@dataclass
+class _CharacterDispatchState:
+    events: _PerceivedEventBuffer
+    active_task: asyncio.Task[Decision] | None = None
+    active_events: _EventBatch = _EventBatch()
+    pending_projection: _PromptProjection | None = None
 
 
 def _tool_text(call: ToolCall) -> str:
@@ -360,6 +461,8 @@ class ControllerDispatch:
         prompt_filter_runtime: PromptFilterRuntime | None = None,
         behavior_resolver: Callable[[str], BehaviorTree] = resolve_behavior_tree,
         script_resolver: Callable[[str], tuple[ToolCall, ...]] = resolve_script,
+        max_buffered_events: int = DEFAULT_MAX_BUFFERED_EVENTS,
+        max_buffered_event_chars: int = DEFAULT_MAX_BUFFERED_EVENT_CHARS,
     ) -> None:
         self.actor = actor
         self.builder = builder
@@ -370,6 +473,8 @@ class ControllerDispatch:
         actor.prompt_filter_runtime = self.prompt_filter_runtime
         self._behavior_resolver = behavior_resolver
         self._script_resolver = script_resolver
+        self._max_buffered_events = max(1, max_buffered_events)
+        self._max_buffered_event_chars = max(1, max_buffered_event_chars)
         # character_id -> a "did you mean..." note to surface on its next prompt, so an
         # agent that named something unreachable gets the same guidance a human does.
         self._feedback: dict[str, str] = {}
@@ -388,13 +493,16 @@ class ControllerDispatch:
         # game loop's world ticks. Keyed by character id: a character with a task still
         # running is never re-prompted, so each character has at most one decision pending.
         self._inflight: dict[str, asyncio.Task[Decision]] = {}
+        self._character_states: dict[str, _CharacterDispatchState] = {}
         # Decisions completed by background tasks since the last ``run_once``, surfaced (and
         # cleared) on the next pass so observers still see what autonomous agents chose.
         self._completed: list[Decision] = []
-        # Serialize decisions in actable-character order. Provider calls stay bounded to one
-        # at a time, and immediate agents preserve the deterministic order they had before
-        # the uniform async contract.
-        self._decision_lock = asyncio.Lock()
+        self._event_reaction_id = f"bunnyland.dispatch:perceived-events:{id(self)}"
+        actor.bus.subscribe(
+            DomainEvent,
+            self._record_perceived_event,
+            reaction_id=self._event_reaction_id,
+        )
 
     async def run_once(self) -> list[Decision]:
         self._tick += 1
@@ -409,15 +517,6 @@ class ControllerDispatch:
             actable = self._actable_characters()
             run_span.set_attribute("dispatch.actable_count", len(actable))
             for character_id in actable:
-                cid = str(character_id)
-                # A character whose previous decision is still being computed is never
-                # re-prompted: a 60s prompt on a 30s loop yields a single pending decision,
-                # not a new one every pass. The intervening passes are coalesced away rather
-                # than queued — once the character is free again, the next pass rebuilds its
-                # prompt from the latest world state via ``_decide_for``, so the prompt that
-                # is finally delivered reflects the most recent state, never a stale one.
-                if self._has_pending(cid):
-                    continue
                 # Prompt building can still remove a character through an in-place edit;
                 # guard that boundary so the dispatch loop continues safely.
                 try:
@@ -461,9 +560,58 @@ class ControllerDispatch:
 
     def cancel_pending(self) -> None:
         """Cancel any in-flight decision tasks (used when the game loop stops)."""
-        for task in list(self._inflight.values()):
+        for cid, task in list(self._inflight.items()):
+            state = self._character_states.get(cid)
+            if state is not None and state.active_events.has_content:
+                state.events.restore(state.active_events)
+                state.active_events = _EventBatch()
             task.cancel()
         self._inflight.clear()
+        for state in self._character_states.values():
+            state.active_task = None
+
+    def close(self) -> None:
+        """Cancel provider work and detach the dispatch event observer."""
+        self.cancel_pending()
+        self.actor.bus.unsubscribe(DomainEvent, self._record_perceived_event)
+
+    def _state_for(self, cid: str) -> _CharacterDispatchState:
+        state = self._character_states.get(cid)
+        if state is None:
+            state = _CharacterDispatchState(
+                events=_PerceivedEventBuffer(
+                    self._max_buffered_events,
+                    self._max_buffered_event_chars,
+                )
+            )
+            self._character_states[cid] = state
+        return state
+
+    def _record_perceived_event(self, event: DomainEvent) -> None:
+        for cid, state in tuple(self._character_states.items()):
+            character_id = parse_entity_id(cid)
+            if character_id is None or not self.actor.world.has_entity(character_id):
+                continue
+            character = self.actor.world.get_entity(character_id)
+            if not event_visible_to(self.actor.world, character, event):
+                continue
+            summary = event_summary(self.actor.world, character, event)
+            if not summary:
+                message = getattr(event, "message", None)
+                if isinstance(message, str) and message.strip():
+                    summary = message.strip()
+                else:
+                    label = re.sub(r"(?<!^)(?=[A-Z])", " ", event.__class__.__name__)
+                    summary = f"{label}."
+            state.events.append(
+                PerceivedPromptEvent(
+                    event_id=event.event_id,
+                    event_type=event.__class__.__name__,
+                    world_epoch=event.world_epoch,
+                    summary=summary,
+                    salience=event_salience(event),
+                )
+            )
 
     def _actable_characters(self) -> list[EntityId]:
         query = (
@@ -531,13 +679,32 @@ class ControllerDispatch:
         return agent
 
     async def _decide_for(self, character_id: EntityId) -> Decision | None:
-        """Prompt one character's agent.
+        """Build or coalesce one character projection, then start it when eligible."""
+        projection = self._build_projection(character_id)
+        if isinstance(projection, Decision):
+            return projection
 
-        Synchronous agents (scripted/behavioral/goal-directed) resolve inline and their
-        ``Decision`` is returned. An async agent's prompt is handed to a background task so a
-        slow provider never blocks the world tick; ``None`` is returned and the eventual
-        ``Decision`` is surfaced by a later ``run_once`` once the task finishes.
-        """
+        cid = str(character_id)
+        if not projection.prompted:
+            if self._has_pending(cid):
+                return None
+            self._launch_projection(character_id, projection, _EventBatch())
+            return None
+
+        state = self._state_for(cid)
+        if state.active_task is not None and not state.active_task.done():
+            # A dispatch pass represents the character's next turn even when its visible
+            # state is unchanged. Keep one slot and overwrite it on every pass; provider
+            # history and newly buffered events still make the eventual request meaningful.
+            state.pending_projection = projection
+            return None
+
+        state.pending_projection = None
+        event_batch = state.events.drain()
+        self._launch_projection(character_id, projection, event_batch)
+        return None
+
+    def _build_projection(self, character_id: EntityId) -> _PromptProjection | Decision:
         controller = self._autonomous_controller(character_id)
         assert controller is not None  # filtered in _actable_characters
         controller_id, generation, controller_component = controller
@@ -552,24 +719,9 @@ class ControllerDispatch:
         prompted = isinstance(controller_component, LLMControllerComponent)
         with telemetry.span("agent.prompt.build", {"character.id": cid}):
             context = self.builder.build(character_id, epoch=self.actor.epoch)
-            pending = self._feedback.pop(cid, None)
+            pending = self._feedback.get(cid)
             if pending is not None:
                 context = replace(context, warnings=(*context.warnings, pending))
-            prompt = render_prompt(context)
-
-        # Low-cardinality attributes for the decision-latency metric; spans can carry the
-        # richer, higher-cardinality context (which character, what prompt, what it chose).
-        metric_attrs = {
-            "provider": provider or "local",
-            "model": model or "unknown",
-            "agent.kind": type(agent).__name__,
-        }
-        span_attrs = {**metric_attrs, "character.id": cid, "decision.prompted": prompted}
-        if isinstance(agent, BehaviorTreeAgent):
-            span_attrs["behavior_tree.name"] = agent.tree.name
-        if prompted and telemetry.enabled():
-            span_attrs["decision.prompt"] = telemetry.attr_text(prompt)
-            span_attrs["decision.prompt_chars"] = len(prompt)
 
         character = self.actor.world.get_entity(character_id)
         all_definitions = self.actor.action_definitions()
@@ -593,27 +745,76 @@ class ControllerDispatch:
                 )
             )
             schemas.extend(filter(None, (discovery,)))
-        # Every agent follows the same async contract. Run the decision (and its follow-up
-        # submit) off the dispatch path so no controller can block the world tick.
+        return _PromptProjection(
+            context=context,
+            schemas=tuple(schemas),
+            controller_id=controller_id,
+            generation=generation,
+            agent=agent,
+            model=model,
+            provider=provider,
+            prompted=prompted,
+        )
+
+    def _launch_projection(
+        self,
+        character_id: EntityId,
+        projection: _PromptProjection,
+        event_batch: _EventBatch,
+    ) -> None:
+        cid = str(character_id)
+        context = replace(
+            projection.context,
+            perceived_events=event_batch.events,
+            omitted_perceived_events=event_batch.omitted,
+            omitted_event_epoch_range=event_batch.omitted_epoch_range,
+        )
+        prompt = render_prompt(context)
+        metric_attrs = {
+            "provider": projection.provider or "local",
+            "model": projection.model or "unknown",
+            "agent.kind": type(projection.agent).__name__,
+        }
+        span_attrs = {
+            **metric_attrs,
+            "character.id": cid,
+            "decision.prompted": projection.prompted,
+            "decision.prompt_event_count": len(event_batch.events),
+            "decision.omitted_prompt_events": event_batch.omitted,
+        }
+        if isinstance(projection.agent, BehaviorTreeAgent):
+            span_attrs["behavior_tree.name"] = projection.agent.tree.name
+        if projection.prompted and telemetry.enabled():
+            span_attrs["decision.prompt"] = telemetry.attr_text(prompt)
+            span_attrs["decision.prompt_chars"] = len(prompt)
+
+        feedback = self._feedback.get(cid)
+        if feedback is not None and feedback in context.warnings:
+            self._feedback.pop(cid, None)
+
         task = asyncio.ensure_future(
             self._await_decision(
                 character_id,
-                controller_id,
-                generation,
+                projection.controller_id,
+                projection.generation,
                 context,
-                agent,
+                projection.agent,
                 prompt,
-                model,
-                provider,
-                schemas,
+                projection.model,
+                projection.provider,
+                list(projection.schemas),
                 span_attrs,
                 metric_attrs,
                 self.actor.epoch,
+                event_batch,
             )
         )
         self._inflight[cid] = task
+        if projection.prompted:
+            state = self._state_for(cid)
+            state.active_task = task
+            state.active_events = event_batch
         task.add_done_callback(lambda finished, key=cid: self._forget(key, finished))
-        return None
 
     async def _await_decision(
         self,
@@ -629,43 +830,36 @@ class ControllerDispatch:
         span_attrs: dict,
         metric_attrs: dict,
         input_epoch: int,
+        event_batch: _EventBatch,
     ) -> Decision:
-        """Await an async agent's decision under the provider lock, then finalize it.
-
-        The lock guarantees only one provider request runs at a time; everything after the
-        request (name resolution, submission) happens outside it so the next character's
-        prompt can start as soon as this one's reply lands.
-        """
+        """Await one character decision and finalize it without blocking other characters."""
         cid = str(character_id)
         try:
-            async with self._decision_lock:
-                # Another decision may remove this character while its task waits for the
-                # provider lock. Do not invoke an agent for an entity that no longer exists.
-                self.actor.world.get_entity(character_id)
-                with (
-                    telemetry.record_duration(telemetry.record_llm_decision, metric_attrs),
-                    telemetry.span("agent.decide", span_attrs) as dspan,
-                ):
-                    with telemetry.span("agent.prompt.filter", {"character.id": cid}):
-                        prompt = await apply_prompt_filters(
-                            prompt,
-                            runtime=self.prompt_filter_runtime,
-                            character=self.actor.world.get_entity(character_id),
-                            context=context,
-                            epoch=input_epoch,
-                        )
-                    if telemetry.enabled():
-                        dspan.set_attribute("decision.prompt", telemetry.attr_text(prompt))
-                        dspan.set_attribute("decision.prompt_chars", len(prompt))
-                    call = await agent.decide(
+            self.actor.world.get_entity(character_id)
+            with (
+                telemetry.record_duration(telemetry.record_llm_decision, metric_attrs),
+                telemetry.span("agent.decide", span_attrs) as dspan,
+            ):
+                with telemetry.span("agent.prompt.filter", {"character.id": cid}):
+                    prompt = await apply_prompt_filters(
                         prompt,
-                        context,
-                        character_id=cid,
-                        model=model,
-                        provider=provider,
-                        tools=tools,
+                        runtime=self.prompt_filter_runtime,
+                        character=self.actor.world.get_entity(character_id),
+                        context=context,
+                        epoch=input_epoch,
                     )
-                    self._annotate_decision_span(dspan, call)
+                if telemetry.enabled():
+                    dspan.set_attribute("decision.prompt", telemetry.attr_text(prompt))
+                    dspan.set_attribute("decision.prompt_chars", len(prompt))
+                call = await agent.decide(
+                    prompt,
+                    context,
+                    character_id=cid,
+                    model=model,
+                    provider=provider,
+                    tools=tools,
+                )
+                self._annotate_decision_span(dspan, call)
             decision = await self._finalize_decision(
                 character_id, controller_id, generation, context, call
             )
@@ -674,6 +868,7 @@ class ControllerDispatch:
             decision = Decision(cid, None, "skipped: removed before decision applied")
         except Exception:  # noqa: BLE001 - a background task must not crash the game loop
             logger.exception("character %s decision task failed", character_id)
+            self._restore_event_batch(cid, event_batch)
             decision = Decision(cid, None, "error")
         decision = replace(
             decision,
@@ -689,6 +884,8 @@ class ControllerDispatch:
             ),
             selected_action=decision.tool,
             receipt_status=decision.receipt_status or ("wait" if decision.tool is None else None),
+            prompt_event_ids=tuple(event.event_id for event in event_batch.events),
+            omitted_prompt_events=event_batch.omitted,
         )
         self._completed.append(decision)
         return decision
@@ -696,6 +893,17 @@ class ControllerDispatch:
     def _forget(self, cid: str, task: asyncio.Task[Decision]) -> None:
         if self._inflight.get(cid) is task:
             del self._inflight[cid]
+        state = self._character_states.get(cid)
+        if state is not None and state.active_task is task:
+            state.active_task = None
+            state.active_events = _EventBatch()
+
+    def _restore_event_batch(self, cid: str, event_batch: _EventBatch) -> None:
+        if not event_batch.has_content:
+            return
+        state = self._character_states[cid]
+        state.events.restore(event_batch)
+        state.active_events = _EventBatch()
 
     @staticmethod
     def _annotate_decision_span(dspan, call: ToolCall | None) -> None:

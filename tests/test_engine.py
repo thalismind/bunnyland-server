@@ -73,6 +73,57 @@ async def test_game_loop_keeps_ticking_while_a_decision_is_pending():
         await asyncio.wait_for(task, timeout=1.0)
 
 
+async def test_game_loop_sends_only_latest_buffer_after_prior_action_commits():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    result = await instantiate(actor, await StubWorldBuilder().propose("seed"))
+
+    class TwoTurnAgent:
+        def __init__(self) -> None:
+            self.first_gate = asyncio.Event()
+            self.second_gate = asyncio.Event()
+            self.contexts = []
+
+        async def decide(
+            self, prompt, context, *, character_id, model=None, provider=None, tools=None
+        ):
+            del prompt, character_id, model, provider, tools
+            self.contexts.append(context)
+            if len(self.contexts) == 1:
+                await self.first_gate.wait()
+                return ToolCall("move", {"direction": "north"})
+            await self.second_gate.wait()
+            return None
+
+    agent = TwoTurnAgent()
+    dispatch = ControllerDispatch(actor, PromptBuilder(actor.world), agent)
+    loop = GameLoop(actor, dispatch, tick_seconds=0.001, time_scale=1000.0)
+    task = asyncio.create_task(loop.run())
+    try:
+        for _ in range(500):
+            if actor.epoch >= 3:
+                break
+            await asyncio.sleep(0.002)
+        assert len(agent.contexts) == 1
+
+        agent.first_gate.set()
+        for _ in range(500):
+            if len(agent.contexts) == 2:
+                break
+            await asyncio.sleep(0.002)
+
+        assert len(agent.contexts) == 2
+        assert agent.contexts[0].location_title == "Mosslit Burrow"
+        assert agent.contexts[1].location_title == "North Tunnel"
+        hazel = actor.world.get_entity(result.characters["hazel"])
+        assert container_of(hazel) == result.rooms["tunnel"]
+    finally:
+        loop.stop()
+        agent.first_gate.set()
+        agent.second_gate.set()
+        await asyncio.wait_for(task, timeout=1.0)
+
+
 async def test_game_loop_stops_when_asked():
     actor = WorldActor()
     apply_plugins(bunnyland_plugins(), actor)

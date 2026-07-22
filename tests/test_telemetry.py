@@ -752,12 +752,11 @@ async def test_background_llm_decision_stays_in_the_run_once_trace(otel_capture)
 
 
 @pytestmark_otel
-async def test_serialized_background_decisions_each_emit_a_non_overlapping_span(otel_capture):
-    """Two characters' background decisions are serialized but each is fully traced.
+async def test_concurrent_character_decisions_each_emit_their_own_span(otel_capture):
+    """Two characters may think concurrently while each decision remains fully traced.
 
-    Regression for decision locking/sync: with the provider lock, the two ``agent.decide``
-    spans must not overlap in time, yet both must still be emitted with their own correct
-    attributes and decision metrics.
+    Regression for character-scoped locking: the two ``agent.decide`` spans overlap, and
+    both are emitted with their own correct attributes and decision metrics.
     """
     import asyncio
 
@@ -804,9 +803,9 @@ async def test_serialized_background_decisions_each_emit_a_non_overlapping_span(
 
     decide_spans = [s for s in span_exporter.get_finished_spans() if s.name == "agent.decide"]
     assert len(decide_spans) == 2
-    # The provider lock serializes the calls: the two decide spans do not overlap in time.
+    # Different characters do not share a provider lock, so their spans overlap.
     decide_spans.sort(key=lambda s: s.start_time)
-    assert decide_spans[0].end_time <= decide_spans[1].start_time
+    assert decide_spans[1].start_time < decide_spans[0].end_time
     assert {s.attributes["decision.tool"] for s in decide_spans} == {"move"}
 
     points = _metric_points(reader)

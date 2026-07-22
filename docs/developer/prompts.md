@@ -1,5 +1,21 @@
 # Prompt Fragment Components
 
+## Character prompt scheduling
+
+`ControllerDispatch` treats each LLM-controlled character as an independent single-flight
+pipeline. A character can have one provider request in progress and one pending prompt
+projection; every world tick overwrites that pending slot with the newest projection instead
+of queuing another provider request. Different characters do not share this lock and may
+think concurrently. The pending projection is sent on the next normal dispatch after the
+active response has landed, so the preceding command commits before a new action is chosen.
+
+Visible domain events use a separate occurrence-time buffer. They are never coalesced with
+the replaceable world projection: the next prompt includes the ordered events the character
+could perceive while it was thinking, even if it has since moved rooms. The buffer defaults
+to 100 events and 8,000 rendered characters. Overflow retains higher-salience and newer
+events and renders an explicit omitted-event count and epoch range. Provider failures restore
+the attempted event batch for the next prompt.
+
 Bunnyland prompt fragments are projections from ECS state into short, deterministic lines
 for a character prompt. Fragment providers still decide what is visible. Component methods
 can format state after the provider has selected the entity/component that should be shown.

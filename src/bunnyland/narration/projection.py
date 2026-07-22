@@ -166,7 +166,7 @@ def _room_title(world: World, raw_id: str | None) -> str:
     return "somewhere"
 
 
-def _event_rooms(world: World, event: DomainEvent) -> tuple[str, ...]:
+def event_rooms(world: World, event: DomainEvent) -> tuple[str, ...]:
     rooms: list[str] = []
     if isinstance(event, ActorMovedEvent):
         rooms.extend([event.from_room_id, event.to_room_id])
@@ -181,7 +181,7 @@ def _event_rooms(world: World, event: DomainEvent) -> tuple[str, ...]:
     return tuple(dict.fromkeys(room for room in rooms if room))
 
 
-def _event_salience(event: DomainEvent) -> int:
+def event_salience(event: DomainEvent) -> int:
     if isinstance(event, (CharacterDiedEvent, CharacterDownedEvent)):
         return 100
     if isinstance(event, (SpeechSaidEvent, SpeechToldEvent)):
@@ -195,7 +195,7 @@ def _event_salience(event: DomainEvent) -> int:
     return 0
 
 
-def _event_visible_to(world: World, viewer: Entity, event: DomainEvent) -> bool:
+def event_visible_to(world: World, viewer: Entity, event: DomainEvent) -> bool:
     viewer_id = str(viewer.id)
     viewer_room_id = container_of(viewer)
     viewer_room = str(viewer_room_id) if viewer_room_id is not None else None
@@ -207,7 +207,7 @@ def _event_visible_to(world: World, viewer: Entity, event: DomainEvent) -> bool:
             or viewer_id in event.target_ids
             or (isinstance(event, SpeechToldEvent) and viewer_id in event.overhearer_ids)
         )
-    rooms = _event_rooms(world, event)
+    rooms = event_rooms(world, event)
     if rooms and viewer_room in rooms:
         return True
     if event.actor_id == viewer_id or viewer_id in event.target_ids:
@@ -215,7 +215,7 @@ def _event_visible_to(world: World, viewer: Entity, event: DomainEvent) -> bool:
     return event.visibility is EventVisibility.PUBLIC
 
 
-def _event_summary(world: World, viewer: Entity, event: DomainEvent) -> str:
+def event_summary(world: World, viewer: Entity, event: DomainEvent) -> str:
     viewer_id = str(viewer.id)
     actor = "You" if event.actor_id == viewer_id else _name(world, event.actor_id)
     if isinstance(event, ActorMovedEvent):
@@ -251,6 +251,13 @@ def _event_summary(world: World, viewer: Entity, event: DomainEvent) -> str:
     if isinstance(event, EntityInspectedEvent):
         return f"{actor} inspected {event.name}."
     return ""
+
+
+# Compatibility aliases for callers that imported the original internal helpers.
+_event_rooms = event_rooms
+_event_salience = event_salience
+_event_summary = event_summary
+_event_visible_to = event_visible_to
 
 
 def _visible_entity_names(scene: SceneInput) -> set[str]:
@@ -550,10 +557,10 @@ class NarrationProjection:
         visible_events: list[SceneEvent] = []
         omitted: list[str] = []
         for event in events:
-            if not _event_visible_to(self.world, viewer, event):
+            if not event_visible_to(self.world, viewer, event):
                 omitted.append(event.event_id)
                 continue
-            summary = _event_summary(self.world, viewer, event)
+            summary = event_summary(self.world, viewer, event)
             if not summary:
                 omitted.append(event.event_id)
                 continue
@@ -562,9 +569,9 @@ class NarrationProjection:
                     event_id=event.event_id,
                     event_type=event.__class__.__name__,
                     summary=summary,
-                    salience=_event_salience(event),
+                    salience=event_salience(event),
                     actor_id=event.actor_id,
-                    room_ids=_event_rooms(self.world, event),
+                    room_ids=event_rooms(self.world, event),
                 )
             )
         visible_events.sort(key=lambda event: (-event.salience, event.event_id))
@@ -715,5 +722,9 @@ __all__ = [
     "SceneNarration",
     "check_grounding",
     "evaluate_narration_quality",
+    "event_rooms",
+    "event_salience",
+    "event_summary",
+    "event_visible_to",
     "render_scene",
 ]

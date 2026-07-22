@@ -450,6 +450,8 @@ def test_live_artifacts_checkpoint_each_trace_and_session(tmp_path):
         repeat_guard_warning=False,
         result_events=(),
         milestones=("looked",),
+        prompt_event_ids=("event-1",),
+        omitted_prompt_events=2,
     )
     writer.record_trace(trace)
     writer.record_session(_session("model", "apple", 1, passed=True))
@@ -458,6 +460,8 @@ def test_live_artifacts_checkpoint_each_trace_and_session(tmp_path):
     saved_session = json.loads((tmp_path / "sessions.jsonl").read_text(encoding="utf-8"))
     assert saved_trace["prompt"] == "full prompt"
     assert saved_trace["receipt_status"] == "committed"
+    assert saved_trace["prompt_event_ids"] == ["event-1"]
+    assert saved_trace["omitted_prompt_events"] == 2
     assert saved_session["session_id"] == "apple-model-1"
     assert (tmp_path / "summary.json").exists()
     assert (tmp_path / "report.md").exists()

@@ -40,6 +40,17 @@ FragmentProvider = Callable[[World, Entity], Sequence[PromptFactLike]]
 
 
 @dataclass(frozen=True)
+class PerceivedPromptEvent:
+    """One occurrence-time-visible event carried into a character prompt."""
+
+    event_id: str
+    event_type: str
+    world_epoch: int
+    summary: str
+    salience: int = 0
+
+
+@dataclass(frozen=True)
 class PromptContext:
     name: str
     kind: str
@@ -61,6 +72,9 @@ class PromptContext:
     feelings: tuple[str, ...] = ()
     social_cues: tuple[str, ...] = ()
     recent: tuple[str, ...] = ()
+    perceived_events: tuple[PerceivedPromptEvent, ...] = ()
+    omitted_perceived_events: int = 0
+    omitted_event_epoch_range: tuple[int, int] | None = None
     notes: tuple[str, ...] = ()
     recall: tuple[str, ...] = ()
     commands: tuple[str, ...] = ()
@@ -509,6 +523,22 @@ def render_prompt(context: PromptContext) -> str:
     section("Currently", context.conditions)
     section("Social cues", context.social_cues)
     section("Recent context", context.recent)
+    if context.perceived_events or context.omitted_perceived_events:
+        lines.append("Observed since your last prompt:")
+        lines.extend(
+            f"- [{event.event_type} {event.event_id}] {event.summary}"
+            for event in context.perceived_events
+        )
+        if context.omitted_perceived_events:
+            epoch_range = context.omitted_event_epoch_range
+            epoch_text = (
+                f" during epochs {epoch_range[0]}-{epoch_range[1]}" if epoch_range else ""
+            )
+            lines.append(
+                f"- {context.omitted_perceived_events} additional visible event(s){epoch_text} "
+                "were omitted because the event buffer reached its configured limit."
+            )
+        lines.append("")
     section("Notes", context.notes)
     section("Recall", context.recall)
 
@@ -522,4 +552,4 @@ def render_prompt(context: PromptContext) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-__all__ = ["PromptBuilder", "PromptContext", "render_prompt"]
+__all__ = ["PerceivedPromptEvent", "PromptBuilder", "PromptContext", "render_prompt"]

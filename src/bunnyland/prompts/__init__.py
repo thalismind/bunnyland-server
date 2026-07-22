@@ -5,7 +5,7 @@ renders it to text. Mechanics own their own fragments (needs, etc.) and are inje
 fragment providers, so the builder holds no domain-specific phrasing of its own.
 """
 
-from .builder import PromptBuilder, PromptContext, render_prompt
+from .builder import PerceivedPromptEvent, PromptBuilder, PromptContext, render_prompt
 from .context import (
     ComponentPromptContext,
     PerspectiveName,
@@ -36,6 +36,7 @@ __all__ = [
     "PromptFilterRuntime",
     "PerspectiveName",
     "PerspectivePhrase",
+    "PerceivedPromptEvent",
     "PromptAccess",
     "PromptBuilder",
     "PromptContext",

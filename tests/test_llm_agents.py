@@ -15,6 +15,7 @@ from bunnyland.core import (
     ActionArgument,
     ActionDefinition,
     ActionPattern,
+    ActionPointsComponent,
     CharacterComponent,
     CommandCost,
     ContainerComponent,
@@ -26,8 +27,10 @@ from bunnyland.core import (
     SayHandler,
     TakeHandler,
     container_of,
+    replace_component,
     spawn_entity,
 )
+from bunnyland.core.events import DomainEvent, EventVisibility, event_base
 from bunnyland.foundation.persona.mechanics import GoalComponent
 from bunnyland.foundation.social.mechanics import SocialBond
 from bunnyland.llm_agents import (
@@ -70,15 +73,23 @@ from bunnyland.llm_agents.agent import (
     _AutonomySignals,
     _call_provider_with_retries,
     _message_to_history,
+    _ollama_response_json,
     _openrouter_arguments,
     _openrouter_enriched_usage,
     _openrouter_usage,
     _tool_call_history,
     normalize_model,
 )
-from bunnyland.llm_agents.dispatch import Decision, _governing_pressure, _memory_ids
+from bunnyland.llm_agents.dispatch import (
+    Decision,
+    _EventBatch,
+    _governing_pressure,
+    _memory_ids,
+    _PerceivedEventBuffer,
+)
 from bunnyland.plugins import PluginRegistry, bunnyland_plugins, collect_persona_fragments
 from bunnyland.plugins.ids import CORE_VERBS
+from bunnyland.prompts import PerceivedPromptEvent
 from bunnyland.prompts.builder import PromptBuilder
 
 
@@ -98,6 +109,43 @@ def test_decision_trace_helpers_keep_safe_memory_ids_and_pressure_precedence():
     assert _governing_pressure(context) == "social"
     decision = Decision(character_id="character-1", tool=None, summary="waiting")
     assert decision.with_receipt(None) == decision
+
+
+def test_ollama_response_without_message_object_still_redacts_top_level_thinking():
+    response = _ollama_response_json(
+        {"message": "finished", "thinking": "private"}, include_thinking=False
+    )
+
+    assert response == {"message": "finished"}
+
+
+def test_perceived_event_buffer_bounds_drains_and_restores_batches():
+    def prompt_event(event_id: str, epoch: int, salience: int = 0) -> PerceivedPromptEvent:
+        return PerceivedPromptEvent(event_id, "TestEvent", epoch, event_id, salience)
+
+    buffer = _PerceivedEventBuffer(max_events=2, max_chars=1_000)
+    assert buffer.has_content is False
+    buffer.append(prompt_event("old-low", 1))
+    buffer.append(prompt_event("important", 2, salience=100))
+    buffer.append(prompt_event("new-low", 3))
+    assert buffer.has_content is True
+
+    batch = buffer.drain()
+    assert [event.event_id for event in batch.events] == ["important", "new-low"]
+    assert batch.omitted == 1
+    assert batch.omitted_epoch_range == (1, 1)
+    assert buffer.has_content is False
+
+    buffer.append(prompt_event("later", 4))
+    buffer.restore(batch)
+    restored = buffer.drain()
+    assert [event.event_id for event in restored.events] == ["important", "later"]
+    assert restored.omitted == 2
+    assert restored.omitted_epoch_range == (1, 3)
+
+    char_limited = _PerceivedEventBuffer(max_events=10, max_chars=1)
+    char_limited.append(prompt_event("too-large", 5))
+    assert char_limited.drain() == _EventBatch(omitted=1, omitted_epoch_range=(5, 5))
 
 ALL_ACTION_DEFINITIONS = tuple(
     definition for _owner, definition in PluginRegistry(bunnyland_plugins()).actions.values()
@@ -1151,11 +1199,13 @@ async def test_dispatch_uses_registered_autonomous_controller_factory():
     class TestControllerComponent(Component):
         act_every_ticks: int = 1
 
+    gated = _GatedAsyncAgent()
+
     def test_agent_factory(dispatch, character_id: str, component: object):
         assert isinstance(dispatch, ControllerDispatch)
         assert character_id
         assert isinstance(component, TestControllerComponent)
-        return ScriptedAgent([ToolCall("move", {"direction": "north"})]), "test-model", "test"
+        return gated, "test-model", "test"
 
     scenario = build_scenario()
     controller = spawn_entity(scenario.actor.world, [TestControllerComponent()])
@@ -1168,6 +1218,9 @@ async def test_dispatch_uses_registered_autonomous_controller_factory():
     )
 
     assert await dispatch.run_once() == []
+    assert await dispatch.run_once() == []
+    assert gated.prompts == [str(scenario.character)]
+    gated.gate.set()
     decisions = await dispatch.await_pending()
 
     assert [decision.tool for decision in decisions] == ["move"]
@@ -2605,6 +2658,24 @@ class _FailingAsyncAgent:
         raise RuntimeError("provider exploded")
 
 
+class _FailSecondAgent:
+    def __init__(self) -> None:
+        self.gate = asyncio.Event()
+        self.contexts: list[object] = []
+
+    async def decide(
+        self, prompt, context, *, character_id, model=None, provider=None, tools=None
+    ):
+        del prompt, character_id, model, provider, tools
+        self.contexts.append(context)
+        if len(self.contexts) == 1:
+            await self.gate.wait()
+            return None
+        if len(self.contexts) == 2:
+            raise RuntimeError("transient provider failure")
+        return None
+
+
 def _add_second_llm_character(scenario, name: str = "Bramble"):
     from bunnyland.core import (
         ActionPointsComponent,
@@ -2711,22 +2782,241 @@ async def test_dispatch_rebuilds_prompt_from_latest_state_after_a_response():
     dispatch.cancel_pending()
 
 
-async def test_dispatch_serializes_concurrent_llm_calls():
+async def test_dispatch_allows_concurrent_llm_calls_for_different_characters():
     scenario = build_scenario()
     _add_second_llm_character(scenario)
     agent = _ConcurrencyProbeAgent()
     dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
 
-    # Both characters are prompted, but the provider lock keeps only one request in flight.
+    # Character locks are independent: both provider calls may run at once.
     assert await dispatch.run_once() == []
     for _ in range(8):
         await asyncio.sleep(0)
-    assert agent.active == 1
-    assert agent.max_active == 1
+    assert agent.active == 2
+    assert agent.max_active == 2
 
     agent.gate.set()
     await dispatch.await_pending()
-    assert agent.max_active == 1
+    assert agent.max_active == 2
+
+
+async def test_dispatch_coalesces_latest_projection_and_preserves_perceived_events():
+    class MessageEvent(DomainEvent):
+        message: str
+
+    scenario = build_scenario()
+    agent = _GatedAsyncAgent(call=None)
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    assert await dispatch.run_once() == []
+    await asyncio.sleep(0)
+    character = scenario.actor.world.get_entity(scenario.character)
+    points = character.get_component(ActionPointsComponent)
+
+    replace_component(character, replace(points, current=4.0))
+    await scenario.actor.bus.publish(
+        DomainEvent(
+            **event_base(
+                scenario.actor.epoch,
+                event_id="visible-one",
+                visibility=EventVisibility.ROOM,
+                room_id=str(scenario.room_a),
+            )
+        )
+    )
+    assert await dispatch.run_once() == []
+
+    scenario.actor.world.get_entity(scenario.room_a).remove_relationship(
+        Contains, scenario.character
+    )
+    scenario.actor.world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), scenario.character
+    )
+    replace_component(character, replace(points, current=3.0))
+    await scenario.actor.bus.publish(
+        DomainEvent(
+            **event_base(
+                scenario.actor.epoch,
+                event_id="visible-two",
+                visibility=EventVisibility.ROOM,
+                room_id=str(scenario.room_b),
+            )
+        )
+    )
+    await scenario.actor.bus.publish(
+        MessageEvent(
+            **event_base(
+                scenario.actor.epoch,
+                event_id="visible-message",
+                visibility=EventVisibility.ROOM,
+                room_id=str(scenario.room_b),
+            ),
+            message="A bell rings nearby.",
+        )
+    )
+    await scenario.actor.bus.publish(
+        DomainEvent(
+            **event_base(
+                scenario.actor.epoch,
+                event_id="private-other",
+                visibility=EventVisibility.PRIVATE,
+                actor_id="somebody-else",
+                room_id=str(scenario.room_b),
+            )
+        )
+    )
+    assert await dispatch.run_once() == []
+    assert len(agent.contexts) == 1
+
+    agent.gate.set()
+    await dispatch.await_pending()
+    assert await dispatch.run_once() == []
+    await asyncio.sleep(0)
+
+    assert len(agent.contexts) == 2
+    latest = agent.contexts[1]
+    assert latest.action == (3.0, 5.0)
+    assert latest.location_title == "North Tunnel"
+    assert [event.event_id for event in latest.perceived_events] == [
+        "visible-one",
+        "visible-two",
+        "visible-message",
+    ]
+    assert latest.perceived_events[-1].summary == "A bell rings nearby."
+    dispatch.cancel_pending()
+
+
+async def test_dispatch_sends_one_latest_unchanged_turn_after_response():
+    scenario = build_scenario()
+    agent = _GatedAsyncAgent(call=None)
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    assert await dispatch.run_once() == []
+    agent.gate.set()
+    await dispatch.await_pending()
+
+    assert await dispatch.run_once() == []
+    await asyncio.sleep(0)
+    assert len(agent.contexts) == 2
+
+
+async def test_dispatch_reports_perceived_event_buffer_overflow():
+    scenario = build_scenario()
+    agent = _GatedAsyncAgent(call=None)
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        agent,
+        max_buffered_events=2,
+    )
+
+    await dispatch.run_once()
+    await asyncio.sleep(0)
+    for index in range(3):
+        await scenario.actor.bus.publish(
+            DomainEvent(
+                **event_base(
+                    scenario.actor.epoch + index,
+                    event_id=f"visible-{index}",
+                    visibility=EventVisibility.ROOM,
+                    room_id=str(scenario.room_a),
+                )
+            )
+        )
+    await dispatch.run_once()
+    agent.gate.set()
+    await dispatch.await_pending()
+    await dispatch.run_once()
+    await asyncio.sleep(0)
+
+    latest = agent.contexts[1]
+    assert [event.event_id for event in latest.perceived_events] == ["visible-1", "visible-2"]
+    assert latest.omitted_perceived_events == 1
+    assert latest.omitted_event_epoch_range == (scenario.actor.epoch, scenario.actor.epoch)
+
+
+async def test_dispatch_requeues_prompt_events_after_provider_failure():
+    scenario = build_scenario()
+    agent = _FailSecondAgent()
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    await dispatch.run_once()
+    await asyncio.sleep(0)
+    await scenario.actor.bus.publish(
+        DomainEvent(
+            **event_base(
+                scenario.actor.epoch,
+                event_id="retry-me",
+                visibility=EventVisibility.ROOM,
+                room_id=str(scenario.room_a),
+            )
+        )
+    )
+    await dispatch.run_once()
+    agent.gate.set()
+    await dispatch.await_pending()
+
+    await dispatch.run_once()
+    failed = await dispatch.await_pending()
+    assert failed[-1].summary == "error"
+    assert failed[-1].prompt_event_ids == ("retry-me",)
+
+    await dispatch.run_once()
+    await dispatch.await_pending()
+    assert [event.event_id for event in agent.contexts[2].perceived_events] == ["retry-me"]
+
+
+async def test_dispatch_cancel_restores_events_from_active_prompt():
+    scenario = build_scenario()
+    agent = _GatedAsyncAgent()
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    await dispatch.run_once()
+    await asyncio.sleep(0)
+    await scenario.actor.bus.publish(
+        DomainEvent(
+            **event_base(
+                scenario.actor.epoch,
+                event_id="active-event",
+                visibility=EventVisibility.ROOM,
+                room_id=str(scenario.room_a),
+            )
+        )
+    )
+    await dispatch.run_once()
+    agent.gate.set()
+    await dispatch.await_pending()
+    agent.gate.clear()
+    await dispatch.run_once()
+    await asyncio.sleep(0)
+
+    dispatch.cancel_pending()
+
+    state = dispatch._character_states[str(scenario.character)]
+    assert [event.event_id for event in state.events.events] == ["active-event"]
+
+
+async def test_dispatch_close_detaches_event_observer_and_skips_stale_state_keys():
+    scenario = build_scenario()
+    dispatch = ControllerDispatch(
+        scenario.actor, PromptBuilder(scenario.actor.world), _GatedAsyncAgent()
+    )
+    await dispatch.run_once()
+    dispatch._state_for("not-an-entity")
+    scenario.actor.world.remove(scenario.character)
+
+    await scenario.actor.bus.publish(
+        DomainEvent(
+            **event_base(
+                scenario.actor.epoch,
+                event_id="after-removal",
+                visibility=EventVisibility.PUBLIC,
+            )
+        )
+    )
+    dispatch.close()
+
+    assert dispatch._inflight == {}
 
 
 async def test_dispatch_surfaces_background_decision_on_a_later_pass():

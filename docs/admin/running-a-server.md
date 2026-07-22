@@ -299,7 +299,8 @@ controller turn hanging off it:
 - `controller.run_once` (with `dispatch.actable_count`, `dispatch.decision_count`) →
   `agent.prompt.build` and `agent.decide` (with `provider`, `model`, `agent.kind`,
   `character.id`, `decision.tool`, `decision.arguments`, and — for LLM-controlled
-  characters — `decision.prompted`, `decision.prompt`, `decision.prompt_chars`; live LLM
+  characters — `decision.prompted`, `decision.prompt`, `decision.prompt_chars`,
+  `decision.prompt_event_count`, and `decision.omitted_prompt_events`; live LLM
   calls also add `llm.request.kind`, `llm.tools.count`, `llm.history.messages`,
   `llm.system_prompt_chars`, `llm.tokens.available`, input/output token counts as
   `llm.tokens.prompt`/`.completion`, `llm.tokens.total`, and `llm.cost.available`.
