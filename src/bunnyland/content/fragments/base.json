@@ -31,7 +31,19 @@
             },
             { "type": "PortableComponent", "fields": { "can_pick_up": true } },
             { "type": "FoodComponent", "fields": { "nutrition": 5.0, "satiety": 20.0 } },
-            { "type": "ConsumableComponent", "fields": { "current_uses": 1, "max_uses": 1 } }
+            { "type": "ConsumableComponent", "fields": { "current_uses": 1, "max_uses": 1 } },
+            {
+              "type": "ActionOverrideComponent",
+              "fields": {
+                "overrides": [
+                  {
+                    "source_action": "use",
+                    "destination_action": "eat",
+                    "destination_argument": "item_id"
+                  }
+                ]
+              }
+            }
           ]
         }
       ]
@@ -61,7 +73,19 @@
                 "tags": ["starter", "water", "fixture"]
               }
             },
-            { "type": "DrinkableComponent", "fields": { "hydration": 25.0, "purity": 1.0 } }
+            { "type": "DrinkableComponent", "fields": { "hydration": 25.0, "purity": 1.0 } },
+            {
+              "type": "ActionOverrideComponent",
+              "fields": {
+                "overrides": [
+                  {
+                    "source_action": "use",
+                    "destination_action": "drink",
+                    "destination_argument": "source_id"
+                  }
+                ]
+              }
+            }
           ]
         }
       ]

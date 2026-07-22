@@ -24,6 +24,8 @@ from bunnyland.foundation.needs.mechanics import HungerComponent, ThirstComponen
 from bunnyland.foundation.persona.mechanics import GoalComponent, TraitSetComponent
 
 from ..core.components import (
+    ActionOverrideComponent,
+    ActionOverrideEntry,
     ActionPointsComponent,
     AffectComponent,
     CharacterComponent,
@@ -135,10 +137,32 @@ def _object_components(spec: ObjectSpec) -> list:
     if spec.kind == "food":
         components.append(FoodComponent(nutrition=spec.nutrition, satiety=spec.satiety))
         components.append(ConsumableComponent())
+        components.append(
+            ActionOverrideComponent(
+                (
+                    ActionOverrideEntry(
+                        "use",
+                        destination_action="eat",
+                        destination_argument="item_id",
+                    ),
+                )
+            )
+        )
     elif spec.kind == "water":
         components.append(DrinkableComponent(hydration=spec.hydration))
         if not spec.renewable:
             components.append(ConsumableComponent())
+        components.append(
+            ActionOverrideComponent(
+                (
+                    ActionOverrideEntry(
+                        "use",
+                        destination_action="drink",
+                        destination_argument="source_id",
+                    ),
+                )
+            )
+        )
     elif spec.kind == "container":
         components.append(ContainerComponent(open=spec.open))
     elif spec.kind == "paper":

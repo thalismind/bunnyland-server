@@ -10,6 +10,8 @@ import pytest
 from relics import Component, Edge
 
 from bunnyland.core import (
+    ActionOverrideComponent,
+    ActionOverrideEntry,
     CharacterComponent,
     CommandCost,
     ContainerComponent,
@@ -1370,6 +1372,14 @@ async def test_instantiate_builds_water_container_and_writable_paper_objects():
         rooms=[RoomSpec(key="room", title="Room")],
         objects=[
             ObjectSpec(
+                key="food",
+                room_key="room",
+                name="berries",
+                kind="food",
+                nutrition=1.0,
+                satiety=2.0,
+            ),
+            ObjectSpec(
                 key="water",
                 room_key="room",
                 name="canteen",
@@ -1406,11 +1416,26 @@ async def test_instantiate_builds_water_container_and_writable_paper_objects():
 
     result = await instantiate(actor, proposal)
 
+    food = actor.world.get_entity(result.objects["food"])
     water = actor.world.get_entity(result.objects["water"])
     box = actor.world.get_entity(result.objects["box"])
     paper = actor.world.get_entity(result.objects["paper"])
+    assert food.get_component(ActionOverrideComponent) == ActionOverrideComponent(
+        (
+            ActionOverrideEntry(
+                "use", destination_action="eat", destination_argument="item_id"
+            ),
+        )
+    )
     assert water.get_component(DrinkableComponent).hydration == 2.0
     assert water.has_component(ConsumableComponent)
+    assert water.get_component(ActionOverrideComponent) == ActionOverrideComponent(
+        (
+            ActionOverrideEntry(
+                "use", destination_action="drink", destination_argument="source_id"
+            ),
+        )
+    )
     assert box.get_component(ContainerComponent).open is False
     assert paper.has_component(ReadableComponent)
     assert paper.has_component(WritableComponent)
