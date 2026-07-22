@@ -319,24 +319,28 @@ assert each action is processed.
 
 ## 🎮 Clients
 
-Bunnyland is played through several clients. The web graph and web toon clients ship from
-the separate frontend/web repo; the rest ship from this repo. *Offline* means the client can
-host a world in its own process with no network port; *Over HTTP* means it can drive a
-running server through the web controller; *Role* is whether it can act in the world or only
-observe it.
+Bunnyland is played through several clients. The browser TUI, REPL, Toon client, and World
+Graph ship from the frontend/web repo; the 3D player ships from the 3D add-on repo; terminal,
+Discord, and MCP clients ship here. *Offline* means the client can host and use a world
+without an external network service; *Over HTTP* means it can drive a running server through
+the web controller. *Role* distinguishes player, agent-integration, and privileged admin
+surfaces.
 
-| Client | Role | Offline | Over HTTP | Agent-driven | 2D graphics | ASCII / rich text | Clickable targets |
-|--------|------|:------:|:--------:|:------------:|:-----------:|:-----------------:|:-----------------:|
-| Web graph †                       | Spectator | | ✓ | | ✓ (world graph) | | ✓ |
-| Web toon †                        | Playable  | | ✓ | | ✓ (sprites)     | | ✓ |
-| Discord bot                       | Playable  | ✓ ‡ | | | | ✓ | |
-| MCP endpoint                      | Playable  | | ✓ | ✓ | | | |
-| Terminal TUI (`uv run --all-extras bunnyland tui`)   | Playable  | ✓ | ✓ | | | ✓ | ✓ |
-| Terminal REPL (`uv run --all-extras bunnyland repl`) | Playable  | ✓ | ✓ | | | ✓ | ✓ |
-| Terminal chat (`uv run --all-extras bunnyland chat`) | Playable  | ✓ | ✓ | | | ✓ | ✓ |
+| Client | Role | Offline | Over HTTP | Agent-driven | Graphics | ASCII / rich text | Clickable targets |
+|--------|------|:------:|:--------:|:------------:|:--------:|:-----------------:|:-----------------:|
+| World Graph †                      | Admin  | | ✓ | | World graph | | ✓ |
+| Web TUI †                          | Player | | ✓ | | | ✓ | ✓ |
+| Web REPL †                         | Player | | ✓ | | | ✓ | ✓ |
+| Toon client †                      | Player | | ✓ | | 2D sprites | | ✓ |
+| 3D player §                        | Player | | ✓ | | 3D world | | ✓ |
+| Discord bot                        | Player | | | | | ✓ | |
+| MCP endpoint                       | Agent  | | ✓ | ✓ | | | |
+| Terminal TUI (`uv run --all-extras bunnyland tui`)   | Player | ✓ | ✓ | | | ✓ | ✓ |
+| Terminal REPL (`uv run --all-extras bunnyland repl`) | Player | ✓ | ✓ | | | ✓ | ✓ |
+| Terminal chat (`uv run --all-extras bunnyland chat`) | Player | ✓ | ✓ | | | ✓ | ✓ |
 
 † Implemented in the frontend/web repo; capabilities summarized here.
-‡ The Discord bot hosts the world in its own process.
+§ Implemented in the 3D add-on repo; capabilities summarized here.
 
 ## Optional extras
 
@@ -349,3 +353,8 @@ observe it.
 | `tui`      | the Textual terminal client (`bunnyland tui`) | `uv sync --extra tui`   |
 | `repl`     | the Textual REPL client (`bunnyland repl`), local or over HTTP | `uv sync --extra repl` |
 | `otel`     | OpenTelemetry metrics/traces export (off by default; set `BUNNYLAND_OTEL_ENABLED`) | `uv sync --extra otel` |
+
+## License
+
+Bunnyland Server is available under the
+[GNU Affero General Public License v3.0 or later](LICENSE).
