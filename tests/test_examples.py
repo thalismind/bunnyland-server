@@ -75,6 +75,7 @@ from bunnyland.simpacks.dinosim.demos import DINOSIM_DEMO
 from bunnyland.simpacks.dinosim.mechanics import (
     CreatureProductComponent,
     DinosaurComponent,
+    EggComponent,
     FeedStoreComponent,
     FertilityComponent,
     FossilFragmentComponent,
@@ -316,6 +317,14 @@ async def test_dinosim_demo_includes_fossil_and_fertile_parent():
 
     await DINOSIM_DEMO.generate(actor, "dinosim-demo", GenOptions())
 
+    egg = next(actor.world.query().with_all([EggComponent]).execute_entities())
+    assert egg.get_component(ActionOverrideComponent) == ActionOverrideComponent(
+        (
+            ActionOverrideEntry(
+                "take", destination_action="collect-egg", destination_argument="egg_id"
+            ),
+        )
+    )
     assert _has(actor, FossilFragmentComponent)
     assert _has(actor, FeedStoreComponent)
     assert _has(actor, CreatureProductComponent)

@@ -10,7 +10,12 @@ from bunnyland.worldgen.proposal import CharacterSpec, ExitSpec, ObjectSpec, Roo
 
 async def dinosim_example(actor, seed: str, options: GenOptions) -> InstantiatedWorld:
     del options
-    from bunnyland.core.components import IdentityComponent, PortableComponent
+    from bunnyland.core.components import (
+        ActionOverrideComponent,
+        ActionOverrideEntry,
+        IdentityComponent,
+        PortableComponent,
+    )
     from bunnyland.simpacks.dinosim.mechanics import (
         BoneComponent,
         CreatureMilkComponent,
@@ -138,6 +143,15 @@ async def dinosim_example(actor, seed: str, options: GenOptions) -> Instantiated
                     progress_seconds=60,
                     last_updated_epoch=0,
                     ready=True,
+                ),
+                ActionOverrideComponent(
+                    (
+                        ActionOverrideEntry(
+                            "take",
+                            destination_action="collect-egg",
+                            destination_argument="egg_id",
+                        ),
+                    )
                 ),
             ],
         )
