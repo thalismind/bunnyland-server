@@ -255,9 +255,12 @@ def write_comparison(
         repeat_command_guard=settings.repeat_command_guard,
     )
     summary = summarize(results, metadata, tutorials)
-    incomplete = tuple(
-        attempt for source in sources for attempt in source.incomplete_attempts
-    )
+    incomplete_by_key = {
+        (attempt.source, attempt.session_id): attempt
+        for source in sources
+        for attempt in source.incomplete_attempts
+    }
+    incomplete = tuple(incomplete_by_key.values())
     output.mkdir(parents=True, exist_ok=True)
     _write_json(
         output / "manifest.json",

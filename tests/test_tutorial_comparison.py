@@ -120,3 +120,21 @@ def test_comparison_can_keep_first_n_sessions_per_cell(tmp_path):
     assert len(summary["excluded_completed_sessions"]) == 3
     report = (output / "report.md").read_text(encoding="utf-8")
     assert "Excluded completed sessions: 3" in report
+
+
+def test_comparison_deduplicates_incomplete_attempts_from_reused_source(tmp_path):
+    source = tmp_path / "source"
+    _source(source, "model", passed=False)
+    trace = '{"session_id":"interrupted","turn":1}\n'
+    (source / "traces.jsonl").write_text(trace, encoding="utf-8")
+    (source / "responses.jsonl").write_text(trace, encoding="utf-8")
+    output = tmp_path / "comparison"
+
+    write_comparison(
+        (SourceSelection(source), SourceSelection(source)),
+        output,
+        sessions_per_cell=1,
+    )
+
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    assert len(summary["incomplete_attempts"]) == 1
