@@ -11,10 +11,13 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from benchmarks.tutorials import (
+    SCHEMA_VERSION,
     BenchmarkConfig,
+    LiveArtifactWriter,
     ModelMetadata,
     ProviderBenchmarkError,
     SessionResult,
+    TurnTrace,
     preflight_ollama_models,
     run_benchmark,
     run_session,
@@ -185,6 +188,49 @@ async def test_session_timeout_is_configurable_and_distinct_from_turn_limit():
     assert traces == ()
 
 
+async def test_repeat_command_guard_warns_at_five_and_ends_at_ten():
+    result, traces = await run_session(
+        tutorial_scenarios()["bell"],
+        model="repeating",
+        provider="ollama-local",
+        run=1,
+        timeout_seconds=5,
+        turn_limit=60,
+        agent=ScriptedAgent(()),
+        repeat_command_guard=True,
+    )
+
+    assert result.status == "repeat_limit"
+    assert result.turns == 10
+    assert traces[4].consecutive_repeat_count == 5
+    assert traces[4].repeat_guard_warning is True
+    assert "Benchmark safety warning" in traces[5].prompt
+    assert traces[-1].consecutive_repeat_count == 10
+
+
+class _FailingAgent:
+    async def decide(self, prompt, context, **kwargs):
+        del prompt, context, kwargs
+        raise OSError("provider unavailable")
+
+
+async def test_provider_failure_is_in_durable_trace_callback():
+    recorded: list[TurnTrace] = []
+    with pytest.raises(ProviderBenchmarkError, match="provider unavailable"):
+        await run_session(
+            tutorial_scenarios()["apple"],
+            model="failing",
+            provider="ollama-local",
+            run=1,
+            timeout_seconds=5,
+            turn_limit=1,
+            agent=_FailingAgent(),
+            on_trace_recorded=recorded.append,
+        )
+    assert len(recorded) == 1
+    assert recorded[0].provider_error == "provider unavailable"
+
+
 @dataclass
 class _FreshAgent(ScriptedAgent):
     prompts_seen: int = 0
@@ -212,7 +258,7 @@ async def test_benchmark_builds_fresh_world_agent_and_history_per_session():
         del host, api_key
         return tuple(ModelMetadata(model=model, parameter_count=1_000_000_000) for model in models)
 
-    summary, sessions, traces, _metadata = await run_benchmark(
+    summary, sessions, traces, responses, _metadata = await run_benchmark(
         BenchmarkConfig(models=("tiny",), tutorials=("apple",), sessions=2, turn_limit=20),
         agent_factory=factory,
         preflight=preflight,
@@ -221,6 +267,7 @@ async def test_benchmark_builds_fresh_world_agent_and_history_per_session():
     assert len({session.world_seed for session in sessions}) == 2
     assert all(session.passed for session in sessions)
     assert {trace.session_id for trace in traces} == {session.session_id for session in sessions}
+    assert responses == ()
     ranking = summary["tutorial_rankings"]
     assert isinstance(ranking, dict)
     assert ranking["apple"][0]["completed_within_session_limit"] == 2
@@ -228,7 +275,7 @@ async def test_benchmark_builds_fresh_world_agent_and_history_per_session():
 
 def _session(model: str, tutorial: str, run: int, *, passed: bool) -> SessionResult:
     return SessionResult(
-        schema_version=1,
+        schema_version=SCHEMA_VERSION,
         session_id=f"{tutorial}-{model}-{run}",
         model=model,
         tutorial=tutorial,
@@ -339,18 +386,69 @@ def test_artifacts_have_stable_schemas_and_never_record_credentials(tmp_path):
     result = _session("model", "apple", 1, passed=True)
     metadata = (ModelMetadata("model", parameter_count=1_000_000_000),)
     summary = summarize((result,), metadata, ("apple",))
-    write_artifacts(config, summary, (result,), (), metadata)
+    write_artifacts(config, summary, (result,), (), (), metadata)
 
-    expected = {"manifest.json", "summary.json", "sessions.jsonl", "traces.jsonl"}
+    expected = {
+        "benchmark.log",
+        "manifest.json",
+        "summary.json",
+        "sessions.jsonl",
+        "traces.jsonl",
+        "report.md",
+        "responses.jsonl",
+    }
     assert {path.name for path in tmp_path.iterdir()} == expected
     combined = "".join(path.read_text(encoding="utf-8") for path in tmp_path.iterdir())
     assert "never-write-this-secret" not in combined
     assert "host-secret" not in combined
     assert "query-secret" not in combined
     manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["schema_version"] == 1
+    assert manifest["schema_version"] == SCHEMA_VERSION
     assert manifest["session_timeout_seconds"] == 3600
     assert manifest["host"] == "https://ollama.example/api"
     session = json.loads((tmp_path / "sessions.jsonl").read_text(encoding="utf-8"))
-    assert session["schema_version"] == 1
+    assert session["schema_version"] == SCHEMA_VERSION
     assert (tmp_path / "traces.jsonl").read_text(encoding="utf-8") == ""
+    assert (tmp_path / "responses.jsonl").read_text(encoding="utf-8") == ""
+    report = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "Ollama tutorial-ladder comparison" in report
+    assert "Adding models" in report
+
+
+def test_live_artifacts_checkpoint_each_trace_and_session(tmp_path):
+    config = BenchmarkConfig(models=("model",), tutorials=("apple",), output=tmp_path)
+    writer = LiveArtifactWriter(config)
+    writer.start()
+    writer.record_preflight((ModelMetadata("model", parameter_count=1_000_000_000),))
+    trace = TurnTrace(
+        schema_version=SCHEMA_VERSION,
+        session_id="apple-model-01",
+        turn=1,
+        prompt="full prompt",
+        selected_tool="look",
+        arguments={},
+        decision_latency_seconds=1.0,
+        candidate_actions=("look",),
+        command_id="command-1",
+        submission_accepted=True,
+        submission_reason="",
+        receipt_status="committed",
+        receipt_reason="",
+        decision_summary="look {}",
+        policy_rejections=(),
+        provider_error="",
+        consecutive_repeat_count=1,
+        repeat_guard_warning=False,
+        result_events=(),
+        milestones=("looked",),
+    )
+    writer.record_trace(trace)
+    writer.record_session(_session("model", "apple", 1, passed=True))
+
+    saved_trace = json.loads((tmp_path / "traces.jsonl").read_text(encoding="utf-8"))
+    saved_session = json.loads((tmp_path / "sessions.jsonl").read_text(encoding="utf-8"))
+    assert saved_trace["prompt"] == "full prompt"
+    assert saved_trace["receipt_status"] == "committed"
+    assert saved_session["session_id"] == "apple-model-1"
+    assert (tmp_path / "summary.json").exists()
+    assert (tmp_path / "report.md").exists()

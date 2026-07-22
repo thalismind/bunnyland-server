@@ -9,6 +9,7 @@ from dataclasses import replace
 
 import pytest
 from conftest import build_scenario
+from pydantic import JsonValue
 
 from bunnyland.core import (
     ActionArgument,
@@ -1356,6 +1357,66 @@ async def test_ollama_agent_sends_system_prompt_and_tool_schemas(monkeypatch):
     assert {"move", "wait"} <= by_name.keys()
     assert "Example: go north." in by_name["move"]["description"]
     assert "Example: wait." in by_name["wait"]["description"]
+
+
+async def test_ollama_agent_sends_configured_thinking_and_temperature(monkeypatch):
+    class ConfiguredOllamaClient(_FakeOllamaClient):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.settings: list[tuple[str, dict[str, float]]] = []
+
+        async def chat(self, *, model, messages, tools, think, options):
+            self.settings.append((think, options))
+            return await super().chat(model=model, messages=messages, tools=tools)
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = ConfiguredOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="reasoner", think="high", temperature=1.0)
+    await agent.decide("turn one", None, character_id="hazel")
+    await agent.chat([{"role": "user", "content": "hello"}], character_id="hazel")
+
+    assert agent._client.settings == [
+        ("high", {"temperature": 1.0}),
+        ("high", {"temperature": 1.0}),
+    ]
+
+
+async def test_ollama_agent_observes_full_response_and_optionally_thinking(monkeypatch):
+    class ThinkingOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            del messages, tools
+            return {
+                "model": model,
+                "eval_count": 12,
+                "message": {
+                    "role": "assistant",
+                    "content": "done",
+                    "thinking": "reasoning trace",
+                    "tool_calls": [{"function": {"name": "wait", "arguments": {}}}],
+                },
+            }
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = ThinkingOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+    without_thinking: list[dict[str, JsonValue]] = []
+    with_thinking: list[dict[str, JsonValue]] = []
+
+    await OllamaAgent(
+        model="reasoner", response_observer=without_thinking.append
+    ).decide("turn one", None, character_id="hazel")
+    await OllamaAgent(
+        model="reasoner",
+        response_observer=with_thinking.append,
+        log_thinking=True,
+    ).decide("turn one", None, character_id="hazel")
+
+    assert without_thinking[0]["model"] == "reasoner"
+    assert without_thinking[0]["eval_count"] == 12
+    assert "thinking" not in without_thinking[0]["message"]
+    assert with_thinking[0]["message"]["thinking"] == "reasoning trace"
 
 
 async def test_ollama_agent_can_override_model_per_decision(monkeypatch):

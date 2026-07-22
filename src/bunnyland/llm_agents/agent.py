@@ -14,10 +14,12 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
 from typing import Literal, Protocol
+
+from pydantic import JsonValue, TypeAdapter
 
 from .. import telemetry
 from ..prompts.builder import PromptContext
@@ -35,6 +37,7 @@ CHARACTER_SYSTEM_PROMPT = (
 )
 
 logger = logging.getLogger("bunnyland.llm")
+_JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,24 @@ class LLMUsage:
 class ChatAgentReply:
     content: str = ""
     tool_call: ToolCall | None = None
+
+
+OllamaResponseObserver = Callable[[dict[str, JsonValue]], None]
+
+
+def _ollama_response_json(
+    response: object, *, include_thinking: bool
+) -> dict[str, JsonValue]:
+    model_dump = getattr(response, "model_dump", None)
+    raw = model_dump(mode="json") if callable(model_dump) else response
+    value = _JSON_OBJECT.validate_python(raw)
+    if include_thinking:
+        return value
+    value.pop("thinking", None)
+    message = value.get("message")
+    if isinstance(message, dict):
+        message.pop("thinking", None)
+    return value
 
 
 def _int_field(source: object, *names: str) -> int:
@@ -634,9 +655,13 @@ class OllamaAgent:
         model: str = DEFAULT_MODEL,
         host: str | None = None,
         api_key: str | None = None,
+        think: bool | Literal["low", "medium", "high"] | None = None,
+        temperature: float | None = None,
         history_turns: int = 12,
         max_retries: int = DEFAULT_PROVIDER_RETRIES,
         retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
+        response_observer: OllamaResponseObserver | None = None,
+        log_thinking: bool = False,
     ) -> None:
         try:
             import ollama
@@ -648,9 +673,13 @@ class OllamaAgent:
         client_cls = ollama.AsyncClient
         self._client = client_cls(host=host, headers=headers) if host else client_cls()
         self._model = model
+        self._think = think
+        self._temperature = temperature
         self._history_turns = history_turns
         self._max_retries = max(0, max_retries)
         self._retry_delay_seconds = max(0.0, retry_delay_seconds)
+        self._response_observer = response_observer
+        self._log_thinking = log_thinking
         # character_id -> running list of {"role", "content"/"tool_calls"} messages.
         self._history: dict[str, list[dict]] = {}
 
@@ -683,6 +712,7 @@ class OllamaAgent:
                 model=resolved_model,
                 messages=messages,
                 tools=resolved_tools,
+                **self._request_options(),
             )
 
         response = await _call_provider_with_retries(
@@ -694,6 +724,7 @@ class OllamaAgent:
         )
         if response is None:
             return None
+        self._observe_response(response)
         _record_llm_usage("ollama", resolved_model, _ollama_usage(response))
         message = response["message"]
         tool_calls = message.get("tool_calls") or []
@@ -734,6 +765,7 @@ class OllamaAgent:
                 model=resolved_model,
                 messages=messages,
                 tools=resolved_tools,
+                **self._request_options(),
             )
 
         response = await _call_provider_with_retries(
@@ -745,6 +777,7 @@ class OllamaAgent:
         )
         if response is None:
             return ChatAgentReply()
+        self._observe_response(response)
         _record_llm_usage("ollama", resolved_model, _ollama_usage(response))
         message = response["message"]
         tool_calls = message.get("tool_calls") or []
@@ -756,6 +789,20 @@ class OllamaAgent:
             content=str(message.get("content") or "").strip(),
             tool_call=tool_call,
         )
+
+    def _request_options(self) -> dict[str, object]:
+        options: dict[str, object] = {}
+        if self._think is not None:
+            options["think"] = self._think
+        if self._temperature is not None:
+            options["options"] = {"temperature": self._temperature}
+        return options
+
+    def _observe_response(self, response: object) -> None:
+        if self._response_observer is not None:
+            self._response_observer(
+                _ollama_response_json(response, include_thinking=self._log_thinking)
+            )
 
     def _trim(self, history: list[dict]) -> None:
         # Keep the last N exchanges (user + assistant per turn).

@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import importlib.metadata
 import json
+import logging
 import os
 import re
 import statistics
@@ -18,6 +19,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol
 from urllib.parse import urlsplit, urlunsplit
+
+from pydantic import JsonValue
 
 from bunnyland.cli_defaults import OLLAMA_CLOUD_HOST
 from bunnyland.core import (
@@ -64,15 +67,18 @@ from bunnyland.worldgen.examples import (
 from bunnyland.worldgen.generators import WorldGenerator
 from bunnyland.worldgen.instantiate import InstantiatedWorld
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 4
 DEFAULT_SESSIONS = 10
 DEFAULT_TIMEOUT_SECONDS = 600.0
 DEFAULT_TURN_LIMIT = 60
 TURN_GAME_SECONDS = 600.0
 TUTORIAL_NAMES = ("apple", "bell", "clover")
 
+logger = logging.getLogger("bunnyland.benchmark.tutorials")
+
 Provider = Literal["ollama-local", "ollama-cloud"]
-SessionStatus = Literal["completed", "turn_limit", "timeout"]
+SessionStatus = Literal["completed", "turn_limit", "timeout", "repeat_limit"]
+ThinkingLevel = Literal["low", "medium", "high"]
 
 
 class BenchmarkError(RuntimeError):
@@ -107,6 +113,10 @@ class BenchmarkConfig:
     host: str | None = None
     output: Path = Path("artifacts/benchmarks/tutorials")
     api_key: str | None = field(default=None, repr=False)
+    thinking: ThinkingLevel | None = None
+    temperature: float | None = None
+    log_thinking: bool = False
+    repeat_command_guard: bool = False
 
     def validated(self) -> BenchmarkConfig:
         if not self.models or any(not model.strip() for model in self.models):
@@ -195,10 +205,24 @@ class TurnTrace:
     candidate_actions: tuple[str, ...]
     command_id: str | None
     submission_accepted: bool | None
+    submission_reason: str
     receipt_status: str | None
     receipt_reason: str
+    decision_summary: str
+    policy_rejections: tuple[str, ...]
+    provider_error: str
+    consecutive_repeat_count: int
+    repeat_guard_warning: bool
     result_events: tuple[dict[str, object], ...]
     milestones: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ModelResponseTrace:
+    schema_version: int
+    session_id: str
+    turn: int
+    response: dict[str, JsonValue]
 
 
 @dataclass(frozen=True)
@@ -233,6 +257,15 @@ class _RecordingAgent:
     def __init__(self, agent: CharacterAgent) -> None:
         self.agent = agent
         self.observations: list[AgentObservation] = []
+        self._repeat_warning = ""
+
+    def warn_repetition(self, tool: str, arguments: Mapping[str, object]) -> None:
+        self._repeat_warning = (
+            "Benchmark safety warning: you have submitted the same command for five "
+            f"consecutive turns: tool {tool!r} with arguments "
+            f"{json.dumps(dict(arguments), sort_keys=True)}. Do not submit that exact "
+            "command again; choose a different available action."
+        )
 
     async def decide(
         self,
@@ -244,10 +277,14 @@ class _RecordingAgent:
         provider: str | None = None,
         tools: list[dict] | None = None,
     ) -> ToolCall | None:
+        effective_prompt = prompt
+        if self._repeat_warning:
+            effective_prompt = f"{prompt}\n\n{self._repeat_warning}"
+            self._repeat_warning = ""
         started = time.perf_counter()
         try:
             call = await self.agent.decide(
-                prompt,
+                effective_prompt,
                 context,
                 character_id=character_id,
                 model=model,
@@ -256,12 +293,14 @@ class _RecordingAgent:
             )
         except Exception as exc:
             self.observations.append(
-                AgentObservation(prompt, None, {}, time.perf_counter() - started, str(exc))
+                AgentObservation(
+                    effective_prompt, None, {}, time.perf_counter() - started, str(exc)
+                )
             )
             raise
         self.observations.append(
             AgentObservation(
-                prompt=prompt,
+                prompt=effective_prompt,
                 tool=call.name if call else None,
                 arguments=dict(call.arguments) if call else {},
                 latency_seconds=time.perf_counter() - started,
@@ -762,6 +801,8 @@ async def run_session(
     timeout_seconds: float,
     turn_limit: int,
     agent: CharacterAgent,
+    on_trace_recorded: Callable[[TurnTrace], None] | None = None,
+    repeat_command_guard: bool = False,
 ) -> tuple[SessionResult, tuple[TurnTrace, ...]]:
     session_id = f"{scenario.name}-{_slug(model)}-{run:02d}"
     seed = f"tutorial-benchmark-{session_id}"
@@ -773,10 +814,14 @@ async def run_session(
     blocker_counts: Counter[str] = Counter()
     first_confusion: str | None = None
     completed = scenario.completion(state)
+    repeated_command: tuple[str, str] | None = None
+    consecutive_repeat_count = 0
+    repeat_guard_ended = False
     started = time.perf_counter()
 
     async def play() -> None:
-        nonlocal completed, first_confusion
+        nonlocal completed, consecutive_repeat_count, first_confusion
+        nonlocal repeated_command, repeat_guard_ended
         for turn in range(1, turn_limit + 1):
             before = {
                 milestone.name for milestone in scenario.milestones if milestone.evaluate(state)
@@ -815,45 +860,71 @@ async def run_session(
                 if len(recording.observations) > observation_index
                 else AgentObservation("", None, {}, 0.0)
             )
-            if observation.error or any(decision.summary == "error" for decision in turn_decisions):
-                raise ProviderBenchmarkError(
-                    f"Ollama decision failed in {session_id}: "
-                    f"{observation.error or 'provider error'}"
-                )
             decision = (
                 turn_decisions[-1]
                 if turn_decisions
                 else Decision(state.player_id, None, "wait")
             )
+            command_key = (
+                observation.tool or "wait",
+                json.dumps(observation.arguments, sort_keys=True),
+            )
+            if command_key == repeated_command:
+                consecutive_repeat_count += 1
+            else:
+                repeated_command = command_key
+                consecutive_repeat_count = 1
+            repeat_warning = repeat_command_guard and consecutive_repeat_count == 5
+            if repeat_warning:
+                recording.warn_repetition(command_key[0], observation.arguments)
             signature = _blocker_signature(decision, progressed=progressed)
             if signature:
                 blocker_counts[signature] += 1
                 if first_confusion is None:
                     first_confusion = signature
-            traces.append(
-                TurnTrace(
-                    schema_version=SCHEMA_VERSION,
-                    session_id=session_id,
-                    turn=turn,
-                    prompt=observation.prompt,
-                    selected_tool=observation.tool,
-                    arguments=observation.arguments,
-                    decision_latency_seconds=observation.latency_seconds,
-                    candidate_actions=decision.candidate_actions,
-                    command_id=decision.command_id,
-                    submission_accepted=decision.submission_accepted,
-                    receipt_status=decision.receipt_status,
-                    receipt_reason=decision.receipt_reason,
-                    result_events=tuple(
-                        _serialize_event(receipt_events[event_id])
-                        for event_id in decision.result_event_ids
-                        if event_id in receipt_events
-                    ),
-                    milestones=tuple(sorted(after)),
-                )
+            provider_error = observation.error or (
+                "provider error"
+                if any(item.summary == "error" for item in turn_decisions)
+                else ""
             )
+            trace = TurnTrace(
+                schema_version=SCHEMA_VERSION,
+                session_id=session_id,
+                turn=turn,
+                prompt=observation.prompt,
+                selected_tool=observation.tool,
+                arguments=observation.arguments,
+                decision_latency_seconds=observation.latency_seconds,
+                candidate_actions=decision.candidate_actions,
+                command_id=decision.command_id,
+                submission_accepted=decision.submission_accepted,
+                submission_reason=decision.submission_reason,
+                receipt_status=decision.receipt_status,
+                receipt_reason=decision.receipt_reason,
+                decision_summary=decision.summary,
+                policy_rejections=decision.policy_rejections,
+                provider_error=provider_error,
+                consecutive_repeat_count=consecutive_repeat_count,
+                repeat_guard_warning=repeat_warning,
+                result_events=tuple(
+                    _serialize_event(receipt_events[event_id])
+                    for event_id in decision.result_event_ids
+                    if event_id in receipt_events
+                ),
+                milestones=tuple(sorted(after)),
+            )
+            traces.append(trace)
+            if on_trace_recorded is not None:
+                on_trace_recorded(trace)
+            if provider_error:
+                raise ProviderBenchmarkError(
+                    f"Ollama decision failed in {session_id}: {provider_error}"
+                )
             completed = scenario.completion(state)
             if completed:
+                return
+            if repeat_command_guard and consecutive_repeat_count >= 10:
+                repeat_guard_ended = True
                 return
 
     status: SessionStatus
@@ -864,7 +935,13 @@ async def run_session(
         dispatch.cancel_pending()
         status = "timeout"
     else:
-        status = "completed" if completed else "turn_limit"
+        status = (
+            "completed"
+            if completed
+            else "repeat_limit"
+            if repeat_guard_ended
+            else "turn_limit"
+        )
     elapsed = time.perf_counter() - started
     milestone_results = tuple(
         (milestone.name, bool(milestone.evaluate(state))) for milestone in scenario.milestones
@@ -1022,23 +1099,67 @@ def summarize(
 async def run_benchmark(
     config: BenchmarkConfig,
     *,
-    agent_factory: AgentFactory = _default_agent_factory,
+    agent_factory: AgentFactory | None = None,
     preflight: Preflight = preflight_ollama_models,
+    on_session_completed: Callable[[SessionResult], None] | None = None,
+    on_trace_recorded: Callable[[TurnTrace], None] | None = None,
+    on_response_recorded: Callable[[ModelResponseTrace], None] | None = None,
+    on_preflight_completed: Callable[[tuple[ModelMetadata, ...]], None] | None = None,
 ) -> tuple[
     dict[str, object],
     tuple[SessionResult, ...],
     tuple[TurnTrace, ...],
+    tuple[ModelResponseTrace, ...],
     tuple[ModelMetadata, ...],
 ]:
     config = config.validated()
     metadata = await preflight(config.models, config.resolved_host, config.api_key)
+    if on_preflight_completed is not None:
+        on_preflight_completed(metadata)
     scenarios = tutorial_scenarios()
     results: list[SessionResult] = []
     traces: list[TurnTrace] = []
+    responses: list[ModelResponseTrace] = []
+
+    def response_recorder(
+        current_session_id: str,
+    ) -> Callable[[dict[str, JsonValue]], None]:
+        response_turn = 0
+
+        def record(response: dict[str, JsonValue]) -> None:
+            nonlocal response_turn
+            response_turn += 1
+            trace = ModelResponseTrace(
+                schema_version=SCHEMA_VERSION,
+                session_id=current_session_id,
+                turn=response_turn,
+                response=response,
+            )
+            responses.append(trace)
+            if on_response_recorded is not None:
+                on_response_recorded(trace)
+
+        return record
+
     for model in config.models:
         for tutorial in config.tutorials:
             for run in range(1, config.sessions + 1):
-                agent = agent_factory(model, config.resolved_host, config.api_key)
+                session_id = f"{tutorial}-{_slug(model)}-{run:02d}"
+                record_response = response_recorder(session_id)
+                agent = (
+                    agent_factory(model, config.resolved_host, config.api_key)
+                    if agent_factory is not None
+                    else OllamaAgent(
+                        model=model,
+                        host=config.resolved_host,
+                        api_key=config.api_key,
+                        history_turns=60,
+                        think=config.thinking,
+                        temperature=config.temperature,
+                        response_observer=record_response,
+                        log_thinking=config.log_thinking,
+                    )
+                )
                 result, session_traces = await run_session(
                     scenarios[tutorial],
                     model=model,
@@ -1047,10 +1168,20 @@ async def run_benchmark(
                     timeout_seconds=config.timeout_seconds,
                     turn_limit=config.turn_limit,
                     agent=agent,
+                    on_trace_recorded=on_trace_recorded,
+                    repeat_command_guard=config.repeat_command_guard,
                 )
                 results.append(result)
                 traces.extend(session_traces)
-    return summarize(results, metadata, config.tutorials), tuple(results), tuple(traces), metadata
+                if on_session_completed is not None:
+                    on_session_completed(result)
+    return (
+        summarize(results, metadata, config.tutorials),
+        tuple(results),
+        tuple(traces),
+        tuple(responses),
+        metadata,
+    )
 
 
 def _commit() -> str:
@@ -1081,10 +1212,27 @@ def write_artifacts(
     summary: Mapping[str, object],
     results: Sequence[SessionResult],
     traces: Sequence[TurnTrace],
+    responses: Sequence[ModelResponseTrace],
     metadata: Sequence[ModelMetadata],
 ) -> None:
     config.output.mkdir(parents=True, exist_ok=True)
-    manifest: dict[str, object] = {
+    _write_json(config.output / "manifest.json", _manifest(config, metadata))
+    _write_json(config.output / "summary.json", dict(summary))
+    _write_jsonl(config.output / "sessions.jsonl", [asdict(result) for result in results])
+    _write_jsonl(config.output / "traces.jsonl", [asdict(trace) for trace in traces])
+    _write_jsonl(config.output / "responses.jsonl", [asdict(response) for response in responses])
+    (config.output / "report.md").write_text(
+        render_report(config, summary, metadata), encoding="utf-8"
+    )
+    log_path = config.output / "benchmark.log"
+    if not log_path.exists():
+        log_path.write_text("benchmark artifacts written\n", encoding="utf-8")
+
+
+def _manifest(
+    config: BenchmarkConfig, metadata: Sequence[ModelMetadata]
+) -> dict[str, object]:
+    return {
         "schema_version": SCHEMA_VERSION,
         "benchmark": "ollama-tutorial-ladder",
         "generated_at": datetime.now(UTC).isoformat(),
@@ -1098,11 +1246,97 @@ def write_artifacts(
         "session_timeout_seconds": config.timeout_seconds,
         "turn_limit": config.turn_limit,
         "turn_game_seconds": TURN_GAME_SECONDS,
+        "thinking": config.thinking,
+        "temperature": config.temperature,
+        "log_thinking": config.log_thinking,
+        "repeat_command_guard": config.repeat_command_guard,
     }
-    _write_json(config.output / "manifest.json", manifest)
-    _write_json(config.output / "summary.json", dict(summary))
-    _write_jsonl(config.output / "sessions.jsonl", [asdict(result) for result in results])
-    _write_jsonl(config.output / "traces.jsonl", [asdict(trace) for trace in traces])
+
+
+def render_report(
+    config: BenchmarkConfig,
+    summary: Mapping[str, object],
+    metadata: Sequence[ModelMetadata],
+) -> str:
+    temperature = (
+        config.temperature if config.temperature is not None else "provider default"
+    )
+    lines = [
+        "# Ollama tutorial-ladder comparison",
+        "",
+        f"Provider: `{config.provider}`  ",
+        f"Sessions per model/tutorial: `{config.sessions}`  ",
+        f"Session timeout: `{config.timeout_seconds:g}` seconds  ",
+        f"Turn limit: `{config.turn_limit}`  ",
+        f"Thinking: `{config.thinking or 'provider default'}`  ",
+        f"Temperature: `{temperature}`  ",
+        f"Thinking logged: `{'yes' if config.log_thinking else 'no'}`",
+        f"Repeat-command guard: `{'enabled' if config.repeat_command_guard else 'disabled'}`",
+        "",
+        "## Models",
+        "",
+        "| Model | Parameters | Family | Quantization |",
+        "| --- | ---: | --- | --- |",
+    ]
+    for item in metadata:
+        parameters = item.parameter_size or (
+            str(item.parameter_count) if item.parameter_count is not None else "unknown"
+        )
+        lines.append(
+            f"| `{item.model}` | {parameters} | {item.family or 'unknown'} | "
+            f"{item.quantization or 'unknown'} |"
+        )
+
+    tutorial_rankings = summary.get("tutorial_rankings")
+    if isinstance(tutorial_rankings, dict):
+        for tutorial in config.tutorials:
+            lines.extend(
+                (
+                    "",
+                    f"## {tutorial.title()}",
+                    "",
+                    "| Rank | Model | Passes | Pass rate | Median seconds | Median turns | "
+                    "Milestones | Valid | Rejected | Recovered |",
+                    "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                )
+            )
+            rows = tutorial_rankings.get(tutorial)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                lines.append(
+                    f"| {row.get('rank', '')} | `{row.get('model', '')}` | "
+                    f"{row.get('completed_within_session_limit', 0)}/{row.get('sessions', 0)} | "
+                    f"{_percent(row.get('pass_rate'))} | "
+                    f"{_number(row.get('median_completion_seconds'))} | "
+                    f"{_number(row.get('median_completion_turns'))} | "
+                    f"{_percent(row.get('milestone_completion_rate'))} | "
+                    f"{row.get('valid_actions', 0)} | {row.get('rejections', 0)} | "
+                    f"{row.get('recovered_rejections', 0)} |"
+                )
+
+    lines.extend(
+        (
+            "",
+            "## Adding models",
+            "",
+            "Run the benchmark again in a new output directory with these model flags plus "
+            "additional repeatable `--model` options. Keeping the prior models in the run "
+            "preserves directly comparable provider timing and rankings.",
+            "",
+        )
+    )
+    return "\n".join(lines)
+
+
+def _number(value: object) -> str:
+    return f"{float(value):.2f}" if isinstance(value, int | float) else "—"
+
+
+def _percent(value: object) -> str:
+    return f"{100 * float(value):.1f}%" if isinstance(value, int | float) else "—"
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -1114,6 +1348,99 @@ def _write_jsonl(path: Path, values: Sequence[object]) -> None:
         "".join(json.dumps(value, sort_keys=True) + "\n" for value in values),
         encoding="utf-8",
     )
+
+
+def _append_jsonl(path: Path, value: object) -> None:
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(value, sort_keys=True) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+class LiveArtifactWriter:
+    """Durably checkpoint a running benchmark at every turn and session boundary."""
+
+    def __init__(self, config: BenchmarkConfig) -> None:
+        self.config = config
+        self.metadata: tuple[ModelMetadata, ...] = ()
+        self.results: list[SessionResult] = []
+
+    def start(self) -> None:
+        self.config.output.mkdir(parents=True, exist_ok=True)
+        _write_jsonl(self.config.output / "sessions.jsonl", ())
+        _write_jsonl(self.config.output / "traces.jsonl", ())
+        _write_jsonl(self.config.output / "responses.jsonl", ())
+        logger.info(
+            "benchmark started provider=%s models=%s tutorials=%s sessions=%d "
+            "timeout=%g turn_limit=%d thinking=%s temperature=%s log_thinking=%s "
+            "repeat_command_guard=%s",
+            self.config.provider,
+            ",".join(self.config.models),
+            ",".join(self.config.tutorials),
+            self.config.sessions,
+            self.config.timeout_seconds,
+            self.config.turn_limit,
+            self.config.thinking or "provider-default",
+            self.config.temperature if self.config.temperature is not None else "provider-default",
+            self.config.log_thinking,
+            self.config.repeat_command_guard,
+        )
+
+    def record_preflight(self, metadata: tuple[ModelMetadata, ...]) -> None:
+        self.metadata = metadata
+        _write_json(self.config.output / "manifest.json", _manifest(self.config, metadata))
+        logger.info("preflight completed models=%s", ",".join(item.model for item in metadata))
+
+    def record_trace(self, trace: TurnTrace) -> None:
+        _append_jsonl(self.config.output / "traces.jsonl", asdict(trace))
+        logger.info(
+            "turn session=%s turn=%d tool=%s receipt=%s latency=%.3f milestones=%s",
+            trace.session_id,
+            trace.turn,
+            trace.selected_tool or "wait",
+            trace.receipt_status or "none",
+            trace.decision_latency_seconds,
+            ",".join(trace.milestones),
+        )
+
+    def record_response(self, response: ModelResponseTrace) -> None:
+        _append_jsonl(self.config.output / "responses.jsonl", asdict(response))
+        message = response.response.get("message")
+        thinking_logged = isinstance(message, dict) and bool(message.get("thinking"))
+        logger.info(
+            "response session=%s turn=%d thinking_logged=%s",
+            response.session_id,
+            response.turn,
+            thinking_logged,
+        )
+
+    def record_session(self, result: SessionResult) -> None:
+        self.results.append(result)
+        _append_jsonl(self.config.output / "sessions.jsonl", asdict(result))
+        if self.metadata:
+            summary = summarize(self.results, self.metadata, self.config.tutorials)
+            _write_json(self.config.output / "summary.json", summary)
+            (self.config.output / "report.md").write_text(
+                render_report(self.config, summary, self.metadata), encoding="utf-8"
+            )
+        logger.info(
+            "session completed id=%s status=%s passed=%s turns=%d elapsed=%.3f",
+            result.session_id,
+            result.status,
+            result.passed,
+            result.turns,
+            result.elapsed_seconds,
+        )
+
+
+def _benchmark_log_handler(output: Path) -> logging.Handler:
+    output.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(output / "benchmark.log", mode="w", encoding="utf-8")
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    )
+    return handler
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1134,6 +1461,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sessions", type=int, default=DEFAULT_SESSIONS)
     parser.add_argument("--session-timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--turn-limit", type=int, default=DEFAULT_TURN_LIMIT)
+    parser.add_argument("--thinking", choices=("low", "medium", "high"))
+    parser.add_argument("--temperature", type=float)
+    parser.add_argument(
+        "--log-thinking",
+        action="store_true",
+        help="include Ollama's thinking field in responses.jsonl (default: omit)",
+    )
+    parser.add_argument(
+        "--repeat-command-guard",
+        action="store_true",
+        help="warn after 5 identical consecutive calls and end the session after 10",
+    )
     parser.add_argument("--output", type=Path, default=BenchmarkConfig.output)
     return parser
 
@@ -1149,10 +1488,62 @@ async def _async_main(args: argparse.Namespace) -> None:
         host=args.host or os.environ.get("OLLAMA_HOST"),
         output=args.output,
         api_key=os.environ.get("OLLAMA_CLOUD_API_KEY") if args.provider == "ollama-cloud" else None,
+        thinking=args.thinking,
+        temperature=args.temperature,
+        log_thinking=args.log_thinking,
+        repeat_command_guard=args.repeat_command_guard,
     )
-    summary, results, traces, metadata = await run_benchmark(config)
-    write_artifacts(config, summary, results, traces, metadata)
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    completed_count = 0
+    total_sessions = len(config.models) * len(config.tutorials) * config.sessions
+    artifact_writer = LiveArtifactWriter(config)
+    log_handler = _benchmark_log_handler(config.output)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(log_handler)
+    verbose_loggers = (
+        logger,
+        logging.getLogger("bunnyland.llm"),
+        logging.getLogger("bunnyland.llm_agents.dispatch"),
+    )
+    previous_levels = tuple(item.level for item in verbose_loggers)
+    for item in verbose_loggers:
+        item.setLevel(logging.INFO)
+    artifact_writer.start()
+
+    def progress(result: SessionResult) -> None:
+        nonlocal completed_count
+        completed_count += 1
+        artifact_writer.record_session(result)
+        print(
+            f"[{completed_count}/{total_sessions}] {result.session_id}: {result.status}, "
+            f"passed={result.passed}, turns={result.turns}, "
+            f"elapsed={result.elapsed_seconds:.1f}s",
+            flush=True,
+        )
+
+    try:
+        summary, results, traces, responses, metadata = await run_benchmark(
+            config,
+            on_session_completed=progress,
+            on_trace_recorded=artifact_writer.record_trace,
+            on_response_recorded=artifact_writer.record_response,
+            on_preflight_completed=artifact_writer.record_preflight,
+        )
+        write_artifacts(config, summary, results, traces, responses, metadata)
+        logger.info(
+            "benchmark completed sessions=%d traces=%d responses=%d",
+            len(results),
+            len(traces),
+            len(responses),
+        )
+        print(json.dumps(summary, indent=2, sort_keys=True))
+    except Exception:
+        logger.exception("benchmark failed; checkpoint artifacts retained")
+        raise
+    finally:
+        for item, level in zip(verbose_loggers, previous_levels, strict=True):
+            item.setLevel(level)
+        root_logger.removeHandler(log_handler)
+        log_handler.close()
 
 
 def main(argv: Sequence[str] | None = None) -> int:

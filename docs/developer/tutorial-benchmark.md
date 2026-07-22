@@ -48,6 +48,18 @@ scripts/benchmark-tutorials \
   --turn-limit 90
 ```
 
+Use `--thinking low|medium|high` and `--temperature` to pin Ollama reasoning and sampling
+settings. Unspecified sampling options retain each model's provider or model-profile
+defaults, which is useful when families recommend different `top_p` or `top_k` values.
+Every raw Ollama response is recorded with its content, tool calls, token counts, and timing
+fields. Thinking text is omitted by default; add `--log-thinking` to retain Ollama's
+`message.thinking` field in `responses.jsonl`.
+
+Use `--repeat-command-guard` to bound exact repetition without prescribing a tutorial
+solution. After five consecutive identical tool-and-argument calls, the next prompt warns
+the agent to choose a different action. A tenth identical call ends that session with
+`repeat_limit`; tutorial outcomes remain report-only.
+
 ## Running with Ollama Cloud
 
 Set the credential only in the environment. It is used for requests but never written to
@@ -105,8 +117,19 @@ The default output directory is `artifacts/benchmarks/tutorials`; change it with
 - `sessions.jsonl` contains one result per fresh world, including status, milestones,
   action/rejection/recovery counts, first confusion signal, and repeated blocker groups.
 - `traces.jsonl` contains each visible prompt, tool and arguments, decision latency,
-  candidates, command receipt, result events, and milestone state. It does not contain or
-  request hidden reasoning.
+  candidates, decision summary, policy rejection codes, submission outcome, command receipt,
+  provider error, consecutive-repeat count, guard warning, result events, and milestone
+  state. It does not contain or request hidden reasoning.
+- `responses.jsonl` contains the complete JSON response returned by Ollama for each turn,
+  correlated by session and turn. It contains thinking text only with `--log-thinking`.
+- `benchmark.log` contains timestamped lifecycle, turn, session, retry, warning, and error
+  messages from the run.
+- `report.md` is a human-readable model and per-tutorial comparison with instructions for
+  rerunning the matrix with additional repeatable `--model` options.
+
+Trace rows are flushed and synced after every completed turn. Session rows, the partial
+summary, and the report are checkpointed after every completed session, so an interruption
+retains all completed evidence instead of losing the whole matrix.
 
 This is a character-tool reasoning benchmark. It does not test whether a human can discover
 controls, read browser layout, interpret rendering, claim a character, or keep state aligned
