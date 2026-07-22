@@ -30,7 +30,16 @@ from bunnyland.core import (
     replace_component,
     spawn_entity,
 )
-from bunnyland.core.events import DomainEvent, EventVisibility, event_base
+from bunnyland.core.events import (
+    CommandCancelledEvent,
+    CommandExecutedEvent,
+    CommandExpiredEvent,
+    CommandRejectedEvent,
+    DomainEvent,
+    EventVisibility,
+    SpeechSaidEvent,
+    event_base,
+)
 from bunnyland.foundation.persona.mechanics import GoalComponent
 from bunnyland.foundation.social.mechanics import SocialBond
 from bunnyland.llm_agents import (
@@ -93,6 +102,10 @@ from bunnyland.prompts import PerceivedPromptEvent
 from bunnyland.prompts.builder import PromptBuilder
 
 
+class _PromptMessageEvent(DomainEvent):
+    message: str
+
+
 def test_decision_trace_helpers_keep_safe_memory_ids_and_pressure_precedence():
     context = types.SimpleNamespace(
         recall=("[memory:first] remembered", "[memory:first] again [memory:second]"),
@@ -109,6 +122,79 @@ def test_decision_trace_helpers_keep_safe_memory_ids_and_pressure_precedence():
     assert _governing_pressure(context) == "social"
     decision = Decision(character_id="character-1", tool=None, summary="waiting")
     assert decision.with_receipt(None) == decision
+
+
+def test_prompt_event_summaries_keep_observations_and_action_outcomes_only():
+    scenario = build_scenario()
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        _GatedAsyncAgent(),
+    )
+    def prompt_event_base(event_id: str) -> dict[str, object]:
+        return event_base(
+            scenario.actor.epoch,
+            event_id=event_id,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+        )
+
+    events = (
+        (
+            SpeechSaidEvent(**prompt_event_base("speech"), text="Hello."),
+            'You said, "Hello."',
+        ),
+        (
+            CommandRejectedEvent(
+                **prompt_event_base("rejected"),
+                command_id="command-1",
+                command_type="move",
+                reason="That way is blocked",
+            ),
+            "Your move action was rejected: That way is blocked.",
+        ),
+        (
+            CommandExecutedEvent(
+                **prompt_event_base("executed"),
+                command_id="command-2",
+                command_type="look",
+            ),
+            "Your look action completed.",
+        ),
+        (
+            CommandCancelledEvent(
+                **prompt_event_base("cancelled"),
+                command_id="command-3",
+                command_type="wait",
+            ),
+            "Your wait action was cancelled.",
+        ),
+        (
+            CommandExpiredEvent(
+                **prompt_event_base("expired"),
+                command_id="command-4",
+                command_type="say",
+            ),
+            "Your say action expired.",
+        ),
+        (
+            _PromptMessageEvent(
+                **prompt_event_base("message"),
+                message="  A bell rings nearby.  ",
+            ),
+            "A bell rings nearby.",
+        ),
+        (
+            DomainEvent(**prompt_event_base("internal")),
+            None,
+        ),
+    )
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    for event, expected in events:
+        assert dispatch._prompt_event_summary(character, event) == expected
+
+    dispatch.close()
 
 
 def test_ollama_response_without_message_object_still_redacts_top_level_thinking():
@@ -2801,9 +2887,6 @@ async def test_dispatch_allows_concurrent_llm_calls_for_different_characters():
 
 
 async def test_dispatch_coalesces_latest_projection_and_preserves_perceived_events():
-    class MessageEvent(DomainEvent):
-        message: str
-
     scenario = build_scenario()
     agent = _GatedAsyncAgent(call=None)
     dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
@@ -2815,13 +2898,14 @@ async def test_dispatch_coalesces_latest_projection_and_preserves_perceived_even
 
     replace_component(character, replace(points, current=4.0))
     await scenario.actor.bus.publish(
-        DomainEvent(
+        _PromptMessageEvent(
             **event_base(
                 scenario.actor.epoch,
                 event_id="visible-one",
                 visibility=EventVisibility.ROOM,
                 room_id=str(scenario.room_a),
-            )
+            ),
+            message="You hear an orchard gate creak.",
         )
     )
     assert await dispatch.run_once() == []
@@ -2834,17 +2918,18 @@ async def test_dispatch_coalesces_latest_projection_and_preserves_perceived_even
     )
     replace_component(character, replace(points, current=3.0))
     await scenario.actor.bus.publish(
-        DomainEvent(
+        _PromptMessageEvent(
             **event_base(
                 scenario.actor.epoch,
                 event_id="visible-two",
                 visibility=EventVisibility.ROOM,
                 room_id=str(scenario.room_b),
-            )
+            ),
+            message="A breeze follows you into the tunnel.",
         )
     )
     await scenario.actor.bus.publish(
-        MessageEvent(
+        _PromptMessageEvent(
             **event_base(
                 scenario.actor.epoch,
                 event_id="visible-message",
@@ -2914,13 +2999,14 @@ async def test_dispatch_reports_perceived_event_buffer_overflow():
     await asyncio.sleep(0)
     for index in range(3):
         await scenario.actor.bus.publish(
-            DomainEvent(
+            _PromptMessageEvent(
                 **event_base(
                     scenario.actor.epoch + index,
                     event_id=f"visible-{index}",
                     visibility=EventVisibility.ROOM,
                     room_id=str(scenario.room_a),
-                )
+                ),
+                message=f"Visible event {index}.",
             )
         )
     await dispatch.run_once()
@@ -2943,13 +3029,14 @@ async def test_dispatch_requeues_prompt_events_after_provider_failure():
     await dispatch.run_once()
     await asyncio.sleep(0)
     await scenario.actor.bus.publish(
-        DomainEvent(
+        _PromptMessageEvent(
             **event_base(
                 scenario.actor.epoch,
                 event_id="retry-me",
                 visibility=EventVisibility.ROOM,
                 room_id=str(scenario.room_a),
-            )
+            ),
+            message="This event should be retried.",
         )
     )
     await dispatch.run_once()
@@ -2974,13 +3061,14 @@ async def test_dispatch_cancel_restores_events_from_active_prompt():
     await dispatch.run_once()
     await asyncio.sleep(0)
     await scenario.actor.bus.publish(
-        DomainEvent(
+        _PromptMessageEvent(
             **event_base(
                 scenario.actor.epoch,
                 event_id="active-event",
                 visibility=EventVisibility.ROOM,
                 room_id=str(scenario.room_a),
-            )
+            ),
+            message="This event is active.",
         )
     )
     await dispatch.run_once()

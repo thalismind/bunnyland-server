@@ -1146,7 +1146,9 @@ def test_perceived_event_stream_and_overflow_are_distinct_prompt_sections():
     prompt = render_prompt(context)
 
     assert "Observed since your last prompt:" in prompt
-    assert "[SpeechSaidEvent speech-1] Hazel said" in prompt
+    assert '- Hazel said, "Hello."' in prompt
+    assert "SpeechSaidEvent" not in prompt
+    assert "speech-1" not in prompt
     assert "2 additional visible event(s) during epochs 10-20 were omitted" in prompt
 
 

@@ -39,7 +39,13 @@ from ..core.controllers import (
 )
 from ..core.ecs import container_of, contents, parse_entity_id, reachable_ids
 from ..core.edges import ControlledBy, ExitTo
-from ..core.events import DomainEvent
+from ..core.events import (
+    CommandCancelledEvent,
+    CommandExecutedEvent,
+    CommandExpiredEvent,
+    CommandRejectedEvent,
+    DomainEvent,
+)
 from ..core.world_actor import WorldActor
 from ..narration.projection import event_salience, event_summary, event_visible_to
 from ..prompts.builder import PerceivedPromptEvent, PromptBuilder, PromptContext, render_prompt
@@ -595,14 +601,9 @@ class ControllerDispatch:
             character = self.actor.world.get_entity(character_id)
             if not event_visible_to(self.actor.world, character, event):
                 continue
-            summary = event_summary(self.actor.world, character, event)
-            if not summary:
-                message = getattr(event, "message", None)
-                if isinstance(message, str) and message.strip():
-                    summary = message.strip()
-                else:
-                    label = re.sub(r"(?<!^)(?=[A-Z])", " ", event.__class__.__name__)
-                    summary = f"{label}."
+            summary = self._prompt_event_summary(character, event)
+            if summary is None:
+                continue
             state.events.append(
                 PerceivedPromptEvent(
                     event_id=event.event_id,
@@ -612,6 +613,23 @@ class ControllerDispatch:
                     salience=event_salience(event),
                 )
             )
+
+    def _prompt_event_summary(self, character: Entity, event: DomainEvent) -> str | None:
+        summary = event_summary(self.actor.world, character, event)
+        if summary:
+            return summary
+        if isinstance(event, CommandRejectedEvent):
+            return f"Your {event.command_type} action was rejected: {event.reason}."
+        if isinstance(event, CommandExecutedEvent):
+            return f"Your {event.command_type} action completed."
+        if isinstance(event, CommandCancelledEvent):
+            return f"Your {event.command_type} action was cancelled."
+        if isinstance(event, CommandExpiredEvent):
+            return f"Your {event.command_type} action expired."
+        message = getattr(event, "message", None)
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+        return None
 
     def _actable_characters(self) -> list[EntityId]:
         query = (

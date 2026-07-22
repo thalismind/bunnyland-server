@@ -526,8 +526,7 @@ def render_prompt(context: PromptContext) -> str:
     if context.perceived_events or context.omitted_perceived_events:
         lines.append("Observed since your last prompt:")
         lines.extend(
-            f"- [{event.event_type} {event.event_id}] {event.summary}"
-            for event in context.perceived_events
+            f"- {event.summary}" for event in context.perceived_events
         )
         if context.omitted_perceived_events:
             epoch_range = context.omitted_event_epoch_range
