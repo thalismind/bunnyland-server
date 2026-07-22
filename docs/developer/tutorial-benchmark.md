@@ -144,6 +144,10 @@ prompts, responses, thinking fields, traces, and logs remain unchanged. Traced a
 without a completed session row are listed as interrupted evidence and excluded from scores.
 If a mixed source contains superseded trials, select only one model from it with repeatable
 `--input-model 'model-name=artifact-directory'` options.
+When interrupted/resumed sources contain more completed attempts than intended, use
+`--sessions-per-cell N` to keep the first N attempts per model/tutorial in source order.
+Excluded completed attempts remain listed in `summary.json` and the source evidence stays
+unchanged.
 
 Trace rows are flushed and synced after every completed turn. Session rows, the partial
 summary, and the report are checkpointed after every completed session, so an interruption

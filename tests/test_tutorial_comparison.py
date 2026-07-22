@@ -65,7 +65,11 @@ def test_comparison_combines_balanced_sources_and_retains_provenance(tmp_path):
     _source(small, "small", passed=False)
     _source(large, "large", passed=True)
 
-    write_comparison((SourceSelection(small), SourceSelection(large)), output)
+    write_comparison(
+        (SourceSelection(small), SourceSelection(large)),
+        output,
+        notes=("Timing caveat.",),
+    )
 
     assert {path.name for path in output.iterdir()} == {
         "manifest.json",
@@ -80,11 +84,13 @@ def test_comparison_combines_balanced_sources_and_retains_provenance(tmp_path):
     assert "## Full ladder" in report
     assert "## Evidence sources" in report
     assert str(small.resolve()) in report
+    assert "- Timing caveat." in report
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["sources"] == [
         {"path": str(small.resolve()), "selected_models": []},
         {"path": str(large.resolve()), "selected_models": []},
     ]
+    assert manifest["notes"] == ["Timing caveat."]
 
 
 def test_comparison_rejects_an_unbalanced_matrix(tmp_path):
@@ -95,3 +101,22 @@ def test_comparison_rejects_an_unbalanced_matrix(tmp_path):
 
     with pytest.raises(ComparisonError, match="missing cells"):
         write_comparison((SourceSelection(source),), tmp_path / "comparison")
+
+
+def test_comparison_can_keep_first_n_sessions_per_cell(tmp_path):
+    source = tmp_path / "source"
+    _source(source, "model", passed=False)
+    sessions = (source / "sessions.jsonl").read_text(encoding="utf-8")
+    (source / "sessions.jsonl").write_text(sessions + sessions, encoding="utf-8")
+    output = tmp_path / "comparison"
+
+    write_comparison(
+        (SourceSelection(source),), output, sessions_per_cell=1
+    )
+
+    combined_sessions = (output / "sessions.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(combined_sessions) == 3
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    assert len(summary["excluded_completed_sessions"]) == 3
+    report = (output / "report.md").read_text(encoding="utf-8")
+    assert "Excluded completed sessions: 3" in report

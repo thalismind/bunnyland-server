@@ -186,7 +186,13 @@ def _write_jsonl(path: Path, values: Sequence[object]) -> None:
     )
 
 
-def write_comparison(selections: Sequence[SourceSelection], output: Path) -> None:
+def write_comparison(
+    selections: Sequence[SourceSelection],
+    output: Path,
+    *,
+    sessions_per_cell: int | None = None,
+    notes: Sequence[str] = (),
+) -> None:
     if not selections:
         raise ComparisonError("at least one --input artifact directory is required")
     resolved = tuple(
@@ -194,25 +200,45 @@ def write_comparison(selections: Sequence[SourceSelection], output: Path) -> Non
         for selection in selections
     )
     sources = tuple(load_source(selection) for selection in resolved)
-    results = tuple(result for source in sources for result in source.results)
-    if not results:
+    all_results = tuple(result for source in sources for result in source.results)
+    if not all_results:
         raise ComparisonError("source artifacts contain no completed sessions")
-    models = _ordered_unique(tuple(result.model for result in results))
+    if sessions_per_cell is not None and sessions_per_cell < 1:
+        raise ComparisonError("--sessions-per-cell must be positive")
+    models = _ordered_unique(tuple(result.model for result in all_results))
     tutorials = tuple(
         tutorial
         for tutorial in TUTORIAL_NAMES
         if any(tutorial in source.manifest.tutorials for source in sources)
     )
-    counts = Counter((result.model, result.tutorial) for result in results)
+    counts = Counter((result.model, result.tutorial) for result in all_results)
     expected_cells = {(model, tutorial) for model in models for tutorial in tutorials}
     missing_cells = sorted(expected_cells - counts.keys())
     if missing_cells:
         rendered = ", ".join(f"{model}/{tutorial}" for model, tutorial in missing_cells)
         raise ComparisonError(f"comparison matrix has missing cells: {rendered}")
-    session_counts = {counts[cell] for cell in expected_cells}
-    if len(session_counts) != 1:
-        raise ComparisonError("comparison matrix has unequal sessions per model/tutorial")
-    sessions = next(iter(session_counts))
+    if sessions_per_cell is None:
+        session_counts = {counts[cell] for cell in expected_cells}
+        if len(session_counts) != 1:
+            raise ComparisonError("comparison matrix has unequal sessions per model/tutorial")
+        sessions = next(iter(session_counts))
+    else:
+        undersized = sorted(cell for cell in expected_cells if counts[cell] < sessions_per_cell)
+        if undersized:
+            rendered = ", ".join(f"{model}/{tutorial}" for model, tutorial in undersized)
+            raise ComparisonError(f"comparison matrix has too few sessions: {rendered}")
+        sessions = sessions_per_cell
+    selected_counts: Counter[tuple[str, str]] = Counter()
+    selected_results: list[SessionResult] = []
+    excluded_results: list[SessionResult] = []
+    for result in all_results:
+        cell = (result.model, result.tutorial)
+        if selected_counts[cell] < sessions:
+            selected_results.append(result)
+            selected_counts[cell] += 1
+        else:
+            excluded_results.append(result)
+    results = tuple(selected_results)
     settings = _ensure_compatible(sources)
     metadata = _metadata(sources, models)
     config = BenchmarkConfig(
@@ -255,11 +281,17 @@ def write_comparison(selections: Sequence[SourceSelection], output: Path) -> Non
             "temperature": settings.temperature,
             "log_thinking": settings.log_thinking,
             "repeat_command_guard": settings.repeat_command_guard,
+            "excluded_completed_sessions": len(excluded_results),
+            "notes": list(notes),
         },
     )
     _write_json(
         output / "summary.json",
-        {**summary, "incomplete_attempts": [asdict(item) for item in incomplete]},
+        {
+            **summary,
+            "incomplete_attempts": [asdict(item) for item in incomplete],
+            "excluded_completed_sessions": [asdict(item) for item in excluded_results],
+        },
     )
     _write_jsonl(output / "sessions.jsonl", [asdict(result) for result in results])
     report = render_report(config, summary, metadata)
@@ -282,6 +314,18 @@ def write_comparison(selections: Sequence[SourceSelection], output: Path) -> Non
             f"{len(source.results)} | {source.trace_rows} | {source.response_rows} | "
             f"{len(source.incomplete_attempts)} |"
         )
+    if excluded_results:
+        source_lines.extend(
+            (
+                "",
+                f"Excluded completed sessions: {len(excluded_results)}. The comparison kept "
+                f"the first {sessions} completed attempts in source order for every "
+                "model/tutorial cell.",
+            )
+        )
+    if notes:
+        source_lines.extend(("", "## Comparison notes", ""))
+        source_lines.extend(f"- {note}" for note in notes)
     (output / "report.md").write_text(
         report.rstrip() + "\n" + "\n".join(source_lines) + "\n", encoding="utf-8"
     )
@@ -299,7 +343,13 @@ def _parser() -> argparse.ArgumentParser:
         metavar="MODEL=PATH",
         help="include only MODEL's completed sessions from PATH (repeatable)",
     )
+    parser.add_argument("--note", action="append", default=[], help="report caveat")
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--sessions-per-cell",
+        type=int,
+        help="keep the first N completed attempts per model/tutorial in source order",
+    )
     return parser
 
 
@@ -314,7 +364,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not model or not path:
                 raise ComparisonError("--input-model must use MODEL=PATH")
             selections.append(SourceSelection(Path(path), (model,)))
-        write_comparison(selections, args.output)
+        write_comparison(
+            selections,
+            args.output,
+            sessions_per_cell=args.sessions_per_cell,
+            notes=args.note,
+        )
     except ComparisonError as exc:
         raise SystemExit(str(exc)) from exc
     return 0
