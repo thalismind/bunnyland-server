@@ -125,6 +125,7 @@ from bunnyland.simpacks.nukesim.demos import NUKESIM_DEMO
 from bunnyland.simpacks.nukesim.mechanics import RadiationSourceComponent
 from bunnyland.simpacks.voidsim.demos import STAR_OPERA_DEMO, VOIDSIM_DEMO
 from bunnyland.simpacks.voidsim.mechanics import (
+    AirlockComponent,
     HabitatModuleComponent,
     LifeSupportComponent,
     PowerGridComponent,
@@ -297,6 +298,16 @@ async def test_voidsim_demo_rooms_are_habitat_modules():
 
     await VOIDSIM_DEMO.generate(actor, "voidsim-demo", GenOptions())
 
+    airlock = next(actor.world.query().with_all([AirlockComponent]).execute_entities())
+    assert airlock.get_component(ActionOverrideComponent) == ActionOverrideComponent(
+        (
+            ActionOverrideEntry(
+                "open",
+                destination_action="open-airlock",
+                destination_argument="airlock_id",
+            ),
+        )
+    )
     assert _has(actor, HabitatModuleComponent)
 
 

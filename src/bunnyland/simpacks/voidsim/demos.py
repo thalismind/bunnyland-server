@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from bunnyland.core.components import (
+    ActionOverrideComponent,
+    ActionOverrideEntry,
     IdentityComponent,
 )
 from bunnyland.core.ecs import replace_component
@@ -108,6 +110,15 @@ async def voidsim_example(actor, seed: str, options: GenOptions) -> Instantiated
             [
                 IdentityComponent(name="the forward airlock", kind="airlock"),
                 AirlockComponent(module_id=str(bridge), exposes_vacuum=True),
+                ActionOverrideComponent(
+                    (
+                        ActionOverrideEntry(
+                            "open",
+                            destination_action="open-airlock",
+                            destination_argument="airlock_id",
+                        ),
+                    )
+                ),
             ],
         )
         # A damaged reactor to repair, and a distress signal to scan and answer.
