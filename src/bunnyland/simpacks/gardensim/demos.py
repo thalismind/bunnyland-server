@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from bunnyland.core.components import (
+    ActionOverrideComponent,
+    ActionOverrideEntry,
     IdentityComponent,
 )
 from bunnyland.core.ecs import replace_component
@@ -110,6 +112,15 @@ async def gardensim_example(actor, seed: str, options: GenOptions) -> Instantiat
             [
                 IdentityComponent(name="a small preserves machine", kind="machine"),
                 MachineComponent(machine_type="preserves", quality=0.9),
+                ActionOverrideComponent(
+                    (
+                        ActionOverrideEntry(
+                            "take",
+                            destination_action="collect-machine-output",
+                            destination_argument="machine_id",
+                        ),
+                    )
+                ),
             ],
         )
         _add(
@@ -127,6 +138,15 @@ async def gardensim_example(actor, seed: str, options: GenOptions) -> Instantiat
                 IdentityComponent(name="a geode from the lower mine", kind="geode"),
                 PortableComponent(can_pick_up=True),
                 GeodeComponent(resource_type="amethyst", quantity=1),
+                ActionOverrideComponent(
+                    (
+                        ActionOverrideEntry(
+                            "open",
+                            destination_action="open-geode",
+                            destination_argument="geode_id",
+                        ),
+                    )
+                ),
             ],
         )
         _add(
@@ -147,6 +167,15 @@ async def gardensim_example(actor, seed: str, options: GenOptions) -> Instantiat
                     subject="Welcome gift",
                     reward_resource="parsnip seed",
                     reward_quantity=3,
+                ),
+                ActionOverrideComponent(
+                    (
+                        ActionOverrideEntry(
+                            "take",
+                            destination_action="claim-mail",
+                            destination_argument="mail_id",
+                        ),
+                    )
                 ),
             ],
         )

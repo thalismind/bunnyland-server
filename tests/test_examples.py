@@ -359,6 +359,24 @@ async def test_gardensim_demo_includes_catalogue_farm_surfaces():
 
     await GARDENSIM_DEMO.generate(actor, "gardensim-demo", GenOptions())
 
+    expected_aliases = {
+        GeodeComponent: ActionOverrideEntry(
+            "open", destination_action="open-geode", destination_argument="geode_id"
+        ),
+        MachineComponent: ActionOverrideEntry(
+            "take",
+            destination_action="collect-machine-output",
+            destination_argument="machine_id",
+        ),
+        MailComponent: ActionOverrideEntry(
+            "take", destination_action="claim-mail", destination_argument="mail_id"
+        ),
+    }
+    for component_type, expected in expected_aliases.items():
+        entity = next(actor.world.query().with_all([component_type]).execute_entities())
+        assert entity.get_component(ActionOverrideComponent) == ActionOverrideComponent(
+            (expected,)
+        )
     assert _has(actor, CropQualityComponent)
     assert _has(actor, RegrowableComponent)
     assert _has(actor, PestComponent)
