@@ -206,3 +206,9 @@ This is a character-tool reasoning benchmark. It does not test whether a human c
 controls, read browser layout, interpret rendering, claim a character, or keep state aligned
 across clients. Use the [player playtesting guide](../player/playtesting.md) for browser,
 Discord, multi-client, and human-usability acceptance.
+
+When benchmark results show a shared milestone bottleneck, review the
+[diegetic guidance and recoverable world design](diegetic-world-guidance.md) standard before
+assuming the intended model-size difficulty ramp is working. Tutorial difficulty should come
+from increasingly rich planning, not one-time pop-ups, hidden command rituals, repeated
+no-op waits, or clues that cannot be consulted again.

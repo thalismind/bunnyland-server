@@ -3,6 +3,12 @@
 A world is a graph of **rooms** connected by **exits**, populated with **items** and
 **characters**. bunnyland generates one from a seed at server start.
 
+World topology is only part of playability. Required routes and state changes should remain
+discoverable through persistent signs, boards, objects, ledgers, recurring activity, and
+repeatable character dialogue. Follow the
+[diegetic guidance and recoverable world design](diegetic-world-guidance.md) standard when
+building generated, hand-authored, or tutorial worlds.
+
 ## How generation stays inside the rules
 
 The model never touches the world directly. It only *proposes* structured content
