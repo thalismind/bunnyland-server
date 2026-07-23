@@ -18,6 +18,7 @@ from ..core.components import (
     DownedComponent,
     IdentityComponent,
     PerceptionComponent,
+    RoomComponent,
     SleepingComponent,
     StealthComponent,
     SuspendedComponent,
@@ -131,7 +132,16 @@ def perceive(world: World, character: Entity) -> Perception:
     exits = tuple(
         sorted(
             (
-                RoomExit(direction=edge.direction, to_room_id=str(target), locked=edge.locked)
+                RoomExit(
+                    direction=edge.direction,
+                    to_room_id=str(target),
+                    locked=edge.locked,
+                    destination=(
+                        world.get_entity(target).get_component(RoomComponent).title
+                        if world.get_entity(target).has_component(RoomComponent)
+                        else _name(world.get_entity(target))
+                    ),
+                )
                 for edge, target in room.get_relationships(ExitTo)
                 if not edge.hidden
             ),

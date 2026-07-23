@@ -18,6 +18,7 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     ControlledBy,
+    DescriptionComponent,
     ExitTo,
     GenerationChild,
     GenerationDelta,
@@ -41,10 +42,15 @@ from bunnyland.core import (
 from bunnyland.core.components import ReadableComponent, WritableComponent
 from bunnyland.core.ecs import replace_component
 from bunnyland.core.events import (
+    ActorMovedEvent,
     CharacterGeneratedEvent,
+    EventVisibility,
     ObjectGeneratedEvent,
     RoomGeneratedEvent,
+    SpeechSaidEvent,
+    SpeechToldEvent,
     WorldGeneratedEvent,
+    event_base,
 )
 from bunnyland.foundation.consumables.components import (
     ConsumableComponent,
@@ -58,6 +64,8 @@ from bunnyland.foundation.tutorial.mechanics import (
     DELIVERY_MARK,
     HungryCourierAgent,
     HungryCourierControllerComponent,
+    TutorialGuideComponent,
+    TutorialGuideReactor,
 )
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.persistence import WorldMeta, load_world, save_world
@@ -415,7 +423,10 @@ async def test_bell_green_generator_builds_online_sandbox_shape():
         actor.world.get_entity(character_id).get_component(IdentityComponent).name
         for character_id in world.characters.values()
     }
-    readable = actor.world.get_entity(world.objects["notice"]).get_component(ReadableComponent)
+    notice = actor.world.get_entity(world.objects["notice"])
+    readable = notice.get_component(ReadableComponent)
+    green = actor.world.get_entity(world.rooms["green"])
+    guide = actor.world.get_entity(world.characters["guide"])
 
     assert len(world.rooms) == 12
     assert 8 <= len(world.characters) <= 12
@@ -433,6 +444,84 @@ async def test_bell_green_generator_builds_online_sandbox_shape():
         character_names
     )
     assert "help Pip finish a delivery" in readable.text
+    assert "north to Bell Green Post Office" in readable.text
+    assert not notice.has_component(PortableComponent)
+    assert "town hub" in green.get_component(DescriptionComponent).long
+    assert guide.has_component(TutorialGuideComponent)
+
+
+async def test_bell_green_guide_answers_help_questions_with_validated_speech():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    world = await BELL_GREEN_DEMO.generate(actor, "bell-guide", GenOptions())
+
+    await actor.bus.publish(
+        SpeechSaidEvent(
+            **event_base(
+                actor.epoch,
+                visibility=EventVisibility.ROOM,
+                actor_id=str(world.characters["bram"]),
+                room_id=str(world.rooms["green"]),
+            ),
+            text="Where is the Old Bell Shrine?",
+        )
+    )
+
+    queued = actor.pending_submissions()
+    assert len(queued) == 1
+    assert queued[0].character_id == str(world.characters["guide"])
+    assert queued[0].command_type == "say"
+    assert "east, south" in str(queued[0].payload["text"])
+
+
+async def test_bell_green_guide_ignores_invalid_or_inapplicable_help_requests():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    world = await BELL_GREEN_DEMO.generate(actor, "bell-guide-guards", GenOptions())
+    reactor = TutorialGuideReactor(actor)
+    bram_id = world.characters["bram"]
+    guide_id = world.characters["guide"]
+    green = actor.world.get_entity(world.rooms["green"])
+
+    def said(actor_id: str) -> SpeechSaidEvent:
+        return SpeechSaidEvent(
+            **event_base(
+                actor.epoch,
+                visibility=EventVisibility.ROOM,
+                actor_id=actor_id,
+                room_id=str(world.rooms["green"]),
+            ),
+            text="Where should I go?",
+        )
+
+    reactor._on_speech(said("entity_999999"))
+    green.remove_relationship(Contains, bram_id)
+    reactor._on_speech(said(str(bram_id)))
+    green.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), bram_id)
+    reactor._on_speech(
+        SpeechToldEvent(
+            **event_base(
+                actor.epoch,
+                visibility=EventVisibility.DIRECTED,
+                actor_id=str(bram_id),
+                room_id=str(world.rooms["green"]),
+                target_ids=(str(bram_id),),
+            ),
+            text="Where should I go?",
+        )
+    )
+    assert actor.pending_submissions() == []
+
+    reactor._on_speech(said(str(bram_id)))
+    reactor._on_speech(said(str(bram_id)))
+    assert len(actor.pending_submissions()) == 1
+    await actor.tick(0)
+
+    guide = actor.world.get_entity(guide_id)
+    _edge, controller_id = guide.get_relationships(ControlledBy)[0]
+    guide.remove_relationship(ControlledBy, controller_id)
+    reactor._on_speech(said(str(bram_id)))
+    assert actor.pending_submissions() == []
 
 
 async def test_clover_city_generator_builds_dense_world_shape():
@@ -456,6 +545,7 @@ async def test_clover_city_generator_builds_dense_world_shape():
     incidents = list(actor.world.query().with_all([IncidentComponent]).execute_entities())
     obligations = list(actor.world.query().with_all([ObligationComponent]).execute_entities())
     bulletin = actor.world.get_entity(world.objects["bulletin"]).get_component(ReadableComponent)
+    directory = actor.world.get_entity(world.objects["directory"])
 
     assert len(world.rooms) >= 20
     assert len(world.characters) >= 16
@@ -475,6 +565,9 @@ async def test_clover_city_generator_builds_dense_world_shape():
     )
     assert len(routines) >= len(world.characters) * 3
     assert "Missing package" in bulletin.text
+    assert "wait a few turns" in bulletin.text
+    assert "southeast to Security Office" in directory.get_component(ReadableComponent).text
+    assert not directory.has_component(PortableComponent)
     assert {incident.get_component(IncidentComponent).kind for incident in incidents} == {
         "missing_parcel",
         "rooftop_water_shortage",
@@ -493,6 +586,24 @@ async def test_clover_city_generator_builds_dense_world_shape():
     assert parcel is not None
     assert actor.world.get_entity(world.objects["log"]).has_component(WritableComponent)
     assert actor.world.get_entity(world.characters["pip"]).get_relationships(SocialBond)
+
+
+async def test_clover_city_route_checker_produces_public_world_activity():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    world = await CLOVER_CITY_DEMO.generate(actor, "clover-activity", GenOptions())
+    movements: list[ActorMovedEvent] = []
+    actor.bus.subscribe(ActorMovedEvent, movements.append, external=True)
+    dispatch = ControllerDispatch(actor, PromptBuilder(actor.world), ScriptedAgent(()))
+
+    for _turn in range(3):
+        await dispatch.run_once()
+        await dispatch.await_pending()
+        await actor.tick(600)
+
+    rook_id = str(world.characters["rook"])
+    rook_movements = [event for event in movements if event.actor_id == rook_id]
+    assert [event.direction for event in rook_movements] == ["east", "west"]
 
 
 async def test_clover_city_story_state_survives_checkpoint_restore(tmp_path):

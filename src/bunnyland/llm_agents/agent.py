@@ -1,8 +1,10 @@
 """Agents decide a character's next action (spec 25).
 
 A ``CharacterAgent`` is given a rendered prompt plus the structured context and returns a
-single ``ToolCall`` (or ``None`` to wait). The dispatch layer turns that into a validated
-command; the agent never touches the ECS and cannot bypass costs or policy (spec 25.3).
+single ``ToolCall``, an ``InvalidAgentResponse``, or ``None`` for deterministic controller
+hold behavior. Provider-backed agents must use the explicit ``wait`` tool instead of
+returning ``None``. The dispatch layer turns calls into validated commands; the agent never
+touches the ECS and cannot bypass costs or policy (spec 25.3).
 
 ``ScriptedAgent`` replays preset decisions and drives the deterministic tests.
 ``OllamaAgent`` calls Ollama Cloud with the verb tool schemas (optional ``llm`` extra).
@@ -33,7 +35,9 @@ DEFAULT_RETRY_DELAY_SECONDS = 1.0
 TRANSIENT_STATUS_CODES = frozenset({408, 409, 425, 429})
 CHARACTER_SYSTEM_PROMPT = (
     "You are an autonomous character in Bunnyland, an asynchronous social sandbox. "
-    "Choose exactly one available tool call that fits your prompt context, or wait."
+    "Choose exactly one available structured tool call that fits your prompt context. "
+    "Call the wait tool when you intentionally want to wait. Never describe a tool call "
+    "only in prose."
 )
 
 logger = logging.getLogger("bunnyland.llm")
@@ -62,7 +66,19 @@ class ChatAgentReply:
     tool_call: ToolCall | None = None
 
 
-OllamaResponseObserver = Callable[[dict[str, JsonValue]], None]
+@dataclass(frozen=True)
+class InvalidAgentResponse:
+    """A provider response that cannot select a character action."""
+
+    reason: str
+    feedback: str
+
+
+AgentDecision = ToolCall | InvalidAgentResponse | None
+
+
+ProviderResponseObserver = Callable[[dict[str, JsonValue]], None]
+OllamaResponseObserver = ProviderResponseObserver
 
 
 def _ollama_response_json(
@@ -77,6 +93,29 @@ def _ollama_response_json(
     message = value.get("message")
     if isinstance(message, dict):
         message.pop("thinking", None)
+    return value
+
+
+def _openrouter_response_json(
+    response: object, *, include_thinking: bool
+) -> dict[str, JsonValue]:
+    model_dump = getattr(response, "model_dump", None)
+    raw = model_dump(mode="json") if callable(model_dump) else response
+    value = _JSON_OBJECT.validate_python(raw)
+    if include_thinking:
+        return value
+    for key in ("thinking", "reasoning", "reasoning_details"):
+        value.pop(key, None)
+    choices = value.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if not isinstance(message, dict):
+                continue
+            for key in ("thinking", "reasoning", "reasoning_details"):
+                message.pop(key, None)
     return value
 
 
@@ -217,10 +256,12 @@ def normalize_model(model: str | None) -> str:
 
 
 class CharacterAgent(Protocol):
-    """Chooses the next action for a character, or ``None`` to wait this turn.
+    """Chooses the next action for a character.
 
     ``character_id`` identifies which character is deciding so stateful agents can keep
-    per-character conversation history across turns.
+    per-character conversation history across turns. Provider-backed agents return an
+    ``InvalidAgentResponse`` when the provider does not emit a structured tool call.
+    Deterministic controllers may return ``None`` to hold for a turn.
     """
 
     async def decide(
@@ -232,7 +273,7 @@ class CharacterAgent(Protocol):
         model: str | None = None,
         provider: str | None = None,
         tools: list[dict] | None = None,
-    ) -> ToolCall | None: ...
+    ) -> AgentDecision: ...
 
 
 class ScriptedAgent:
@@ -657,6 +698,7 @@ class OllamaAgent:
         api_key: str | None = None,
         think: bool | Literal["low", "medium", "high"] | None = None,
         temperature: float | None = None,
+        max_output_tokens: int | None = None,
         history_turns: int = 12,
         max_retries: int = DEFAULT_PROVIDER_RETRIES,
         retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
@@ -675,13 +717,16 @@ class OllamaAgent:
         self._model = model
         self._think = think
         self._temperature = temperature
+        self._max_output_tokens = max_output_tokens
         self._history_turns = history_turns
         self._max_retries = max(0, max_retries)
         self._retry_delay_seconds = max(0.0, retry_delay_seconds)
         self._response_observer = response_observer
         self._log_thinking = log_thinking
-        # character_id -> running list of {"role", "content"/"tool_calls"} messages.
+        # character_id -> running provider-native user/assistant/tool message history.
         self._history: dict[str, list[dict]] = {}
+        # The authoritative visible result is available in PromptContext on the next turn.
+        self._pending_tool_results: dict[str, str] = {}
 
     async def decide(
         self,
@@ -692,9 +737,12 @@ class OllamaAgent:
         model: str | None = None,
         provider: str | None = None,
         tools: list[dict] | None = None,
-    ) -> ToolCall | None:
-        del context, provider
+    ) -> AgentDecision:
+        del provider
         history = self._history.setdefault(character_id, [])
+        pending_tool = self._pending_tool_results.pop(character_id, None)
+        if pending_tool is not None:
+            history.append(_ollama_tool_result_history(pending_tool, context))
         user_message = {"role": "user", "content": prompt}
         messages = [_character_system_message(), *history, user_message]
         resolved_model = normalize_model(model or self._model)
@@ -723,20 +771,29 @@ class OllamaAgent:
             attributes=request_attrs,
         )
         if response is None:
-            return None
+            attempts = self._max_retries + 1
+            return InvalidAgentResponse(
+                reason="provider returned no response after retries",
+                feedback=(
+                    f"Invalid action response: Ollama returned no response after {attempts} "
+                    "attempt(s), so no action was submitted. Return exactly one structured "
+                    "tool call on this turn."
+                ),
+            )
         self._observe_response(response)
         _record_llm_usage("ollama", resolved_model, _ollama_usage(response))
         message = response["message"]
         tool_calls = message.get("tool_calls") or []
         history.append(user_message)
+        history.append(_ollama_message_to_history(message))
         if tool_calls:
-            history.append(_tool_call_history(tool_calls[0]["function"]))
-        else:
-            history.append(dict(message))
+            self._pending_tool_results[character_id] = str(
+                tool_calls[0]["function"].get("name", "unknown")
+            )
         self._trim(history)
 
         if not tool_calls:
-            return None
+            return _invalid_agent_response(message)
         call = tool_calls[0]["function"]
         return ToolCall(name=call["name"], arguments=dict(call.get("arguments", {})))
 
@@ -794,8 +851,13 @@ class OllamaAgent:
         options: dict[str, object] = {}
         if self._think is not None:
             options["think"] = self._think
+        sampling_options: dict[str, float | int] = {}
         if self._temperature is not None:
-            options["options"] = {"temperature": self._temperature}
+            sampling_options["temperature"] = self._temperature
+        if self._max_output_tokens is not None:
+            sampling_options["num_predict"] = self._max_output_tokens
+        if sampling_options:
+            options["options"] = sampling_options
         return options
 
     def _observe_response(self, response: object) -> None:
@@ -805,10 +867,7 @@ class OllamaAgent:
             )
 
     def _trim(self, history: list[dict]) -> None:
-        # Keep the last N exchanges (user + assistant per turn).
-        limit = self._history_turns * 2
-        if len(history) > limit:
-            del history[: len(history) - limit]
+        _trim_history(history, self._history_turns)
 
 
 class OpenRouterAgent:
@@ -820,9 +879,14 @@ class OpenRouterAgent:
         model: str = DEFAULT_MODEL,
         api_key: str | None = None,
         server_url: str | None = None,
+        reasoning: Literal["low", "medium", "high"] | None = None,
+        temperature: float | None = None,
+        max_output_tokens: int | None = None,
         history_turns: int = 12,
         max_retries: int = DEFAULT_PROVIDER_RETRIES,
         retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
+        response_observer: ProviderResponseObserver | None = None,
+        log_thinking: bool = False,
     ) -> None:
         try:
             from openrouter import OpenRouter
@@ -835,10 +899,16 @@ class OpenRouterAgent:
             kwargs["server_url"] = server_url
         self._client = OpenRouter(**kwargs)
         self._model = model
+        self._reasoning = reasoning
+        self._temperature = temperature
+        self._max_output_tokens = max_output_tokens
         self._history_turns = history_turns
         self._max_retries = max(0, max_retries)
         self._retry_delay_seconds = max(0.0, retry_delay_seconds)
+        self._response_observer = response_observer
+        self._log_thinking = log_thinking
         self._history: dict[str, list[dict]] = {}
+        self._pending_tool_results: dict[str, str] = {}
 
     async def decide(
         self,
@@ -849,9 +919,12 @@ class OpenRouterAgent:
         model: str | None = None,
         provider: str | None = None,
         tools: list[dict] | None = None,
-    ) -> ToolCall | None:
-        del context, provider
+    ) -> AgentDecision:
+        del provider
         history = self._history.setdefault(character_id, [])
+        pending_tool_call_id = self._pending_tool_results.pop(character_id, None)
+        if pending_tool_call_id is not None:
+            history.append(_openrouter_tool_result_history(pending_tool_call_id, context))
         user_message = {"role": "user", "content": prompt}
         messages = [_character_system_message(), *history, user_message]
         resolved_model = normalize_model(model or self._model)
@@ -869,6 +942,7 @@ class OpenRouterAgent:
                 model=resolved_model,
                 messages=messages,
                 tools=resolved_tools,
+                **self._request_options(),
             )
 
         response = await _call_provider_with_retries(
@@ -879,7 +953,16 @@ class OpenRouterAgent:
             attributes=request_attrs,
         )
         if response is None:
-            return None
+            attempts = self._max_retries + 1
+            return InvalidAgentResponse(
+                reason="provider returned no response after retries",
+                feedback=(
+                    f"Invalid action response: OpenRouter returned no response after {attempts} "
+                    "attempt(s), so no action was submitted. Return exactly one structured "
+                    "tool call on this turn."
+                ),
+            )
+        self._observe_response(response)
         _record_llm_usage(
             "openrouter",
             resolved_model,
@@ -888,22 +971,25 @@ class OpenRouterAgent:
         message = response.choices[0].message
         tool_calls = getattr(message, "tool_calls", None) or []
         history.append(user_message)
+        history.append(_message_to_history(message))
         if tool_calls:
-            function = tool_calls[0].function
-            history.append(
-                _tool_call_history(
-                    {
-                        "name": function.name,
-                        "arguments": _openrouter_arguments(getattr(function, "arguments", {})),
-                    }
+            tool_call_id = str(getattr(tool_calls[0], "id", "") or "")
+            if not tool_call_id:
+                invalid = InvalidAgentResponse(
+                    reason="provider tool call contained no tool call id",
+                    feedback=(
+                        "Invalid action response: the structured tool call had no tool-call "
+                        "id, so its authoritative result cannot be correlated. Return exactly "
+                        "one complete structured tool call."
+                    ),
                 )
-            )
-        else:
-            history.append(_message_to_history(message))
+                self._trim(history)
+                return invalid
+            self._pending_tool_results[character_id] = tool_call_id
         self._trim(history)
 
         if not tool_calls:
-            return None
+            return _invalid_agent_response(message)
         function = tool_calls[0].function
         arguments = _openrouter_arguments(getattr(function, "arguments", {}))
         return ToolCall(name=function.name, arguments=arguments)
@@ -933,6 +1019,7 @@ class OpenRouterAgent:
                 model=resolved_model,
                 messages=messages,
                 tools=resolved_tools,
+                **self._request_options(),
             )
 
         response = await _call_provider_with_retries(
@@ -944,6 +1031,7 @@ class OpenRouterAgent:
         )
         if response is None:
             return ChatAgentReply()
+        self._observe_response(response)
         _record_llm_usage(
             "openrouter",
             resolved_model,
@@ -963,10 +1051,27 @@ class OpenRouterAgent:
             tool_call=tool_call,
         )
 
+    def _request_options(self) -> dict[str, object]:
+        options: dict[str, object] = {}
+        if self._reasoning is not None:
+            options["reasoning"] = {"effort": self._reasoning}
+        if self._temperature is not None:
+            options["temperature"] = self._temperature
+        if self._max_output_tokens is not None:
+            options["max_completion_tokens"] = self._max_output_tokens
+        return options
+
+    def _observe_response(self, response: object) -> None:
+        if self._response_observer is not None:
+            self._response_observer(
+                _openrouter_response_json(
+                    response,
+                    include_thinking=self._log_thinking,
+                )
+            )
+
     def _trim(self, history: list[dict]) -> None:
-        limit = self._history_turns * 2
-        if len(history) > limit:
-            del history[: len(history) - limit]
+        _trim_history(history, self._history_turns)
 
 
 class ProviderRouterAgent:
@@ -987,7 +1092,7 @@ class ProviderRouterAgent:
         model: str | None = None,
         provider: str | None = None,
         tools: list[dict] | None = None,
-    ) -> ToolCall | None:
+    ) -> AgentDecision:
         selected = provider or self._default_provider
         agent = self._providers.get(selected)
         if agent is None:
@@ -1091,7 +1196,7 @@ async def _call_provider_with_retries(
                 if retry_delay_seconds > 0:
                     await asyncio.sleep(retry_delay_seconds)
     logger.warning(
-        "%s provider failed after %s attempt%s; character will wait: %s",
+        "%s provider failed after %s attempt%s; no response is available: %s",
         provider,
         max_retries + 1,
         "" if max_retries == 0 else "s",
@@ -1111,6 +1216,74 @@ def _message_to_history(message) -> dict:
     if tool_calls:
         result["tool_calls"] = tool_calls
     return result
+
+
+def _ollama_message_to_history(message: object) -> dict:
+    if isinstance(message, MappingABC):
+        return _JSON_OBJECT.validate_python(dict(message))
+    return _JSON_OBJECT.validate_python(_message_to_history(message))
+
+
+def _tool_result_content(context: PromptContext | None) -> str:
+    perceived_events = context.perceived_events if context is not None else ()
+    events: list[JsonValue] = [
+        {
+            "event_id": event.event_id,
+            "event_type": event.event_type,
+            "world_epoch": event.world_epoch,
+            "summary": event.summary,
+        }
+        for event in perceived_events
+    ]
+    payload: dict[str, JsonValue] = {
+        "events": events,
+        "omitted_event_count": context.omitted_perceived_events if context is not None else 0,
+        "warnings": list(context.warnings) if context is not None else [],
+    }
+    if context is not None and context.omitted_event_epoch_range is not None:
+        payload["omitted_event_epoch_range"] = list(context.omitted_event_epoch_range)
+    return json.dumps(payload, sort_keys=True)
+
+
+def _ollama_tool_result_history(tool_name: str, context: PromptContext | None) -> dict:
+    return {
+        "role": "tool",
+        "tool_name": tool_name,
+        "content": _tool_result_content(context),
+    }
+
+
+def _openrouter_tool_result_history(tool_call_id: str, context: PromptContext | None) -> dict:
+    return {
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "content": _tool_result_content(context),
+    }
+
+
+def _invalid_agent_response(message: object) -> InvalidAgentResponse:
+    history = _ollama_message_to_history(message)
+    content = str(history.get("content") or "").strip()
+    excerpt = content[:1_000]
+    if len(content) > len(excerpt):
+        excerpt = f"{excerpt}..."
+    detail = json.dumps(excerpt or "<empty>")
+    reason = "provider response contained no structured tool call"
+    feedback = (
+        f"Invalid action response: {reason}. The assistant content was {detail}. "
+        "Prose such as 'Selected tool ...' does not execute an action. Return exactly one "
+        "structured tool call using an available tool; call the wait tool to wait."
+    )
+    return InvalidAgentResponse(reason=reason, feedback=feedback)
+
+
+def _trim_history(history: list[dict], history_turns: int) -> None:
+    user_indexes = [
+        index for index, message in enumerate(history) if message.get("role") == "user"
+    ]
+    if len(user_indexes) <= history_turns:
+        return
+    del history[: user_indexes[-history_turns]]
 
 
 def _character_system_message() -> dict:
@@ -1134,19 +1307,6 @@ def _llm_request_attrs(
     }
 
 
-def _tool_call_history(function: MappingABC[str, object]) -> dict:
-    name = str(function.get("name", "unknown"))
-    arguments = function.get("arguments", {})
-    try:
-        encoded = json.dumps(arguments, sort_keys=True)
-    except TypeError:
-        encoded = json.dumps(str(arguments))
-    return {
-        "role": "assistant",
-        "content": f"Selected tool {name} with arguments {encoded}.",
-    }
-
-
 def _openrouter_arguments(arguments: object) -> dict:
     if isinstance(arguments, str):
         return dict(json.loads(arguments or "{}"))
@@ -1163,12 +1323,14 @@ __all__ = [
     "LEGACY_DEFAULT_MODEL",
     "CHARACTER_SYSTEM_PROMPT",
     "Agent",
+    "AgentDecision",
     "BACKGROUND_PROFILES",
     "BackgroundProfile",
     "ChatAgentReply",
     "BehaviorProfileAgent",
     "CharacterAgent",
     "GoalDirectedAgent",
+    "InvalidAgentResponse",
     "OpenRouterAgent",
     "OllamaAgent",
     "ProviderRouterAgent",

@@ -1,6 +1,6 @@
-# Ollama tutorial-ladder benchmark
+# LLM tutorial-ladder benchmark
 
-`scripts/benchmark-tutorials` measures how Ollama models reason through the three public
+`scripts/benchmark-tutorials` measures how provider-backed models reason through the three public
 tutorial worlds with Bunnyland's ordinary character prompts, action tools, command
 validation, receipts, and authoritative ECS state:
 
@@ -10,9 +10,9 @@ validation, receipts, and authoritative ECS state:
 
 The default run creates ten fresh worlds for every model/tutorial pair. Sessions run
 sequentially so provider contention does not distort comparative timing. Every session also
-gets a fresh controller, Ollama agent, and conversation history. Ollama's `show` endpoint
-preflights each model without downloading it and records the parameter size, family, and
-quantization when the provider supplies them.
+gets a fresh controller, provider agent, and conversation history. Model preflight does not
+download or invoke a model. Ollama records parameter size, family, and quantization when
+available; OpenRouter records the catalogue metadata it exposes.
 
 ## Running locally
 
@@ -48,6 +48,23 @@ scripts/benchmark-tutorials \
   --turn-limit 90
 ```
 
+Session duration and response length are separate controls. Most models stop normally, so
+Ollama's model-profile output setting is retained by default. If a model can enter runaway
+reasoning, use `--max-output-tokens` to cap a single response without shortening the session:
+
+```bash
+scripts/benchmark-tutorials \
+  --model deep-reasoner:32b \
+  --session-timeout 3600 \
+  --max-output-tokens 8192
+```
+
+`--max-output-tokens` maps to Ollama's `num_predict`, which includes both thinking and final
+answer/tool-call tokens. Do not use it for comparative reasoning runs unless that shared
+budget is intentional: a thinking-heavy model can exhaust the cap before emitting its tool
+call. Prefer the wall-clock session limit for the normal tutorial benchmark, and reserve the
+token cap for explicitly labeled runaway-generation diagnostics.
+
 Use `--thinking low|medium|high` and `--temperature` to pin Ollama reasoning and sampling
 settings. Unspecified sampling options retain each model's provider or model-profile
 defaults, which is useful when families recommend different `top_p` or `top_k` values.
@@ -75,6 +92,27 @@ scripts/benchmark-tutorials \
 
 Ollama Cloud defaults to `https://ollama.com`; `--host` can override it.
 
+## Running with OpenRouter
+
+Set `OPENROUTER_API_KEY` in the environment and use the exact OpenRouter model id. The key is
+used only for requests and is never written to benchmark artifacts.
+
+```bash
+export OPENROUTER_API_KEY='...'
+scripts/benchmark-tutorials \
+  --provider openrouter \
+  --model openai/gpt-5.6-terra \
+  --model anthropic/claude-sonnet-5 \
+  --thinking medium \
+  --tutorial bell \
+  --tutorial clover \
+  --sessions 2
+```
+
+`--thinking low|medium|high` maps to OpenRouter reasoning effort. Leave `--temperature`
+unset to preserve each model/provider default. OpenRouter defaults to
+`https://openrouter.ai/api/v1`; `--host` can override it.
+
 ## Objectives and scoring
 
 The model receives a high-level tester objective, not a route or scripted solution. Apple
@@ -99,19 +137,26 @@ smallest model reaching 8/10 independently on Apple, Bell, and Clover.
 
 Milestones are evaluated from command result events and authoritative state. For example,
 Apple does not complete until the delivery ledger contains the Hungry Courier mark, and
-Bell's carry milestone requires the item to remain in Bram's inventory after crossing a
-room boundary. Tool selection alone is not success.
+Bell's carry milestone requires the item to be in Bram's inventory after crossing a room
+boundary. Once authoritatively observed, a milestone remains achieved even if Bram later
+returns the item. Tool selection alone is not success.
+
+The initial full-room prompt projection counts as looking in Bell Green or the Clover City
+Lobby. Requiring a redundant `look` tool call after the character has already received that
+projection would measure command ritual rather than orientation.
 
 The Clover missing-parcel, rooftop-water-shortage, and elevator/noise experiments are not
 part of this model-size benchmark. Continue to use the fixed-snapshot controller experiment
-for those systemic stories.
+for those systemic stories. Benchmark preparation suppresses Ada's authored story obligation
+before the first prompt without removing it from the normal Clover City generator.
 
 ## Artifacts
 
 The default output directory is `artifacts/benchmarks/tutorials`; change it with `--output`.
 
 - `manifest.json` records the provider endpoint, model metadata, tutorials, session count,
-  wall-clock limit, turn limit, simulated seconds per turn, version, and commit.
+  wall-clock limit, per-response token limit (when configured), turn limit, simulated seconds
+  per turn, version, and commit.
 - `summary.json` contains per-tutorial and complete-ladder rankings plus the 8/10 parameter
   threshold results.
 - `sessions.jsonl` contains one result per fresh world, including status, milestones,
@@ -120,9 +165,12 @@ The default output directory is `artifacts/benchmarks/tutorials`; change it with
   candidates, decision summary, policy rejection codes, submission outcome, command receipt,
   provider error, consecutive-repeat count, guard warning, result events, prompt-visible event
   ids, event-buffer omission counts, and milestone state. It does not contain or request
-  hidden reasoning.
-- `responses.jsonl` contains the complete JSON response returned by Ollama for each turn,
-  correlated by session and turn. It contains thinking text only with `--log-thinking`.
+  hidden reasoning. A provider response without structured `tool_calls` is recorded as an
+  `invalid_agent_response` policy rejection, with its bounded content excerpt in
+  `receipt_reason`; it is never counted as a wait.
+- `responses.jsonl` contains the complete JSON response returned by the provider for each
+  turn, correlated by session and turn. It contains thinking or reasoning fields only with
+  `--log-thinking`.
 - `benchmark.log` contains timestamped lifecycle, turn, session, retry, warning, and error
   messages from the run.
 - `report.md` is a human-readable model and per-tutorial comparison with instructions for

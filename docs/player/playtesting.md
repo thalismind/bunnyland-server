@@ -8,6 +8,10 @@ The goal is to confirm that a new player can learn the rules in Apple Crossing, 
 understand Bell Green as the shared small-town sandbox, and Clover City as the larger
 dense-world showcase.
 
+The ladder uses layered guidance rather than a forced walkthrough. Room summaries name exit
+destinations, fixed boards provide route information, and hub guides answer spoken direction
+questions through normal validated speech actions. Players can ignore those hints and explore.
+
 For model reasoning through these same tutorial objectives, use the
 [Ollama tutorial-ladder benchmark](../developer/tutorial-benchmark.md). That harness measures
 validated character-tool decisions in fresh worlds; it does not replace the browser,
@@ -107,12 +111,14 @@ What to try:
 - Claim Bram Hollow, Pippa Bramble, or another obvious resident.
 - Look in Bell Green.
 - Inspect the central notice board.
+- Ask Tansy Bell for directions if the route is unclear.
 - Visit Bell Green Post Office, Garden Walk, Hearthwick Inn, and Old Bell Shrine.
 
 Pass criteria:
 
 - Tester can identify Bell Green as a town center.
 - Notice board text gives several possible goals.
+- Tansy's authored answer identifies the main routes without using an LLM provider.
 - Exits are readable enough to navigate back to Bell Green.
 - The post office, garden, store/workshop/inn, pet yard, and shrine feel distinct.
 
@@ -151,6 +157,7 @@ What to try:
 - Claim Ada Warden.
 - Look in Clover City Lobby.
 - Inspect the daily bulletin.
+- Inspect the directory board or ask Cleo Clover for directions.
 - Visit Mailroom, Elevator, Laundry Room, Community Kitchen, Rooftop Garden, Security
   Office, and Street Stop.
 
@@ -158,6 +165,7 @@ Pass criteria:
 
 - Tester can identify the lobby as the navigation hub.
 - The daily bulletin clearly lists city-block tensions.
+- The directory maps every shared facility from the lobby and its branch hubs.
 - Shared facilities feel distinct from private apartments.
 - The map feels denser than Bell Green without losing basic navigability.
 
@@ -169,6 +177,7 @@ What to try:
 - Move through elevator apartment exits.
 - Observe at least three residents in different facilities.
 - Wait or tick long enough to see routines or activity feed changes.
+- At Street Stop, Rook's store route provides visible public activity while time advances.
 - Use a second client or Discord account to compare room and bulletin state.
 
 Pass criteria:

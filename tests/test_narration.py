@@ -762,6 +762,36 @@ def test_event_summary_describes_other_actors_movement_drop_and_third_party_tell
     assert _event_summary(world, viewer, dropped) == "Hazel dropped smooth pebble."
 
 
+def test_event_summary_keeps_private_inspection_details_for_the_reader(scenario):
+    world = scenario.actor.world
+    viewer = world.get_entity(scenario.character)
+    notice = spawn_entity(world, [IdentityComponent(name="route notice", kind="paper")])
+    inspected = EntityInspectedEvent(
+        **event_base(
+            1,
+            visibility=EventVisibility.PRIVATE,
+            actor_id=str(scenario.character),
+            target_ids=(str(notice.id),),
+        ),
+        entity_id=str(notice.id),
+        name="route notice",
+        kind="paper",
+        description="A fixed town map.",
+        text="North leads to the post office.",
+        facts=({"key": "test.route", "text": "The shrine is east.", "detail": 10},),
+    )
+
+    assert _event_summary(world, viewer, inspected) == (
+        "You inspected route notice. Details: A fixed town map. "
+        "North leads to the post office. The shrine is east."
+    )
+    observer = spawn_entity(
+        world,
+        [IdentityComponent(name="Hazel", kind="character"), CharacterComponent()],
+    )
+    assert _event_summary(world, observer, inspected) == "Juniper inspected route notice."
+
+
 def test_render_perceived_room_summary_emits_bands_and_skips_empty_sections():
     with_bands = _render_perceived_room_summary(
         title="Mosslit Burrow",

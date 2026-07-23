@@ -1658,7 +1658,7 @@ def test_render_look_uses_room_summary_projection(scenario):
 
     assert text.startswith("Mosslit Burrow")
     assert "Here: Juniper." in text
-    assert "Exits: north." in text
+    assert "Exits: north to North Tunnel." in text
 
 
 def test_render_look_reports_unclaimed_and_nowhere_characters(scenario):

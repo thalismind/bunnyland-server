@@ -364,7 +364,7 @@ def test_move_handler_can_select_exit_by_target_id_and_custom_noise():
     assert event.direction == "north"
     assert event.arrival_summary.startswith("North Tunnel")
     assert "Here: Juniper." in event.arrival_summary
-    assert "Exits: south." in event.arrival_summary
+    assert "Exits: south to Mosslit Burrow." in event.arrival_summary
 
     noises = scenario.actor.world.query().with_all([NoiseComponent]).execute_entities()
     noise = next(iter(noises)).get_component(NoiseComponent)

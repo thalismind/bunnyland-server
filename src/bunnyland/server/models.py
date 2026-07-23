@@ -249,6 +249,7 @@ class ClientActionView(BaseModel):
 class ClientRoomView(BaseModel):
     id: str | None = None
     title: str = ""
+    description: str = ""
     entities: list[ClientEntityView] = Field(default_factory=list)
     exits: list[ClientExitView] = Field(default_factory=list)
 

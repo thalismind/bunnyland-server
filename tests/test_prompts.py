@@ -21,6 +21,7 @@ from bunnyland.core import (
     IdentityComponent,
     MemoryProfileComponent,
     PortableComponent,
+    ReadableComponent,
     RoomComponent,
     SleepingComponent,
     SuspendedComponent,
@@ -41,6 +42,7 @@ from bunnyland.foundation.social.mechanics import SocialBond
 from bunnyland.memory import InMemoryStore
 from bunnyland.plugins import bunnyland_plugins, collect_persona_fragments
 from bunnyland.projections import RecentContextProjection, RoomSummaryProjection
+from bunnyland.projections.perception import PerceivedEntity
 from bunnyland.prompts import (
     ComponentPromptContext,
     PerceivedPromptEvent,
@@ -135,8 +137,9 @@ def test_build_context_has_core_sections():
     assert ctx.action == (5.0, 5.0)
     assert ctx.location_title == "Mosslit Burrow"
     assert "three berries" in ctx.visible_objects
-    assert "north" in ctx.exits
+    assert "north to North Tunnel" in ctx.exits
     assert "move north" in ctx.commands
+    assert "inspect three berries" in ctx.commands
     assert "take note" in ctx.commands
 
 
@@ -272,6 +275,36 @@ def test_include_entity_ids_annotates_entities_and_commands_when_enabled():
     assert "three berries" in plain.visible_objects
     assert "move north" in plain.commands
     assert f"[{item.id}]" not in " ".join(plain.commands)
+
+
+def test_available_commands_match_object_affordances():
+    scenario = build_scenario()
+    fixed_notice = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="fixed notice", kind="paper"), ReadableComponent(text="Read me")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), fixed_notice.id
+    )
+
+    commands = PromptBuilder(scenario.actor.world).build(scenario.character).commands
+
+    assert "inspect fixed notice" in commands
+    assert "take fixed notice" not in commands
+    assert "use fixed notice" not in commands
+
+
+def test_available_commands_skip_stale_perceived_entities():
+    scenario = build_scenario()
+    commands = PromptBuilder(scenario.actor.world)._available_commands(
+        exits=(),
+        visible_entities=(
+            PerceivedEntity(id="entity_999999", name="old notice", is_character=False),
+        ),
+        visible_characters=(),
+    )
+
+    assert commands == ("take note", "remember/search notes", "forget note by id")
 
 
 def test_prompt_surfaces_others_held_items_without_offering_take():

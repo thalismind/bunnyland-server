@@ -1,11 +1,11 @@
-"""Deterministic coverage for the Ollama tutorial-ladder benchmark."""
+"""Deterministic coverage for the LLM tutorial-ladder benchmark."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -13,12 +13,14 @@ import pytest
 from benchmarks.tutorials import (
     SCHEMA_VERSION,
     BenchmarkConfig,
+    BenchmarkConfigurationError,
     LiveArtifactWriter,
     ModelMetadata,
     ProviderBenchmarkError,
     SessionResult,
     TurnTrace,
     preflight_ollama_models,
+    preflight_openrouter_models,
     render_report,
     run_benchmark,
     run_session,
@@ -26,7 +28,7 @@ from benchmarks.tutorials import (
     tutorial_scenarios,
     write_artifacts,
 )
-from bunnyland.llm_agents import ScriptedAgent, ToolCall
+from bunnyland.llm_agents import InvalidAgentResponse, ScriptedAgent, ToolCall
 
 
 def _apple_calls() -> tuple[ToolCall, ...]:
@@ -209,6 +211,117 @@ async def test_repeat_command_guard_warns_at_five_and_ends_at_ten():
     assert traces[-1].consecutive_repeat_count == 10
 
 
+async def test_repeat_command_guard_ignores_controller_holds_while_sleeping():
+    result, traces = await run_session(
+        tutorial_scenarios()["bell"],
+        model="sleeper",
+        provider="ollama-local",
+        run=1,
+        timeout_seconds=5,
+        turn_limit=6,
+        agent=ScriptedAgent((ToolCall("sleep", {}),)),
+        repeat_command_guard=True,
+    )
+
+    assert result.status == "turn_limit"
+    assert traces[0].selected_tool == "sleep"
+    assert traces[0].receipt_status == "committed"
+    assert all(trace.selected_tool is None for trace in traces[1:])
+    assert all(trace.decision_summary == "controller hold" for trace in traces[1:])
+    assert all(trace.consecutive_repeat_count == 0 for trace in traces[1:])
+    assert not any(trace.repeat_guard_warning for trace in traces)
+
+
+async def test_invalid_provider_response_is_rejected_with_recovery_feedback():
+    class InvalidThenWaitAgent:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def decide(self, prompt, context, **kwargs):
+            del context, kwargs
+            self.prompts.append(prompt)
+            if len(self.prompts) == 1:
+                return InvalidAgentResponse(
+                    reason="provider response contained no structured tool call",
+                    feedback=(
+                        "Invalid action response: assistant.tool_calls was empty. "
+                        "Return exactly one structured tool call."
+                    ),
+                )
+            return ToolCall("wait", {})
+
+    agent = InvalidThenWaitAgent()
+    result, traces = await run_session(
+        tutorial_scenarios()["bell"],
+        model="invalid-then-wait",
+        provider="ollama-local",
+        run=1,
+        timeout_seconds=5,
+        turn_limit=2,
+        agent=agent,
+    )
+
+    assert result.rejected_actions == 1
+    assert result.first_confusion_signal.startswith("invalid action response")
+    assert traces[0].receipt_status == "policy_rejected"
+    assert traces[0].policy_rejections == ("invalid_agent_response",)
+    assert traces[0].decision_summary.startswith("invalid response")
+    assert "assistant.tool_calls was empty" in traces[0].receipt_reason
+    assert "Invalid action response" in agent.prompts[1]
+
+
+async def test_milestones_remain_achieved_after_authoritative_state_changes():
+    calls = (
+        ToolCall("move", {"direction": "east"}),
+        ToolCall("take", {"item_id": "harvest basket"}),
+        ToolCall("move", {"direction": "south"}),
+        ToolCall("drop", {"item_id": "harvest basket"}),
+    )
+    result, traces = await run_session(
+        tutorial_scenarios()["bell"],
+        model="deterministic",
+        provider="ollama-local",
+        run=1,
+        timeout_seconds=5,
+        turn_limit=len(calls),
+        agent=ScriptedAgent(calls),
+    )
+
+    assert "carried_item_between_rooms" in traces[2].milestones
+    assert "carried_item_between_rooms" in traces[3].milestones
+    assert dict(result.milestone_results)["carried_item_between_rooms"] is True
+
+
+async def test_clover_orientation_excludes_systemic_story_obligations_from_prompt():
+    result, traces = await run_session(
+        tutorial_scenarios()["clover"],
+        model="deterministic",
+        provider="ollama-local",
+        run=1,
+        timeout_seconds=5,
+        turn_limit=1,
+        agent=ScriptedAgent(()),
+    )
+
+    assert result.turns == 1
+    assert "owes you:" not in traces[0].prompt
+    assert dict(result.milestone_results)["looked_in_clover_city_lobby"] is True
+
+
+async def test_starting_room_projection_counts_as_orientation_without_redundant_look():
+    result, _traces = await run_session(
+        tutorial_scenarios()["bell"],
+        model="deterministic",
+        provider="ollama-local",
+        run=1,
+        timeout_seconds=5,
+        turn_limit=1,
+        agent=ScriptedAgent(()),
+    )
+
+    assert dict(result.milestone_results)["looked_in_bell_green"] is True
+
+
 class _FailingAgent:
     async def decide(self, prompt, context, **kwargs):
         del prompt, context, kwargs
@@ -381,12 +494,59 @@ async def test_preflight_failure_is_provider_error(monkeypatch):
         await preflight_ollama_models(("missing",), "http://local", None)
 
 
+async def test_openrouter_preflight_lists_models_without_inference(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    class FakeModels:
+        async def list_async(self):
+            calls.append(("models", "list"))
+            architecture = SimpleNamespace(tokenizer="GPT")
+            model = SimpleNamespace(
+                id="openai/gpt-5.6-terra",
+                architecture=architecture,
+            )
+            return SimpleNamespace(data=[model])
+
+    class FakeClient:
+        def __init__(self, *, api_key, server_url):
+            calls.append((api_key, server_url))
+            self.models = FakeModels()
+
+    fake = ModuleType("openrouter")
+    fake.OpenRouter = FakeClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake)
+
+    result = await preflight_openrouter_models(
+        ("openai/gpt-5.6-terra",),
+        "https://openrouter.example/api/v1",
+        "router-secret",
+    )
+
+    assert calls == [
+        ("router-secret", "https://openrouter.example/api/v1"),
+        ("models", "list"),
+    ]
+    assert result == (ModelMetadata("openai/gpt-5.6-terra", family="GPT"),)
+    assert not hasattr(FakeClient, "chat")
+
+
+def test_openrouter_configuration_requires_credential_and_uses_default_host():
+    config = BenchmarkConfig(models=("model",), provider="openrouter")
+
+    with pytest.raises(BenchmarkConfigurationError, match="OPENROUTER_API_KEY"):
+        config.validated()
+
+    configured = replace(config, api_key="router-secret").validated()
+    assert configured.resolved_host == "https://openrouter.ai/api/v1"
+
+
 def test_artifacts_have_stable_schemas_and_never_record_credentials(tmp_path):
     config = BenchmarkConfig(
         models=("model",),
         tutorials=("apple",),
         sessions=1,
         timeout_seconds=3600,
+        max_output_tokens=8192,
         output=tmp_path,
         provider="ollama-cloud",
         host="https://user:host-secret@ollama.example/api?token=query-secret",
@@ -414,13 +574,14 @@ def test_artifacts_have_stable_schemas_and_never_record_credentials(tmp_path):
     manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["schema_version"] == SCHEMA_VERSION
     assert manifest["session_timeout_seconds"] == 3600
+    assert manifest["max_output_tokens"] == 8192
     assert manifest["host"] == "https://ollama.example/api"
     session = json.loads((tmp_path / "sessions.jsonl").read_text(encoding="utf-8"))
     assert session["schema_version"] == SCHEMA_VERSION
     assert (tmp_path / "traces.jsonl").read_text(encoding="utf-8") == ""
     assert (tmp_path / "responses.jsonl").read_text(encoding="utf-8") == ""
     report = (tmp_path / "report.md").read_text(encoding="utf-8")
-    assert "Ollama tutorial-ladder comparison" in report
+    assert "LLM tutorial-ladder comparison" in report
     assert "Adding models" in report
 
 

@@ -2,6 +2,7 @@
 
 from bunnyland.foundation.tutorial.mechanics import (
     HungryCourierControllerComponent,
+    TutorialGuideComponent,
     install_tutorial,
 )
 
@@ -30,7 +31,9 @@ def _definition() -> Plugin:
     return Plugin(
         id=WORLDGEN,
         name="World Generators",
-        ecs=EcsContribution(components=(HungryCourierControllerComponent,)),
+        ecs=EcsContribution(
+            components=(HungryCourierControllerComponent, TutorialGuideComponent)
+        ),
         runtime=RuntimeContribution(service_factories=(install_tutorial,)),
         content=ContentContribution(
             world_generators=(

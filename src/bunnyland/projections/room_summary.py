@@ -9,7 +9,6 @@ instead of raw numbers so tiny changes don't churn the summary (spec 17.3).
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 
@@ -25,6 +24,7 @@ from relics import (
 from ..core.components import (
     CharacterComponent,
     ContainerComponent,
+    DescriptionComponent,
     DoorComponent,
     IdentityComponent,
     LightComponent,
@@ -42,6 +42,7 @@ from ..core.edges import Contains, ExitTo
 # (Door/Container/Lockable open/closed/locked) all dirty the room they sit in.
 _ROOM_COMPONENTS = (
     RoomComponent,
+    DescriptionComponent,
     LightComponent,
     TemperatureComponent,
     DoorComponent,
@@ -76,6 +77,7 @@ class RoomFacts:
     room_id: str
     title: str
     biome: str
+    description: str = ""
     occupants: tuple[tuple[str, str], ...] = ()  # (entity_id, name)
     objects: tuple[RoomObject, ...] = ()
     exits: tuple[RoomExit, ...] = ()
@@ -166,6 +168,12 @@ def build_room_facts(world: World, room_id: EntityId) -> RoomFacts:
         room_id=str(room_id),
         title=room_component.title if room_component else "an unknown place",
         biome=room_component.biome if room_component else "unknown",
+        description=(
+            room.get_component(DescriptionComponent).long
+            or room.get_component(DescriptionComponent).short
+            if room.has_component(DescriptionComponent)
+            else ""
+        ),
         occupants=tuple(sorted(occupants)),
         objects=tuple(sorted(objects, key=lambda o: o.name)),
         exits=tuple(sorted(exits, key=lambda e: (e.direction, e.destination, e.to_room_id))),
@@ -176,6 +184,8 @@ def build_room_facts(world: World, room_id: EntityId) -> RoomFacts:
 def render_summary(facts: RoomFacts) -> str:
     """Deterministic template prose (LLM prose summaries are a later, optional feature)."""
     lines = [facts.title]
+    if facts.description:
+        lines.append(facts.description)
     if facts.bands:
         descriptors = ", ".join(facts.bands[k] for k in sorted(facts.bands))
         lines.append(f"It is {descriptors}.")
@@ -187,13 +197,8 @@ def render_summary(facts: RoomFacts) -> str:
             rendered.append(f"{obj.name} ({', '.join(obj.states)})" if obj.states else obj.name)
         lines.append("You see: " + ", ".join(rendered) + ".")
     if facts.exits:
-        direction_counts = Counter(exit_.direction for exit_ in facts.exits)
         rendered_exits = [
-            (
-                f"{exit_.direction} to {exit_.destination or exit_.to_room_id}"
-                if direction_counts[exit_.direction] > 1
-                else exit_.direction
-            )
+            f"{exit_.direction} to {exit_.destination or exit_.to_room_id}"
             for exit_ in facts.exits
         ]
         lines.append("Exits: " + ", ".join(rendered_exits) + ".")

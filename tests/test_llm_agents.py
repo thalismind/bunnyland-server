@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import types
 from dataclasses import replace
@@ -47,6 +48,7 @@ from bunnyland.llm_agents import (
     BehaviorProfileAgent,
     ControllerDispatch,
     GoalDirectedAgent,
+    InvalidAgentResponse,
     OpenRouterAgent,
     ProviderRouterAgent,
     ScriptedAgent,
@@ -85,8 +87,8 @@ from bunnyland.llm_agents.agent import (
     _ollama_response_json,
     _openrouter_arguments,
     _openrouter_enriched_usage,
+    _openrouter_response_json,
     _openrouter_usage,
-    _tool_call_history,
     normalize_model,
 )
 from bunnyland.llm_agents.dispatch import (
@@ -99,7 +101,7 @@ from bunnyland.llm_agents.dispatch import (
 from bunnyland.plugins import PluginRegistry, bunnyland_plugins, collect_persona_fragments
 from bunnyland.plugins.ids import CORE_VERBS
 from bunnyland.prompts import PerceivedPromptEvent
-from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.prompts.builder import PromptBuilder, PromptContext
 
 
 class _PromptMessageEvent(DomainEvent):
@@ -1454,14 +1456,69 @@ async def test_ollama_agent_resends_prior_turns_as_context(monkeypatch):
     await agent.decide("turn two", None, character_id="char_1")
 
     client = agent._client
-    # Second chat call carries the full history: turn one (user + assistant) + turn two.
+    # The prior assistant tool call and its authoritative result retain provider-native roles.
     second = client.calls[1]
     assert second[0] == {"role": "system", "content": CHARACTER_SYSTEM_PROMPT}
     assert second[1] == {"role": "user", "content": "turn one"}
     assert second[2]["role"] == "assistant"
-    assert second[2]["content"] == "Selected tool wait with arguments {}."
-    assert "tool_calls" not in second[2]
-    assert second[3] == {"role": "user", "content": "turn two"}
+    assert second[2]["tool_calls"] == [
+        {"function": {"name": "wait", "arguments": {}}}
+    ]
+    assert second[3]["role"] == "tool"
+    assert second[3]["tool_name"] == "wait"
+    assert json.loads(second[3]["content"]) == {
+        "events": [],
+        "omitted_event_count": 0,
+        "warnings": [],
+    }
+    assert second[4] == {"role": "user", "content": "turn two"}
+
+
+async def test_ollama_agent_returns_visible_events_as_structured_tool_result(monkeypatch):
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = _FakeOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+    context = PromptContext(
+        name="Hazel",
+        kind="character",
+        status="active",
+        action=(5.0, 5.0),
+        focus=(5.0, 5.0),
+        location_title="Meadow",
+        room_summary="Meadow",
+        perceived_events=(
+            PerceivedPromptEvent(
+                event_id="event-1",
+                event_type="CommandExecutedEvent",
+                world_epoch=12,
+                summary="Your move action completed.",
+            ),
+        ),
+        omitted_perceived_events=2,
+        omitted_event_epoch_range=(3, 8),
+        warnings=("The destination was blocked.",),
+    )
+    agent = OllamaAgent(model="llama3")
+
+    await agent.decide("turn one", context, character_id="hazel")
+    await agent.decide("turn two", context, character_id="hazel")
+
+    result = agent._client.calls[1][3]
+    assert result["role"] == "tool"
+    assert result["tool_name"] == "wait"
+    assert json.loads(result["content"]) == {
+        "events": [
+            {
+                "event_id": "event-1",
+                "event_type": "CommandExecutedEvent",
+                "world_epoch": 12,
+                "summary": "Your move action completed.",
+            }
+        ],
+        "omitted_event_count": 2,
+        "omitted_event_epoch_range": [3, 8],
+        "warnings": ["The destination was blocked."],
+    }
 
 
 async def test_ollama_agent_keeps_history_per_character(monkeypatch):
@@ -1502,7 +1559,7 @@ async def test_ollama_agent_sends_configured_thinking_and_temperature(monkeypatc
     class ConfiguredOllamaClient(_FakeOllamaClient):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self.settings: list[tuple[str, dict[str, float]]] = []
+            self.settings: list[tuple[str, dict[str, float | int]]] = []
 
         async def chat(self, *, model, messages, tools, think, options):
             self.settings.append((think, options))
@@ -1512,13 +1569,15 @@ async def test_ollama_agent_sends_configured_thinking_and_temperature(monkeypatc
     fake_module.AsyncClient = ConfiguredOllamaClient
     monkeypatch.setitem(sys.modules, "ollama", fake_module)
 
-    agent = OllamaAgent(model="reasoner", think="high", temperature=1.0)
+    agent = OllamaAgent(
+        model="reasoner", think="high", temperature=1.0, max_output_tokens=8192
+    )
     await agent.decide("turn one", None, character_id="hazel")
     await agent.chat([{"role": "user", "content": "hello"}], character_id="hazel")
 
     assert agent._client.settings == [
-        ("high", {"temperature": 1.0}),
-        ("high", {"temperature": 1.0}),
+        ("high", {"temperature": 1.0, "num_predict": 8192}),
+        ("high", {"temperature": 1.0, "num_predict": 8192}),
     ]
 
 
@@ -1581,7 +1640,7 @@ async def test_ollama_agent_maps_legacy_default_model_to_flash(monkeypatch):
     assert agent._client.models == [DEFAULT_MODEL]
 
 
-async def test_ollama_agent_records_plain_assistant_reply_and_trims_history(monkeypatch):
+async def test_ollama_agent_rejects_plain_assistant_reply_and_trims_history(monkeypatch):
     class PlainOllamaClient(_FakeOllamaClient):
         async def chat(self, *, model, messages, tools):
             del tools
@@ -1595,7 +1654,10 @@ async def test_ollama_agent_records_plain_assistant_reply_and_trims_history(monk
 
     agent = OllamaAgent(model="llama3", history_turns=1)
 
-    assert await agent.decide("turn one", None, character_id="hazel") is None
+    first = await agent.decide("turn one", None, character_id="hazel")
+    assert isinstance(first, InvalidAgentResponse)
+    assert "no structured tool call" in first.feedback
+    assert '"waiting"' in first.feedback
     assert agent._history["hazel"] == [
         {"role": "user", "content": "turn one"},
         {"role": "assistant", "content": "waiting"},
@@ -1607,6 +1669,25 @@ async def test_ollama_agent_records_plain_assistant_reply_and_trims_history(monk
         {"role": "user", "content": "turn two"},
         {"role": "assistant", "content": "waiting"},
     ]
+
+
+async def test_ollama_agent_bounds_invalid_response_feedback(monkeypatch):
+    class LongReplyOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            del model, messages, tools
+            return {"message": {"role": "assistant", "content": "x" * 1_001}}
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = LongReplyOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    result = await OllamaAgent(model="llama3").decide(
+        "turn one", None, character_id="hazel"
+    )
+
+    assert isinstance(result, InvalidAgentResponse)
+    assert f'{"x" * 1_000}...' in result.feedback
+    assert "x" * 1_001 not in result.feedback
 
 
 async def test_ollama_agent_retries_transient_provider_errors(monkeypatch):
@@ -1622,7 +1703,9 @@ async def test_ollama_agent_retries_transient_provider_errors(monkeypatch):
     assert agent._history["hazel"][0] == {"role": "user", "content": "turn one"}
 
 
-async def test_ollama_agent_returns_wait_after_transient_provider_retries(monkeypatch):
+async def test_ollama_agent_rejects_missing_response_after_transient_provider_retries(
+    monkeypatch,
+):
     class AlwaysFailOllamaClient(_FlakyOllamaClient):
         failures = 99
 
@@ -1633,7 +1716,9 @@ async def test_ollama_agent_returns_wait_after_transient_provider_retries(monkey
     agent = OllamaAgent(model="llama3", retry_delay_seconds=0)
     call = await agent.decide("turn one", None, character_id="hazel")
 
-    assert call is None
+    assert isinstance(call, InvalidAgentResponse)
+    assert call.reason == "provider returned no response after retries"
+    assert "after 3 attempt(s)" in call.feedback
     assert len(agent._client.calls) == 3
     assert agent._history["hazel"] == []
 
@@ -1700,7 +1785,7 @@ class _FakeOpenRouterChat:
     async def send_async(self, *, model, messages, tools):
         self.calls.append({"model": model, "messages": [dict(m) for m in messages], "tools": tools})
         function = types.SimpleNamespace(name="wait", arguments='{"reason": "rest"}')
-        tool_call = types.SimpleNamespace(function=function)
+        tool_call = types.SimpleNamespace(id="call_wait", function=function)
         message = types.SimpleNamespace(
             role="assistant",
             content="ok",
@@ -1708,7 +1793,13 @@ class _FakeOpenRouterChat:
             model_dump=lambda **_: {
                 "role": "assistant",
                 "content": "ok",
-                "tool_calls": [{"function": {"name": "wait", "arguments": '{"reason": "rest"}'}}],
+                "tool_calls": [
+                    {
+                        "id": "call_wait",
+                        "type": "function",
+                        "function": {"name": "wait", "arguments": '{"reason": "rest"}'},
+                    }
+                ],
             },
         )
         usage = types.SimpleNamespace(
@@ -1739,7 +1830,7 @@ class _FlakyOpenRouterChat(_FakeOpenRouterChat):
             self.remaining_failures -= 1
             raise _FakeProviderError(502)
         function = types.SimpleNamespace(name="wait", arguments='{"reason": "rest"}')
-        tool_call = types.SimpleNamespace(function=function)
+        tool_call = types.SimpleNamespace(id="call_wait", function=function)
         message = types.SimpleNamespace(
             role="assistant",
             content="ok",
@@ -1747,7 +1838,13 @@ class _FlakyOpenRouterChat(_FakeOpenRouterChat):
             model_dump=lambda **_: {
                 "role": "assistant",
                 "content": "ok",
-                "tool_calls": [{"function": {"name": "wait", "arguments": '{"reason": "rest"}'}}],
+                "tool_calls": [
+                    {
+                        "id": "call_wait",
+                        "type": "function",
+                        "function": {"name": "wait", "arguments": '{"reason": "rest"}'},
+                    }
+                ],
             },
         )
         return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
@@ -1774,6 +1871,170 @@ async def test_openrouter_agent_parses_tool_arguments_json(monkeypatch):
     assert agent._client.chat.calls[0]["model"] == "openai/gpt-4.1-mini"
 
 
+async def test_openrouter_agent_passes_reasoning_options_and_observes_response(
+    monkeypatch,
+):
+    class ConfiguredOpenRouterChat:
+        def __init__(self):
+            self.options: dict[str, object] = {}
+
+        async def send_async(
+            self,
+            *,
+            model,
+            messages,
+            tools,
+            reasoning=None,
+            temperature=None,
+            max_completion_tokens=None,
+        ):
+            del model, messages, tools
+            self.options = {
+                "reasoning": reasoning,
+                "temperature": temperature,
+                "max_completion_tokens": max_completion_tokens,
+            }
+            function = types.SimpleNamespace(name="wait", arguments="{}")
+            tool_call = types.SimpleNamespace(id="call_wait", function=function)
+            message = types.SimpleNamespace(
+                role="assistant",
+                content="",
+                reasoning="private trace",
+                tool_calls=[tool_call],
+                model_dump=lambda **_: {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning": "private trace",
+                    "tool_calls": [
+                        {
+                            "id": "call_wait",
+                            "type": "function",
+                            "function": {"name": "wait", "arguments": "{}"},
+                        }
+                    ],
+                },
+            )
+            response_json = {
+                "id": "generation",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "reasoning": "private trace",
+                            "tool_calls": [
+                                {
+                                    "id": "call_wait",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "wait",
+                                        "arguments": "{}",
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ],
+            }
+            return types.SimpleNamespace(
+                choices=[types.SimpleNamespace(message=message)],
+                model_dump=lambda **_: response_json,
+            )
+
+    class ConfiguredOpenRouterClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = ConfiguredOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = ConfiguredOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+    responses: list[dict[str, JsonValue]] = []
+    agent = OpenRouterAgent(
+        model="openai/gpt-5.6-terra",
+        api_key="key",
+        reasoning="medium",
+        temperature=0.4,
+        max_output_tokens=4096,
+        response_observer=responses.append,
+        log_thinking=True,
+    )
+
+    call = await agent.decide("turn one", None, character_id="hazel")
+
+    assert call == ToolCall("wait", {})
+    assert agent._client.chat.options == {
+        "reasoning": {"effort": "medium"},
+        "temperature": 0.4,
+        "max_completion_tokens": 4096,
+    }
+    assert responses[0]["choices"][0]["message"]["reasoning"] == "private trace"
+    sanitized = _openrouter_response_json(
+        types.SimpleNamespace(model_dump=lambda **_: responses[0]),
+        include_thinking=False,
+    )
+    assert "reasoning" not in sanitized["choices"][0]["message"]
+
+
+def test_openrouter_response_redaction_handles_partial_provider_shapes():
+    without_choices = _openrouter_response_json(
+        {"reasoning": "private trace"},
+        include_thinking=False,
+    )
+    mixed_choices = _openrouter_response_json(
+        {
+            "choices": [
+                None,
+                {},
+                {"message": None},
+                {"message": {"reasoning_details": ["private trace"]}},
+            ]
+        },
+        include_thinking=False,
+    )
+
+    assert without_choices == {}
+    assert mixed_choices["choices"][-1] == {"message": {}}
+
+
+async def test_openrouter_agent_rejects_tool_call_without_correlation_id(monkeypatch):
+    class MissingIdOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            self.calls.append({"model": model, "messages": messages, "tools": tools})
+            function = types.SimpleNamespace(name="wait", arguments="{}")
+            tool_call = types.SimpleNamespace(function=function)
+            message = types.SimpleNamespace(
+                role="assistant",
+                content="",
+                tool_calls=[tool_call],
+                model_dump=lambda **_: {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"type": "function", "function": {"name": "wait", "arguments": "{}"}}
+                    ],
+                },
+            )
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    class MissingIdOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = MissingIdOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = MissingIdOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    result = await OpenRouterAgent(model="model", api_key="key").decide(
+        "turn one", None, character_id="hazel"
+    )
+
+    assert isinstance(result, InvalidAgentResponse)
+    assert result.reason == "provider tool call contained no tool call id"
+    assert "cannot be correlated" in result.feedback
+
+
 async def test_openrouter_agent_resends_prior_turns_as_context(monkeypatch):
     fake_module = types.ModuleType("openrouter")
     fake_module.OpenRouter = _FakeOpenRouterClient
@@ -1787,9 +2048,11 @@ async def test_openrouter_agent_resends_prior_turns_as_context(monkeypatch):
     assert second[0] == {"role": "system", "content": CHARACTER_SYSTEM_PROMPT}
     assert second[1] == {"role": "user", "content": "turn one"}
     assert second[2]["role"] == "assistant"
-    assert second[2]["content"] == 'Selected tool wait with arguments {"reason": "rest"}.'
-    assert "tool_calls" not in second[2]
-    assert second[3] == {"role": "user", "content": "turn two"}
+    assert second[2]["tool_calls"][0]["id"] == "call_wait"
+    assert second[3]["role"] == "tool"
+    assert second[3]["tool_call_id"] == "call_wait"
+    assert json.loads(second[3]["content"])["events"] == []
+    assert second[4] == {"role": "user", "content": "turn two"}
 
 
 async def test_openrouter_agent_sends_system_prompt_and_tool_schemas(monkeypatch):
@@ -1907,7 +2170,7 @@ async def test_openrouter_agent_retries_transient_provider_errors(monkeypatch):
     assert agent._history["hazel"][0] == {"role": "user", "content": "turn one"}
 
 
-async def test_openrouter_agent_records_plain_assistant_reply_and_trims_history(monkeypatch):
+async def test_openrouter_agent_rejects_plain_assistant_reply_and_trims_history(monkeypatch):
     class PlainOpenRouterChat(_FakeOpenRouterChat):
         async def send_async(self, *, model, messages, tools):
             del tools
@@ -1926,7 +2189,9 @@ async def test_openrouter_agent_records_plain_assistant_reply_and_trims_history(
 
     agent = OpenRouterAgent(model="openai/gpt-4.1-mini", api_key="key", history_turns=1)
 
-    assert await agent.decide("turn one", None, character_id="hazel") is None
+    first = await agent.decide("turn one", None, character_id="hazel")
+    assert isinstance(first, InvalidAgentResponse)
+    assert "no structured tool call" in first.feedback
     assert agent._history["hazel"] == [
         {"role": "user", "content": "turn one"},
         {"role": "assistant", "content": "waiting"},
@@ -1940,7 +2205,9 @@ async def test_openrouter_agent_records_plain_assistant_reply_and_trims_history(
     ]
 
 
-async def test_openrouter_agent_returns_wait_after_transient_provider_retries(monkeypatch):
+async def test_openrouter_agent_rejects_missing_response_after_transient_provider_retries(
+    monkeypatch,
+):
     class AlwaysFailOpenRouterChat(_FlakyOpenRouterChat):
         failures = 99
 
@@ -1954,7 +2221,9 @@ async def test_openrouter_agent_returns_wait_after_transient_provider_retries(mo
     agent = OpenRouterAgent(model="openai/gpt-4.1-mini", api_key="key", retry_delay_seconds=0)
     call = await agent.decide("turn one", None, character_id="hazel")
 
-    assert call is None
+    assert isinstance(call, InvalidAgentResponse)
+    assert call.reason == "provider returned no response after retries"
+    assert "after 3 attempt(s)" in call.feedback
     assert len(agent._client.chat.calls) == 3
     assert agent._history["hazel"] == []
 
@@ -2034,6 +2303,45 @@ async def test_dispatch_records_wait_when_agent_passes():
     assert len(decisions) == 1
     assert decisions[0].tool is None
     assert scenario.actor._inbox.empty()
+
+
+async def test_dispatch_rejects_invalid_agent_response_and_returns_feedback():
+    class RecoveringAgent:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def decide(
+            self, prompt, context, *, character_id, model=None, provider=None, tools=None
+        ):
+            del context, character_id, model, provider, tools
+            self.prompts.append(prompt)
+            if len(self.prompts) == 1:
+                return InvalidAgentResponse(
+                    reason="provider response contained no structured tool call",
+                    feedback=(
+                        "Invalid action response: no structured tool call was returned. "
+                        "Return the action through assistant.tool_calls."
+                    ),
+                )
+            return ToolCall("wait", {})
+
+    scenario = build_scenario()
+    agent = RecoveringAgent()
+    dispatch = ControllerDispatch(
+        scenario.actor, PromptBuilder(scenario.actor.world), agent
+    )
+
+    assert await dispatch.run_once() == []
+    first = await dispatch.await_pending()
+    assert first[0].receipt_status == "policy_rejected"
+    assert first[0].policy_rejections == ("invalid_agent_response",)
+    assert "no structured tool call" in first[0].receipt_reason
+    assert scenario.actor._inbox.empty()
+
+    assert await dispatch.run_once() == []
+    second = await dispatch.await_pending()
+    assert second[0].tool == "wait"
+    assert "Invalid action response" in agent.prompts[1]
 
 
 async def test_dispatch_skips_a_character_despawned_mid_run():
@@ -2369,15 +2677,6 @@ async def test_provider_retry_helper_sleeps_between_retries(monkeypatch):
 
     assert result == "ok"
     assert sleeps == [0.25]
-
-
-def test_tool_call_history_falls_back_to_string_for_unencodable_arguments():
-    encoded = _tool_call_history({"name": "take", "arguments": {"item": {1, 2, 3}}})
-
-    assert encoded["role"] == "assistant"
-    assert encoded["content"].startswith("Selected tool take with arguments ")
-    # A set is not JSON-serializable, so the helper stringifies it instead.
-    assert "take" in encoded["content"]
 
 
 async def test_provider_router_uses_selected_agent():

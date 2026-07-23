@@ -1368,6 +1368,11 @@
     },
     "ClientRoomView": {
       "properties": {
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
         "entities": {
           "items": {
             "$ref": "#/$defs/ClientEntityView"

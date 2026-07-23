@@ -1245,7 +1245,9 @@ async def test_discord_playtest_writes_trace_artifacts(scenario, tmp_path, monke
     assert trace["sent_messages"][0]["content"] == "<@123> You are now controlling Juniper."
     assert trace["inputs"][1]["content"] == "!move north"
     assert trace["inputs"][1]["messages"] == [
-        "<@123> You are now in North Tunnel\nHere: Juniper.\nExits: south."
+        "<@123> You are now in North Tunnel\n"
+        "Here: Juniper.\n"
+        "Exits: south to Mosslit Burrow."
     ]
     assert any(item["command"]["command_type"] == "move" for item in trace["commands"])
     assert any(

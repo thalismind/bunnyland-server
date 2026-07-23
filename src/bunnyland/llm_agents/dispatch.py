@@ -50,7 +50,7 @@ from ..core.world_actor import WorldActor
 from ..narration.projection import event_salience, event_summary, event_visible_to
 from ..prompts.builder import PerceivedPromptEvent, PromptBuilder, PromptContext, render_prompt
 from ..prompts.filters import PromptFilterRuntime, apply_prompt_filters
-from .agent import CharacterAgent, ScriptedAgent
+from .agent import AgentDecision, CharacterAgent, InvalidAgentResponse, ScriptedAgent
 from .behavior_tree import BehaviorTree, BehaviorTreeAgent, resolve_behavior_tree
 from .scripts import resolve_script
 from .tools import (
@@ -924,12 +924,15 @@ class ControllerDispatch:
         state.active_events = _EventBatch()
 
     @staticmethod
-    def _annotate_decision_span(dspan, call: ToolCall | None) -> None:
-        if call is not None:
+    def _annotate_decision_span(dspan, call: AgentDecision) -> None:
+        if isinstance(call, ToolCall):
             dspan.set_attribute("decision.tool", call.name)
             if telemetry.enabled():
                 encoded = json.dumps(call.arguments, sort_keys=True, default=str)
                 dspan.set_attribute("decision.arguments", telemetry.attr_text(encoded))
+        elif isinstance(call, InvalidAgentResponse):
+            dspan.set_attribute("decision.tool", "invalid_response")
+            dspan.set_attribute("decision.error", call.reason)
         else:
             dspan.set_attribute("decision.tool", "wait")
 
@@ -939,9 +942,24 @@ class ControllerDispatch:
         controller_id: EntityId,
         generation: int,
         context,
-        call: ToolCall | None,
+        call: AgentDecision,
     ) -> Decision:
         cid = str(character_id)
+        if isinstance(call, InvalidAgentResponse):
+            self._feedback[cid] = call.feedback
+            logger.info(
+                "character %s returned an invalid agent response: %s",
+                character_id,
+                call.reason,
+            )
+            return Decision(
+                cid,
+                None,
+                f"invalid response: {call.reason}",
+                policy_rejections=("invalid_agent_response",),
+                receipt_status="policy_rejected",
+                receipt_reason=call.feedback,
+            )
         if call is None:
             logger.info("character %s decided to wait", character_id)
             return Decision(cid, None, "wait")

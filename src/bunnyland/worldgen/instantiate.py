@@ -132,6 +132,8 @@ def validate_proposal(proposal: WorldProposal) -> list[str]:
 
 def _object_components(spec: ObjectSpec) -> list:
     components = [IdentityComponent(name=spec.name, kind=spec.kind)]
+    if spec.description:
+        components.append(DescriptionComponent(short=spec.description, long=spec.description))
     if spec.portable:
         components.append(PortableComponent(can_pick_up=True))
     if spec.kind == "food":
@@ -179,7 +181,10 @@ def _memory_collection_name(key: str) -> str:
 def _character_components(spec: CharacterSpec) -> list:
     components = [
         IdentityComponent(name=spec.name, kind="character"),
-        DescriptionComponent(short=f"{spec.name}, a {spec.species}"),
+        DescriptionComponent(
+            short=spec.description or f"{spec.name}, a {spec.species}",
+            long=spec.description,
+        ),
         CharacterComponent(species=spec.species),
         ActionPointsComponent(current=5.0, maximum=5.0),
         FocusPointsComponent(current=3.0, maximum=3.0),
@@ -476,6 +481,10 @@ async def instantiate(actor: WorldActor, proposal: WorldProposal) -> Instantiate
     # failure therefore aborts the proposal without leaving a partially generated world.
     for room in proposal.rooms:
         components = [RoomComponent(title=room.title, biome=room.biome, indoor=room.indoor)]
+        if room.description:
+            components.append(
+                DescriptionComponent(short=room.description, long=room.description)
+            )
         if room.light is not None:
             components.append(LightComponent(level=room.light))
         if room.celsius is not None:

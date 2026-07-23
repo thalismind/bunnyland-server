@@ -66,7 +66,7 @@ def test_v1_catalogue_is_bounded_owned_and_projection_scoped(scenario):
     assert actions.output_type == "AvailableActionsOutput"
     assert any(action["command_type"] == "move" for action in actions.result)
     assert targets.result["exit_id"] == [
-        {"id": str(scenario.room_b), "label": f"north: {scenario.room_b}", "kind": "exit"}
+        {"id": str(scenario.room_b), "label": "north: North Tunnel", "kind": "exit"}
     ]
     assert why.result["available"] is False
     assert why.result["reason"] == "target is not valid"

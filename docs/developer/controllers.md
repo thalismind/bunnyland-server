@@ -50,6 +50,32 @@ for configured transient failures, and recorded with usage/cost telemetry when t
 provides it. A slow request never blocks world ticks, and an invalid or unavailable tool is
 fed back to the character instead of being submitted through a compatibility adapter.
 
+### Provider message roles and tool results
+
+Provider conversation history preserves native tool messages; it must not rewrite a tool
+call as prose. An LLM-controlled turn uses this sequence:
+
+1. `system` defines the autonomous-character and structured-tool contract.
+2. `user` contains the newest character-scoped world projection and visible event stream.
+3. `assistant` contains the model's proposed action in `tool_calls`.
+4. Bunnyland resolves and validates that action through the normal command pipeline.
+5. On the next provider turn, `tool` contains the authoritative visible result accumulated
+   since the call. Ollama correlates it with `tool_name`; OpenRouter uses `tool_call_id`.
+6. The next `user` message contains the newest current-world projection.
+
+The `tool` content is JSON containing the same visibility-filtered event records, omission
+metadata, and rejection warnings used to build the character prompt. It is not a second
+model-authored narration and does not claim success before validation. Human-facing web,
+terminal, and Discord clients continue to render those authoritative events as prose or UI;
+provider roles are internal to LLM conversation history.
+
+An assistant response without `tool_calls` is invalid for character decisions. Dispatch
+records it as `policy_rejected` with `invalid_agent_response`, includes a bounded excerpt of
+the assistant content in the rejection details, and returns those details in the next prompt.
+Only an explicit call to the `wait` tool is an intentional LLM wait. Deterministic behavior
+and scripted controllers may still return `None` as their internal hold signal because they
+do not participate in a provider message protocol.
+
 ## Behavior trees
 
 A behavior tree is ticked once per dispatch turn and yields a single `ToolCall` (or `None` to

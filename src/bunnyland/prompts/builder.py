@@ -14,19 +14,23 @@ from dataclasses import dataclass, field
 from relics import Entity, EntityId, World
 
 from ..core.components import (
+    ActionOverrideComponent,
     ActionPointsComponent,
     AffectComponent,
+    ContainerComponent,
     DeadComponent,
     DownedComponent,
     FocusPointsComponent,
     IdentityComponent,
     MemoryProfileComponent,
+    PortableComponent,
     SleepingComponent,
     SuspendedComponent,
 )
 from ..core.ecs import container_of, parse_entity_id
 from ..core.edges import Contains, ControlledBy, Holding, Wearing
 from ..projections import RecentContextProjection, RoomSummaryProjection, perceive
+from ..projections.perception import PerceivedEntity
 from ..projections.room_summary import RoomExit
 from .facts import (
     STANDARD_DETAIL_CUTOFF,
@@ -215,10 +219,9 @@ class PromptBuilder:
             recent=tuple(recent),
         )
         commands = self._available_commands(
-            exits=exits,
-            visible_objects=visible_objects,
+            exits=perception.exits,
+            visible_entities=perception.entities,
             visible_characters=visible_characters,
-            inventory=inventory,
         )
 
         return PromptContext(
@@ -301,7 +304,8 @@ class PromptBuilder:
 
     def _exit_label(self, exit_: RoomExit) -> str:
         direction = f"{exit_.direction} (locked)" if exit_.locked else exit_.direction
-        return self._label(direction, exit_.to_room_id)
+        destination = exit_.destination or exit_.to_room_id
+        return self._label(f"{direction} to {destination}", exit_.to_room_id)
 
     def _equipment(
         self, character: Entity
@@ -476,20 +480,35 @@ class PromptBuilder:
             used = next_used
         return tuple(kept)
 
-    @staticmethod
     def _available_commands(
+        self,
         *,
-        exits: tuple[str, ...],
-        visible_objects: tuple[str, ...],
+        exits: tuple[RoomExit, ...],
+        visible_entities: tuple[PerceivedEntity, ...],
         visible_characters: tuple[str, ...],
-        inventory: tuple[str, ...],
     ) -> tuple[str, ...]:
         commands: list[str] = []
-        for direction in exits:
+        for exit_ in exits:
+            direction = self._label(exit_.direction, exit_.to_room_id)
             commands.append(f"move {direction}")
-        for obj in visible_objects:
-            commands.append(f"take {obj}")
-            commands.append(f"use {obj}")
+        for perceived in visible_entities:
+            if perceived.is_character:
+                continue
+            entity_id = parse_entity_id(perceived.id)
+            if entity_id is None or not self.world.has_entity(entity_id):
+                continue
+            entity = self.world.get_entity(entity_id)
+            label = self._label(perceived.name, perceived.id)
+            commands.append(f"inspect {label}")
+            if entity.has_component(PortableComponent) and entity.get_component(
+                PortableComponent
+            ).can_pick_up:
+                commands.append(f"take {label}")
+            if entity.has_component(ActionOverrideComponent):
+                commands.append(f"use {label}")
+            if entity.has_component(ContainerComponent):
+                state = entity.get_component(ContainerComponent)
+                commands.append(f"{'close' if state.open else 'open'} {label}")
         if visible_characters:
             commands.append("say something to the room")
             commands.append("tell someone something privately")

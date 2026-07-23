@@ -144,7 +144,7 @@ def test_render_summary_is_deterministic_template():
 
     text = render_summary(facts)
     assert text.startswith("Mosslit Burrow")
-    assert "Exits: north." in text
+    assert "Exits: north to North Tunnel." in text
 
 
 def test_render_summary_names_destinations_for_codirectional_exits():

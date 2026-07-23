@@ -1,4 +1,4 @@
-"""Scenario-driven Ollama benchmark for the public tutorial ladder."""
+"""Scenario-driven LLM benchmark for the public tutorial ladder."""
 
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ from bunnyland.core import (
     WorldActor,
     container_of,
     contents,
+    parse_entity_id,
     replace_component,
     spawn_entity,
 )
@@ -52,12 +53,20 @@ from bunnyland.core.events import (
 )
 from bunnyland.foundation.needs.mechanics import FoodEatenEvent
 from bunnyland.foundation.persona.mechanics import GoalComponent
+from bunnyland.foundation.social.mechanics import obligations_for
 from bunnyland.foundation.tutorial.mechanics import DELIVERY_MARK
-from bunnyland.llm_agents import CharacterAgent, ControllerDispatch, OllamaAgent, ToolCall
+from bunnyland.llm_agents import (
+    CharacterAgent,
+    ControllerDispatch,
+    InvalidAgentResponse,
+    OllamaAgent,
+    OpenRouterAgent,
+    ToolCall,
+)
 from bunnyland.llm_agents.dispatch import Decision
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_persona_fragments
 from bunnyland.prompts.builder import PromptBuilder, PromptContext
-from bunnyland.terminal_config import LOCAL_OLLAMA_HOST
+from bunnyland.terminal_config import DEFAULT_OPENROUTER_SERVER_URL, LOCAL_OLLAMA_HOST
 from bunnyland.worldgen import GenOptions
 from bunnyland.worldgen.examples import (
     APPLE_CROSSING_DEMO,
@@ -76,7 +85,7 @@ TUTORIAL_NAMES = ("apple", "bell", "clover")
 
 logger = logging.getLogger("bunnyland.benchmark.tutorials")
 
-Provider = Literal["ollama-local", "ollama-cloud"]
+Provider = Literal["ollama-local", "ollama-cloud", "openrouter"]
 SessionStatus = Literal["completed", "turn_limit", "timeout", "repeat_limit"]
 ThinkingLevel = Literal["low", "medium", "high"]
 
@@ -90,7 +99,7 @@ class BenchmarkConfigurationError(BenchmarkError):
 
 
 class ProviderBenchmarkError(BenchmarkError):
-    """Ollama could not preflight a model or answer a benchmark decision."""
+    """The configured provider could not preflight or answer a benchmark decision."""
 
 
 @dataclass(frozen=True)
@@ -115,6 +124,7 @@ class BenchmarkConfig:
     api_key: str | None = field(default=None, repr=False)
     thinking: ThinkingLevel | None = None
     temperature: float | None = None
+    max_output_tokens: int | None = None
     log_thinking: bool = False
     repeat_command_guard: bool = False
 
@@ -130,9 +140,15 @@ class BenchmarkConfig:
             raise BenchmarkConfigurationError("session timeout must be positive")
         if self.turn_limit < 1:
             raise BenchmarkConfigurationError("turn limit must be positive")
+        if self.max_output_tokens is not None and self.max_output_tokens < 1:
+            raise BenchmarkConfigurationError("max output tokens must be positive")
         if self.provider == "ollama-cloud" and not self.api_key:
             raise BenchmarkConfigurationError(
                 "ollama-cloud needs OLLAMA_CLOUD_API_KEY in the environment"
+            )
+        if self.provider == "openrouter" and not self.api_key:
+            raise BenchmarkConfigurationError(
+                "openrouter needs OPENROUTER_API_KEY in the environment"
             )
         return self
 
@@ -142,6 +158,8 @@ class BenchmarkConfig:
             return self.host.rstrip("/")
         if self.provider == "ollama-cloud":
             return OLLAMA_CLOUD_HOST
+        if self.provider == "openrouter":
+            return DEFAULT_OPENROUTER_SERVER_URL
         return LOCAL_OLLAMA_HOST
 
 
@@ -159,6 +177,7 @@ class TutorialScenario:
     tester_brief: str | None
     milestones: tuple[Milestone, ...]
     completion: Callable[[TutorialState], bool]
+    prepare: Callable[[TutorialState], None] | None = None
 
 
 @dataclass
@@ -278,7 +297,7 @@ class _RecordingAgent:
         model: str | None = None,
         provider: str | None = None,
         tools: list[dict] | None = None,
-    ) -> ToolCall | None:
+    ) -> ToolCall | InvalidAgentResponse | None:
         effective_prompt = prompt
         if self._repeat_warning:
             effective_prompt = f"{prompt}\n\n{self._repeat_warning}"
@@ -303,8 +322,8 @@ class _RecordingAgent:
         self.observations.append(
             AgentObservation(
                 prompt=effective_prompt,
-                tool=call.name if call else None,
-                arguments=dict(call.arguments) if call else {},
+                tool=call.name if isinstance(call, ToolCall) else None,
+                arguments=dict(call.arguments) if isinstance(call, ToolCall) else {},
                 latency_seconds=time.perf_counter() - started,
             )
         )
@@ -522,9 +541,32 @@ def _all_milestones(state: TutorialState, milestones: tuple[Milestone, ...]) -> 
     return all(milestone.evaluate(state) for milestone in milestones)
 
 
+def _is_in_room(state: TutorialState, title: str) -> bool:
+    player_id = parse_entity_id(state.player_id)
+    if player_id is None or not state.actor.world.has_entity(player_id):
+        return False
+    room_id = container_of(state.actor.world.get_entity(player_id))
+    if room_id is None or not state.actor.world.has_entity(room_id):
+        return False
+    room = state.actor.world.get_entity(room_id)
+    return room.has_component(RoomComponent) and room.get_component(RoomComponent).title == title
+
+
+def _prepare_clover_orientation(state: TutorialState) -> None:
+    player_id = parse_entity_id(state.player_id)
+    if player_id is None:
+        return
+    for entity, obligation in obligations_for(state.actor.world, player_id):
+        if obligation.source_event_id.startswith("clover-story-"):
+            replace_component(entity, replace(obligation, status="benchmark_suppressed"))
+
+
 def _bell_milestones() -> tuple[Milestone, ...]:
     return (
-        Milestone("looked_in_bell_green", lambda state: _looked(state, "Bell Green")),
+        Milestone(
+            "looked_in_bell_green",
+            lambda state: _is_in_room(state, "Bell Green") or _looked(state, "Bell Green"),
+        ),
         Milestone(
             "inspected_notice_board",
             lambda state: _inspected(state, "central notice board"),
@@ -575,7 +617,11 @@ def _waited_for_activity(state: TutorialState) -> bool:
 
 def _clover_milestones() -> tuple[Milestone, ...]:
     return (
-        Milestone("looked_in_clover_city_lobby", lambda state: _looked(state, "Clover City Lobby")),
+        Milestone(
+            "looked_in_clover_city_lobby",
+            lambda state: _is_in_room(state, "Clover City Lobby")
+            or _looked(state, "Clover City Lobby"),
+        ),
         Milestone("inspected_daily_bulletin", lambda state: _inspected(state, "daily bulletin")),
         *(Milestone(f"visited_{_slug(title)}", lambda state, title=title: _visited(state, title))
           for title in (
@@ -630,6 +676,7 @@ def tutorial_scenarios() -> dict[str, TutorialScenario]:
             ),
             milestones=clover,
             completion=lambda state: _all_milestones(state, clover),
+            prepare=_prepare_clover_orientation,
         ),
     }
 
@@ -683,8 +730,37 @@ async def preflight_ollama_models(
     return tuple(metadata)
 
 
-def _default_agent_factory(model: str, host: str, api_key: str | None) -> CharacterAgent:
-    return OllamaAgent(model=model, host=host, api_key=api_key, history_turns=60)
+async def preflight_openrouter_models(
+    models: tuple[str, ...], host: str, api_key: str | None
+) -> tuple[ModelMetadata, ...]:
+    """Confirm exact model ids from OpenRouter's catalogue without running inference."""
+
+    try:
+        from openrouter import OpenRouter
+    except ImportError as exc:
+        raise ProviderBenchmarkError(
+            "tutorial benchmark requires the 'llm' extra: uv sync --extra llm"
+        ) from exc
+    client = OpenRouter(api_key=api_key, server_url=host)
+    try:
+        response = await client.models.list_async()
+    except Exception as exc:
+        raise ProviderBenchmarkError(
+            f"OpenRouter model preflight failed: {exc}"
+        ) from exc
+    available = {item.id: item for item in response.data}
+    missing = [model for model in models if model not in available]
+    if missing:
+        raise ProviderBenchmarkError(
+            f"OpenRouter model(s) not found: {', '.join(missing)}"
+        )
+    metadata = []
+    for model in models:
+        item = available[model]
+        architecture = getattr(item, "architecture", None)
+        family = getattr(architecture, "tokenizer", None)
+        metadata.append(ModelMetadata(model=model, family=family))
+    return tuple(metadata)
 
 
 def _record_event(events: list[DomainEvent]) -> Callable[[DomainEvent], None]:
@@ -755,11 +831,10 @@ async def _build_session(
         ),
         recording,
     )
-    return (
-        TutorialState(actor, generated, str(player_id), events, initial_item_rooms),
-        dispatch,
-        recording,
-    )
+    state = TutorialState(actor, generated, str(player_id), events, initial_item_rooms)
+    if scenario.prepare is not None:
+        scenario.prepare(state)
+    return state, dispatch, recording
 
 
 def _serialize_event(event: DomainEvent) -> dict[str, object]:
@@ -816,6 +891,9 @@ async def run_session(
     blocker_counts: Counter[str] = Counter()
     first_confusion: str | None = None
     completed = scenario.completion(state)
+    achieved_milestones = {
+        milestone.name for milestone in scenario.milestones if milestone.evaluate(state)
+    }
     repeated_command: tuple[str, str] | None = None
     consecutive_repeat_count = 0
     repeat_guard_ended = False
@@ -825,9 +903,7 @@ async def run_session(
         nonlocal completed, consecutive_repeat_count, first_confusion
         nonlocal repeated_command, repeat_guard_ended
         for turn in range(1, turn_limit + 1):
-            before = {
-                milestone.name for milestone in scenario.milestones if milestone.evaluate(state)
-            }
+            before = set(achieved_milestones)
             observation_index = len(recording.observations)
             immediate = await dispatch.run_once()
             pending = await dispatch.await_pending()
@@ -852,31 +928,43 @@ async def run_session(
             ):
                 state.waited_game_seconds += TURN_GAME_SECONDS
             receipt_events = {event.event_id: event for event in state.events}
-            after = {
+            achieved_milestones.update(
                 milestone.name for milestone in scenario.milestones if milestone.evaluate(state)
-            }
+            )
+            after = set(achieved_milestones)
             progressed = len(after) > len(before)
             decisions.extend(turn_decisions)
+            observation_recorded = len(recording.observations) > observation_index
             observation = (
                 recording.observations[observation_index]
-                if len(recording.observations) > observation_index
+                if observation_recorded
                 else AgentObservation("", None, {}, 0.0)
             )
             decision = (
                 turn_decisions[-1]
                 if turn_decisions
-                else Decision(state.player_id, None, "wait")
+                else Decision(state.player_id, None, "controller hold")
             )
+            invalid_response = "invalid_agent_response" in decision.policy_rejections
             command_key = (
-                observation.tool or "wait",
+                "invalid_response"
+                if invalid_response
+                else observation.tool or "deterministic_hold",
                 json.dumps(observation.arguments, sort_keys=True),
             )
-            if command_key == repeated_command:
+            if not observation_recorded:
+                repeated_command = None
+                consecutive_repeat_count = 0
+            elif command_key == repeated_command:
                 consecutive_repeat_count += 1
             else:
                 repeated_command = command_key
                 consecutive_repeat_count = 1
-            repeat_warning = repeat_command_guard and consecutive_repeat_count == 5
+            repeat_warning = (
+                repeat_command_guard
+                and observation_recorded
+                and consecutive_repeat_count == 5
+            )
             if repeat_warning:
                 recording.warn_repetition(command_key[0], observation.arguments)
             signature = _blocker_signature(decision, progressed=progressed)
@@ -922,9 +1010,11 @@ async def run_session(
                 on_trace_recorded(trace)
             if provider_error:
                 raise ProviderBenchmarkError(
-                    f"Ollama decision failed in {session_id}: {provider_error}"
+                    f"{provider} decision failed in {session_id}: {provider_error}"
                 )
-            completed = scenario.completion(state)
+            completed = scenario.completion(state) or len(achieved_milestones) == len(
+                scenario.milestones
+            )
             if completed:
                 return
             if repeat_command_guard and consecutive_repeat_count >= 10:
@@ -948,7 +1038,8 @@ async def run_session(
         )
     elapsed = time.perf_counter() - started
     milestone_results = tuple(
-        (milestone.name, bool(milestone.evaluate(state))) for milestone in scenario.milestones
+        (milestone.name, milestone.name in achieved_milestones)
+        for milestone in scenario.milestones
     )
     valid = sum(decision.receipt_status == "committed" for decision in decisions)
     rejected = sum(
@@ -1104,7 +1195,7 @@ async def run_benchmark(
     config: BenchmarkConfig,
     *,
     agent_factory: AgentFactory | None = None,
-    preflight: Preflight = preflight_ollama_models,
+    preflight: Preflight | None = None,
     on_session_completed: Callable[[SessionResult], None] | None = None,
     on_trace_recorded: Callable[[TurnTrace], None] | None = None,
     on_response_recorded: Callable[[ModelResponseTrace], None] | None = None,
@@ -1117,7 +1208,18 @@ async def run_benchmark(
     tuple[ModelMetadata, ...],
 ]:
     config = config.validated()
-    metadata = await preflight(config.models, config.resolved_host, config.api_key)
+    resolved_preflight = preflight
+    if resolved_preflight is None:
+        resolved_preflight = (
+            preflight_openrouter_models
+            if config.provider == "openrouter"
+            else preflight_ollama_models
+        )
+    metadata = await resolved_preflight(
+        config.models,
+        config.resolved_host,
+        config.api_key,
+    )
     if on_preflight_completed is not None:
         on_preflight_completed(metadata)
     scenarios = tutorial_scenarios()
@@ -1150,20 +1252,32 @@ async def run_benchmark(
             for run in range(1, config.sessions + 1):
                 session_id = f"{tutorial}-{_slug(model)}-{run:02d}"
                 record_response = response_recorder(session_id)
-                agent = (
-                    agent_factory(model, config.resolved_host, config.api_key)
-                    if agent_factory is not None
-                    else OllamaAgent(
+                if agent_factory is not None:
+                    agent = agent_factory(model, config.resolved_host, config.api_key)
+                elif config.provider == "openrouter":
+                    agent = OpenRouterAgent(
+                        model=model,
+                        api_key=config.api_key,
+                        server_url=config.resolved_host,
+                        history_turns=60,
+                        reasoning=config.thinking,
+                        temperature=config.temperature,
+                        max_output_tokens=config.max_output_tokens,
+                        response_observer=record_response,
+                        log_thinking=config.log_thinking,
+                    )
+                else:
+                    agent = OllamaAgent(
                         model=model,
                         host=config.resolved_host,
                         api_key=config.api_key,
                         history_turns=60,
                         think=config.thinking,
                         temperature=config.temperature,
+                        max_output_tokens=config.max_output_tokens,
                         response_observer=record_response,
                         log_thinking=config.log_thinking,
                     )
-                )
                 result, session_traces = await run_session(
                     scenarios[tutorial],
                     model=model,
@@ -1252,6 +1366,7 @@ def _manifest(
         "turn_game_seconds": TURN_GAME_SECONDS,
         "thinking": config.thinking,
         "temperature": config.temperature,
+        "max_output_tokens": config.max_output_tokens,
         "log_thinking": config.log_thinking,
         "repeat_command_guard": config.repeat_command_guard,
     }
@@ -1265,8 +1380,9 @@ def render_report(
     temperature = (
         config.temperature if config.temperature is not None else "provider default"
     )
+    max_output_tokens = config.max_output_tokens or "provider default"
     lines = [
-        "# Ollama tutorial-ladder comparison",
+        "# LLM tutorial-ladder comparison",
         "",
         f"Provider: `{config.provider}`  ",
         f"Sessions per model/tutorial: `{config.sessions}`  ",
@@ -1274,6 +1390,7 @@ def render_report(
         f"Turn limit: `{config.turn_limit}`  ",
         f"Thinking: `{config.thinking or 'provider default'}`  ",
         f"Temperature: `{temperature}`  ",
+        f"Maximum output tokens: `{max_output_tokens}`  ",
         f"Thinking logged: `{'yes' if config.log_thinking else 'no'}`",
         f"Repeat-command guard: `{'enabled' if config.repeat_command_guard else 'disabled'}`",
         "",
@@ -1398,6 +1515,27 @@ def _append_jsonl(path: Path, value: object) -> None:
         os.fsync(stream.fileno())
 
 
+def _response_includes_thinking(response: dict[str, JsonValue]) -> bool:
+    fields = ("thinking", "reasoning", "reasoning_details")
+    if any(response.get(field) for field in fields):
+        return True
+    message = response.get("message")
+    if isinstance(message, dict) and any(message.get(field) for field in fields):
+        return True
+    choices = response.get("choices")
+    if not isinstance(choices, list):
+        return False
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        choice_message = choice.get("message")
+        if isinstance(choice_message, dict) and any(
+            choice_message.get(field) for field in fields
+        ):
+            return True
+    return False
+
+
 class LiveArtifactWriter:
     """Durably checkpoint a running benchmark at every turn and session boundary."""
 
@@ -1413,7 +1551,8 @@ class LiveArtifactWriter:
         _write_jsonl(self.config.output / "responses.jsonl", ())
         logger.info(
             "benchmark started provider=%s models=%s tutorials=%s sessions=%d "
-            "timeout=%g turn_limit=%d thinking=%s temperature=%s log_thinking=%s "
+            "timeout=%g turn_limit=%d thinking=%s temperature=%s max_output_tokens=%s "
+            "log_thinking=%s "
             "repeat_command_guard=%s",
             self.config.provider,
             ",".join(self.config.models),
@@ -1423,6 +1562,7 @@ class LiveArtifactWriter:
             self.config.turn_limit,
             self.config.thinking or "provider-default",
             self.config.temperature if self.config.temperature is not None else "provider-default",
+            self.config.max_output_tokens or "provider-default",
             self.config.log_thinking,
             self.config.repeat_command_guard,
         )
@@ -1446,8 +1586,7 @@ class LiveArtifactWriter:
 
     def record_response(self, response: ModelResponseTrace) -> None:
         _append_jsonl(self.config.output / "responses.jsonl", asdict(response))
-        message = response.response.get("message")
-        thinking_logged = isinstance(message, dict) and bool(message.get("thinking"))
+        thinking_logged = _response_includes_thinking(response.response)
         logger.info(
             "response session=%s turn=%d thinking_logged=%s",
             response.session_id,
@@ -1486,7 +1625,7 @@ def _benchmark_log_handler(output: Path) -> logging.Handler:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", action="append", required=True, help="Ollama model (repeatable)")
+    parser.add_argument("--model", action="append", required=True, help="model id (repeatable)")
     parser.add_argument(
         "--tutorial",
         action="append",
@@ -1495,19 +1634,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--provider",
-        choices=("ollama-local", "ollama-cloud"),
+        choices=("ollama-local", "ollama-cloud", "openrouter"),
         default="ollama-local",
     )
-    parser.add_argument("--host", help="Ollama endpoint override")
+    parser.add_argument("--host", help="provider endpoint override")
     parser.add_argument("--sessions", type=int, default=DEFAULT_SESSIONS)
     parser.add_argument("--session-timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--turn-limit", type=int, default=DEFAULT_TURN_LIMIT)
     parser.add_argument("--thinking", choices=("low", "medium", "high"))
     parser.add_argument("--temperature", type=float)
     parser.add_argument(
+        "--max-output-tokens",
+        type=int,
+        help="cap tokens generated for one response (default: provider setting)",
+    )
+    parser.add_argument(
         "--log-thinking",
         action="store_true",
-        help="include Ollama's thinking field in responses.jsonl (default: omit)",
+        help="include provider thinking/reasoning fields in responses.jsonl (default: omit)",
     )
     parser.add_argument(
         "--repeat-command-guard",
@@ -1519,6 +1663,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def _async_main(args: argparse.Namespace) -> None:
+    if args.provider == "ollama-cloud":
+        api_key = os.environ.get("OLLAMA_CLOUD_API_KEY")
+    elif args.provider == "openrouter":
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+    else:
+        api_key = None
     config = BenchmarkConfig(
         models=tuple(dict.fromkeys(args.model)),
         tutorials=tuple(dict.fromkeys(args.tutorial or TUTORIAL_NAMES)),
@@ -1526,11 +1676,16 @@ async def _async_main(args: argparse.Namespace) -> None:
         sessions=args.sessions,
         timeout_seconds=args.session_timeout,
         turn_limit=args.turn_limit,
-        host=args.host or os.environ.get("OLLAMA_HOST"),
+        host=args.host or (
+            os.environ.get("OLLAMA_HOST")
+            if args.provider.startswith("ollama-")
+            else None
+        ),
         output=args.output,
-        api_key=os.environ.get("OLLAMA_CLOUD_API_KEY") if args.provider == "ollama-cloud" else None,
+        api_key=api_key,
         thinking=args.thinking,
         temperature=args.temperature,
+        max_output_tokens=args.max_output_tokens,
         log_thinking=args.log_thinking,
         repeat_command_guard=args.repeat_command_guard,
     )

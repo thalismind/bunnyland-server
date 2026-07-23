@@ -1205,14 +1205,23 @@ def serialize_character_projection(
             ClientExitView(
                 id=exit.to_room_id,
                 direction=exit.direction,
-                label=f"{exit.direction}: {exit.to_room_id}" if exit.direction else exit.to_room_id,
+                label=(
+                    f"{exit.direction}: {exit.destination}"
+                    if exit.direction and exit.destination
+                    else exit.destination or exit.to_room_id
+                ),
                 locked=exit.locked,
             )
             for exit in perception.exits
         ]
+        description = ""
+        if room_entity.has_component(DescriptionComponent):
+            component = room_entity.get_component(DescriptionComponent)
+            description = component.long or component.short or component.appearance
         room = ClientRoomView(
             id=str(room_id),
             title=room_title,
+            description=description,
             entities=[_perceived_entity_view(entity) for entity in perception.entities],
             exits=exits,
         )
@@ -1383,7 +1392,11 @@ def _dm_room_projection(actor: WorldActor, room) -> DmRoomProjectionView:
             ClientExitView(
                 id=exit.to_room_id,
                 direction=exit.direction,
-                label=f"{exit.direction}: {exit.to_room_id}" if exit.direction else exit.to_room_id,
+                label=(
+                    f"{exit.direction}: {exit.destination}"
+                    if exit.direction and exit.destination
+                    else exit.destination or exit.to_room_id
+                ),
                 locked=exit.locked,
             )
             for exit in facts.exits

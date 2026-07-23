@@ -126,6 +126,7 @@ async def run_fixed_snapshot_controller_benchmark(
                     actor.receipt_for(decision.command_id) if decision.command_id else None
                 )
                 for decision in turn_decisions
+                if decision.character_id == character_id
             )
         elapsed = time.perf_counter() - started
         attempted = [decision for decision in decisions if decision.selected_action is not None]

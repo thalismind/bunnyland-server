@@ -492,6 +492,9 @@ def test_world_snapshot_serializes_pending_submitted_commands_before_tick(scenar
 
 def test_client_view_scopes_visible_state_points_controller_and_actions(scenario):
     world = scenario.actor.world
+    world.get_entity(scenario.room_a).add_component(
+        DescriptionComponent(short="A mossy tutorial hub.")
+    )
     visible_item = spawn_entity(
         world,
         [
@@ -541,6 +544,8 @@ def test_client_view_scopes_visible_state_points_controller_and_actions(scenario
     assert view["character_id"] == str(scenario.character)
     assert view["character_name"] == "Juniper"
     assert view["room"]["id"] == str(scenario.room_a)
+    assert view["room"]["description"] == "A mossy tutorial hub."
+    assert view["room"]["exits"][0]["label"] == "north: North Tunnel"
     assert view["points"] == {
         "action": 5.0,
         "action_max": 5.0,
@@ -1066,6 +1071,7 @@ def test_client_view_handles_unperceiving_character_and_errors():
     assert view["room"] == {
         "id": str(room.id),
         "title": "Bare Room",
+        "description": "",
         "entities": [],
         "exits": [],
     }
@@ -1089,7 +1095,13 @@ def test_client_view_handles_unperceiving_character_and_errors():
         ],
     )
     unplaced_view = serialize_character_projection(actor, str(unplaced.id)).model_dump(mode="json")
-    assert unplaced_view["room"] == {"id": None, "title": "", "entities": [], "exits": []}
+    assert unplaced_view["room"] == {
+        "id": None,
+        "title": "",
+        "description": "",
+        "entities": [],
+        "exits": [],
+    }
 
     with pytest.raises(ValueError, match="character does not exist"):
         serialize_character_projection(actor, "not-an-id")

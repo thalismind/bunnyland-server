@@ -249,7 +249,20 @@ def event_summary(world: World, viewer: Entity, event: DomainEvent) -> str:
     if isinstance(event, RoomLookedEvent):
         return f"{actor} looked around."
     if isinstance(event, EntityInspectedEvent):
-        return f"{actor} inspected {event.name}."
+        if event.actor_id != viewer_id:
+            return f"{actor} inspected {event.name}."
+        details = [
+            value.strip()
+            for value in (event.description, event.text, event.state)
+            if value.strip()
+        ]
+        details.extend(
+            str(fact.get("text", "")).strip()
+            for fact in event.facts
+            if str(fact.get("text", "")).strip()
+        )
+        suffix = f" Details: {' '.join(details)}" if details else ""
+        return f"You inspected {event.name}.{suffix}"
     return ""
 
 

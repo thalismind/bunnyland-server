@@ -10,10 +10,80 @@ from bunnyland.foundation.needs.mechanics import HungerComponent
 
 from ...core.components import IdentityComponent, ReadableComponent, RoomComponent
 from ...core.ecs import container_of, contents, entity_name, parse_entity_id, reachable_ids
+from ...core.edges import ControlledBy
+from ...core.events import SpeechSaidEvent, SpeechToldEvent
+from ...core.world_actor import WorldActor
 from ...llm_agents.dispatch import ControllerDispatch, register_autonomous_controller
-from ...llm_agents.tools import ToolCall
+from ...llm_agents.tools import ToolCall, command_from_tool_call
 
 DELIVERY_MARK = "Hungry Courier delivery complete"
+_HELP_WORDS = frozenset({"help", "lost", "where", "which", "route", "direction", "find"})
+
+
+@dataclass(frozen=True)
+class TutorialGuideComponent(Component):
+    """Authored same-room help that never needs an LLM provider call."""
+
+    help_text: str
+
+
+class TutorialGuideReactor:
+    def __init__(self, actor: WorldActor) -> None:
+        self.actor = actor
+
+    def subscribe(self) -> None:
+        self.actor.bus.subscribe(SpeechSaidEvent, self._on_speech)
+        self.actor.bus.subscribe(SpeechToldEvent, self._on_speech)
+
+    @staticmethod
+    def _asks_for_help(text: str) -> bool:
+        words = {word.strip(".,!?;:").lower() for word in text.split()}
+        return "?" in text or bool(words.intersection(_HELP_WORDS))
+
+    def _on_speech(self, event: SpeechSaidEvent | SpeechToldEvent) -> None:
+        speaker_id = parse_entity_id(event.actor_id)
+        if speaker_id is None or not self.actor.world.has_entity(speaker_id):
+            return
+        speaker = self.actor.world.get_entity(speaker_id)
+        if speaker.has_component(TutorialGuideComponent) or not self._asks_for_help(event.text):
+            return
+        room_id = container_of(speaker)
+        if room_id is None or not self.actor.world.has_entity(room_id):
+            return
+        for guide_id in sorted(contents(self.actor.world.get_entity(room_id)), key=str):
+            guide = self.actor.world.get_entity(guide_id)
+            if not guide.has_component(TutorialGuideComponent):
+                continue
+            if isinstance(event, SpeechToldEvent) and str(guide_id) not in event.target_ids:
+                continue
+            if any(
+                command.character_id == str(guide_id) and command.command_type == "say"
+                for command in self.actor.pending_submissions()
+            ):
+                return
+            controlled = guide.get_relationships(ControlledBy)
+            if not controlled:
+                return
+            edge, controller_id = controlled[0]
+            call = ToolCall(
+                "say",
+                {
+                    "text": guide.get_component(TutorialGuideComponent).help_text,
+                    "intent": "inform",
+                    "approach": "friendly",
+                },
+            )
+            self.actor.submit_nowait(
+                command_from_tool_call(
+                    call,
+                    character_id=str(guide_id),
+                    controller_id=str(controller_id),
+                    controller_generation=edge.generation,
+                    submitted_at_epoch=self.actor.epoch,
+                    definitions=self.actor.action_definitions(),
+                )
+            )
+            return
 
 
 @dataclass(frozen=True)
@@ -190,16 +260,18 @@ def _hungry_courier_agent_factory(
 
 
 def install_tutorial(actor) -> None:
-    del actor
     register_autonomous_controller(
         HungryCourierControllerComponent,
         _hungry_courier_agent_factory,
     )
+    TutorialGuideReactor(actor).subscribe()
 
 
 __all__ = [
     "DELIVERY_MARK",
     "HungryCourierAgent",
     "HungryCourierControllerComponent",
+    "TutorialGuideComponent",
+    "TutorialGuideReactor",
     "install_tutorial",
 ]
