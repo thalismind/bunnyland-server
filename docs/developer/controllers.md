@@ -80,6 +80,13 @@ its content, and those details are returned in the next prompt. Only an explicit
 still return `None` as their internal hold signal because they do not participate in a
 provider message protocol.
 
+These provider retries, structured rejections, per-character single-flight locks, latest
+prompt projection slots, and perceived-event buffers are gameplay-engine behavior in
+`ControllerDispatch` and the provider agents. Offline benchmarks use those same classes and
+must not implement private substitutes. Benchmark-only policies may stop or score a session,
+but they must not alter how a live character is prompted, how an action is validated, or how
+the authoritative result is returned.
+
 ## Behavior trees
 
 A behavior tree is ticked once per dispatch turn and yields a single `ToolCall` (or `None` to

@@ -14,6 +14,12 @@ gets a fresh controller, provider agent, and conversation history. Model preflig
 download or invoke a model. Ollama records parameter size, family, and quantization when
 available; OpenRouter records the catalogue metadata it exposes.
 
+The harness deliberately uses the standard `ControllerDispatch`, Ollama/OpenRouter agents,
+prompt projection, event buffering, tool-result history, command validation, and receipts.
+Provider and per-character scheduling fixes belong to those shared gameplay paths, with
+standard game-loop regression coverage; the harness owns only session orchestration,
+scoring, safety limits, and artifacts.
+
 ## Running locally
 
 Install the `llm` extra and make sure each requested model already exists in Ollama. A local

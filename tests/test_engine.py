@@ -6,7 +6,12 @@ import asyncio
 
 from bunnyland.core import WorldActor, WorldPauseStatusChangedEvent, container_of
 from bunnyland.engine import GameLoop
-from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
+from bunnyland.llm_agents import (
+    ControllerDispatch,
+    InvalidAgentResponse,
+    ScriptedAgent,
+    ToolCall,
+)
 from bunnyland.plugins import apply_plugins, bunnyland_plugins
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.worldgen import StubWorldBuilder, instantiate
@@ -122,6 +127,44 @@ async def test_game_loop_sends_only_latest_buffer_after_prior_action_commits():
         agent.first_gate.set()
         agent.second_gate.set()
         await asyncio.wait_for(task, timeout=1.0)
+
+
+async def test_game_loop_returns_invalid_agent_response_feedback_on_next_prompt():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    await instantiate(actor, await StubWorldBuilder().propose("seed"))
+
+    class RecoveringAgent:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def decide(
+            self, prompt, context, *, character_id, model=None, provider=None, tools=None
+        ):
+            del context, character_id, model, provider, tools
+            self.prompts.append(prompt)
+            if len(self.prompts) == 1:
+                return InvalidAgentResponse(
+                    reason="provider returned empty response after retries",
+                    feedback=(
+                        "Invalid action response: the provider returned an empty assistant "
+                        "message. Return exactly one structured tool call."
+                    ),
+                )
+            return ToolCall("wait", {})
+
+    agent = RecoveringAgent()
+    dispatch = ControllerDispatch(actor, PromptBuilder(actor.world), agent)
+
+    await dispatch.run_once()
+    first = await dispatch.await_pending()
+    assert first[0].receipt_status == "policy_rejected"
+    assert first[0].policy_rejections == ("invalid_agent_response",)
+
+    await dispatch.run_once()
+    second = await dispatch.await_pending()
+    assert second[0].selected_action == "wait"
+    assert "Invalid action response" in agent.prompts[1]
 
 
 async def test_game_loop_stops_when_asked():
