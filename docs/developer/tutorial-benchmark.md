@@ -202,6 +202,43 @@ Trace rows are flushed and synced after every completed turn. Session rows, the 
 summary, and the report are checkpointed after every completed session, so an interruption
 retains all completed evidence instead of losing the whole matrix.
 
+## Building the illustrated report
+
+Build a Markdown report, a copy-ready comparison table, a Typst source document, tutorial
+maps, and milestone heatmaps from one or more benchmark artifact directories:
+
+```bash
+scripts/build-tutorial-report \
+  --input artifacts/benchmarks/tutorials/local-batch \
+  --input artifacts/benchmarks/tutorials/cloud-batch \
+  --output artifacts/benchmarks/tutorials/full-report \
+  --title "Bunnyland tutorial ladder"
+```
+
+The report builder accepts an in-progress artifact directory and includes only checkpointed
+sessions. Rerun the same command after more sessions complete; it replaces the derived report
+files without changing the source traces, responses, logs, or session evidence.
+
+The generated directory contains:
+
+- `report.md`, the source-linked narrative and embedded SVG diagrams.
+- `comparison-table.md`, the compact model, passes, milestones, validity, and
+  milestones-per-turn table suitable for a README or server document.
+- `report.typ`, the deterministic print layout.
+- `diagrams/*-tabletop.png`, illustrated top-down world maps in Bunnyland's visual style.
+- `diagrams/*-map.svg`, exact tutorial topology with milestone locations and persistent clue
+  notes.
+- `diagrams/*-milestones.svg`, heatmaps whose first row counts models that reached each
+  milestone at least once and whose remaining rows show session reliability by model.
+
+Install [Typst](https://typst.app/open-source/) and render the PDF with:
+
+```bash
+scripts/build-tutorial-report-pdf \
+  artifacts/benchmarks/tutorials/full-report/report.typ \
+  artifacts/benchmarks/tutorials/full-report/report.pdf
+```
+
 This is a character-tool reasoning benchmark. It does not test whether a human can discover
 controls, read browser layout, interpret rendering, claim a character, or keep state aligned
 across clients. Use the [player playtesting guide](../player/playtesting.md) for browser,
