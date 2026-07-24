@@ -270,6 +270,37 @@ async def test_invalid_provider_response_is_rejected_with_recovery_feedback():
     assert "Invalid action response" in agent.prompts[1]
 
 
+async def test_exhausted_empty_provider_response_is_rejected_without_waiting():
+    class EmptyResponseAgent:
+        async def decide(self, prompt, context, **kwargs):
+            del prompt, context, kwargs
+            return InvalidAgentResponse(
+                reason="provider returned empty response after retries",
+                feedback=(
+                    "Invalid action response: Ollama returned an empty assistant message "
+                    "on 4 consecutive attempt(s), so no action was submitted."
+                ),
+            )
+
+    result, traces = await run_session(
+        tutorial_scenarios()["bell"],
+        model="empty",
+        provider="ollama-cloud",
+        run=1,
+        timeout_seconds=5,
+        turn_limit=1,
+        agent=EmptyResponseAgent(),
+    )
+
+    assert result.status == "turn_limit"
+    assert result.rejected_actions == 1
+    assert traces[0].selected_tool is None
+    assert traces[0].receipt_status == "policy_rejected"
+    assert traces[0].policy_rejections == ("invalid_agent_response",)
+    assert traces[0].provider_error == ""
+    assert "empty assistant message" in traces[0].receipt_reason
+
+
 async def test_milestones_remain_achieved_after_authoritative_state_changes():
     calls = (
         ToolCall("move", {"direction": "east"}),

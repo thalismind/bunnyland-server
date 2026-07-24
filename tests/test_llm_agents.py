@@ -1703,6 +1703,78 @@ async def test_ollama_agent_retries_transient_provider_errors(monkeypatch):
     assert agent._history["hazel"][0] == {"role": "user", "content": "turn one"}
 
 
+async def test_ollama_agent_retries_empty_responses_before_recording_history(monkeypatch):
+    class EmptyThenValidOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            if len(self.calls) < 3:
+                return {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [],
+                    }
+                }
+            return _fake_ollama_response()
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = EmptyThenValidOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+    observed: list[dict[str, JsonValue]] = []
+
+    agent = OllamaAgent(
+        model="llama3",
+        retry_delay_seconds=0,
+        response_observer=observed.append,
+    )
+    call = await agent.decide("turn one", None, character_id="hazel")
+
+    assert call == ToolCall("wait", {})
+    assert len(agent._client.calls) == 3
+    assert len(observed) == 1
+    assert agent._history["hazel"] == [
+        {"role": "user", "content": "turn one"},
+        _fake_ollama_response()["message"],
+    ]
+
+
+async def test_ollama_agent_rejects_empty_response_after_three_retries(monkeypatch):
+    class AlwaysEmptyOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [],
+                }
+            }
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = AlwaysEmptyOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+    observed: list[dict[str, JsonValue]] = []
+
+    agent = OllamaAgent(
+        model="llama3",
+        retry_delay_seconds=0,
+        response_observer=observed.append,
+    )
+    call = await agent.decide("turn one", None, character_id="hazel")
+
+    assert isinstance(call, InvalidAgentResponse)
+    assert call.reason == "provider returned empty response after retries"
+    assert "4 consecutive attempt(s)" in call.feedback
+    assert len(agent._client.calls) == 4
+    assert len(observed) == 1
+    assert observed[0]["message"]["content"] == ""
+    assert agent._history["hazel"] == []
+
+
 async def test_ollama_agent_rejects_missing_response_after_transient_provider_retries(
     monkeypatch,
 ):
@@ -2168,6 +2240,138 @@ async def test_openrouter_agent_retries_transient_provider_errors(monkeypatch):
     assert call == ToolCall("wait", {"reason": "rest"})
     assert len(agent._client.chat.calls) == 2
     assert agent._history["hazel"][0] == {"role": "user", "content": "turn one"}
+
+
+async def test_openrouter_agent_retries_empty_responses_before_recording_history(
+    monkeypatch,
+):
+    class EmptyThenValidOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            if len(self.calls) >= 2:
+                return await super().send_async(
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                )
+            self.calls.append(
+                {
+                    "model": model,
+                    "messages": [dict(message) for message in messages],
+                    "tools": tools,
+                }
+            )
+            message = types.SimpleNamespace(
+                role="assistant",
+                content="",
+                tool_calls=None,
+                model_dump=lambda **_: {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": None,
+                },
+            )
+            return types.SimpleNamespace(
+                choices=[types.SimpleNamespace(message=message)],
+                model_dump=lambda **_: {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                                "tool_calls": None,
+                            }
+                        }
+                    ]
+                },
+            )
+
+    class EmptyThenValidOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = EmptyThenValidOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = EmptyThenValidOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(
+        model="openai/gpt-4.1-mini",
+        api_key="key",
+        retry_delay_seconds=0,
+    )
+    call = await agent.decide("turn one", None, character_id="hazel")
+
+    assert call == ToolCall("wait", {"reason": "rest"})
+    assert len(agent._client.chat.calls) == 3
+    assert len(agent._history["hazel"]) == 2
+    assert agent._history["hazel"][0] == {"role": "user", "content": "turn one"}
+    assert agent._history["hazel"][1]["content"] == "ok"
+
+
+async def test_openrouter_agent_rejects_empty_response_after_three_retries(
+    monkeypatch,
+):
+    class AlwaysEmptyOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            self.calls.append(
+                {
+                    "model": model,
+                    "messages": [dict(message) for message in messages],
+                    "tools": tools,
+                }
+            )
+            message = types.SimpleNamespace(
+                role="assistant",
+                content="",
+                tool_calls=None,
+                model_dump=lambda **_: {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": None,
+                },
+            )
+            return types.SimpleNamespace(
+                choices=[types.SimpleNamespace(message=message)],
+                model_dump=lambda **_: {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                                "tool_calls": None,
+                            }
+                        }
+                    ]
+                },
+            )
+
+    class AlwaysEmptyOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = AlwaysEmptyOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = AlwaysEmptyOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+    observed: list[dict[str, JsonValue]] = []
+
+    agent = OpenRouterAgent(
+        model="openai/gpt-4.1-mini",
+        api_key="key",
+        retry_delay_seconds=0,
+        response_observer=observed.append,
+    )
+    call = await agent.decide("turn one", None, character_id="hazel")
+
+    assert isinstance(call, InvalidAgentResponse)
+    assert call.reason == "provider returned empty response after retries"
+    assert "4 consecutive attempt(s)" in call.feedback
+    assert len(agent._client.chat.calls) == 4
+    assert len(observed) == 1
+    choices = observed[0]["choices"]
+    assert isinstance(choices, list)
+    assert choices[0]["message"]["content"] == ""
+    assert agent._history["hazel"] == []
 
 
 async def test_openrouter_agent_rejects_plain_assistant_reply_and_trims_history(monkeypatch):

@@ -167,7 +167,10 @@ The default output directory is `artifacts/benchmarks/tutorials`; change it with
   ids, event-buffer omission counts, and milestone state. It does not contain or request
   hidden reasoning. A provider response without structured `tool_calls` is recorded as an
   `invalid_agent_response` policy rejection, with its bounded content excerpt in
-  `receipt_reason`; it is never counted as a wait.
+  `receipt_reason`; it is never counted as a wait. Completely empty Ollama and OpenRouter
+  responses receive up to three retries after the original response. Retries do not advance
+  the world or enter conversation history; if all four attempts are empty, the final empty
+  response is recorded and rejected through the same policy path.
 - `responses.jsonl` contains the complete JSON response returned by the provider for each
   turn, correlated by session and turn. It contains thinking or reasoning fields only with
   `--log-thinking`.

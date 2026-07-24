@@ -69,12 +69,16 @@ model-authored narration and does not claim success before validation. Human-fac
 terminal, and Discord clients continue to render those authoritative events as prose or UI;
 provider roles are internal to LLM conversation history.
 
-An assistant response without `tool_calls` is invalid for character decisions. Dispatch
-records it as `policy_rejected` with `invalid_agent_response`, includes a bounded excerpt of
-the assistant content in the rejection details, and returns those details in the next prompt.
-Only an explicit call to the `wait` tool is an intentional LLM wait. Deterministic behavior
-and scripted controllers may still return `None` as their internal hold signal because they
-do not participate in a provider message protocol.
+An assistant response without `tool_calls` is invalid for character decisions. A completely
+empty Ollama or OpenRouter response is retried before it enters conversation history, using
+three retries after the original response. If all four attempts are empty, the final empty
+response is retained for evidence and dispatch records an
+`invalid_agent_response` policy rejection; it does not become a wait or abort the controller.
+A non-empty response without `tool_calls` is rejected immediately with a bounded excerpt of
+its content, and those details are returned in the next prompt. Only an explicit call to the
+`wait` tool is an intentional LLM wait. Deterministic behavior and scripted controllers may
+still return `None` as their internal hold signal because they do not participate in a
+provider message protocol.
 
 ## Behavior trees
 

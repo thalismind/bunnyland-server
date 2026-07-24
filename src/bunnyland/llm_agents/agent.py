@@ -31,6 +31,7 @@ from .tools import ToolCall, tool_schemas
 DEFAULT_MODEL = "deepseek-v4-flash"
 LEGACY_DEFAULT_MODEL = "llama3"
 DEFAULT_PROVIDER_RETRIES = 2
+EMPTY_RESPONSE_MAX_RETRIES = 3
 DEFAULT_RETRY_DELAY_SECONDS = 1.0
 TRANSIENT_STATUS_CODES = frozenset({408, 409, 425, 429})
 CHARACTER_SYSTEM_PROMPT = (
@@ -754,23 +755,38 @@ class OllamaAgent:
             resolved_tools,
             system_prompt=CHARACTER_SYSTEM_PROMPT,
         )
+        empty_responses = 0
+        last_empty_response: object | None = None
 
         async def request():
-            return await self._client.chat(
+            nonlocal empty_responses, last_empty_response
+            response = await self._client.chat(
                 model=resolved_model,
                 messages=messages,
                 tools=resolved_tools,
                 **self._request_options(),
             )
+            message = response["message"]
+            if _provider_message_is_empty(message):
+                empty_responses += 1
+                last_empty_response = response
+                raise _EmptyProviderResponseError("Ollama returned an empty assistant message")
+            return response
 
         response = await _call_provider_with_retries(
             "ollama",
             request,
             max_retries=self._max_retries,
+            empty_response_retries=EMPTY_RESPONSE_MAX_RETRIES,
             retry_delay_seconds=self._retry_delay_seconds,
             attributes=request_attrs,
         )
         if response is None:
+            empty_attempts = EMPTY_RESPONSE_MAX_RETRIES + 1
+            if empty_responses == empty_attempts:
+                if last_empty_response is not None:
+                    self._observe_response(last_empty_response)
+                return _empty_response_rejection("Ollama", empty_attempts)
             attempts = self._max_retries + 1
             return InvalidAgentResponse(
                 reason="provider returned no response after retries",
@@ -936,23 +952,40 @@ class OpenRouterAgent:
             resolved_tools,
             system_prompt=CHARACTER_SYSTEM_PROMPT,
         )
+        empty_responses = 0
+        last_empty_response: object | None = None
 
         async def request():
-            return await self._client.chat.send_async(
+            nonlocal empty_responses, last_empty_response
+            response = await self._client.chat.send_async(
                 model=resolved_model,
                 messages=messages,
                 tools=resolved_tools,
                 **self._request_options(),
             )
+            message = response.choices[0].message
+            if _provider_message_is_empty(message):
+                empty_responses += 1
+                last_empty_response = response
+                raise _EmptyProviderResponseError(
+                    "OpenRouter returned an empty assistant message"
+                )
+            return response
 
         response = await _call_provider_with_retries(
             "openrouter",
             request,
             max_retries=self._max_retries,
+            empty_response_retries=EMPTY_RESPONSE_MAX_RETRIES,
             retry_delay_seconds=self._retry_delay_seconds,
             attributes=request_attrs,
         )
         if response is None:
+            empty_attempts = EMPTY_RESPONSE_MAX_RETRIES + 1
+            if empty_responses == empty_attempts:
+                if last_empty_response is not None:
+                    self._observe_response(last_empty_response)
+                return _empty_response_rejection("OpenRouter", empty_attempts)
             attempts = self._max_retries + 1
             return InvalidAgentResponse(
                 reason="provider returned no response after retries",
@@ -1137,6 +1170,31 @@ class ProviderRouterAgent:
         )
 
 
+class _EmptyProviderResponseError(RuntimeError):
+    """A provider returned an assistant message with no content or tool call."""
+
+
+def _provider_message_is_empty(message: object) -> bool:
+    if isinstance(message, MappingABC):
+        content = message.get("content")
+        tool_calls = message.get("tool_calls")
+    else:
+        content = getattr(message, "content", None)
+        tool_calls = getattr(message, "tool_calls", None)
+    return not str(content or "").strip() and not tool_calls
+
+
+def _empty_response_rejection(provider: str, attempts: int) -> InvalidAgentResponse:
+    return InvalidAgentResponse(
+        reason="provider returned empty response after retries",
+        feedback=(
+            f"Invalid action response: {provider} returned an empty assistant message on "
+            f"{attempts} consecutive attempt(s), so no action was submitted. Return exactly "
+            "one structured tool call using an available tool; call the wait tool to wait."
+        ),
+    )
+
+
 def _provider_status_code(exc: BaseException) -> int | None:
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):
@@ -1149,6 +1207,8 @@ def _provider_status_code(exc: BaseException) -> int | None:
 
 
 def _is_transient_provider_error(exc: BaseException) -> bool:
+    if isinstance(exc, _EmptyProviderResponseError):
+        return True
     if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
         return True
     status = _provider_status_code(exc)
@@ -1163,12 +1223,15 @@ async def _call_provider_with_retries(
     request,
     *,
     max_retries: int,
+    empty_response_retries: int = 0,
     retry_delay_seconds: float,
     attributes: MappingABC[str, object] | None = None,
 ):
     last_exc: Exception | None = None
     base_attrs = {"provider": provider, **dict(attributes or {})}
-    for attempt in range(max_retries + 1):
+    attempts_made = 0
+    for attempt in range(max(max_retries, empty_response_retries) + 1):
+        attempts_made = attempt + 1
         try:
             with telemetry.span(
                 "llm.provider.attempt", {**base_attrs, "llm.attempt": attempt}
@@ -1185,21 +1248,28 @@ async def _call_provider_with_retries(
             if not _is_transient_provider_error(exc):
                 raise
             last_exc = exc
-            if attempt < max_retries:
+            retry_limit = (
+                empty_response_retries
+                if isinstance(exc, _EmptyProviderResponseError)
+                else max_retries
+            )
+            if attempt < retry_limit:
                 logger.warning(
                     "%s provider transient error on attempt %s/%s; retrying: %s",
                     provider,
                     attempt + 1,
-                    max_retries + 1,
+                    retry_limit + 1,
                     exc,
                 )
                 if retry_delay_seconds > 0:
                     await asyncio.sleep(retry_delay_seconds)
+            else:
+                break
     logger.warning(
         "%s provider failed after %s attempt%s; no response is available: %s",
         provider,
-        max_retries + 1,
-        "" if max_retries == 0 else "s",
+        attempts_made,
+        "" if attempts_made == 1 else "s",
         last_exc,
     )
     return None
