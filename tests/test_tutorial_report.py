@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 
 from benchmarks.tutorial_comparison import SourceSelection, write_comparison
-from benchmarks.tutorial_report import TUTORIAL_MAPS, build_report, render_map_svg
+from benchmarks.tutorial_report import (
+    TUTORIAL_MAPS,
+    build_report,
+    package_report,
+    render_map_svg,
+)
 from benchmarks.tutorials import (
     SCHEMA_VERSION,
     BenchmarkConfig,
     ModelMetadata,
+    ModelResponseTrace,
     SessionResult,
     summarize,
     write_artifacts,
@@ -51,12 +58,21 @@ def _source(path: Path) -> None:
         ModelMetadata("large", parameter_count=20_000_000_000),
     )
     config = BenchmarkConfig(models=models, tutorials=tutorials, sessions=1, output=path)
+    responses = tuple(
+        ModelResponseTrace(
+            schema_version=SCHEMA_VERSION,
+            session_id=result.session_id,
+            turn=1,
+            response={"prompt_eval_count": 100, "eval_count": 20},
+        )
+        for result in results
+    )
     write_artifacts(
         config,
         summarize(results, metadata, tutorials),
         results,
         (),
-        (),
+        responses,
         metadata,
     )
 
@@ -73,12 +89,16 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
         "diagrams",
         "report.md",
         "report.typ",
+        "token-stats.md",
     }
     assert len(tuple((output / "diagrams").glob("*.svg"))) == 6
     assert len(tuple((output / "diagrams").glob("*-tabletop.png"))) == 3
     markdown = (output / "report.md").read_text(encoding="utf-8")
     assert "# Test ladder" in markdown
-    assert f"[`source`]({source.resolve()})" in markdown
+    assert "`source` — 6 completed sessions" in markdown
+    assert str(source.resolve()) not in markdown
+    assert "720 tokens" in markdown
+    assert "| `large` | 300 | 60 | 360 | 3/3 (100.0%) | 2.50 | 16,666.67 |" in markdown
     assert "| `large` | 3/3 | 6/6 | 75.0% | 0.500 |" in markdown
     assert "{{" not in markdown
     heatmap = (output / "diagrams/apple-milestones.svg").read_text(encoding="utf-8")
@@ -88,6 +108,7 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     assert '#image("diagrams/apple-tabletop.png"' in typst
     assert '#image("diagrams/apple-map.svg"' in typst
     assert '#text("large")' in typst
+    assert str(source.resolve()) not in typst
 
 
 def test_build_report_accepts_derived_comparison_artifact(tmp_path):
@@ -121,3 +142,22 @@ def test_report_source_manifest_stays_valid_json(tmp_path):
     manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
 
     assert manifest["benchmark"] == "ollama-tutorial-ladder"
+
+
+def test_package_report_includes_only_shareable_report_files(tmp_path):
+    report = tmp_path / "tutorial-report"
+    output = tmp_path / "tutorial-report.zip"
+    _source(tmp_path / "source")
+    build_report((tmp_path / "source",), report, title="Test ladder")
+    (report / "report.pdf").write_bytes(b"%PDF-1.7\n")
+    (report / "private-traces.jsonl").write_text("private", encoding="utf-8")
+
+    package_report(report, output)
+
+    with zipfile.ZipFile(output) as bundle:
+        names = set(bundle.namelist())
+    assert "tutorial-report/report.md" in names
+    assert "tutorial-report/report.pdf" in names
+    assert "tutorial-report/token-stats.md" in names
+    assert "tutorial-report/private-traces.jsonl" not in names
+    assert "tutorial-report/report.typ" not in names

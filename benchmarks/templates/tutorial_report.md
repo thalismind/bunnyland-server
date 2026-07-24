@@ -8,6 +8,18 @@ Authoritative passes: **{{PASSES}}**
 
 {{SOURCES}}
 
+## Runtime and token use
+
+{{RUNTIME_SUMMARY}}
+
+Output tokens include thinking tokens when the provider reports them. Token efficiency is
+completed milestones per million total provider-reported input plus output tokens. Speed is
+the median session-level seconds per turn. Timing is comparable only within panels with the
+same provider and reasoning settings. These are logical provider-reported tokens, not billed
+tokens; cached prompt tokens may still be included.
+
+{{TOKEN_TABLE}}
+
 ## Model comparison
 
 {{COMPARISON_TABLE}}

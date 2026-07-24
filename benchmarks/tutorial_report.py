@@ -5,14 +5,18 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-from collections import defaultdict
+import statistics
+import zipfile
+from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 
-from benchmarks.tutorial_comparison import SourceSelection, load_source
-from benchmarks.tutorials import SessionResult
+from pydantic import TypeAdapter
+
+from benchmarks.tutorial_comparison import LoadedSource, SourceSelection, load_source
+from benchmarks.tutorials import JsonValue, ModelResponseTrace, SessionResult
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,47 @@ class ModelRow:
     valid_actions: int
     rejected_actions: int
     turns: int
+    median_seconds_per_turn: float
+    input_tokens: int
+    output_tokens: int
+    token_response_rows: int
+    response_rows: int
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    @property
+    def token_efficiency(self) -> float:
+        if not self.total_tokens:
+            return 0
+        return self.milestone_hits * 1_000_000 / self.total_tokens
+
+    @property
+    def token_coverage(self) -> float:
+        if not self.response_rows:
+            return 0
+        return self.token_response_rows / self.response_rows
+
+
+@dataclass(frozen=True)
+class ResponseUsage:
+    input_tokens: int
+    output_tokens: int
+
+
+@dataclass(frozen=True)
+class ModelUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    token_response_rows: int = 0
+    response_rows: int = 0
+
+
+@dataclass(frozen=True)
+class EvidenceSlice:
+    path: Path
+    results: tuple[SessionResult, ...]
 
 
 TUTORIAL_MAPS: dict[str, TutorialMap] = {
@@ -256,12 +301,106 @@ TABLETOP_MAPS: dict[str, Path] = {
 }
 
 
-def _model_rows(results: Sequence[SessionResult]) -> tuple[ModelRow, ...]:
+def _json_int(value: JsonValue | None) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _response_usage(response: dict[str, JsonValue]) -> ResponseUsage | None:
+    prompt_tokens = _json_int(response.get("prompt_eval_count"))
+    output_tokens = _json_int(response.get("eval_count"))
+    if prompt_tokens is not None and output_tokens is not None:
+        return ResponseUsage(prompt_tokens, output_tokens)
+    usage = response.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    prompt_tokens = _json_int(usage.get("prompt_tokens"))
+    output_tokens = _json_int(usage.get("completion_tokens"))
+    if prompt_tokens is None or output_tokens is None:
+        return None
+    return ResponseUsage(prompt_tokens, output_tokens)
+
+
+def _source_path(parent: Path, value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else parent / path
+
+
+def _evidence_slices(source: LoadedSource) -> tuple[EvidenceSlice, ...]:
+    if source.manifest.benchmark != "ollama-tutorial-ladder-comparison":
+        return (EvidenceSlice(source.path, source.results),)
+    remaining = Counter(source.results)
+    slices: list[EvidenceSlice] = []
+    for entry in source.manifest.sources:
+        child = load_source(
+            SourceSelection(
+                _source_path(source.path, entry.path),
+                entry.selected_models,
+            )
+        )
+        selected: list[SessionResult] = []
+        for result in child.results:
+            if remaining[result] <= 0:
+                continue
+            remaining[result] -= 1
+            selected.append(result)
+        if selected:
+            for evidence in _evidence_slices(child):
+                evidence_results = tuple(
+                    result for result in evidence.results if result in selected
+                )
+                if evidence_results:
+                    slices.append(EvidenceSlice(evidence.path, evidence_results))
+    return tuple(slices)
+
+
+def _read_responses(path: Path) -> tuple[ModelResponseTrace, ...]:
+    response_path = path / "responses.jsonl"
+    if not response_path.exists():
+        return ()
+    rows = []
+    adapter = TypeAdapter(ModelResponseTrace)
+    for line in response_path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(adapter.validate_json(line))
+    return tuple(rows)
+
+
+def _model_usage(sources: Sequence[LoadedSource]) -> dict[str, ModelUsage]:
+    usage: dict[str, ModelUsage] = defaultdict(ModelUsage)
+    for source in sources:
+        for evidence in _evidence_slices(source):
+            model_by_session = {
+                result.session_id: result.model for result in evidence.results
+            }
+            for row in _read_responses(evidence.path):
+                model = model_by_session.get(row.session_id)
+                if model is None:
+                    continue
+                previous = usage[model]
+                tokens = _response_usage(row.response)
+                usage[model] = ModelUsage(
+                    input_tokens=previous.input_tokens
+                    + (tokens.input_tokens if tokens is not None else 0),
+                    output_tokens=previous.output_tokens
+                    + (tokens.output_tokens if tokens is not None else 0),
+                    token_response_rows=previous.token_response_rows
+                    + (tokens is not None),
+                    response_rows=previous.response_rows + 1,
+                )
+    return usage
+
+
+def _model_rows(
+    results: Sequence[SessionResult], usage: dict[str, ModelUsage]
+) -> tuple[ModelRow, ...]:
     grouped: dict[str, list[SessionResult]] = defaultdict(list)
     for result in results:
         grouped[result.model].append(result)
     rows = []
     for model, sessions in grouped.items():
+        model_usage = usage.get(model, ModelUsage())
         rows.append(
             ModelRow(
                 model=model,
@@ -275,6 +414,15 @@ def _model_rows(results: Sequence[SessionResult]) -> tuple[ModelRow, ...]:
                 valid_actions=sum(result.valid_actions for result in sessions),
                 rejected_actions=sum(result.rejected_actions for result in sessions),
                 turns=sum(result.turns for result in sessions),
+                median_seconds_per_turn=statistics.median(
+                    result.elapsed_seconds / result.turns
+                    for result in sessions
+                    if result.turns
+                ),
+                input_tokens=model_usage.input_tokens,
+                output_tokens=model_usage.output_tokens,
+                token_response_rows=model_usage.token_response_rows,
+                response_rows=model_usage.response_rows,
             )
         )
     return tuple(
@@ -440,6 +588,52 @@ def _comparison_table(rows: Sequence[ModelRow]) -> str:
     return "\n".join(lines)
 
 
+def _token_table(rows: Sequence[ModelRow]) -> str:
+    lines = [
+        "| Model | Input tokens | Output tokens | Total tokens | "
+        "Usage coverage | Median sec/turn | Milestones/M tokens |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in rows:
+        lines.append(
+            f"| `{row.model}` | {row.input_tokens:,} | {row.output_tokens:,} | "
+            f"{row.total_tokens:,} | {row.token_response_rows}/{row.response_rows} "
+            f"({row.token_coverage:.1%}) | {row.median_seconds_per_turn:.2f} | "
+            f"{row.token_efficiency:,.2f} |"
+        )
+    return "\n".join(lines)
+
+
+def _runtime_summary(rows: Sequence[ModelRow]) -> str:
+    measured = tuple(row for row in rows if row.total_tokens and row.response_rows)
+    if not measured:
+        return "Provider token usage was not retained for these sessions."
+    fastest = min(measured, key=lambda row: row.median_seconds_per_turn)
+    slowest = max(measured, key=lambda row: row.median_seconds_per_turn)
+    most_efficient = max(measured, key=lambda row: row.token_efficiency)
+    least_efficient = min(measured, key=lambda row: row.token_efficiency)
+    input_tokens = sum(row.input_tokens for row in measured)
+    output_tokens = sum(row.output_tokens for row in measured)
+    covered = sum(row.token_response_rows for row in measured)
+    response_rows = sum(row.response_rows for row in measured)
+    return "\n".join(
+        (
+            f"Recorded provider usage totals **{input_tokens + output_tokens:,} tokens**: "
+            f"{input_tokens:,} input and {output_tokens:,} output tokens across "
+            f"{covered:,}/{response_rows:,} retained response rows.",
+            "",
+            f"- Fastest median decision pace: `{fastest.model}` at "
+            f"{fastest.median_seconds_per_turn:.2f} seconds/turn.",
+            f"- Slowest median decision pace: `{slowest.model}` at "
+            f"{slowest.median_seconds_per_turn:.2f} seconds/turn.",
+            f"- Most token-efficient: `{most_efficient.model}` at "
+            f"{most_efficient.token_efficiency:,.2f} completed milestones per million tokens.",
+            f"- Least token-efficient: `{least_efficient.model}` at "
+            f"{least_efficient.token_efficiency:,.2f} completed milestones per million tokens.",
+        )
+    )
+
+
 def _typst_text(value: str) -> str:
     return f"#text({json.dumps(value, ensure_ascii=False)})"
 
@@ -448,7 +642,7 @@ def _typst_report(
     title: str,
     rows: Sequence[ModelRow],
     diagrams: Sequence[str],
-    sources: Sequence[Path],
+    sources: Sequence[str],
 ) -> str:
     cells = [
         "[*Model*]",
@@ -469,6 +663,26 @@ def _typst_report(
             f"{progress:.3f}",
         )
         cells.extend(f"[{_typst_text(value)}]" for value in values)
+    token_cells = [
+        "[*Model*]",
+        "[*Input*]",
+        "[*Output*]",
+        "[*Total*]",
+        "[*Coverage*]",
+        "[*Sec / turn*]",
+        "[*Milestones / M tokens*]",
+    ]
+    for row in rows:
+        values = (
+            row.model,
+            f"{row.input_tokens:,}",
+            f"{row.output_tokens:,}",
+            f"{row.total_tokens:,}",
+            f"{row.token_response_rows}/{row.response_rows}",
+            f"{row.median_seconds_per_turn:.2f}",
+            f"{row.token_efficiency:,.2f}",
+        )
+        token_cells.extend(f"[{_typst_text(value)}]" for value in values)
     images = []
     for path in diagrams:
         images.extend(
@@ -489,7 +703,23 @@ def _typst_report(
             "",
             "== Evidence sources",
             "",
-            *(_typst_text(str(path)) for path in sources),
+            *(_typst_text(path) for path in sources),
+            "",
+            "== Runtime and token use",
+            "",
+            _typst_text(_runtime_summary(rows)),
+            "",
+            "Provider-reported logical tokens are shown, not billed tokens. Output includes "
+            "thinking where reported. Timing is comparable only within compatible panels.",
+            "",
+            "#set text(size: 6pt)",
+            "#table(",
+            "  columns: (2fr, 1fr, 0.8fr, 1fr, 0.8fr, 0.8fr, 1fr),",
+            "  inset: 3pt,",
+            "  stroke: 0.5pt + rgb(\"ccd3dc\"),",
+            "  " + ",\n  ".join(token_cells),
+            ")",
+            "#set text(size: 9pt)",
             "",
             "== Model comparison",
             "",
@@ -528,7 +758,7 @@ def build_report(inputs: Sequence[Path], output: Path, *, title: str) -> None:
                 str(heatmap_path.relative_to(output)),
             )
         )
-    rows = _model_rows(results)
+    rows = _model_rows(results, _model_usage(sources))
     template = (Path(__file__).parent / "templates" / "tutorial_report.md").read_text(
         encoding="utf-8"
     )
@@ -539,11 +769,13 @@ def build_report(inputs: Sequence[Path], output: Path, *, title: str) -> None:
         .replace(
             "{{SOURCES}}",
             "\n".join(
-                f"- [`{source.path.name}`]({source.path}) — "
+                f"- `{source.path.name}` — "
                 f"{len(source.results)} completed sessions"
                 for source in sources
             ),
         )
+        .replace("{{RUNTIME_SUMMARY}}", _runtime_summary(rows))
+        .replace("{{TOKEN_TABLE}}", _token_table(rows))
         .replace("{{COMPARISON_TABLE}}", _comparison_table(rows))
         .replace(
             "{{DIAGRAMS}}",
@@ -552,10 +784,30 @@ def build_report(inputs: Sequence[Path], output: Path, *, title: str) -> None:
     )
     (output / "report.md").write_text(markdown, encoding="utf-8")
     (output / "report.typ").write_text(
-        _typst_report(title, rows, diagram_paths, tuple(source.path for source in sources)),
+        _typst_report(title, rows, diagram_paths, tuple(source.path.name for source in sources)),
         encoding="utf-8",
     )
     (output / "comparison-table.md").write_text(_comparison_table(rows) + "\n", encoding="utf-8")
+    (output / "token-stats.md").write_text(_token_table(rows) + "\n", encoding="utf-8")
+
+
+def package_report(report: Path, archive: Path) -> None:
+    files = (
+        "report.md",
+        "report.pdf",
+        "comparison-table.md",
+        "token-stats.md",
+        "findings.md",
+    )
+    diagrams = tuple(sorted((report / "diagrams").glob("*")))
+    selected = tuple(report / name for name in files if (report / name).is_file()) + diagrams
+    if not (report / "report.md").is_file() or not (report / "report.pdf").is_file():
+        raise ValueError("shareable report needs report.md and report.pdf")
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    root = report.name
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for path in selected:
+            bundle.write(path, Path(root) / path.relative_to(report))
 
 
 def _parser() -> argparse.ArgumentParser:

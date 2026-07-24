@@ -29,6 +29,12 @@ class ComparisonError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ManifestSource:
+    path: str
+    selected_models: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class SourceManifest:
     schema_version: int
     benchmark: str
@@ -43,6 +49,7 @@ class SourceManifest:
     temperature: float | None = None
     log_thinking: bool = False
     repeat_command_guard: bool = False
+    sources: tuple[ManifestSource, ...] = ()
 
 
 @dataclass(frozen=True)

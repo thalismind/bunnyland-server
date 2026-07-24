@@ -233,6 +233,9 @@ The generated directory contains:
 - `report.md`, the source-linked narrative and embedded SVG diagrams.
 - `comparison-table.md`, the compact model, passes, milestones, validity, and
   milestones-per-turn table suitable for a README or server document.
+- `token-stats.md`, the provider-reported input/output totals, response-row coverage,
+  median seconds per turn, and completed milestones per million total tokens for every
+  model.
 - `report.typ`, the deterministic print layout.
 - `diagrams/*-tabletop.png`, illustrated top-down world maps in Bunnyland's visual style.
 - `diagrams/*-map.svg`, exact tutorial topology with milestone locations and persistent clue
@@ -247,6 +250,19 @@ scripts/build-tutorial-report-pdf \
   artifacts/benchmarks/tutorials/full-report/report.typ \
   artifacts/benchmarks/tutorials/full-report/report.pdf
 ```
+
+Package the rendered report for external sharing:
+
+```bash
+scripts/package-tutorial-report \
+  artifacts/benchmarks/tutorials/full-report \
+  artifacts/benchmarks/tutorials/bunnyland-tutorial-report.zip
+```
+
+The ZIP uses a report-only allowlist: Markdown, PDF, copy-ready tables, findings when
+present, and diagrams. It deliberately excludes raw prompts, provider responses, thinking,
+traces, manifests, logs, and the Typst source. Generated reports identify evidence sources
+by artifact directory name instead of recording local absolute paths.
 
 This is a character-tool reasoning benchmark. It does not test whether a human can discover
 controls, read browser layout, interpret rendering, claim a character, or keep state aligned
