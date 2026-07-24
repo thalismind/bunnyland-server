@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from benchmarks.tutorial_comparison import SourceSelection, write_comparison
 from benchmarks.tutorial_report import TUTORIAL_MAPS, build_report, render_map_svg
 from benchmarks.tutorials import (
     SCHEMA_VERSION,
@@ -87,6 +88,21 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     assert '#image("diagrams/apple-tabletop.png"' in typst
     assert '#image("diagrams/apple-map.svg"' in typst
     assert '#text("large")' in typst
+
+
+def test_build_report_accepts_derived_comparison_artifact(tmp_path):
+    source = tmp_path / "source"
+    comparison = tmp_path / "comparison"
+    output = tmp_path / "report"
+    _source(source)
+    write_comparison((SourceSelection(source),), comparison)
+
+    build_report((comparison,), output, title="Combined ladder")
+
+    markdown = (output / "report.md").read_text(encoding="utf-8")
+    assert "# Combined ladder" in markdown
+    assert "6 completed sessions" in markdown
+    assert "| `large` | 3/3 |" in markdown
 
 
 def test_map_svg_contains_diegetic_clues_and_valid_root():

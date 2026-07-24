@@ -784,8 +784,8 @@ class OllamaAgent:
         if response is None:
             empty_attempts = EMPTY_RESPONSE_MAX_RETRIES + 1
             if empty_responses == empty_attempts:
-                if last_empty_response is not None:
-                    self._observe_response(last_empty_response)
+                assert last_empty_response is not None
+                self._observe_response(last_empty_response)
                 return _empty_response_rejection("Ollama", empty_attempts)
             attempts = self._max_retries + 1
             return InvalidAgentResponse(
@@ -983,8 +983,8 @@ class OpenRouterAgent:
         if response is None:
             empty_attempts = EMPTY_RESPONSE_MAX_RETRIES + 1
             if empty_responses == empty_attempts:
-                if last_empty_response is not None:
-                    self._observe_response(last_empty_response)
+                assert last_empty_response is not None
+                self._observe_response(last_empty_response)
                 return _empty_response_rejection("OpenRouter", empty_attempts)
             attempts = self._max_retries + 1
             return InvalidAgentResponse(
@@ -1230,7 +1230,8 @@ async def _call_provider_with_retries(
     last_exc: Exception | None = None
     base_attrs = {"provider": provider, **dict(attributes or {})}
     attempts_made = 0
-    for attempt in range(max(max_retries, empty_response_retries) + 1):
+    attempt = 0
+    while True:
         attempts_made = attempt + 1
         try:
             with telemetry.span(
@@ -1263,6 +1264,7 @@ async def _call_provider_with_retries(
                 )
                 if retry_delay_seconds > 0:
                     await asyncio.sleep(retry_delay_seconds)
+                attempt += 1
             else:
                 break
     logger.warning(

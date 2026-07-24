@@ -33,12 +33,12 @@ class SourceManifest:
     schema_version: int
     benchmark: str
     provider: Provider
-    host: str
     models: tuple[ModelMetadata, ...]
     tutorials: tuple[str, ...]
     sessions_per_model_tutorial: int
     session_timeout_seconds: float
     turn_limit: int
+    host: str = ""
     thinking: ThinkingLevel | None = None
     temperature: float | None = None
     log_thinking: bool = False
@@ -101,7 +101,11 @@ class SourceSelection:
 def load_source(selection: SourceSelection) -> LoadedSource:
     path = selection.path
     manifest = _read_json(path / "manifest.json", SourceManifest)
-    if manifest.benchmark != "ollama-tutorial-ladder":
+    is_comparison = manifest.benchmark == "ollama-tutorial-ladder-comparison"
+    if manifest.benchmark not in {
+        "ollama-tutorial-ladder",
+        "ollama-tutorial-ladder-comparison",
+    }:
         raise ComparisonError(f"{path} is not a tutorial-ladder benchmark")
     all_results = _read_jsonl(path / "sessions.jsonl", SessionResult)
     unknown_models = sorted(set(selection.models) - {item.model for item in manifest.models})
@@ -114,8 +118,20 @@ def load_source(selection: SourceSelection) -> LoadedSource:
         for result in all_results
         if not selection.models or result.model in selection.models
     )
-    traces = _read_jsonl(path / "traces.jsonl", TraceIdentity)
-    responses = _read_jsonl(path / "responses.jsonl", ResponseIdentity)
+    trace_path = path / "traces.jsonl"
+    response_path = path / "responses.jsonl"
+    traces = (
+        _read_jsonl(trace_path, TraceIdentity)
+        if trace_path.exists()
+        else ()
+    )
+    responses = (
+        _read_jsonl(response_path, ResponseIdentity)
+        if response_path.exists()
+        else ()
+    )
+    if not is_comparison and (not trace_path.exists() or not response_path.exists()):
+        raise ComparisonError(f"{path} is missing raw trace or response evidence")
     completed_ids = {result.session_id for result in all_results}
     trace_counts = Counter(trace.session_id for trace in traces)
     response_counts = Counter(response.session_id for response in responses)
@@ -278,6 +294,7 @@ def write_comparison(
             "tutorials": list(tutorials),
             "sessions_per_model_tutorial": sessions,
             "provider": settings.provider,
+            "host": settings.host,
             "session_timeout_seconds": settings.session_timeout_seconds,
             "turn_limit": settings.turn_limit,
             "thinking": settings.thinking,

@@ -10,6 +10,7 @@ import pytest
 from benchmarks.tutorial_comparison import (
     ComparisonError,
     SourceSelection,
+    load_source,
     write_comparison,
 )
 from benchmarks.tutorials import (
@@ -86,11 +87,21 @@ def test_comparison_combines_balanced_sources_and_retains_provenance(tmp_path):
     assert str(small.resolve()) in report
     assert "- Timing caveat." in report
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["host"] == "http://127.0.0.1:11434"
     assert manifest["sources"] == [
         {"path": str(small.resolve()), "selected_models": []},
         {"path": str(large.resolve()), "selected_models": []},
     ]
     assert manifest["notes"] == ["Timing caveat."]
+    loaded = load_source(SourceSelection(output))
+    assert len(loaded.results) == 6
+    assert loaded.trace_rows == 0
+    assert loaded.response_rows == 0
+
+    manifest.pop("host")
+    (output / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    legacy = load_source(SourceSelection(output))
+    assert legacy.manifest.host == ""
 
 
 def test_comparison_rejects_an_unbalanced_matrix(tmp_path):
