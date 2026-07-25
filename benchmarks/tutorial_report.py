@@ -480,14 +480,18 @@ def _model_rows(
                 response_rows=model_usage.response_rows,
             )
         )
-    cohort_mode = any(row.cohort is not None for row in rows)
+    cohort_rank = {
+        cohort: index
+        for index, cohort in enumerate(
+            dict.fromkeys(labeled.cohort for labeled in results)
+        )
+    }
 
-    def sort_key(row: ModelRow) -> tuple[str, int, float, str]:
+    def sort_key(row: ModelRow) -> tuple[str, str, int]:
         return (
-            (row.cohort or "") if cohort_mode else "",
-            -row.passes,
-            -(row.milestone_hits / row.milestone_possible if row.milestone_possible else 0),
+            row.model.casefold(),
             row.model,
+            cohort_rank[row.cohort],
         )
 
     return tuple(sorted(rows, key=sort_key))
@@ -736,6 +740,13 @@ def _comparison_table(rows: Sequence[ModelRow]) -> str:
 
 
 def _difficulty_rows(results: Sequence[LabeledResult]) -> tuple[DifficultyRow, ...]:
+    cohort_rank = {
+        cohort: index
+        for index, cohort in enumerate(
+            dict.fromkeys(item.cohort for item in results)
+        )
+    }
+    tutorial_rank = {name: index for index, name in enumerate(TUTORIAL_MAPS)}
     cells: dict[tuple[str | None, str, str], list[SessionResult]] = defaultdict(list)
     for item in results:
         cells[(item.cohort, item.result.tutorial, item.result.model)].append(item.result)
@@ -755,7 +766,16 @@ def _difficulty_rows(results: Sequence[LabeledResult]) -> tuple[DifficultyRow, .
         )
         for (cohort, tutorial), pass_counts in grouped.items()
     )
-    return tuple(sorted(rows, key=lambda row: ((row.cohort or ""), row.tutorial)))
+    return tuple(
+        sorted(
+            rows,
+            key=lambda row: (
+                tutorial_rank.get(row.tutorial, len(tutorial_rank)),
+                row.tutorial,
+                cohort_rank[row.cohort],
+            ),
+        )
+    )
 
 
 def _difficulty_table(rows: Sequence[DifficultyRow]) -> str:
@@ -870,16 +890,25 @@ def _cohort_delta_rows(
                     )
                 )
     cohort_rank = {cohort: index for index, cohort in enumerate(cohort_order)}
+    ordered_aggregate_rows = sorted(
+        aggregate_rows,
+        key=lambda row: (
+            tutorial_rank.get(row.tutorial, len(tutorial_rank)),
+            row.tutorial,
+            cohort_rank[row.before_cohort],
+        ),
+    )
     ordered_model_rows = sorted(
         model_rows,
         key=lambda row: (
-            cohort_rank[row.before_cohort],
+            (row.model or "").casefold(),
             row.model or "",
             tutorial_rank.get(row.tutorial, len(tutorial_rank)),
             row.tutorial,
+            cohort_rank[row.before_cohort],
         ),
     )
-    return tuple(aggregate_rows), tuple(ordered_model_rows)
+    return tuple(ordered_aggregate_rows), tuple(ordered_model_rows)
 
 
 def _pass_rate_cell(passes: int | None, sessions: int | None) -> str:

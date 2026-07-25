@@ -131,6 +131,35 @@ def _single_cell_source(path: Path) -> None:
     )
 
 
+def _complete_source(path: Path) -> None:
+    tutorials = ("apple", "bell", "clover")
+    models = ("small", "large")
+    results = tuple(
+        _result(model, tutorial, passed=model == "large", run=run)
+        for model in models
+        for tutorial in tutorials
+        for run in range(1, 6)
+    )
+    metadata = (
+        ModelMetadata("small", parameter_count=4_000_000_000),
+        ModelMetadata("large", parameter_count=20_000_000_000),
+    )
+    config = BenchmarkConfig(
+        models=models,
+        tutorials=tutorials,
+        sessions=5,
+        output=path,
+    )
+    write_artifacts(
+        config,
+        summarize(results, metadata, tutorials),
+        results,
+        (),
+        (),
+        metadata,
+    )
+
+
 def _as_schema_five_baseline(path: Path) -> None:
     manifest_path = path / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -238,6 +267,41 @@ def test_report_classifies_possible_likely_and_consistent_passes(tmp_path):
     assert "[#text(\"3/4\")]" in typst
 
 
+def test_cohort_difficulty_table_sorts_by_tutorial_then_version(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    third = tmp_path / "third"
+    output = tmp_path / "report"
+    _complete_source(first)
+    _complete_source(second)
+    _complete_source(third)
+
+    build_report(
+        (),
+        output,
+        title="Ordered cohorts",
+        cohorts=(
+            CohortInput("v1", first),
+            CohortInput("v2", second),
+            CohortInput("v3", third),
+        ),
+    )
+
+    markdown = (output / "report.md").read_text(encoding="utf-8")
+    difficulty = markdown.split("## Difficulty distribution", maxsplit=1)[1].split(
+        "## Cohort deltas", maxsplit=1
+    )[0]
+    assert difficulty.index("| `v1` | `apple` |") < difficulty.index(
+        "| `v2` | `apple` |"
+    )
+    assert difficulty.index("| `v2` | `apple` |") < difficulty.index(
+        "| `v3` | `apple` |"
+    )
+    assert difficulty.index("| `v3` | `apple` |") < difficulty.index(
+        "| `v1` | `bell` |"
+    )
+
+
 def test_cohort_report_separates_versions_and_styles_replacement_columns(tmp_path):
     baseline = tmp_path / "baseline"
     post_one = tmp_path / "post-one"
@@ -273,6 +337,39 @@ def test_cohort_report_separates_versions_and_styles_replacement_columns(tmp_pat
     assert "## Cohort deltas" in markdown
     assert "| `v1 → v2` | `apple` | 1/2 (50.0%) | 2/4 (50.0%) | +0.0 pp |" in markdown
     assert "| `v2 → v3` | `small` | `bell` | 0/2 (0.0%) | — | — |" in markdown
+    aggregate_deltas = markdown.split("### Tutorial totals", maxsplit=1)[1].split(
+        "### Matching model/tutorial cells", maxsplit=1
+    )[0]
+    assert aggregate_deltas.index(
+        "| `v1 → v2` | `bell` |"
+    ) < aggregate_deltas.index("| `v2 → v3` | `bell` |")
+    assert aggregate_deltas.index(
+        "| `v2 → v3` | `bell` |"
+    ) < aggregate_deltas.index("| `v1 → v2` | `clover` |")
+    for table_name in ("comparison-table.md", "token-stats.md"):
+        table = (output / table_name).read_text(encoding="utf-8")
+        assert table.index("| `v1` | `large` |") < table.index(
+            "| `v2` | `large` |"
+        )
+        assert table.index("| `v2` | `large` |") < table.index(
+            "| `v3` | `large` |"
+        )
+        assert table.index("| `v3` | `large` |") < table.index(
+            "| `v1` | `small` |"
+        )
+    model_deltas = markdown.split("### Matching model/tutorial cells", maxsplit=1)[1]
+    assert model_deltas.index(
+        "| `v1 → v2` | `large` | `apple` |"
+    ) < model_deltas.index("| `v1 → v2` | `large` | `bell` |")
+    assert model_deltas.index(
+        "| `v1 → v2` | `large` | `bell` |"
+    ) < model_deltas.index("| `v2 → v3` | `large` | `bell` |")
+    assert model_deltas.index(
+        "| `v2 → v3` | `large` | `bell` |"
+    ) < model_deltas.index("| `v1 → v2` | `large` | `clover` |")
+    assert model_deltas.index(
+        "| `v1 → v2` | `large` | `clover` |"
+    ) < model_deltas.index("| `v1 → v2` | `small` | `apple` |")
     heatmap = (output / "diagrams/apple-milestones.svg").read_text(encoding="utf-8")
     assert "large / v1" in heatmap
     assert "large / v2" in heatmap
