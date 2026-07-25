@@ -90,6 +90,33 @@ class DifficultyRow:
 
 
 @dataclass(frozen=True)
+class CohortDeltaRow:
+    before_cohort: str
+    after_cohort: str
+    tutorial: str
+    model: str | None
+    before_passes: int | None
+    before_sessions: int | None
+    after_passes: int | None
+    after_sessions: int | None
+
+    @property
+    def delta_percentage_points(self) -> float | None:
+        if (
+            self.before_passes is None
+            or self.before_sessions is None
+            or not self.before_sessions
+            or self.after_passes is None
+            or self.after_sessions is None
+            or not self.after_sessions
+        ):
+            return None
+        before_rate = self.before_passes / self.before_sessions
+        after_rate = self.after_passes / self.after_sessions
+        return 100 * (after_rate - before_rate)
+
+
+@dataclass(frozen=True)
 class ResponseUsage:
     input_tokens: int
     output_tokens: int
@@ -763,6 +790,150 @@ def _difficulty_table(rows: Sequence[DifficultyRow]) -> str:
     return "\n".join(lines)
 
 
+def _cohort_delta_rows(
+    results: Sequence[LabeledResult],
+    cohort_order: Sequence[str],
+) -> tuple[tuple[CohortDeltaRow, ...], tuple[CohortDeltaRow, ...]]:
+    cells: dict[tuple[str, str, str], list[SessionResult]] = defaultdict(list)
+    tutorials_by_cohort: dict[str, set[str]] = defaultdict(set)
+    for item in results:
+        if item.cohort is None:
+            continue
+        key = (item.cohort, item.result.tutorial, item.result.model)
+        cells[key].append(item.result)
+        tutorials_by_cohort[item.cohort].add(item.result.tutorial)
+
+    aggregate_rows: list[CohortDeltaRow] = []
+    model_rows: list[CohortDeltaRow] = []
+    tutorial_rank = {name: index for index, name in enumerate(TUTORIAL_MAPS)}
+    for before, after in zip(cohort_order, cohort_order[1:], strict=False):
+        shared_tutorials = tutorials_by_cohort[before].intersection(
+            tutorials_by_cohort[after]
+        )
+        for tutorial in sorted(
+            shared_tutorials,
+            key=lambda name: (tutorial_rank.get(name, len(tutorial_rank)), name),
+        ):
+            before_cells = {
+                model: sessions
+                for (cohort, cell_tutorial, model), sessions in cells.items()
+                if cohort == before and cell_tutorial == tutorial
+            }
+            after_cells = {
+                model: sessions
+                for (cohort, cell_tutorial, model), sessions in cells.items()
+                if cohort == after and cell_tutorial == tutorial
+            }
+            before_sessions = tuple(
+                result for sessions in before_cells.values() for result in sessions
+            )
+            after_sessions = tuple(
+                result for sessions in after_cells.values() for result in sessions
+            )
+            aggregate_rows.append(
+                CohortDeltaRow(
+                    before_cohort=before,
+                    after_cohort=after,
+                    tutorial=tutorial,
+                    model=None,
+                    before_passes=sum(result.passed for result in before_sessions),
+                    before_sessions=len(before_sessions),
+                    after_passes=sum(result.passed for result in after_sessions),
+                    after_sessions=len(after_sessions),
+                )
+            )
+            for model in sorted(before_cells.keys() | after_cells.keys()):
+                before_model = before_cells.get(model)
+                after_model = after_cells.get(model)
+                model_rows.append(
+                    CohortDeltaRow(
+                        before_cohort=before,
+                        after_cohort=after,
+                        tutorial=tutorial,
+                        model=model,
+                        before_passes=(
+                            sum(result.passed for result in before_model)
+                            if before_model is not None
+                            else None
+                        ),
+                        before_sessions=(
+                            len(before_model) if before_model is not None else None
+                        ),
+                        after_passes=(
+                            sum(result.passed for result in after_model)
+                            if after_model is not None
+                            else None
+                        ),
+                        after_sessions=(
+                            len(after_model) if after_model is not None else None
+                        ),
+                    )
+                )
+    cohort_rank = {cohort: index for index, cohort in enumerate(cohort_order)}
+    ordered_model_rows = sorted(
+        model_rows,
+        key=lambda row: (
+            cohort_rank[row.before_cohort],
+            row.model or "",
+            tutorial_rank.get(row.tutorial, len(tutorial_rank)),
+            row.tutorial,
+        ),
+    )
+    return tuple(aggregate_rows), tuple(ordered_model_rows)
+
+
+def _pass_rate_cell(passes: int | None, sessions: int | None) -> str:
+    if passes is None or sessions is None or not sessions:
+        return "—"
+    return f"{passes}/{sessions} ({passes / sessions:.1%})"
+
+
+def _delta_cell(row: CohortDeltaRow) -> str:
+    delta = row.delta_percentage_points
+    if delta is None:
+        return "—"
+    return f"{delta:+.1f} pp"
+
+
+def _cohort_delta_table(
+    aggregate_rows: Sequence[CohortDeltaRow],
+    model_rows: Sequence[CohortDeltaRow],
+) -> str:
+    if not aggregate_rows:
+        return "At least two cohorts with a shared tutorial are required."
+    lines = [
+        "### Tutorial totals",
+        "",
+        "| Transition | Tutorial | Before | After | Δ pass rate |",
+        "| --- | --- | ---: | ---: | ---: |",
+    ]
+    for row in aggregate_rows:
+        lines.append(
+            f"| `{row.before_cohort} → {row.after_cohort}` | `{row.tutorial}` | "
+            f"{_pass_rate_cell(row.before_passes, row.before_sessions)} | "
+            f"{_pass_rate_cell(row.after_passes, row.after_sessions)} | "
+            f"{_delta_cell(row)} |"
+        )
+    lines.extend(
+        (
+            "",
+            "### Matching model/tutorial cells",
+            "",
+            "| Transition | Model | Tutorial | Before | After | Δ pass rate |",
+            "| --- | --- | --- | ---: | ---: | ---: |",
+        )
+    )
+    for row in model_rows:
+        lines.append(
+            f"| `{row.before_cohort} → {row.after_cohort}` | `{row.model}` | "
+            f"`{row.tutorial}` | "
+            f"{_pass_rate_cell(row.before_passes, row.before_sessions)} | "
+            f"{_pass_rate_cell(row.after_passes, row.after_sessions)} | "
+            f"{_delta_cell(row)} |"
+        )
+    return "\n".join(lines)
+
+
 def _token_table(rows: Sequence[ModelRow]) -> str:
     cohort_mode = any(row.cohort is not None for row in rows)
     lines = (
@@ -830,6 +1001,8 @@ def _typst_report(
     title: str,
     rows: Sequence[ModelRow],
     difficulty_rows: Sequence[DifficultyRow],
+    aggregate_deltas: Sequence[CohortDeltaRow],
+    model_deltas: Sequence[CohortDeltaRow],
     diagrams: Sequence[str],
     sources: Sequence[str],
 ) -> str:
@@ -912,6 +1085,65 @@ def _typst_report(
         if difficulty_rows
         else (_typst_text("No complete five-session model/tutorial cells were available."),)
     )
+    delta_block: tuple[str, ...]
+    if aggregate_deltas:
+        aggregate_cells = [
+            "[*Transition*]",
+            "[*Tutorial*]",
+            "[*Before*]",
+            "[*After*]",
+            "[*Delta*]",
+        ]
+        for row in aggregate_deltas:
+            values = (
+                f"{row.before_cohort} → {row.after_cohort}",
+                row.tutorial,
+                _pass_rate_cell(row.before_passes, row.before_sessions),
+                _pass_rate_cell(row.after_passes, row.after_sessions),
+                _delta_cell(row),
+            )
+            aggregate_cells.extend(f"[{_typst_text(value)}]" for value in values)
+        model_cells = [
+            "[*Transition*]",
+            "[*Model*]",
+            "[*Tutorial*]",
+            "[*Before*]",
+            "[*After*]",
+            "[*Delta*]",
+        ]
+        for row in model_deltas:
+            values = (
+                f"{row.before_cohort} → {row.after_cohort}",
+                row.model or "",
+                row.tutorial,
+                _pass_rate_cell(row.before_passes, row.before_sessions),
+                _pass_rate_cell(row.after_passes, row.after_sessions),
+                _delta_cell(row),
+            )
+            model_cells.extend(f"[{_typst_text(value)}]" for value in values)
+        delta_block = (
+            "=== Tutorial totals",
+            "#table(",
+            "  columns: (1.2fr, 1fr, 1fr, 1fr, 1fr),",
+            "  inset: 5pt,",
+            '  stroke: 0.5pt + rgb("ccd3dc"),',
+            "  " + ",\n  ".join(aggregate_cells),
+            ")",
+            "#pagebreak()",
+            "=== Matching model/tutorial cells",
+            "#set text(size: 7pt)",
+            "#table(",
+            "  columns: (1.2fr, 2fr, 1fr, 1fr, 1fr, 1fr),",
+            "  inset: 3pt,",
+            '  stroke: 0.5pt + rgb("ccd3dc"),',
+            "  " + ",\n  ".join(model_cells),
+            ")",
+            "#set text(size: 9pt)",
+        )
+    else:
+        delta_block = (
+            _typst_text("At least two cohorts with a shared tutorial are required."),
+        )
     images = []
     for path in diagrams:
         images.extend(
@@ -973,6 +1205,14 @@ def _typst_report(
             "pass at least 4/5. Incomplete cells are excluded.",
             "",
             *difficulty_block,
+            "",
+            "== Cohort deltas",
+            "",
+            "Deltas compare consecutive cohorts in the supplied order. Missing model/cohort "
+            "cells are not treated as failures. Tutorial totals reflect each cohort's "
+            "tested model mix; matching model/tutorial rows are like-for-like.",
+            "",
+            *delta_block,
             *images,
             "",
         )
@@ -1053,6 +1293,12 @@ def build_report(
         )
     rows = _model_rows(results, _model_usage(labeled_sources))
     difficulty_rows = _difficulty_rows(results)
+    cohort_order = tuple(
+        dict.fromkeys(
+            cohort for cohort, _source in labeled_sources if cohort is not None
+        )
+    )
+    aggregate_deltas, model_deltas = _cohort_delta_rows(results, cohort_order)
     template = (Path(__file__).parent / "templates" / "tutorial_report.md").read_text(
         encoding="utf-8"
     )
@@ -1075,6 +1321,10 @@ def build_report(
         .replace("{{COMPARISON_TABLE}}", _comparison_table(rows))
         .replace("{{DIFFICULTY_TABLE}}", _difficulty_table(difficulty_rows))
         .replace(
+            "{{COHORT_DELTAS}}",
+            _cohort_delta_table(aggregate_deltas, model_deltas),
+        )
+        .replace(
             "{{DIAGRAMS}}",
             "\n\n".join(f"![{Path(path).stem}]({path})" for path in diagram_paths),
         )
@@ -1085,6 +1335,8 @@ def build_report(
             title,
             rows,
             difficulty_rows,
+            aggregate_deltas,
+            model_deltas,
             diagram_paths,
             tuple(
                 f"{cohort} / {source.path.name}" if cohort is not None else source.path.name

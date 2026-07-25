@@ -112,6 +112,25 @@ def _threshold_source(path: Path) -> None:
     )
 
 
+def _single_cell_source(path: Path) -> None:
+    result = _result("large", "bell", passed=True)
+    metadata = (ModelMetadata("large", parameter_count=20_000_000_000),)
+    config = BenchmarkConfig(
+        models=("large",),
+        tutorials=("bell",),
+        sessions=1,
+        output=path,
+    )
+    write_artifacts(
+        config,
+        summarize((result,), metadata, ("bell",)),
+        (result,),
+        (),
+        (),
+        metadata,
+    )
+
+
 def _as_schema_five_baseline(path: Path) -> None:
     manifest_path = path / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -223,10 +242,12 @@ def test_cohort_report_separates_versions_and_styles_replacement_columns(tmp_pat
     baseline = tmp_path / "baseline"
     post_one = tmp_path / "post-one"
     post_two = tmp_path / "post-two"
+    latest = tmp_path / "latest"
     output = tmp_path / "report"
     _source(baseline)
     _source(post_one)
     _source(post_two)
+    _single_cell_source(latest)
     _as_schema_five_baseline(baseline)
     _use_replacement_milestones(post_one)
     _use_replacement_milestones(post_two)
@@ -236,23 +257,27 @@ def test_cohort_report_separates_versions_and_styles_replacement_columns(tmp_pat
         output,
         title="Before and after",
         cohorts=(
-            CohortInput("baseline", baseline),
-            CohortInput("post-fix", post_one),
-            CohortInput("post-fix", post_two),
+            CohortInput("v1", baseline),
+            CohortInput("v2", post_one),
+            CohortInput("v2", post_two),
+            CohortInput("v3", latest),
         ),
     )
 
     markdown = (output / "report.md").read_text(encoding="utf-8")
     assert "| Cohort | Model | Passes |" in markdown
-    assert "| `baseline` | `large` |" in markdown
-    assert "| `post-fix` | `large` |" in markdown
-    assert "`post-fix` / `post-one`" in markdown
-    assert "`post-fix` / `post-two`" in markdown
+    assert "| `v1` | `large` |" in markdown
+    assert "| `v2` | `large` |" in markdown
+    assert "`v2` / `post-one`" in markdown
+    assert "`v2` / `post-two`" in markdown
+    assert "## Cohort deltas" in markdown
+    assert "| `v1 → v2` | `apple` | 1/2 (50.0%) | 2/4 (50.0%) | +0.0 pp |" in markdown
+    assert "| `v2 → v3` | `small` | `bell` | 0/2 (0.0%) | — | — |" in markdown
     heatmap = (output / "diagrams/apple-milestones.svg").read_text(encoding="utf-8")
-    assert "large / baseline" in heatmap
-    assert "large / post-fix" in heatmap
-    assert heatmap.index("large / baseline") < heatmap.index("large / post-fix")
-    assert heatmap.index("large / post-fix") < heatmap.index("small / baseline")
+    assert "large / v1" in heatmap
+    assert "large / v2" in heatmap
+    assert heatmap.index("large / v1") < heatmap.index("large / v2")
+    assert heatmap.index("large / v2") < heatmap.index("small / v1")
     assert "replaced-column" in heatmap
     assert "replacement-column" in heatmap
     assert "opacity:.72" in heatmap
@@ -263,6 +288,10 @@ def test_cohort_report_separates_versions_and_styles_replacement_columns(tmp_pat
     assert "Completed sessions · ColorBrewer RdYlGn" in heatmap
     for color in ("#d73027", "#fc8d59", "#fee08b", "#d9ef8b", "#91cf60", "#1a9850"):
         assert color in heatmap
+    typst = (output / "report.typ").read_text(encoding="utf-8")
+    assert "== Cohort deltas" in typst
+    assert '#text("v1 → v2")' in typst
+    assert '#text("—")' in typst
 
 
 def test_non_cohort_report_rejects_mixed_schema_versions(tmp_path):

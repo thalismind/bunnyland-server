@@ -31,6 +31,14 @@ Possible pass means at least 1/5, likely pass at least 3/5, and consistent pass 
 
 {{DIFFICULTY_TABLE}}
 
+## Cohort deltas
+
+Deltas compare consecutive cohorts in the supplied order. Missing model/cohort cells are
+shown as an em dash and are not treated as failures. Tutorial totals reflect each cohort's
+tested model mix; matching model/tutorial rows provide the like-for-like comparison.
+
+{{COHORT_DELTAS}}
+
 ## Tutorial maps and milestone heatmaps
 
 Heatmap cells show completed sessions per model. The first row shows how many tested models
