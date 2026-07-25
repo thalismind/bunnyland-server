@@ -293,12 +293,14 @@ class InspectHandler:
             facts = tuple(
                 {"key": fact.key, "text": fact.text, "detail": fact.detail} for fact in projected
             )
+        character_room_id = container_of(character)
         return planned(
             MutationPlan(),
             EntityInspectedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=command.character_id,
+                    room_id=str(character_room_id) if character_room_id is not None else None,
                     target_ids=(str(target_id),),
                     entity_id=str(target_id),
                     name=name,

@@ -8,7 +8,12 @@ from relics import Component, Entity
 from bunnyland.foundation.consumables.components import FoodComponent
 from bunnyland.foundation.needs.mechanics import HungerComponent
 
-from ...core.components import IdentityComponent, ReadableComponent, RoomComponent
+from ...core.components import (
+    ContainerComponent,
+    IdentityComponent,
+    ReadableComponent,
+    RoomComponent,
+)
 from ...core.ecs import container_of, contents, entity_name, parse_entity_id, reachable_ids
 from ...core.edges import ControlledBy
 from ...core.events import SpeechSaidEvent, SpeechToldEvent
@@ -125,6 +130,8 @@ class HungryCourierAgent:
         if self._is_hungry(character):
             food = self._reachable_food(character)
             if food is not None:
+                if food.id not in reachable_ids(self.dispatch.actor.world, character):
+                    return ToolCall("take", {"item_id": entity_name(food)})
                 return ToolCall("eat", {"item_id": entity_name(food)})
             return ToolCall(
                 "say",
@@ -146,7 +153,10 @@ class HungryCourierAgent:
             return ToolCall(
                 "say",
                 {
-                    "text": "I am ready to go, but the courier letter is not where I can reach it.",
+                    "text": (
+                        "I am ready to go, but the courier letter is not where I can reach it. "
+                        "If you picked it up, drop it here in Apple Crossing so I can take it."
+                    ),
                     "intent": "request",
                     "approach": "worried",
                 },
@@ -215,11 +225,29 @@ class HungryCourierAgent:
         return hunger.value >= hunger.warning_at
 
     def _reachable_food(self, character: Entity) -> Entity | None:
-        named = self._reachable_match(character, self.component.food_query)
-        if named is not None and named.has_component(FoodComponent):
-            return named
-        for entity_id in reachable_ids(self.dispatch.actor.world, character):
-            entity = self.dispatch.actor.world.get_entity(entity_id)
+        world = self.dispatch.actor.world
+        candidate_ids = reachable_ids(world, character)
+        room = self._room(character)
+        if room is not None:
+            for container_id in contents(room):
+                if not world.has_entity(container_id):
+                    continue
+                container = world.get_entity(container_id)
+                if not container.has_component(ContainerComponent):
+                    continue
+                state = container.get_component(ContainerComponent)
+                if not state.open or state.locked or not state.allow_remove:
+                    continue
+                candidate_ids.update(
+                    item_id for item_id in contents(container) if world.has_entity(item_id)
+                )
+        query_key = self.component.food_query.lower()
+        for entity_id in sorted(candidate_ids, key=str):
+            entity = world.get_entity(entity_id)
+            if entity.has_component(FoodComponent) and self._matches(entity, query_key):
+                return entity
+        for entity_id in sorted(candidate_ids, key=str):
+            entity = world.get_entity(entity_id)
             if entity.has_component(FoodComponent):
                 return entity
         return None

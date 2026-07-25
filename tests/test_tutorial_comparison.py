@@ -14,6 +14,7 @@ from benchmarks.tutorial_comparison import (
     write_comparison,
 )
 from benchmarks.tutorials import (
+    MILESTONE_REPLACEMENTS,
     SCHEMA_VERSION,
     BenchmarkConfig,
     ModelMetadata,
@@ -93,6 +94,7 @@ def test_comparison_combines_balanced_sources_and_retains_provenance(tmp_path):
         {"path": str(large.resolve()), "selected_models": []},
     ]
     assert manifest["notes"] == ["Timing caveat."]
+    assert manifest["milestone_replacements"] == MILESTONE_REPLACEMENTS
     loaded = load_source(SourceSelection(output))
     assert len(loaded.results) == 6
     assert loaded.trace_rows == 0
@@ -112,6 +114,33 @@ def test_comparison_rejects_an_unbalanced_matrix(tmp_path):
 
     with pytest.raises(ComparisonError, match="missing cells"):
         write_comparison((SourceSelection(source),), tmp_path / "comparison")
+
+
+def test_comparison_rejects_mixed_benchmark_schema_versions(tmp_path):
+    baseline = tmp_path / "baseline"
+    current = tmp_path / "current"
+    _source(baseline, "baseline-model", passed=False)
+    _source(current, "current-model", passed=True)
+    manifest_path = baseline / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = 5
+    manifest.pop("milestone_replacements")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    session_path = baseline / "sessions.jsonl"
+    sessions = [
+        {**json.loads(line), "schema_version": 5}
+        for line in session_path.read_text(encoding="utf-8").splitlines()
+    ]
+    session_path.write_text(
+        "".join(json.dumps(session) + "\n" for session in sessions),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ComparisonError, match="schema_version"):
+        write_comparison(
+            (SourceSelection(baseline), SourceSelection(current)),
+            tmp_path / "comparison",
+        )
 
 
 def test_comparison_can_keep_first_n_sessions_per_cell(tmp_path):

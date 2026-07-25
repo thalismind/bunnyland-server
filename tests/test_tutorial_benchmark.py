@@ -19,6 +19,7 @@ from benchmarks.tutorials import (
     ProviderBenchmarkError,
     SessionResult,
     TurnTrace,
+    _build_session,
     preflight_ollama_models,
     preflight_openrouter_models,
     render_report,
@@ -28,36 +29,51 @@ from benchmarks.tutorials import (
     tutorial_scenarios,
     write_artifacts,
 )
+from bunnyland.core import (
+    ContainmentMode,
+    Contains,
+    IdentityComponent,
+    RoomComponent,
+)
+from bunnyland.core.events import (
+    ActorMovedEvent,
+    EntityInspectedEvent,
+    EventVisibility,
+    RoomLookedEvent,
+    SpeechSaidEvent,
+    SpeechToldEvent,
+    event_base,
+)
+from bunnyland.foundation.needs.mechanics import FoodEatenEvent
 from bunnyland.llm_agents import InvalidAgentResponse, ScriptedAgent, ToolCall
 
 
 def _apple_calls() -> tuple[ToolCall, ...]:
     return (
-        ToolCall("look", {}),
         ToolCall("move", {"direction": "east"}),
         ToolCall("take", {"item_id": "red crossing apple"}),
         ToolCall("move", {"direction": "west"}),
         ToolCall("drop", {"item_id": "red crossing apple"}),
-        *(ToolCall("wait", {}) for _ in range(10)),
+        ToolCall("inspect", {"target_id": "Apple Crossing notice board"}),
+        ToolCall("move", {"direction": "south"}),
+        ToolCall("move", {"direction": "west"}),
+        ToolCall("move", {"direction": "in"}),
+        ToolCall("inspect", {"target_id": "delivery ledger"}),
     )
 
 
 def _bell_calls() -> tuple[ToolCall, ...]:
     return (
-        ToolCall("look", {}),
         ToolCall("inspect", {"target_id": "central notice board"}),
-        ToolCall("inspect", {"target_id": "community mailbox"}),
+        ToolCall("open", {"target_id": "community mailbox"}),
         ToolCall("move", {"direction": "north"}),
-        ToolCall("look", {}),
         ToolCall("inspect", {"target_id": "sorted letters"}),
         ToolCall("say", {"text": "Hello!", "intent": "greet"}),
         ToolCall("move", {"direction": "south"}),
         ToolCall("move", {"direction": "east"}),
-        ToolCall("look", {}),
         ToolCall("take", {"item_id": "harvest basket"}),
         ToolCall("move", {"direction": "west"}),
         ToolCall("move", {"direction": "south"}),
-        ToolCall("look", {}),
         ToolCall("move", {"direction": "north"}),
         ToolCall("move", {"direction": "east"}),
         ToolCall("move", {"direction": "south"}),
@@ -67,38 +83,29 @@ def _bell_calls() -> tuple[ToolCall, ...]:
 
 def _clover_calls() -> tuple[ToolCall, ...]:
     return (
-        ToolCall("look", {}),
         ToolCall("inspect", {"target_id": "daily bulletin"}),
         ToolCall("move", {"direction": "east"}),
-        ToolCall("look", {}),
-        ToolCall("inspect", {"target_id": "parcel locker"}),
+        ToolCall("open", {"target_id": "parcel locker"}),
         ToolCall("move", {"direction": "west"}),
         ToolCall("move", {"direction": "north"}),
-        ToolCall("look", {}),
         ToolCall("move", {"direction": "south"}),
         ToolCall("move", {"direction": "south"}),
-        ToolCall("look", {}),
         ToolCall("move", {"direction": "west"}),
-        ToolCall("look", {}),
         ToolCall("move", {"direction": "east"}),
         ToolCall("move", {"direction": "east"}),
-        ToolCall("look", {}),
         ToolCall("move", {"direction": "west"}),
         ToolCall("move", {"direction": "north"}),
         ToolCall("move", {"direction": "west"}),
         ToolCall("move", {"direction": "up"}),
-        ToolCall("look", {}),
         ToolCall("move", {"direction": "down"}),
         ToolCall("move", {"direction": "east"}),
         ToolCall("move", {"direction": "southeast"}),
-        ToolCall("look", {}),
         ToolCall("inspect", {"target_id": "incident log"}),
         ToolCall("move", {"direction": "northwest"}),
         ToolCall("move", {"direction": "out"}),
-        ToolCall("look", {}),
-        ToolCall("wait", {}),
-        ToolCall("wait", {}),
-        ToolCall("wait", {}),
+        ToolCall("inspect", {"target_id": "Street Stop timetable"}),
+        ToolCall("inspect", {"target_id": "Rook Vale"}),
+        ToolCall("say", {"text": "What is the posted route?", "intent": "ask"}),
     )
 
 
@@ -123,7 +130,10 @@ async def test_scenarios_score_success_stall_rejection_and_recovery(tutorial):
     )
     assert successful.passed is True
     assert all(passed for _name, passed in successful.milestone_results)
-    assert traces[-1].result_events
+    assert any(trace.result_events for trace in traces)
+    assert all(trace.selected_tool != "wait" for trace in traces)
+    if tutorial in {"apple", "clover"}:
+        assert all(trace.selected_tool != "look" for trace in traces)
 
     stalled, _traces = await run_session(
         scenario,
@@ -336,7 +346,9 @@ async def test_clover_orientation_excludes_systemic_story_obligations_from_promp
 
     assert result.turns == 1
     assert "owes you:" not in traces[0].prompt
-    assert dict(result.milestone_results)["looked_in_clover_city_lobby"] is True
+    milestones = dict(result.milestone_results)
+    assert milestones["oriented_in_clover_city_lobby"] is True
+    assert milestones["observed_world_activity"] is False
 
 
 async def test_starting_room_projection_counts_as_orientation_without_redundant_look():
@@ -350,7 +362,284 @@ async def test_starting_room_projection_counts_as_orientation_without_redundant_
         agent=ScriptedAgent(()),
     )
 
-    assert dict(result.milestone_results)["looked_in_bell_green"] is True
+    assert dict(result.milestone_results)["oriented_in_bell_green"] is True
+
+
+async def test_initial_projection_perceives_apple_scene_without_look():
+    result, traces = await run_session(
+        tutorial_scenarios()["apple"],
+        model="deterministic",
+        provider="ollama-local",
+        run=1,
+        timeout_seconds=5,
+        turn_limit=1,
+        agent=ScriptedAgent(()),
+    )
+
+    milestones = dict(result.milestone_results)
+    assert milestones["oriented_in_apple_crossing"] is True
+    assert milestones["perceived_courier_scene"] is True
+    assert traces[0].selected_tool is None
+
+
+@pytest.mark.parametrize(
+    "handoff",
+    (
+        ToolCall("drop", {"item_id": "red crossing apple"}),
+        ToolCall(
+            "put",
+            {
+                "item_id": "red crossing apple",
+                "target_container_id": "open courier basket",
+            },
+        ),
+        ToolCall(
+            "give_gift",
+            {"item_id": "red crossing apple", "target_id": "Pip Thistle"},
+        ),
+    ),
+    ids=("drop", "accessible-container", "gift"),
+)
+async def test_apple_food_handoffs_make_food_accessible(handoff):
+    result, _traces = await run_session(
+        tutorial_scenarios()["apple"],
+        model="deterministic",
+        provider="ollama-local",
+        run=1,
+        timeout_seconds=5,
+        turn_limit=4,
+        agent=ScriptedAgent(
+            (
+                ToolCall("move", {"direction": "east"}),
+                ToolCall("take", {"item_id": "red crossing apple"}),
+                ToolCall("move", {"direction": "west"}),
+                handoff,
+            )
+        ),
+    )
+
+    assert dict(result.milestone_results)["made_food_accessible_to_pip"] is True
+
+
+async def test_apple_food_in_player_inventory_is_not_accessible():
+    result, _traces = await run_session(
+        tutorial_scenarios()["apple"],
+        model="deterministic",
+        provider="ollama-local",
+        run=1,
+        timeout_seconds=5,
+        turn_limit=5,
+        agent=ScriptedAgent(
+            (
+                ToolCall("move", {"direction": "east"}),
+                ToolCall("take", {"item_id": "red crossing apple"}),
+                ToolCall("move", {"direction": "west"}),
+                ToolCall("inspect", {"target_id": "Pip Thistle"}),
+                ToolCall("inspect", {"target_id": "Apple Crossing notice board"}),
+            )
+        ),
+    )
+
+    milestones = dict(result.milestone_results)
+    assert milestones["made_food_accessible_to_pip"] is False
+    assert milestones["pip_ate_apple"] is False
+
+
+async def test_eventual_consumption_is_authoritative_food_access():
+    scenario = tutorial_scenarios()["apple"]
+    state, _dispatch, _recording = await _build_session(
+        scenario,
+        model="deterministic",
+        provider="ollama-local",
+        seed="food-consumption-evidence",
+        agent=ScriptedAgent(()),
+    )
+    state.events.append(
+        FoodEatenEvent(
+            **event_base(
+                state.actor.epoch,
+                visibility=EventVisibility.ROOM,
+                actor_id=str(state.generated.characters["courier"]),
+                room_id=str(state.generated.rooms["crossing"]),
+                target_ids=(str(state.generated.objects["apple"]),),
+            ),
+            item_id=str(state.generated.objects["apple"]),
+            satiety=55,
+        )
+    )
+    milestone = next(
+        item for item in scenario.milestones if item.name == "made_food_accessible_to_pip"
+    )
+
+    assert milestone.evaluate(state) is True
+
+
+def _perception_event(
+    source: str,
+    *,
+    state,
+    room_key: str,
+    character_key: str,
+):
+    room_id = str(state.generated.rooms[room_key])
+    character_id = str(state.generated.characters[character_key])
+    resident_name = state.actor.world.get_entity(
+        state.generated.characters[character_key]
+    ).get_component(IdentityComponent).name
+    base = event_base(
+        state.actor.epoch,
+        visibility=EventVisibility.PRIVATE,
+        actor_id=state.player_id,
+        room_id=room_id,
+        target_ids=(character_id,),
+    )
+    if source == "arrival":
+        room_title = state.actor.world.get_entity(
+            state.generated.rooms[room_key]
+        ).get_component(RoomComponent).title
+        return ActorMovedEvent(
+            **base,
+            from_room_id=str(state.generated.rooms["lobby"]),
+            to_room_id=room_id,
+            direction="test",
+            arrival_summary=f"{room_title}\nHere: {resident_name}.",
+        )
+    if source == "look":
+        room_title = state.actor.world.get_entity(
+            state.generated.rooms[room_key]
+        ).get_component(RoomComponent).title
+        return RoomLookedEvent(**base, room_title=room_title, summary=resident_name)
+    if source == "inspect":
+        return EntityInspectedEvent(
+            **base,
+            entity_id=character_id,
+            name=resident_name,
+            kind="character",
+        )
+    assert source == "speech"
+    return SpeechToldEvent(**base, text=f"Hello, {resident_name}.")
+
+
+@pytest.mark.parametrize("source", ("arrival", "look", "inspect", "speech"))
+async def test_clover_resident_perception_accepts_authoritative_sources(source):
+    scenario = tutorial_scenarios()["clover"]
+    state, _dispatch, _recording = await _build_session(
+        scenario,
+        model="deterministic",
+        provider="ollama-local",
+        seed=f"resident-{source}",
+        agent=ScriptedAgent(()),
+    )
+    state.initial_room_title = ""
+    state.initial_room_projection = ""
+    state.events.extend(
+        _perception_event(
+            source,
+            state=state,
+            room_key=room_key,
+            character_key=character_key,
+        )
+        for room_key, character_key in (
+            ("mailroom", "pip"),
+            ("laundry", "tavi"),
+            ("kitchen", "wick"),
+        )
+    )
+    milestone = next(
+        item
+        for item in scenario.milestones
+        if item.name == "perceived_three_residents_across_facilities"
+    )
+
+    assert milestone.evaluate(state) is True
+
+
+async def test_clover_repeated_observations_in_one_facility_do_not_count():
+    scenario = tutorial_scenarios()["clover"]
+    state, _dispatch, _recording = await _build_session(
+        scenario,
+        model="deterministic",
+        provider="ollama-local",
+        seed="resident-one-room",
+        agent=ScriptedAgent(()),
+    )
+    state.initial_room_title = ""
+    state.initial_room_projection = ""
+    state.events.extend(
+        _perception_event(
+            "inspect",
+            state=state,
+            room_key="security",
+            character_key=character_key,
+        )
+        for character_key in ("orla", "cress", "orla")
+    )
+    milestone = next(
+        item
+        for item in scenario.milestones
+        if item.name == "perceived_three_residents_across_facilities"
+    )
+
+    assert milestone.evaluate(state) is False
+
+
+async def test_rook_movement_and_route_report_each_count_as_world_activity():
+    scenario = tutorial_scenarios()["clover"]
+    movement_state, _dispatch, _recording = await _build_session(
+        scenario,
+        model="deterministic",
+        provider="ollama-local",
+        seed="rook-movement",
+        agent=ScriptedAgent(()),
+    )
+    player = movement_state.actor.world.get_entity(
+        movement_state.generated.characters["ada"]
+    )
+    lobby = movement_state.actor.world.get_entity(
+        movement_state.generated.rooms["lobby"]
+    )
+    lobby.remove_relationship(Contains, player.id)
+    movement_state.actor.world.get_entity(
+        movement_state.generated.rooms["street"]
+    ).add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), player.id)
+    movement_state.events.append(
+        ActorMovedEvent(
+            **event_base(
+                movement_state.actor.epoch,
+                visibility=EventVisibility.ROOM,
+                actor_id=str(movement_state.generated.characters["rook"]),
+                room_id=str(movement_state.generated.rooms["store"]),
+            ),
+            from_room_id=str(movement_state.generated.rooms["street"]),
+            to_room_id=str(movement_state.generated.rooms["store"]),
+            direction="east",
+        )
+    )
+    milestone = next(
+        item for item in scenario.milestones if item.name == "observed_world_activity"
+    )
+    assert milestone.evaluate(movement_state) is True
+
+    speech_state, _dispatch, _recording = await _build_session(
+        scenario,
+        model="deterministic",
+        provider="ollama-local",
+        seed="rook-speech",
+        agent=ScriptedAgent(()),
+    )
+    speech_state.events.append(
+        SpeechSaidEvent(
+            **event_base(
+                speech_state.actor.epoch,
+                visibility=EventVisibility.ROOM,
+                actor_id=str(speech_state.generated.characters["rook"]),
+                room_id=str(speech_state.generated.rooms["street"]),
+                target_ids=(speech_state.player_id,),
+            ),
+            text="Rook route report — Street Stop: next stop Corner Store.",
+        )
+    )
+    assert milestone.evaluate(speech_state) is True
 
 
 class _FailingAgent:

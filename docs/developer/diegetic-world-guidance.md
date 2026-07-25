@@ -134,20 +134,25 @@ A tutorial ladder should increase planning and world-model demands, not obscurit
 
 Use two complementary acceptance measures:
 
-1. **Onboarding floor:** every tested model family, including small models, completes the
-   tutorial at least once. This catches undiscoverable or brittle requirements.
-2. **Intended-tier reliability:** the target parameter band completes the tutorial
-   consistently, with useful milestone progress per turn and few unrecovered rejections.
+1. **Representative reliability:** preselect one strong, commonly used model for the target
+   parameter class using a public metric such as Hugging Face downloads or likes. That
+   representative should complete at least four of five sessions.
+2. **Cohort distribution:** report how many models achieve a possible pass (at least 1/5), a
+   likely pass (at least 3/5), and a consistent pass (at least 4/5). A 0/5 result is evidence
+   about that model and provider, not by itself proof that the world is undiscoverable.
 
 An initial target may be small 3--4B models for the first tutorial, 7--8B models for the
 second, and 20--25B models for the third. Treat those as hypotheses, not reasons to preserve
-an unpleasant difficulty spike. If nearly every model misses the same milestone, first
+an unpleasant difficulty spike. Choose representatives before reading their tutorial
+outcomes, record the metric source, value, and retrieval date, and do not silently replace a
+representative after a poor result. If nearly every model misses the same milestone, first
 inspect the world's clues, action visibility, and evaluator semantics.
 
 Milestone analysis should report:
 
 - how many models ever reached each milestone;
 - how many sessions reached it;
+- how many complete five-session cells reached possible, likely, and consistent pass;
 - the smallest parameter band reaching it reliably;
 - where characters' notes or dialogue falsely claimed completion;
 - whether the blocker was navigation, interaction semantics, timing, tool formatting, or
@@ -169,4 +174,3 @@ Before shipping a tutorial or authored world:
 - [ ] Completion comes from authoritative state, not a note or dialogue claim.
 - [ ] Human, Discord, terminal, and LLM surfaces preserve the same facts.
 - [ ] Playtests include returning to a location after forgetting the original clue.
-

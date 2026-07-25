@@ -20,6 +20,34 @@ Provider and per-character scheduling fixes belong to those shared gameplay path
 standard game-loop regression coverage; the harness owns only session orchestration,
 scoring, safety limits, and artifacts.
 
+## Five-session difficulty rubric
+
+Use complete five-session cells for tutorial-difficulty decisions:
+
+- **Possible pass:** at least 1/5 sessions pass.
+- **Likely pass:** at least 3/5 sessions pass.
+- **Consistent pass:** at least 4/5 sessions pass.
+
+Preselect one representative for each target parameter class before reading its tutorial
+results. Prefer a strong, commonly used model and record a reproducible public metric such as
+Hugging Face downloads or likes, the source model id, and the retrieval date. The
+representative carries the consistent-pass target. Other models describe the difficulty
+distribution: reports count how many reach possible, likely, and consistent pass rather than
+requiring every family to succeed.
+
+For the server-`5b33e2a69301` research round, the representatives use the Hugging Face
+`downloads` field retrieved 2026-07-24:
+
+- 3--4B: [`Qwen/Qwen3.5-4B`](https://huggingface.co/Qwen/Qwen3.5-4B), 6,665,403 downloads.
+- 7--9B: [`Qwen/Qwen3.5-9B`](https://huggingface.co/Qwen/Qwen3.5-9B), 10,929,128 downloads.
+- 20--35B: [`Qwen/Qwen3.6-35B-A3B`](https://huggingface.co/Qwen/Qwen3.6-35B-A3B),
+  6,460,680 downloads. The tested
+  [`unsloth/Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF)
+  distribution had another 793,190 downloads.
+
+Download counters change over time; the dated values explain selection and are not permanent
+rankings.
+
 ## Running locally
 
 Install the `llm` extra and make sure each requested model already exists in Ollama. A local
@@ -147,9 +175,17 @@ Bell's carry milestone requires the item to be in Bram's inventory after crossin
 boundary. Once authoritatively observed, a milestone remains achieved even if Bram later
 returns the item. Tool selection alone is not success.
 
-The initial full-room prompt projection counts as looking in Bell Green or the Clover City
-Lobby. Requiring a redundant `look` tool call after the character has already received that
-projection would measure command ritual rather than orientation.
+The benchmark captures the initial full-room prompt projection once with the gameplay
+room-fact renderer. That projection, later movement arrival summaries, and optional explicit
+`look` results all count as room perception. Resident perception also accepts inspecting or
+speaking with the resident. Apple food access accepts a room drop, an open same-room
+container, a gift to Pip, or Pip's eventual consumption; carrying the apple nearby does not
+count. Clover activity requires witnessing Rook move through Street Stop or hearing one of
+his co-located route reports, so repeated no-op waits are unnecessary.
+
+Artifact schema 6 records the old-to-new milestone identifier mapping in every manifest.
+Schema-5 baseline artifacts remain immutable and keep their original identifiers and
+completion counts.
 
 The Clover missing-parcel, rooftop-water-shortage, and elevator/noise experiments are not
 part of this model-size benchmark. Continue to use the fixed-snapshot controller experiment
@@ -197,7 +233,8 @@ scripts/compare-tutorial-benchmarks \
 
 Add later batches with more repeatable `--input` options. The comparison command rejects
 missing or unequal model/tutorial cells and incompatible provider settings rather than
-silently producing an unfair ranking. Its report links each source directory, where full
+silently producing an unfair ranking. Schema versions must also match; fair-ranking
+comparisons never mix schema-5 and schema-6 sessions. Its report links each source directory, where full
 prompts, responses, thinking fields, traces, and logs remain unchanged. Traced attempts
 without a completed session row are listed as interrupted evidence and excluded from scores.
 If a mixed source contains superseded trials, select only one model from it with repeatable
@@ -228,6 +265,22 @@ The report builder accepts an in-progress artifact directory and includes only c
 sessions. Rerun the same command after more sessions complete; it replaces the derived report
 files without changing the source traces, responses, logs, or session evidence.
 
+For an explicit before/after analysis across schema versions, use repeatable cohort inputs.
+Multiple paths may share a label and are aggregated under that cohort:
+
+```bash
+scripts/build-tutorial-report \
+  --cohort baseline=artifacts/benchmarks/tutorials/schema-5-baseline \
+  --cohort post-fix=artifacts/benchmarks/tutorials/schema-6-part-one \
+  --cohort post-fix=artifacts/benchmarks/tutorials/schema-6-part-two \
+  --output artifacts/benchmarks/tutorials/before-after \
+  --title "Bunnyland tutorial playability: baseline and post-fix"
+```
+
+Cohort mode groups comparison and token rows by cohort and model. Its heatmaps keep old and
+replacement milestone columns separate, show unavailable cohort cells as em dashes, fade the
+replaced column, outline the replacement, and print the exact identifier mapping.
+
 The generated directory contains:
 
 - `report.md`, the source-linked narrative and embedded SVG diagrams.
@@ -242,6 +295,8 @@ The generated directory contains:
   notes.
 - `diagrams/*-milestones.svg`, heatmaps whose first row counts models that reached each
   milestone at least once and whose remaining rows show session reliability by model.
+- The difficulty-distribution table counts complete cells reaching possible pass (1/5),
+  likely pass (3/5), and consistent pass (4/5) for each cohort and tutorial.
 
 Install [Typst](https://typst.app/open-source/) and render the PDF with:
 

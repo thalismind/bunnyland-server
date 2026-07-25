@@ -26,6 +26,7 @@ from bunnyland.cli_defaults import OLLAMA_CLOUD_HOST
 from bunnyland.core import (
     ActionPointsComponent,
     CharacterComponent,
+    ContainerComponent,
     FocusPointsComponent,
     IdentityComponent,
     LLMControllerComponent,
@@ -42,10 +43,11 @@ from bunnyland.core import (
 )
 from bunnyland.core.events import (
     ActorMovedEvent,
-    CommandExecutedEvent,
+    ContainerOpenedEvent,
     DomainEvent,
     EntityInspectedEvent,
     ItemDroppedEvent,
+    ItemPutEvent,
     ItemTakenEvent,
     RoomLookedEvent,
     SpeechSaidEvent,
@@ -65,7 +67,9 @@ from bunnyland.llm_agents import (
 )
 from bunnyland.llm_agents.dispatch import Decision
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_persona_fragments
+from bunnyland.projections.room_summary import build_room_facts, render_summary
 from bunnyland.prompts.builder import PromptBuilder, PromptContext
+from bunnyland.simpacks.gardensim.mechanics import GiftGivenEvent
 from bunnyland.terminal_config import DEFAULT_OPENROUTER_SERVER_URL, LOCAL_OLLAMA_HOST
 from bunnyland.worldgen import GenOptions
 from bunnyland.worldgen.examples import (
@@ -76,7 +80,16 @@ from bunnyland.worldgen.examples import (
 from bunnyland.worldgen.generators import WorldGenerator
 from bunnyland.worldgen.instantiate import InstantiatedWorld
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
+MILESTONE_REPLACEMENTS = {
+    "looked_in_apple_crossing": "oriented_in_apple_crossing",
+    "saw_courier_scene": "perceived_courier_scene",
+    "left_apple_for_pip": "made_food_accessible_to_pip",
+    "looked_in_bell_green": "oriented_in_bell_green",
+    "looked_in_clover_city_lobby": "oriented_in_clover_city_lobby",
+    "observed_three_residents": "perceived_three_residents_across_facilities",
+    "waited_for_world_activity": "observed_world_activity",
+}
 DEFAULT_SESSIONS = 10
 DEFAULT_TIMEOUT_SECONDS = 600.0
 DEFAULT_TURN_LIMIT = 60
@@ -187,8 +200,9 @@ class TutorialState:
     player_id: str
     events: list[DomainEvent]
     initial_item_rooms: dict[str, str]
+    initial_room_title: str
+    initial_room_projection: str
     turns: int = 0
-    waited_game_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -338,11 +352,30 @@ def _event_for_player(state: TutorialState, event_type: type[DomainEvent]) -> li
     ]
 
 
-def _looked(state: TutorialState, title: str) -> bool:
-    return any(
-        isinstance(event, RoomLookedEvent) and event.room_title == title
-        for event in _event_for_player(state, RoomLookedEvent)
-    )
+def _room_title_by_id(state: TutorialState, room_id: str | None) -> str | None:
+    entity_id = parse_entity_id(room_id)
+    if entity_id is None or not state.actor.world.has_entity(entity_id):
+        return None
+    room = state.actor.world.get_entity(entity_id)
+    if not room.has_component(RoomComponent):
+        return None
+    return room.get_component(RoomComponent).title
+
+
+def _perceived_room_summaries(state: TutorialState) -> tuple[tuple[str, str], ...]:
+    summaries = [(state.initial_room_title, state.initial_room_projection)]
+    for event in state.events:
+        if isinstance(event, ActorMovedEvent) and event.actor_id == state.player_id:
+            title = _room_title_by_id(state, event.to_room_id)
+            if title is not None:
+                summaries.append((title, event.arrival_summary))
+        elif isinstance(event, RoomLookedEvent) and event.actor_id == state.player_id:
+            summaries.append((event.room_title, event.summary))
+    return tuple(summaries)
+
+
+def _perceived_room(state: TutorialState, title: str) -> bool:
+    return any(room_title == title for room_title, _summary in _perceived_room_summaries(state))
 
 
 def _inspected(state: TutorialState, *names: str) -> bool:
@@ -395,6 +428,16 @@ def _entity_id_by_name(state: TutorialState, name: str) -> str | None:
     return None
 
 
+def _entity_name_by_id(state: TutorialState, entity_id: str) -> str | None:
+    parsed = parse_entity_id(entity_id)
+    if parsed is None or not state.actor.world.has_entity(parsed):
+        return None
+    entity = state.actor.world.get_entity(parsed)
+    if not entity.has_component(IdentityComponent):
+        return None
+    return entity.get_component(IdentityComponent).name
+
+
 def _generated_object_id(state: TutorialState, key: str) -> str:
     return str(state.generated.objects[key])
 
@@ -418,11 +461,9 @@ def _apple_milestones() -> tuple[Milestone, ...]:
 
     def crossing_scene(state: TutorialState) -> bool:
         return any(
-            isinstance(event, RoomLookedEvent)
-            and event.actor_id == state.player_id
-            and event.room_title == "Apple Crossing"
-            and all(label in event.summary for label in ("Pip Thistle", "courier letter"))
-            for event in state.events
+            room_title == "Apple Crossing"
+            and all(label in summary for label in ("Pip Thistle", "courier letter"))
+            for room_title, summary in _perceived_room_summaries(state)
         )
 
     def took_apple(state: TutorialState) -> bool:
@@ -434,14 +475,47 @@ def _apple_milestones() -> tuple[Milestone, ...]:
             for event in state.events
         )
 
-    def left_apple(state: TutorialState) -> bool:
+    def made_food_accessible(state: TutorialState) -> bool:
         apple = _generated_object_id(state, "apple")
-        return any(
-            isinstance(event, ItemDroppedEvent)
-            and event.actor_id == state.player_id
-            and event.item_id == apple
-            for event in state.events
-        )
+        pip = _entity_id_by_name(state, "Pip Thistle")
+        crossing = str(state.generated.rooms["crossing"])
+        for event in state.events:
+            if (
+                isinstance(event, ItemDroppedEvent)
+                and event.actor_id == state.player_id
+                and event.item_id == apple
+                and event.room_id_dropped == crossing
+            ):
+                return True
+            if (
+                isinstance(event, ItemPutEvent)
+                and event.actor_id == state.player_id
+                and event.item_id == apple
+            ):
+                container_id = parse_entity_id(event.to_container_id)
+                if container_id is None or not state.actor.world.has_entity(container_id):
+                    continue
+                container = state.actor.world.get_entity(container_id)
+                if (
+                    container.has_component(ContainerComponent)
+                    and container.get_component(ContainerComponent).open
+                    and container_of(container) == state.generated.rooms["crossing"]
+                ):
+                    return True
+            if (
+                isinstance(event, GiftGivenEvent)
+                and event.actor_id == state.player_id
+                and event.item_id == apple
+                and event.target_id == pip
+            ):
+                return True
+            if (
+                isinstance(event, FoodEatenEvent)
+                and event.actor_id == pip
+                and event.item_id == apple
+            ):
+                return True
+        return False
 
     def pip_event(state: TutorialState, event_type: type[DomainEvent], item_key: str) -> bool:
         pip = _entity_id_by_name(state, "Pip Thistle")
@@ -459,8 +533,11 @@ def _apple_milestones() -> tuple[Milestone, ...]:
 
     return (
         Milestone("pippa_introduced_problem", pippa_introduced),
-        Milestone("looked_in_apple_crossing", lambda state: _looked(state, "Apple Crossing")),
-        Milestone("saw_courier_scene", crossing_scene),
+        Milestone(
+            "oriented_in_apple_crossing",
+            lambda state: _perceived_room(state, "Apple Crossing"),
+        ),
+        Milestone("perceived_courier_scene", crossing_scene),
         Milestone("visited_apple_hedge", lambda state: _visited(state, "Apple Hedge")),
         Milestone("took_red_crossing_apple", took_apple),
         Milestone(
@@ -473,7 +550,7 @@ def _apple_milestones() -> tuple[Milestone, ...]:
                 for event in state.events
             ),
         ),
-        Milestone("left_apple_for_pip", left_apple),
+        Milestone("made_food_accessible_to_pip", made_food_accessible),
         Milestone(
             "pip_ate_apple",
             lambda state: pip_event(state, FoodEatenEvent, "apple"),
@@ -541,17 +618,6 @@ def _all_milestones(state: TutorialState, milestones: tuple[Milestone, ...]) -> 
     return all(milestone.evaluate(state) for milestone in milestones)
 
 
-def _is_in_room(state: TutorialState, title: str) -> bool:
-    player_id = parse_entity_id(state.player_id)
-    if player_id is None or not state.actor.world.has_entity(player_id):
-        return False
-    room_id = container_of(state.actor.world.get_entity(player_id))
-    if room_id is None or not state.actor.world.has_entity(room_id):
-        return False
-    room = state.actor.world.get_entity(room_id)
-    return room.has_component(RoomComponent) and room.get_component(RoomComponent).title == title
-
-
 def _prepare_clover_orientation(state: TutorialState) -> None:
     player_id = parse_entity_id(state.player_id)
     if player_id is None:
@@ -564,8 +630,8 @@ def _prepare_clover_orientation(state: TutorialState) -> None:
 def _bell_milestones() -> tuple[Milestone, ...]:
     return (
         Milestone(
-            "looked_in_bell_green",
-            lambda state: _is_in_room(state, "Bell Green") or _looked(state, "Bell Green"),
+            "oriented_in_bell_green",
+            lambda state: _perceived_room(state, "Bell Green"),
         ),
         Milestone(
             "inspected_notice_board",
@@ -580,47 +646,99 @@ def _bell_milestones() -> tuple[Milestone, ...]:
           )),
         Milestone(
             "inspected_mail",
-            lambda state: _inspected(state, "community mailbox", "sorted letters"),
+            lambda state: _interacted_with_fixture(
+                state,
+                ("community mailbox",),
+                ("sorted letters",),
+            ),
         ),
         Milestone("spoke_to_resident", _spoke_to_resident),
         Milestone("carried_item_between_rooms", _carried_item_between_rooms),
     )
 
 
-def _observed_residents_across_facilities(state: TutorialState) -> bool:
+def _interacted_with_fixture(
+    state: TutorialState,
+    fixture_names: tuple[str, ...],
+    readable_content_names: tuple[str, ...] = (),
+) -> bool:
+    if _inspected(state, *fixture_names, *readable_content_names):
+        return True
+    expected = {name.lower() for name in fixture_names}
+    return any(
+        isinstance(event, ContainerOpenedEvent)
+        and event.actor_id == state.player_id
+        and (_entity_name_by_id(state, event.target_id) or "").lower() in expected
+        for event in state.events
+    )
+
+
+def _perceived_residents_across_facilities(state: TutorialState) -> bool:
     observations: set[tuple[str, str]] = set()
-    player_events = _event_for_player(state, RoomLookedEvent)
     residents = {
-        entity.get_component(IdentityComponent).name
+        str(entity.id): entity.get_component(IdentityComponent).name
         for entity in state.actor.world.query().with_all([CharacterComponent]).execute_entities()
         if str(entity.id) != state.player_id and entity.has_component(IdentityComponent)
     }
-    for event in player_events:
-        assert isinstance(event, RoomLookedEvent)
-        for resident in residents:
-            if resident in event.summary:
-                observations.add((event.room_title, resident))
+    for room_title, summary in _perceived_room_summaries(state):
+        for resident in residents.values():
+            if resident in summary:
+                observations.add((room_title, resident))
+    for event in state.events:
+        if (
+            isinstance(event, EntityInspectedEvent)
+            and event.actor_id == state.player_id
+            and event.entity_id in residents
+        ):
+            room_title = _room_title_by_id(state, event.room_id)
+            if room_title is not None:
+                observations.add((room_title, residents[event.entity_id]))
+        if (
+            isinstance(event, (SpeechSaidEvent, SpeechToldEvent))
+            and event.actor_id == state.player_id
+        ):
+            room_title = _room_title_by_id(state, event.room_id)
+            if room_title is None:
+                continue
+            for target_id in event.target_ids:
+                if target_id in residents:
+                    observations.add((room_title, residents[target_id]))
     return len({room for room, _resident in observations}) >= 3 and len(
         {resident for _room, resident in observations}
     ) >= 3
 
 
-def _waited_for_activity(state: TutorialState) -> bool:
-    waits = sum(
-        isinstance(event, CommandExecutedEvent)
-        and event.actor_id == state.player_id
-        and event.command_type == "wait"
+def _observed_world_activity(state: TutorialState) -> bool:
+    rook = _entity_id_by_name(state, "Rook Vale")
+    street = str(state.generated.rooms["street"])
+    player_id = parse_entity_id(state.player_id)
+    player_room = (
+        str(container_of(state.actor.world.get_entity(player_id)))
+        if player_id is not None and state.actor.world.has_entity(player_id)
+        else None
+    )
+    return any(
+        (
+            isinstance(event, ActorMovedEvent)
+            and event.actor_id == rook
+            and street in {event.from_room_id, event.to_room_id}
+            and player_room in {event.from_room_id, event.to_room_id}
+        )
+        or (
+            isinstance(event, SpeechSaidEvent)
+            and event.actor_id == rook
+            and state.player_id in event.target_ids
+            and "route report" in event.text.lower()
+        )
         for event in state.events
     )
-    return waits >= 3 and state.waited_game_seconds >= 3 * TURN_GAME_SECONDS
 
 
 def _clover_milestones() -> tuple[Milestone, ...]:
     return (
         Milestone(
-            "looked_in_clover_city_lobby",
-            lambda state: _is_in_room(state, "Clover City Lobby")
-            or _looked(state, "Clover City Lobby"),
+            "oriented_in_clover_city_lobby",
+            lambda state: _perceived_room(state, "Clover City Lobby"),
         ),
         Milestone("inspected_daily_bulletin", lambda state: _inspected(state, "daily bulletin")),
         *(Milestone(f"visited_{_slug(title)}", lambda state, title=title: _visited(state, title))
@@ -635,10 +753,17 @@ def _clover_milestones() -> tuple[Milestone, ...]:
           )),
         Milestone(
             "inspected_city_record",
-            lambda state: _inspected(state, "parcel locker", "incident log"),
+            lambda state: _interacted_with_fixture(
+                state,
+                ("parcel locker",),
+                ("incident log",),
+            ),
         ),
-        Milestone("observed_three_residents", _observed_residents_across_facilities),
-        Milestone("waited_for_world_activity", _waited_for_activity),
+        Milestone(
+            "perceived_three_residents_across_facilities",
+            _perceived_residents_across_facilities,
+        ),
+        Milestone("observed_world_activity", _observed_world_activity),
     )
 
 
@@ -831,7 +956,22 @@ async def _build_session(
         ),
         recording,
     )
-    state = TutorialState(actor, generated, str(player_id), events, initial_item_rooms)
+    initial_room_id = container_of(player)
+    initial_room_title = ""
+    initial_room_projection = ""
+    if initial_room_id is not None:
+        initial_facts = build_room_facts(actor.world, initial_room_id)
+        initial_room_title = initial_facts.title
+        initial_room_projection = render_summary(initial_facts)
+    state = TutorialState(
+        actor,
+        generated,
+        str(player_id),
+        events,
+        initial_item_rooms,
+        initial_room_title,
+        initial_room_projection,
+    )
     if scenario.prepare is not None:
         scenario.prepare(state)
     return state, dispatch, recording
@@ -922,11 +1062,6 @@ async def run_session(
                 for decision in turn_decisions
             ]
             state.turns = turn
-            if any(
-                decision.selected_action == "wait" and decision.receipt_status == "committed"
-                for decision in turn_decisions
-            ):
-                state.waited_game_seconds += TURN_GAME_SECONDS
             receipt_events = {event.event_id: event for event in state.events}
             achieved_milestones.update(
                 milestone.name for milestone in scenario.milestones if milestone.evaluate(state)
@@ -1369,6 +1504,7 @@ def _manifest(
         "max_output_tokens": config.max_output_tokens,
         "log_thinking": config.log_thinking,
         "repeat_command_guard": config.repeat_command_guard,
+        "milestone_replacements": MILESTONE_REPLACEMENTS,
     }
 
 

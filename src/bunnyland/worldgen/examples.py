@@ -51,8 +51,11 @@ async def hungry_courier_example(actor, seed: str, options: GenOptions) -> Insta
                 {
                     "text": (
                         "Welcome to Apple Crossing. Pip the courier has a letter for Mira, "
-                        "but wants do not bypass world rules. Find an apple, bring it back, "
-                        "and watch what happens."
+                        "but hunger is keeping him here. Apple Hedge is east. Bring back an "
+                        "apple and drop it beside Pip, put it in the open courier basket, or "
+                        "give it to him. Leave Pip's courier letter on the post table; if you "
+                        "pick it up, drop it back here. Then watch Pip take it and follow the "
+                        "route."
                     ),
                     "intent": "inform",
                     "approach": "friendly",
@@ -72,7 +75,8 @@ async def hungry_courier_example(actor, seed: str, options: GenOptions) -> Insta
                 celsius=18.0,
                 description=(
                     "A quiet countryside crossing with a signpost, a bench, and a post "
-                    "table where a courier waits beside a sealed letter."
+                    "table where Pip waits beside his sealed courier letter. Leave that "
+                    "letter on the table for Pip to take after he eats."
                 ),
             ),
             RoomSpec(
@@ -166,6 +170,15 @@ async def hungry_courier_example(actor, seed: str, options: GenOptions) -> Insta
                 portable=False,
             ),
             ObjectSpec(
+                key="courier_basket",
+                room_key="crossing",
+                name="open courier basket",
+                kind="container",
+                portable=False,
+                open=True,
+                description="A fixed open basket where food remains within Pip's reach.",
+            ),
+            ObjectSpec(
                 key="mailbox",
                 room_key="cottage_lane",
                 name="Mira's mailbox",
@@ -223,8 +236,9 @@ async def hungry_courier_example(actor, seed: str, options: GenOptions) -> Insta
             player.id,
             GoalComponent(
                 active_goals=(
-                    "Help Pip deliver the courier letter. Find food at Apple Hedge, "
-                    "bring or leave it where Pip can reach it, then watch Pip act.",
+                    "Help Pip deliver his courier letter without taking it away from him. "
+                    "Find food at Apple Hedge, bring or leave it where Pip can reach it, "
+                    "leave or drop the letter in Apple Crossing for Pip, then watch Pip act.",
                 )
             ),
         )
@@ -244,6 +258,36 @@ async def hungry_courier_example(actor, seed: str, options: GenOptions) -> Insta
             DescriptionComponent(short="A public ledger that records completed deliveries."),
             ReadableComponent(text="Delivery ledger entries:"),
             WritableComponent(remaining_space=1000),
+        )
+        _augment(
+            actor,
+            world.objects["notice_board"],
+            ReadableComponent(
+                title="Apple Crossing Courier Notice",
+                text=(
+                    "Hungry Courier route: Apple Hedge is east. Bring a red crossing apple "
+                    "west to Apple Crossing and make it reachable to Pip by dropping it beside "
+                    "him, putting it in the open courier basket, or giving it to him. Leave "
+                    "Pip's courier letter on the post table; if you picked it up, drop it back "
+                    "in Apple Crossing. Once fed, Pip takes the letter south to Old Footbridge, "
+                    "west to Mira's Cottage Lane, then in to Mira's Cottage. The delivery "
+                    "ledger there records confirmation."
+                ),
+            ),
+        )
+        _augment(
+            actor,
+            world.characters["postmaster"],
+            TutorialGuideComponent(
+                help_text=(
+                    "Apple Hedge is east. Bring its red crossing apple west, then drop it beside "
+                    "Pip, put it in the open courier basket, or give it to Pip. Leave his courier "
+                    "letter on the post table, or drop it back in Apple Crossing if you picked "
+                    "it up. He will take the letter south to Old Footbridge, west to Mira's "
+                    "Cottage Lane, and in to Mira's Cottage; the delivery ledger confirms "
+                    "completion."
+                )
+            ),
         )
         courier = actor.world.get_entity(world.characters["courier"])
         _augment(
@@ -284,8 +328,8 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
                 {
                     "text": (
                         "Welcome to Bell Green. The notice board has a town map and errands. "
-                        "From here the Post Office is north, Garden Walk east, and Hearthwick "
-                        "Inn south. Ask me if you get lost."
+                        "From here Bell Green Post Office is north, Garden Walk east, and "
+                        "Hearthwick Inn south. Ask me if you get lost."
                     ),
                     "intent": "inform",
                     "approach": "friendly",
@@ -304,8 +348,9 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
                 light=0.8,
                 celsius=18.0,
                 description=(
-                    "The town hub gathers a notice board, community mailbox, and four clear "
-                    "roads beneath the bell."
+                    "The town hub gathers a fixed central notice board, a fixed community "
+                    "mailbox, and four clear roads beneath the bell. The Old Bell Shrine route "
+                    "is east to Garden Walk, south to River Footbridge, then east."
                 ),
             ),
             RoomSpec(
@@ -315,7 +360,10 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
                 indoor=True,
                 light=0.7,
                 celsius=20.0,
-                description="Sorted letters and Pippa's counter make this the town mail stop.",
+                description=(
+                    "Pippa's fixed sorted-letter stacks and counter make this the town mail "
+                    "stop; they can be inspected but not carried."
+                ),
             ),
             RoomSpec(
                 key="garden_walk",
@@ -324,7 +372,8 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
                 light=0.9,
                 description=(
                     "Herb beds and a portable harvest basket line the east walk; the river "
-                    "footbridge continues south toward the shrine."
+                    "footbridge continues south toward the shrine. A fixed shrine sign says "
+                    "south to River Footbridge, then east to Old Bell Shrine."
                 ),
             ),
             RoomSpec(
@@ -374,7 +423,10 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
                 title="River Footbridge",
                 biome="river",
                 light=0.75,
-                description="The bridge runs south from Garden Walk; the Old Bell Shrine is east.",
+                description=(
+                    "River Footbridge runs south from Garden Walk. A fixed shrine sign points "
+                    "east to Old Bell Shrine and north to Garden Walk."
+                ),
             ),
             RoomSpec(
                 key="pet_yard",
@@ -437,7 +489,10 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
                 name="community mailbox",
                 kind="container",
                 portable=False,
-                description="An open community box for local mail.",
+                open=False,
+                description=(
+                    "A fixed community mail container; open or inspect it to check local mail."
+                ),
             ),
             ObjectSpec(key="bell", room_key="green", name="town bell", portable=False),
             ObjectSpec(
@@ -450,6 +505,14 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
             ),
             ObjectSpec(key="herbs", room_key="garden_walk", name="herb beds", portable=False),
             ObjectSpec(
+                key="garden_shrine_sign",
+                room_key="garden_walk",
+                name="Garden Walk shrine sign",
+                kind="paper",
+                portable=False,
+                description="A fixed route sign for the Old Bell Shrine.",
+            ),
+            ObjectSpec(
                 key="basket",
                 room_key="garden_walk",
                 name="harvest basket",
@@ -461,6 +524,14 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
             ObjectSpec(key="bench", room_key="workshop", name="workbench", portable=False),
             ObjectSpec(key="stew", room_key="inn", name="stew pot", kind="food", satiety=25.0),
             ObjectSpec(key="bowl", room_key="pet_yard", name="feed bowl", portable=False),
+            ObjectSpec(
+                key="bridge_shrine_sign",
+                room_key="footbridge",
+                name="River Footbridge shrine sign",
+                kind="paper",
+                portable=False,
+                description="A fixed route sign for the Old Bell Shrine.",
+            ),
             ObjectSpec(key="old_bell", room_key="bell_shrine", name="weathered bell"),
             ObjectSpec(key="milestone", room_key="courier_path", name="route milestone"),
         ],
@@ -523,10 +594,32 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
             world.characters["guide"],
             TutorialGuideComponent(
                 help_text=(
-                    "From Bell Green: north reaches the Post Office, east reaches Garden Walk, "
-                    "and south reaches Hearthwick Inn. The Old Bell Shrine is east, south, "
-                    "then east by way of Garden Walk and River Footbridge."
+                    "From Bell Green: the north exit reaches Bell Green Post Office, the east "
+                    "exit reaches Garden Walk, and the south exit reaches Hearthwick Inn. For "
+                    "Old Bell Shrine, take the east exit to Garden Walk, the south exit to "
+                    "River Footbridge, then the east exit to Old Bell Shrine."
                 )
+            ),
+        )
+        _augment(
+            actor,
+            world.objects["garden_shrine_sign"],
+            ReadableComponent(
+                title="Garden Walk Shrine Sign",
+                text=(
+                    "Old Bell Shrine: take the south exit to River Footbridge, then the east "
+                    "exit to Old Bell Shrine."
+                ),
+            ),
+        )
+        _augment(
+            actor,
+            world.objects["bridge_shrine_sign"],
+            ReadableComponent(
+                title="River Footbridge Shrine Sign",
+                text=(
+                    "Old Bell Shrine: take the east exit. Garden Walk: take the north exit."
+                ),
             ),
         )
         _region_stack(
@@ -547,7 +640,8 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
                 {
                     "text": (
                         "Welcome to Clover City. Inspect the directory for facility routes and "
-                        "the daily bulletin for today's activity. Ask me if you need directions."
+                        "the daily bulletin for today's activity. Ask me for the exact shared-"
+                        "facility routes whenever you need them."
                     ),
                     "intent": "inform",
                     "approach": "friendly",
@@ -559,11 +653,25 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
         "clover-street-route",
         (
             ToolCall("move", {"direction": "east"}),
+            ToolCall(
+                "say",
+                {
+                    "text": (
+                        "Rook route report — Corner Store: supplies checked; returning west "
+                        "to Street Stop."
+                    ),
+                    "intent": "inform",
+                    "approach": "plain",
+                },
+            ),
             ToolCall("move", {"direction": "west"}),
             ToolCall(
                 "say",
                 {
-                    "text": "Street check complete; the city keeps moving even when you wait.",
+                    "text": (
+                        "Rook route report — Street Stop: timetable checked; the next stop is "
+                        "east at Corner Store."
+                    ),
                     "intent": "inform",
                     "approach": "plain",
                 },
@@ -613,9 +721,15 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
         ),
         "mailroom": "Parcel lockers and Pip's mail station sit directly east of the lobby.",
         "elevator": "The north lift serves the apartment floors through numbered exits.",
-        "stairwell": "The west stairs lead up to the rooftop and down to the workshop.",
+        "stairwell": (
+            "The west stairs hold a fixed directory: up to Rooftop Garden, down to Basement "
+            "Workshop, and east to Clover City Lobby."
+        ),
         "laundry": "A shared laundry west of the courtyard, with Tavi and a lost-sock basket.",
-        "courtyard": "The central outdoor court connects the kitchen east and laundry west.",
+        "courtyard": (
+            "The central outdoor court holds a fixed directory: east to Community Kitchen, "
+            "west to Laundry Room, and north to Clover City Lobby."
+        ),
         "roof": "A shared rooftop garden and rationed rain barrel sit above the stairwell.",
         "kitchen": "The community kitchen east of the courtyard holds a limited pantry.",
         "workshop": "Jun's basement workshop stores elevator parts below the stairwell.",
@@ -629,7 +743,10 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
         "apt_saffron": "Saffron's private room opens from the elevator's 3B stop.",
         "apt_nettle": "Nettle's private room opens from the elevator's 4A stop.",
         "empty_unit": "An unoccupied fourth-floor unit opens from the elevator's 4B stop.",
-        "street": "The public street outside the lobby connects east to the corner store.",
+        "street": (
+            "The public street outside Clover City Lobby connects east to Corner Store. A "
+            "fixed timetable posts Rook's repeating Street Stop–Corner Store route."
+        ),
     }
     proposal = WorldProposal(
         seed=seed,
@@ -705,13 +822,34 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
                 key="parcels",
                 room_key="mailroom",
                 name="parcel locker",
+                kind="container",
                 portable=False,
-                description="Numbered lockers for resident deliveries and missing-parcel checks.",
+                open=False,
+                description=(
+                    "A fixed closed bank of numbered delivery lockers; open or inspect it for "
+                    "missing-parcel checks."
+                ),
             ),
             ObjectSpec(key="panel", room_key="elevator", name="button panel", portable=False),
             ObjectSpec(key="key", room_key="stairwell", name="dropped key", kind="key"),
+            ObjectSpec(
+                key="stairwell_directory",
+                room_key="stairwell",
+                name="Stairwell directory",
+                kind="paper",
+                portable=False,
+                description="A fixed directory for the stairwell branches.",
+            ),
             ObjectSpec(key="sock", room_key="laundry", name="lost sock basket", portable=False),
             ObjectSpec(key="planters", room_key="courtyard", name="planter boxes"),
+            ObjectSpec(
+                key="courtyard_directory",
+                room_key="courtyard",
+                name="Courtyard directory",
+                kind="paper",
+                portable=False,
+                description="A fixed directory for the courtyard branches.",
+            ),
             ObjectSpec(
                 key="rain",
                 room_key="roof",
@@ -748,6 +886,14 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
                 name="snack shelf",
                 kind="food",
                 portable=False,
+            ),
+            ObjectSpec(
+                key="street_timetable",
+                room_key="street",
+                name="Street Stop timetable",
+                kind="paper",
+                portable=False,
+                description="A fixed public timetable for Rook's recurring route.",
             ),
             ObjectSpec(key="clipboard", room_key="clinic", name="appointment clipboard"),
             ObjectSpec(key="piano", room_key="music", name="old piano", portable=False),
@@ -835,7 +981,7 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
                 title="Clover City Directory",
                 text=(
                     "From the lobby: east to Mailroom; north to Elevator; west to Stairwell; "
-                    "south to Courtyard; northeast to Clinic; northwest to Music Room; "
+                    "south to Courtyard; northeast to Clinic Room; northwest to Music Room; "
                     "southeast to Security Office; out to Street Stop. From Courtyard, west "
                     "reaches Laundry Room and east reaches Community Kitchen. From Stairwell, "
                     "up reaches Rooftop Garden and down reaches Basement Workshop."
@@ -848,10 +994,12 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
             ReadableComponent(
                 title="Clover City Daily Bulletin",
                 text=(
-                    "Missing package in the mailroom. Elevator unreliable. Noise complaint "
-                    "near the music room. Kitchen chores open. Rooftop water ration active. "
-                    "Residents follow routines; look around different facilities and wait a "
-                    "few turns at Street Stop to observe city activity."
+                    "Missing package in Mailroom. Elevator unreliable. Noise complaint "
+                    "near Music Room. Community Kitchen chores open. Rooftop Garden water "
+                    "ration active. "
+                    "Residents follow visible routines throughout shared facilities. Rook's "
+                    "posted route alternates between Street Stop and Corner Store with a route "
+                    "report at each stop; ordinary travel and inspection let the route advance."
                 ),
             ),
         )
@@ -860,10 +1008,45 @@ async def clover_city_example(actor, seed: str, options: GenOptions) -> Instanti
             world.characters["guide"],
             TutorialGuideComponent(
                 help_text=(
-                    "From the lobby: east is Mailroom, north Elevator, west Stairwell, south "
-                    "Courtyard, southeast Security, and out Street Stop. Laundry and Kitchen "
-                    "branch west and east from Courtyard; Rooftop Garden is up from Stairwell."
+                    "From Clover City Lobby: east is Mailroom, north Elevator, west Stairwell, "
+                    "south Courtyard, northeast Clinic Room, northwest Music Room, southeast "
+                    "Security Office, and out Street Stop. Laundry Room and Community Kitchen "
+                    "branch west and east from Courtyard; Rooftop Garden is up and Basement "
+                    "Workshop down from Stairwell."
                 )
+            ),
+        )
+        _augment(
+            actor,
+            world.objects["courtyard_directory"],
+            ReadableComponent(
+                title="Courtyard Directory",
+                text=(
+                    "From Courtyard: west to Laundry Room; east to Community Kitchen; north "
+                    "to Clover City Lobby."
+                ),
+            ),
+        )
+        _augment(
+            actor,
+            world.objects["stairwell_directory"],
+            ReadableComponent(
+                title="Stairwell Directory",
+                text=(
+                    "From Stairwell: up to Rooftop Garden; down to Basement Workshop; east "
+                    "to Clover City Lobby."
+                ),
+            ),
+        )
+        _augment(
+            actor,
+            world.objects["street_timetable"],
+            ReadableComponent(
+                title="Street Stop Timetable",
+                text=(
+                    "Rook Vale repeats this public route: depart Street Stop east for Corner "
+                    "Store, report there, return west to Street Stop, report here, repeat."
+                ),
             ),
         )
         _augment(

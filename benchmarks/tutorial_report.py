@@ -47,6 +47,7 @@ class TutorialMap:
 
 @dataclass(frozen=True)
 class ModelRow:
+    cohort: str | None
     model: str
     sessions: int
     passes: int
@@ -79,6 +80,16 @@ class ModelRow:
 
 
 @dataclass(frozen=True)
+class DifficultyRow:
+    cohort: str | None
+    tutorial: str
+    complete_cells: int
+    possible_passes: int
+    likely_passes: int
+    consistent_passes: int
+
+
+@dataclass(frozen=True)
 class ResponseUsage:
     input_tokens: int
     output_tokens: int
@@ -98,6 +109,18 @@ class EvidenceSlice:
     results: tuple[SessionResult, ...]
 
 
+@dataclass(frozen=True)
+class CohortInput:
+    label: str
+    path: Path
+
+
+@dataclass(frozen=True)
+class LabeledResult:
+    cohort: str | None
+    result: SessionResult
+
+
 TUTORIAL_MAPS: dict[str, TutorialMap] = {
     "apple": TutorialMap(
         "Apple Crossing / Hungry Courier",
@@ -107,7 +130,7 @@ TUTORIAL_MAPS: dict[str, TutorialMap] = {
                 "Apple Crossing",
                 360,
                 190,
-                ("introduction", "look", "courier scene", "apple handoff"),
+                ("introduction", "orientation", "courier scene", "food access"),
                 ("notice board", "Pippa and Pip", "post table"),
             ),
             MapNode(
@@ -146,7 +169,7 @@ TUTORIAL_MAPS: dict[str, TutorialMap] = {
                 "Bell Green",
                 500,
                 230,
-                ("look", "notice", "mail", "resident"),
+                ("orientation", "notice", "mail", "resident"),
                 ("persistent route board", "Tansy"),
             ),
             MapNode(
@@ -212,7 +235,7 @@ TUTORIAL_MAPS: dict[str, TutorialMap] = {
                 "Clover City Lobby",
                 700,
                 420,
-                ("look", "bulletin"),
+                ("orientation", "bulletin"),
                 ("directory", "Cleo concierge"),
             ),
             MapNode(
@@ -367,9 +390,11 @@ def _read_responses(path: Path) -> tuple[ModelResponseTrace, ...]:
     return tuple(rows)
 
 
-def _model_usage(sources: Sequence[LoadedSource]) -> dict[str, ModelUsage]:
-    usage: dict[str, ModelUsage] = defaultdict(ModelUsage)
-    for source in sources:
+def _model_usage(
+    sources: Sequence[tuple[str | None, LoadedSource]],
+) -> dict[tuple[str | None, str], ModelUsage]:
+    usage: dict[tuple[str | None, str], ModelUsage] = defaultdict(ModelUsage)
+    for cohort, source in sources:
         for evidence in _evidence_slices(source):
             model_by_session = {
                 result.session_id: result.model for result in evidence.results
@@ -378,9 +403,10 @@ def _model_usage(sources: Sequence[LoadedSource]) -> dict[str, ModelUsage]:
                 model = model_by_session.get(row.session_id)
                 if model is None:
                     continue
-                previous = usage[model]
+                key = (cohort, model)
+                previous = usage[key]
                 tokens = _response_usage(row.response)
-                usage[model] = ModelUsage(
+                usage[key] = ModelUsage(
                     input_tokens=previous.input_tokens
                     + (tokens.input_tokens if tokens is not None else 0),
                     output_tokens=previous.output_tokens
@@ -393,16 +419,18 @@ def _model_usage(sources: Sequence[LoadedSource]) -> dict[str, ModelUsage]:
 
 
 def _model_rows(
-    results: Sequence[SessionResult], usage: dict[str, ModelUsage]
+    results: Sequence[LabeledResult],
+    usage: dict[tuple[str | None, str], ModelUsage],
 ) -> tuple[ModelRow, ...]:
-    grouped: dict[str, list[SessionResult]] = defaultdict(list)
-    for result in results:
-        grouped[result.model].append(result)
+    grouped: dict[tuple[str | None, str], list[SessionResult]] = defaultdict(list)
+    for labeled in results:
+        grouped[(labeled.cohort, labeled.result.model)].append(labeled.result)
     rows = []
-    for model, sessions in grouped.items():
-        model_usage = usage.get(model, ModelUsage())
+    for (cohort, model), sessions in grouped.items():
+        model_usage = usage.get((cohort, model), ModelUsage())
         rows.append(
             ModelRow(
+                cohort=cohort,
                 model=model,
                 sessions=len(sessions),
                 passes=sum(result.passed for result in sessions),
@@ -425,16 +453,17 @@ def _model_rows(
                 response_rows=model_usage.response_rows,
             )
         )
-    return tuple(
-        sorted(
-            rows,
-            key=lambda row: (
-                -row.passes,
-                -(row.milestone_hits / row.milestone_possible if row.milestone_possible else 0),
-                row.model,
-            ),
+    cohort_mode = any(row.cohort is not None for row in rows)
+
+    def sort_key(row: ModelRow) -> tuple[str, int, float, str]:
+        return (
+            (row.cohort or "") if cohort_mode else "",
+            -row.passes,
+            -(row.milestone_hits / row.milestone_possible if row.milestone_possible else 0),
+            row.model,
         )
-    )
+
+    return tuple(sorted(rows, key=sort_key))
 
 
 def _svg_start(width: int, height: int, title: str) -> list[str]:
@@ -496,16 +525,33 @@ def render_map_svg(spec: TutorialMap) -> str:
 
 
 def _milestone_matrix(
-    results: Sequence[SessionResult], tutorial: str
+    results: Sequence[LabeledResult],
+    tutorial: str,
+    replacements: dict[str, str],
 ) -> tuple[tuple[str, ...], dict[str, dict[str, tuple[int, int]]]]:
-    selected = [result for result in results if result.tutorial == tutorial]
-    milestones = tuple(
-        dict.fromkeys(name for result in selected for name, _complete in result.milestone_results)
+    selected = [item for item in results if item.result.tutorial == tutorial]
+    milestone_order = list(
+        dict.fromkeys(
+            name
+            for item in selected
+            for name, _complete in item.result.milestone_results
+        )
     )
+    for old, new in replacements.items():
+        if old not in milestone_order or new not in milestone_order:
+            continue
+        milestone_order.remove(new)
+        milestone_order.insert(milestone_order.index(old) + 1, new)
+    milestones = tuple(milestone_order)
     models: dict[str, dict[str, list[bool]]] = defaultdict(lambda: defaultdict(list))
-    for result in selected:
-        for name, complete in result.milestone_results:
-            models[result.model][name].append(complete)
+    for item in selected:
+        row_name = (
+            f"{item.cohort} / {item.result.model}"
+            if item.cohort is not None
+            else item.result.model
+        )
+        for name, complete in item.result.milestone_results:
+            models[row_name][name].append(complete)
     matrix = {
         model: {
             milestone: (
@@ -529,23 +575,44 @@ def _heat_color(rate: float) -> str:
     return "#c92a2a"
 
 
-def render_heatmap_svg(results: Sequence[SessionResult], tutorial: str) -> str:
-    milestones, matrix = _milestone_matrix(results, tutorial)
+def render_heatmap_svg(
+    results: Sequence[LabeledResult],
+    tutorial: str,
+    replacements: dict[str, str],
+) -> str:
+    milestones, matrix = _milestone_matrix(results, tutorial, replacements)
     models = tuple(sorted(matrix))
     cell_width, cell_height, label_width = 82, 34, 230
     width = max(720, label_width + cell_width * len(milestones) + 24)
-    height = 118 + cell_height * (len(models) + 1)
+    visible_replacements = tuple(
+        (old, new)
+        for old, new in replacements.items()
+        if old in milestones and new in milestones
+    )
+    legend_height = 26 + 18 * len(visible_replacements) if visible_replacements else 0
+    height = 118 + cell_height * (len(models) + 1) + legend_height
     lines = _svg_start(width, height, f"{tutorial.title()} milestone completion")
+    lines.insert(
+        2,
+        ".replaced-column{opacity:.42;filter:saturate(.25)}"
+        ".replacement-column{stroke:#1971c2;"
+        "stroke-width:4}.not-applicable{fill:#adb5bd}",
+    )
     model_reach = {
-        milestone: sum(matrix[model][milestone][0] > 0 for model in models)
+        milestone: (
+            sum(matrix[model][milestone][0] > 0 for model in models),
+            sum(matrix[model][milestone][1] > 0 for model in models),
+        )
         for milestone in milestones
     }
     for column, milestone in enumerate(milestones):
         x = label_width + column * cell_width
         short = milestone.replace("visited_", "").replace("inspected_", "").replace("_", " ")
+        css = " replaced-column" if milestone in replacements else ""
+        suffix = " (replaced)" if milestone in replacements else ""
         lines.append(
-            f'<text class="small" transform="translate({x + 14},104) rotate(-48)">'
-            f"{escape(short[:24])}</text>"
+            f'<text class="small{css}" transform="translate({x + 14},104) rotate(-48)">'
+            f"{escape((short + suffix)[:34])}</text>"
         )
     all_rows = (("Models reaching milestone", None), *((model, model) for model in models))
     for row, (label, model) in enumerate(all_rows):
@@ -554,49 +621,144 @@ def render_heatmap_svg(results: Sequence[SessionResult], tutorial: str) -> str:
         for column, milestone in enumerate(milestones):
             x = label_width + column * cell_width
             if model is None:
-                hit, total = model_reach[milestone], len(models)
+                hit, total = model_reach[milestone]
             else:
                 hit, total = matrix[model][milestone]
             rate = hit / total if total else 0
+            classes = []
+            if milestone in replacements:
+                classes.append("replaced-column")
+            if milestone in replacements.values():
+                classes.append("replacement-column")
+            if not total:
+                classes.append("not-applicable")
+            class_attr = f' class="{" ".join(classes)}"' if classes else ""
+            fill = "#adb5bd" if not total else _heat_color(rate)
             lines.append(
-                f'<rect x="{x}" y="{y}" width="{cell_width - 2}" height="{cell_height - 2}" '
-                f'fill="{_heat_color(rate)}"/>'
+                f'<rect{class_attr} x="{x}" y="{y}" width="{cell_width - 2}" '
+                f'height="{cell_height - 2}" fill="{fill}"/>'
             )
+            text_css = ' class="replaced-column"' if milestone in replacements else ""
+            cell_text = f"{hit}/{total}" if total else "—"
             lines.append(
-                f'<text x="{x + cell_width // 2}" y="{y + 22}" text-anchor="middle" '
+                f'<text{text_css} x="{x + cell_width // 2}" y="{y + 22}" text-anchor="middle" '
                 'style="font-family:sans-serif;font-size:12px;font-weight:700;fill:white">'
-                f"{hit}/{total}</text>"
+                f"{cell_text}</text>"
+            )
+    if visible_replacements:
+        legend_y = 124 + cell_height * (len(models) + 1)
+        lines.append(
+            f'<text class="label" x="12" y="{legend_y}">Milestone replacements</text>'
+        )
+        for index, (old, new) in enumerate(visible_replacements, 1):
+            lines.append(
+                f'<text class="small" x="12" y="{legend_y + index * 18}">'
+                f"{escape(old)} → {escape(new)}</text>"
             )
     lines.append("</svg>")
     return "\n".join(lines) + "\n"
 
 
 def _comparison_table(rows: Sequence[ModelRow]) -> str:
-    lines = [
-        "| Model | Passes | Milestones | Validity | Milestones/turn |",
-        "| --- | ---: | ---: | ---: | ---: |",
-    ]
+    cohort_mode = any(row.cohort is not None for row in rows)
+    lines = (
+        [
+            "| Cohort | Model | Passes | Milestones | Validity | Milestones/turn |",
+            "| --- | --- | ---: | ---: | ---: | ---: |",
+        ]
+        if cohort_mode
+        else [
+            "| Model | Passes | Milestones | Validity | Milestones/turn |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
     for row in rows:
         attempted = row.valid_actions + row.rejected_actions
         validity = row.valid_actions / attempted if attempted else 1
         progress = row.milestone_hits / row.turns if row.turns else 0
+        prefix = f"| `{row.cohort}` | `{row.model}`" if cohort_mode else f"| `{row.model}`"
         lines.append(
-            f"| `{row.model}` | {row.passes}/{row.sessions} | "
+            f"{prefix} | {row.passes}/{row.sessions} | "
             f"{row.milestone_hits}/{row.milestone_possible} | {validity:.1%} | "
             f"{progress:.3f} |"
         )
     return "\n".join(lines)
 
 
-def _token_table(rows: Sequence[ModelRow]) -> str:
-    lines = [
-        "| Model | Input tokens | Output tokens | Total tokens | "
-        "Usage coverage | Median sec/turn | Milestones/M tokens |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
-    ]
+def _difficulty_rows(results: Sequence[LabeledResult]) -> tuple[DifficultyRow, ...]:
+    cells: dict[tuple[str | None, str, str], list[SessionResult]] = defaultdict(list)
+    for item in results:
+        cells[(item.cohort, item.result.tutorial, item.result.model)].append(item.result)
+    grouped: dict[tuple[str | None, str], list[int]] = defaultdict(list)
+    for (cohort, tutorial, _model), sessions in cells.items():
+        if len(sessions) < 5:
+            continue
+        grouped[(cohort, tutorial)].append(sum(result.passed for result in sessions))
+    rows = (
+        DifficultyRow(
+            cohort=cohort,
+            tutorial=tutorial,
+            complete_cells=len(pass_counts),
+            possible_passes=sum(count >= 1 for count in pass_counts),
+            likely_passes=sum(count >= 3 for count in pass_counts),
+            consistent_passes=sum(count >= 4 for count in pass_counts),
+        )
+        for (cohort, tutorial), pass_counts in grouped.items()
+    )
+    return tuple(sorted(rows, key=lambda row: ((row.cohort or ""), row.tutorial)))
+
+
+def _difficulty_table(rows: Sequence[DifficultyRow]) -> str:
+    if not rows:
+        return "No complete five-session model/tutorial cells were available."
+    cohort_mode = any(row.cohort is not None for row in rows)
+    lines = (
+        [
+            "| Cohort | Tutorial | Complete cells | Possible pass ≥1/5 | "
+            "Likely pass ≥3/5 | Consistent pass ≥4/5 |",
+            "| --- | --- | ---: | ---: | ---: | ---: |",
+        ]
+        if cohort_mode
+        else [
+            "| Tutorial | Complete cells | Possible pass ≥1/5 | Likely pass ≥3/5 | "
+            "Consistent pass ≥4/5 |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
     for row in rows:
+        prefix = (
+            f"| `{row.cohort}` | `{row.tutorial}`"
+            if cohort_mode
+            else f"| `{row.tutorial}`"
+        )
         lines.append(
-            f"| `{row.model}` | {row.input_tokens:,} | {row.output_tokens:,} | "
+            f"{prefix} | {row.complete_cells} | "
+            f"{row.possible_passes}/{row.complete_cells} | "
+            f"{row.likely_passes}/{row.complete_cells} | "
+            f"{row.consistent_passes}/{row.complete_cells} |"
+        )
+    return "\n".join(lines)
+
+
+def _token_table(rows: Sequence[ModelRow]) -> str:
+    cohort_mode = any(row.cohort is not None for row in rows)
+    lines = (
+        [
+            "| Cohort | Model | Input tokens | Output tokens | Total tokens | "
+            "Usage coverage | Median sec/turn | Milestones/M tokens |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        if cohort_mode
+        else [
+            "| Model | Input tokens | Output tokens | Total tokens | "
+            "Usage coverage | Median sec/turn | Milestones/M tokens |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in rows:
+        prefix = f"| `{row.cohort}` | `{row.model}`" if cohort_mode else f"| `{row.model}`"
+        lines.append(
+            f"{prefix} | {row.input_tokens:,} | {row.output_tokens:,} | "
             f"{row.total_tokens:,} | {row.token_response_rows}/{row.response_rows} "
             f"({row.token_coverage:.1%}) | {row.median_seconds_per_turn:.2f} | "
             f"{row.token_efficiency:,.2f} |"
@@ -616,19 +778,22 @@ def _runtime_summary(rows: Sequence[ModelRow]) -> str:
     output_tokens = sum(row.output_tokens for row in measured)
     covered = sum(row.token_response_rows for row in measured)
     response_rows = sum(row.response_rows for row in measured)
+    def label(row: ModelRow) -> str:
+        return f"{row.cohort} / {row.model}" if row.cohort is not None else row.model
+
     return "\n".join(
         (
             f"Recorded provider usage totals **{input_tokens + output_tokens:,} tokens**: "
             f"{input_tokens:,} input and {output_tokens:,} output tokens across "
             f"{covered:,}/{response_rows:,} retained response rows.",
             "",
-            f"- Fastest median decision pace: `{fastest.model}` at "
+            f"- Fastest median decision pace: `{label(fastest)}` at "
             f"{fastest.median_seconds_per_turn:.2f} seconds/turn.",
-            f"- Slowest median decision pace: `{slowest.model}` at "
+            f"- Slowest median decision pace: `{label(slowest)}` at "
             f"{slowest.median_seconds_per_turn:.2f} seconds/turn.",
-            f"- Most token-efficient: `{most_efficient.model}` at "
+            f"- Most token-efficient: `{label(most_efficient)}` at "
             f"{most_efficient.token_efficiency:,.2f} completed milestones per million tokens.",
-            f"- Least token-efficient: `{least_efficient.model}` at "
+            f"- Least token-efficient: `{label(least_efficient)}` at "
             f"{least_efficient.token_efficiency:,.2f} completed milestones per million tokens.",
         )
     )
@@ -641,10 +806,13 @@ def _typst_text(value: str) -> str:
 def _typst_report(
     title: str,
     rows: Sequence[ModelRow],
+    difficulty_rows: Sequence[DifficultyRow],
     diagrams: Sequence[str],
     sources: Sequence[str],
 ) -> str:
+    cohort_mode = any(row.cohort is not None for row in rows)
     cells = [
+        *(["[*Cohort*]"] if cohort_mode else []),
         "[*Model*]",
         "[*Passes*]",
         "[*Milestones*]",
@@ -656,6 +824,7 @@ def _typst_report(
         validity = row.valid_actions / attempted if attempted else 1
         progress = row.milestone_hits / row.turns if row.turns else 0
         values = (
+            *((row.cohort or "",) if cohort_mode else ()),
             row.model,
             f"{row.passes}/{row.sessions}",
             f"{row.milestone_hits}/{row.milestone_possible}",
@@ -664,6 +833,7 @@ def _typst_report(
         )
         cells.extend(f"[{_typst_text(value)}]" for value in values)
     token_cells = [
+        *(["[*Cohort*]"] if cohort_mode else []),
         "[*Model*]",
         "[*Input*]",
         "[*Output*]",
@@ -674,6 +844,7 @@ def _typst_report(
     ]
     for row in rows:
         values = (
+            *((row.cohort or "",) if cohort_mode else ()),
             row.model,
             f"{row.input_tokens:,}",
             f"{row.output_tokens:,}",
@@ -683,6 +854,41 @@ def _typst_report(
             f"{row.token_efficiency:,.2f}",
         )
         token_cells.extend(f"[{_typst_text(value)}]" for value in values)
+    difficulty_cohort_mode = any(row.cohort is not None for row in difficulty_rows)
+    difficulty_cells = [
+        *(["[*Cohort*]"] if difficulty_cohort_mode else []),
+        "[*Tutorial*]",
+        "[*Complete cells*]",
+        "[*Possible ≥1/5*]",
+        "[*Likely ≥3/5*]",
+        "[*Consistent ≥4/5*]",
+    ]
+    for row in difficulty_rows:
+        values = (
+            *((row.cohort or "",) if difficulty_cohort_mode else ()),
+            row.tutorial,
+            str(row.complete_cells),
+            f"{row.possible_passes}/{row.complete_cells}",
+            f"{row.likely_passes}/{row.complete_cells}",
+            f"{row.consistent_passes}/{row.complete_cells}",
+        )
+        difficulty_cells.extend(f"[{_typst_text(value)}]" for value in values)
+    difficulty_block = (
+        (
+            "#table(",
+            (
+                "  columns: (1.2fr, 1fr, 1fr, 1fr, 1fr, 1fr),"
+                if difficulty_cohort_mode
+                else "  columns: (1fr, 1fr, 1fr, 1fr, 1fr),"
+            ),
+            "  inset: 5pt,",
+            '  stroke: 0.5pt + rgb("ccd3dc"),',
+            "  " + ",\n  ".join(difficulty_cells),
+            ")",
+        )
+        if difficulty_rows
+        else (_typst_text("No complete five-session model/tutorial cells were available."),)
+    )
     images = []
     for path in diagrams:
         images.extend(
@@ -714,7 +920,11 @@ def _typst_report(
             "",
             "#set text(size: 6pt)",
             "#table(",
-            "  columns: (2fr, 1fr, 0.8fr, 1fr, 0.8fr, 0.8fr, 1fr),",
+            (
+                "  columns: (1.2fr, 2fr, 1fr, 0.8fr, 1fr, 0.8fr, 0.8fr, 1fr),"
+                if cohort_mode
+                else "  columns: (2fr, 1fr, 0.8fr, 1fr, 0.8fr, 0.8fr, 1fr),"
+            ),
             "  inset: 3pt,",
             "  stroke: 0.5pt + rgb(\"ccd3dc\"),",
             "  " + ",\n  ".join(token_cells),
@@ -724,22 +934,79 @@ def _typst_report(
             "== Model comparison",
             "",
             "#table(",
-            "  columns: (2.2fr, 1fr, 1fr, 1fr, 1fr),",
+            (
+                "  columns: (1.2fr, 2.2fr, 1fr, 1fr, 1fr, 1fr),"
+                if cohort_mode
+                else "  columns: (2.2fr, 1fr, 1fr, 1fr, 1fr),"
+            ),
             "  inset: 5pt,",
             "  stroke: 0.5pt + rgb(\"ccd3dc\"),",
             "  " + ",\n  ".join(cells),
             ")",
+            "",
+            "== Difficulty distribution",
+            "",
+            "Possible pass means at least 1/5, likely pass at least 3/5, and consistent "
+            "pass at least 4/5. Incomplete cells are excluded.",
+            "",
+            *difficulty_block,
             *images,
             "",
         )
     )
 
 
-def build_report(inputs: Sequence[Path], output: Path, *, title: str) -> None:
-    sources = tuple(load_source(SourceSelection(path.resolve())) for path in inputs)
-    results = tuple(result for source in sources for result in source.results)
+def _replacement_mapping(sources: Sequence[LoadedSource]) -> dict[str, str]:
+    replacements: dict[str, str] = {}
+    for source in sources:
+        for old, new in source.manifest.milestone_replacements.items():
+            previous = replacements.get(old)
+            if previous is not None and previous != new:
+                raise ValueError(
+                    f"report sources disagree on replacement for {old}: {previous} vs {new}"
+                )
+            replacements[old] = new
+    return replacements
+
+
+def build_report(
+    inputs: Sequence[Path],
+    output: Path,
+    *,
+    title: str,
+    cohorts: Sequence[CohortInput] = (),
+) -> None:
+    if inputs and cohorts:
+        raise ValueError("use either --input or --cohort, not both")
+    if cohorts:
+        if any(not cohort.label.strip() for cohort in cohorts):
+            raise ValueError("cohort labels must not be empty")
+        labeled_sources = tuple(
+            (cohort.label, load_source(SourceSelection(cohort.path.resolve())))
+            for cohort in cohorts
+        )
+    else:
+        labeled_sources = tuple(
+            (None, load_source(SourceSelection(path.resolve()))) for path in inputs
+        )
+    if not labeled_sources:
+        raise ValueError("at least one --input or --cohort is required")
+    sources = tuple(source for _cohort, source in labeled_sources)
+    schema_versions = {source.manifest.schema_version for source in sources}
+    if not cohorts and len(schema_versions) > 1:
+        versions = ", ".join(map(str, sorted(schema_versions)))
+        raise ValueError(
+            f"report inputs mix schema versions ({versions}); use --cohort LABEL=PATH "
+            "for explicit cross-version analysis"
+        )
+    results = tuple(
+        LabeledResult(cohort, result)
+        for cohort, source in labeled_sources
+        for result in source.results
+    )
     if not results:
         raise ValueError("report inputs contain no completed sessions")
+    replacements = _replacement_mapping(sources)
     output.mkdir(parents=True, exist_ok=True)
     diagrams = output / "diagrams"
     diagrams.mkdir(exist_ok=True)
@@ -750,7 +1017,10 @@ def build_report(inputs: Sequence[Path], output: Path, *, title: str) -> None:
         heatmap_path = diagrams / f"{tutorial}-milestones.svg"
         shutil.copyfile(TABLETOP_MAPS[tutorial], tabletop_path)
         map_path.write_text(render_map_svg(spec), encoding="utf-8")
-        heatmap_path.write_text(render_heatmap_svg(results, tutorial), encoding="utf-8")
+        heatmap_path.write_text(
+            render_heatmap_svg(results, tutorial, replacements),
+            encoding="utf-8",
+        )
         diagram_paths.extend(
             (
                 str(tabletop_path.relative_to(output)),
@@ -758,25 +1028,29 @@ def build_report(inputs: Sequence[Path], output: Path, *, title: str) -> None:
                 str(heatmap_path.relative_to(output)),
             )
         )
-    rows = _model_rows(results, _model_usage(sources))
+    rows = _model_rows(results, _model_usage(labeled_sources))
+    difficulty_rows = _difficulty_rows(results)
     template = (Path(__file__).parent / "templates" / "tutorial_report.md").read_text(
         encoding="utf-8"
     )
     markdown = (
         template.replace("{{TITLE}}", title)
         .replace("{{COMPLETED}}", str(len(results)))
-        .replace("{{PASSES}}", str(sum(result.passed for result in results)))
+        .replace("{{PASSES}}", str(sum(item.result.passed for item in results)))
         .replace(
             "{{SOURCES}}",
             "\n".join(
-                f"- `{source.path.name}` — "
+                "- "
+                + (f"`{cohort}` / " if cohort is not None else "")
+                + f"`{source.path.name}` — "
                 f"{len(source.results)} completed sessions"
-                for source in sources
+                for cohort, source in labeled_sources
             ),
         )
         .replace("{{RUNTIME_SUMMARY}}", _runtime_summary(rows))
         .replace("{{TOKEN_TABLE}}", _token_table(rows))
         .replace("{{COMPARISON_TABLE}}", _comparison_table(rows))
+        .replace("{{DIFFICULTY_TABLE}}", _difficulty_table(difficulty_rows))
         .replace(
             "{{DIAGRAMS}}",
             "\n\n".join(f"![{Path(path).stem}]({path})" for path in diagram_paths),
@@ -784,7 +1058,16 @@ def build_report(inputs: Sequence[Path], output: Path, *, title: str) -> None:
     )
     (output / "report.md").write_text(markdown, encoding="utf-8")
     (output / "report.typ").write_text(
-        _typst_report(title, rows, diagram_paths, tuple(source.path.name for source in sources)),
+        _typst_report(
+            title,
+            rows,
+            difficulty_rows,
+            diagram_paths,
+            tuple(
+                f"{cohort} / {source.path.name}" if cohort is not None else source.path.name
+                for cohort, source in labeled_sources
+            ),
+        ),
         encoding="utf-8",
     )
     (output / "comparison-table.md").write_text(_comparison_table(rows) + "\n", encoding="utf-8")
@@ -812,7 +1095,14 @@ def package_report(report: Path, archive: Path) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", action="append", required=True, type=Path)
+    parser.add_argument("--input", action="append", default=[], type=Path)
+    parser.add_argument(
+        "--cohort",
+        action="append",
+        default=[],
+        metavar="LABEL=PATH",
+        help="label a report input cohort; repeat and reuse labels for multiple paths",
+    )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--title", default="Bunnyland tutorial-ladder benchmark")
     return parser
@@ -820,7 +1110,15 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    build_report(args.input, args.output, title=args.title)
+    cohorts = []
+    for value in args.cohort:
+        if "=" not in value:
+            raise SystemExit("--cohort must use LABEL=PATH")
+        label, path = value.split("=", 1)
+        if not label or not path:
+            raise SystemExit("--cohort must use LABEL=PATH")
+        cohorts.append(CohortInput(label, Path(path)))
+    build_report(args.input, args.output, title=args.title, cohorts=cohorts)
     return 0
 
 

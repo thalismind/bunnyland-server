@@ -195,13 +195,50 @@ async def test_apple_crossing_generator_builds_tutorial_world_shape():
     assert {"Pippa Bramble", "Pip Thistle", "Mira Vale", "Rowan Reed"} <= character_names
     assert actor.world.get_entity(world.objects["apple"]).has_component(FoodComponent)
     assert actor.world.get_entity(world.objects["letter"]).has_component(ReadableComponent)
+    notice = actor.world.get_entity(world.objects["notice_board"])
+    notice_text = notice.get_component(ReadableComponent).text
+    assert "Apple Hedge is east" in notice_text
+    assert "open courier basket" in notice_text
+    assert "south to Old Footbridge" in notice_text
+    assert "delivery ledger" in notice_text
+    assert actor.world.get_entity(world.characters["postmaster"]).has_component(
+        TutorialGuideComponent
+    )
+    assert not actor.world.get_entity(world.objects["courier_basket"]).has_component(
+        PortableComponent
+    )
+
+
+async def test_apple_crossing_pippa_repeats_recovery_help():
+    actor, world = await _hungry_courier_world()
+
+    await actor.bus.publish(
+        SpeechToldEvent(
+            **event_base(
+                actor.epoch,
+                visibility=EventVisibility.DIRECTED,
+                actor_id=str(world.characters["player"]),
+                room_id=str(world.rooms["crossing"]),
+                target_ids=(str(world.characters["postmaster"]),),
+            ),
+            text="Where should I leave the apple?",
+        )
+    )
+
+    queued = actor.pending_submissions()
+    assert len(queued) == 1
+    assert queued[0].character_id == str(world.characters["postmaster"])
+    assert "open courier basket" in str(queued[0].payload["text"])
+    assert "drop it back in Apple Crossing" in str(queued[0].payload["text"])
+    assert "Mira's Cottage" in str(queued[0].payload["text"])
 
 
 async def test_hungry_courier_demo_delivers_through_validated_actions():
     actor, world = await _hungry_courier_world()
 
-    # Simulate the golden-path player help: food becomes physically reachable to Moss.
-    _move_entity(actor, world.objects["apple"], world.rooms["crossing"])
+    # Simulate the documented container path: Pip retrieves the apple through normal
+    # take/eat actions before taking the letter and walking the route.
+    _move_entity(actor, world.objects["apple"], world.objects["courier_basket"])
 
     dispatch = ControllerDispatch(actor, PromptBuilder(actor.world), ScriptedAgent([]))
     decisions = []
@@ -211,7 +248,7 @@ async def test_hungry_courier_demo_delivers_through_validated_actions():
 
     tools = [decision.tool for decision in decisions]
     assert "eat" in tools
-    assert "take" in tools
+    assert tools.count("take") >= 2
     assert tools.count("move") >= 2
     assert "write" in tools
 
@@ -257,6 +294,7 @@ async def test_hungry_courier_agent_branches_on_real_world_state():
     assert missing_letter is not None
     assert missing_letter.name == "say"
     assert "letter is not where I can reach it" in missing_letter.arguments["text"]
+    assert "drop it here in Apple Crossing" in missing_letter.arguments["text"]
 
     _move_entity(actor, letter.id, world.rooms["crossing"])
     take_letter = await agent.decide("", None, character_id=courier_id)
@@ -348,6 +386,44 @@ async def test_hungry_courier_agent_finds_food_by_state_not_script():
     assert fake_agent._carried_match(courier, "missing") is None
 
 
+async def test_hungry_courier_agent_retrieves_food_from_accessible_container():
+    actor, world = await _hungry_courier_world()
+    agent = _hungry_courier_agent(actor)
+    courier = actor.world.get_entity(world.characters["courier"])
+    crossing = actor.world.get_entity(world.rooms["crossing"])
+    basket = actor.world.get_entity(world.objects["courier_basket"])
+    apple = actor.world.get_entity(world.objects["apple"])
+    _move_entity(actor, apple.id, basket.id)
+
+    assert agent._reachable_food(courier) == apple
+    decision = await agent.decide("", None, character_id=str(courier.id))
+    assert decision is not None
+    assert decision.name == "take"
+    assert decision.arguments["item_id"] == "red crossing apple"
+
+    container = basket.get_component(ContainerComponent)
+    for unavailable in (
+        replace(container, open=False),
+        replace(container, locked=True),
+        replace(container, allow_remove=False),
+    ):
+        replace_component(basket, unavailable)
+        assert agent._reachable_food(courier) is None
+    replace_component(basket, container)
+
+    stale = spawn_entity(actor.world, [IdentityComponent(name="stale basket", kind="container")])
+    crossing.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), stale.id)
+    fake_actor = SimpleNamespace(world=_WorldWithMissingEntities(actor.world, {stale.id}))
+    fake_agent = HungryCourierAgent(
+        SimpleNamespace(actor=fake_actor), HungryCourierControllerComponent()
+    )
+    assert fake_agent._reachable_food(courier) == apple
+
+    crossing.remove_relationship(Contains, courier.id)
+    assert agent._reachable_food(courier) is None
+    crossing.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), courier.id)
+
+
 async def test_first_run_suggestions_cover_courier_states():
     actor, world = await _hungry_courier_world()
     player = actor.world.get_entity(world.characters["player"])
@@ -427,6 +503,9 @@ async def test_bell_green_generator_builds_online_sandbox_shape():
     readable = notice.get_component(ReadableComponent)
     green = actor.world.get_entity(world.rooms["green"])
     guide = actor.world.get_entity(world.characters["guide"])
+    garden_sign = actor.world.get_entity(world.objects["garden_shrine_sign"])
+    bridge_sign = actor.world.get_entity(world.objects["bridge_shrine_sign"])
+    mailbox = actor.world.get_entity(world.objects["mailbox"])
 
     assert len(world.rooms) == 12
     assert 8 <= len(world.characters) <= 12
@@ -448,6 +527,21 @@ async def test_bell_green_generator_builds_online_sandbox_shape():
     assert not notice.has_component(PortableComponent)
     assert "town hub" in green.get_component(DescriptionComponent).long
     assert guide.has_component(TutorialGuideComponent)
+    assert "south exit to River Footbridge" in garden_sign.get_component(
+        ReadableComponent
+    ).text
+    assert "east exit" in bridge_sign.get_component(ReadableComponent).text
+    assert mailbox.get_component(ContainerComponent).open is False
+    assert "fixed community mail container" in mailbox.get_component(
+        DescriptionComponent
+    ).long
+    garden_prompt = PromptBuilder(actor.world).build(world.characters["saffron"])
+    _move_entity(actor, world.characters["mira"], world.rooms["footbridge"])
+    bridge_prompt = PromptBuilder(actor.world).build(world.characters["mira"])
+    assert "Garden Walk shrine sign" in garden_prompt.room_summary
+    assert "south toward the shrine" in garden_prompt.room_summary
+    assert "River Footbridge shrine sign" in bridge_prompt.room_summary
+    assert "east to Old Bell Shrine" in bridge_prompt.room_summary
 
 
 async def test_bell_green_guide_answers_help_questions_with_validated_speech():
@@ -471,7 +565,8 @@ async def test_bell_green_guide_answers_help_questions_with_validated_speech():
     assert len(queued) == 1
     assert queued[0].character_id == str(world.characters["guide"])
     assert queued[0].command_type == "say"
-    assert "east, south" in str(queued[0].payload["text"])
+    assert "east exit to Garden Walk" in str(queued[0].payload["text"])
+    assert "south exit to River Footbridge" in str(queued[0].payload["text"])
 
 
 async def test_bell_green_guide_ignores_invalid_or_inapplicable_help_requests():
@@ -546,6 +641,10 @@ async def test_clover_city_generator_builds_dense_world_shape():
     obligations = list(actor.world.query().with_all([ObligationComponent]).execute_entities())
     bulletin = actor.world.get_entity(world.objects["bulletin"]).get_component(ReadableComponent)
     directory = actor.world.get_entity(world.objects["directory"])
+    courtyard_directory = actor.world.get_entity(world.objects["courtyard_directory"])
+    stairwell_directory = actor.world.get_entity(world.objects["stairwell_directory"])
+    timetable = actor.world.get_entity(world.objects["street_timetable"])
+    parcel_locker = actor.world.get_entity(world.objects["parcels"])
 
     assert len(world.rooms) >= 20
     assert len(world.characters) >= 16
@@ -565,9 +664,19 @@ async def test_clover_city_generator_builds_dense_world_shape():
     )
     assert len(routines) >= len(world.characters) * 3
     assert "Missing package" in bulletin.text
-    assert "wait a few turns" in bulletin.text
+    assert "ordinary travel and inspection" in bulletin.text
+    assert "wait a few turns" not in bulletin.text
     assert "southeast to Security Office" in directory.get_component(ReadableComponent).text
     assert not directory.has_component(PortableComponent)
+    assert "west to Laundry Room" in courtyard_directory.get_component(ReadableComponent).text
+    assert "up to Rooftop Garden" in stairwell_directory.get_component(ReadableComponent).text
+    assert "Street Stop east for Corner Store" in timetable.get_component(
+        ReadableComponent
+    ).text
+    assert parcel_locker.get_component(ContainerComponent).open is False
+    street_prompt = PromptBuilder(actor.world).build(world.characters["rook"])
+    assert "fixed timetable" in street_prompt.room_summary
+    assert "Street Stop timetable" in street_prompt.room_summary
     assert {incident.get_component(IncidentComponent).kind for incident in incidents} == {
         "missing_parcel",
         "rooftop_water_shortage",
@@ -593,10 +702,12 @@ async def test_clover_city_route_checker_produces_public_world_activity():
     apply_plugins(bunnyland_plugins(), actor)
     world = await CLOVER_CITY_DEMO.generate(actor, "clover-activity", GenOptions())
     movements: list[ActorMovedEvent] = []
+    speech: list[SpeechSaidEvent] = []
     actor.bus.subscribe(ActorMovedEvent, movements.append, external=True)
+    actor.bus.subscribe(SpeechSaidEvent, speech.append, external=True)
     dispatch = ControllerDispatch(actor, PromptBuilder(actor.world), ScriptedAgent(()))
 
-    for _turn in range(3):
+    for _turn in range(4):
         await dispatch.run_once()
         await dispatch.await_pending()
         await actor.tick(600)
@@ -604,6 +715,13 @@ async def test_clover_city_route_checker_produces_public_world_activity():
     rook_id = str(world.characters["rook"])
     rook_movements = [event for event in movements if event.actor_id == rook_id]
     assert [event.direction for event in rook_movements] == ["east", "west"]
+    rook_reports = [
+        event.text
+        for event in speech
+        if event.actor_id == rook_id and "route report" in event.text.lower()
+    ]
+    assert any("Corner Store" in text for text in rook_reports)
+    assert any("Street Stop" in text for text in rook_reports)
 
 
 async def test_clover_city_story_state_survives_checkpoint_restore(tmp_path):

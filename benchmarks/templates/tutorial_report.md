@@ -24,6 +24,13 @@ tokens; cached prompt tokens may still be included.
 
 {{COMPARISON_TABLE}}
 
+## Difficulty distribution
+
+Possible pass means at least 1/5, likely pass at least 3/5, and consistent pass at least
+4/5. Only complete five-session model/tutorial cells are classified.
+
+{{DIFFICULTY_TABLE}}
+
 ## Tutorial maps and milestone heatmaps
 
 Heatmap cells show completed sessions per model. The first row shows how many tested models

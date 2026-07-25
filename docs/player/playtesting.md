@@ -64,17 +64,19 @@ Pass criteria:
 Expected beats:
 
 1. Pippa Bramble introduces Pip and the delivery problem.
-2. Player looks around in Apple Crossing.
-3. Player sees Pip, Pippa, the courier letter, and exits.
+2. Player receives the Apple Crossing room view and can reread the notice board or ask Pippa.
+3. Player identifies Pip, Pippa, the courier letter, and exits from that view.
 4. Player goes east to Apple Hedge.
 5. Player takes the red crossing apple.
 6. Player returns west to Apple Crossing.
-7. Player drops or otherwise leaves the apple where Pip can reach it.
-8. Pip eats through the normal `eat` action.
-9. Pip takes the courier letter.
-10. Pip moves through Old Footbridge and Mira's Cottage Lane.
-11. Pip reaches Mira's Cottage and writes the delivery ledger consequence.
-12. Player confirms the consequence in activity, history, memory, or the ledger.
+7. Player drops the apple beside Pip, puts it in the open courier basket, or gives it to Pip.
+8. Player leaves Pip's courier letter on the post table, or drops it back in Apple Crossing
+   if they picked it up.
+9. Pip retrieves basket food if necessary and eats through normal `take` and `eat` actions.
+10. Pip takes the courier letter.
+11. Pip moves through Old Footbridge and Mira's Cottage Lane.
+12. Pip reaches Mira's Cottage and writes the delivery ledger consequence.
+13. Player confirms the consequence in activity, history, memory, or the ledger.
 
 Pass criteria:
 
@@ -109,9 +111,10 @@ Crossing: more rooms, more residents, and more shared-town context without becom
 What to try:
 
 - Claim Bram Hollow, Pippa Bramble, or another obvious resident.
-- Look in Bell Green.
+- Orient from the initial Bell Green room view.
 - Inspect the central notice board.
 - Ask Tansy Bell for directions if the route is unclear.
+- Read the fixed shrine signs at Garden Walk or River Footbridge if needed.
 - Visit Bell Green Post Office, Garden Walk, Hearthwick Inn, and Old Bell Shrine.
 
 Pass criteria:
@@ -155,7 +158,7 @@ with shared facilities, routines, and overlapping tensions.
 What to try:
 
 - Claim Ada Warden.
-- Look in Clover City Lobby.
+- Orient from the initial Clover City Lobby room view.
 - Inspect the daily bulletin.
 - Inspect the directory board or ask Cleo Clover for directions.
 - Visit Mailroom, Elevator, Laundry Room, Community Kitchen, Rooftop Garden, Security
@@ -176,8 +179,8 @@ What to try:
 - Inspect the parcel locker or incident log.
 - Move through elevator apartment exits.
 - Observe at least three residents in different facilities.
-- Wait or tick long enough to see routines or activity feed changes.
-- At Street Stop, Rook's store route provides visible public activity while time advances.
+- Use ordinary movement, inspection, and conversation while routines advance.
+- At Street Stop, inspect the timetable and witness Rook move or hear a route report.
 - Use a second client or Discord account to compare room and bulletin state.
 
 Pass criteria:

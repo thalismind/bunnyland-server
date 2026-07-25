@@ -6,12 +6,13 @@ import argparse
 import json
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from pydantic import TypeAdapter, ValidationError
 
 from benchmarks.tutorials import (
+    MILESTONE_REPLACEMENTS,
     SCHEMA_VERSION,
     TUTORIAL_NAMES,
     BenchmarkConfig,
@@ -50,6 +51,7 @@ class SourceManifest:
     log_thinking: bool = False
     repeat_command_guard: bool = False
     sources: tuple[ManifestSource, ...] = ()
+    milestone_replacements: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -115,6 +117,18 @@ def load_source(selection: SourceSelection) -> LoadedSource:
     }:
         raise ComparisonError(f"{path} is not a tutorial-ladder benchmark")
     all_results = _read_jsonl(path / "sessions.jsonl", SessionResult)
+    mismatched_results = sorted(
+        {
+            result.schema_version
+            for result in all_results
+            if result.schema_version != manifest.schema_version
+        }
+    )
+    if mismatched_results:
+        raise ComparisonError(
+            f"{path} manifest schema {manifest.schema_version} disagrees with session "
+            f"schema version(s): {', '.join(map(str, mismatched_results))}"
+        )
     unknown_models = sorted(set(selection.models) - {item.model for item in manifest.models})
     if unknown_models:
         raise ComparisonError(
@@ -165,6 +179,7 @@ def load_source(selection: SourceSelection) -> LoadedSource:
 def _ensure_compatible(sources: Sequence[LoadedSource]) -> SourceManifest:
     first = sources[0].manifest
     settings = (
+        "schema_version",
         "provider",
         "session_timeout_seconds",
         "turn_limit",
@@ -278,6 +293,7 @@ def write_comparison(
         repeat_command_guard=settings.repeat_command_guard,
     )
     summary = summarize(results, metadata, tutorials)
+    summary["schema_version"] = settings.schema_version
     incomplete_by_key = {
         (attempt.source, attempt.session_id): attempt
         for source in sources
@@ -285,33 +301,33 @@ def write_comparison(
     }
     incomplete = tuple(incomplete_by_key.values())
     output.mkdir(parents=True, exist_ok=True)
-    _write_json(
-        output / "manifest.json",
-        {
-            "schema_version": SCHEMA_VERSION,
-            "benchmark": "ollama-tutorial-ladder-comparison",
-            "sources": [
-                {
-                    "path": str(source.path),
-                    "selected_models": list(source.selected_models),
-                }
-                for source in sources
-            ],
-            "models": [asdict(item) for item in metadata],
-            "tutorials": list(tutorials),
-            "sessions_per_model_tutorial": sessions,
-            "provider": settings.provider,
-            "host": settings.host,
-            "session_timeout_seconds": settings.session_timeout_seconds,
-            "turn_limit": settings.turn_limit,
-            "thinking": settings.thinking,
-            "temperature": settings.temperature,
-            "log_thinking": settings.log_thinking,
-            "repeat_command_guard": settings.repeat_command_guard,
-            "excluded_completed_sessions": len(excluded_results),
-            "notes": list(notes),
-        },
-    )
+    comparison_manifest: dict[str, object] = {
+        "schema_version": settings.schema_version,
+        "benchmark": "ollama-tutorial-ladder-comparison",
+        "sources": [
+            {
+                "path": str(source.path),
+                "selected_models": list(source.selected_models),
+            }
+            for source in sources
+        ],
+        "models": [asdict(item) for item in metadata],
+        "tutorials": list(tutorials),
+        "sessions_per_model_tutorial": sessions,
+        "provider": settings.provider,
+        "host": settings.host,
+        "session_timeout_seconds": settings.session_timeout_seconds,
+        "turn_limit": settings.turn_limit,
+        "thinking": settings.thinking,
+        "temperature": settings.temperature,
+        "log_thinking": settings.log_thinking,
+        "repeat_command_guard": settings.repeat_command_guard,
+        "excluded_completed_sessions": len(excluded_results),
+        "notes": list(notes),
+    }
+    if settings.schema_version == SCHEMA_VERSION:
+        comparison_manifest["milestone_replacements"] = MILESTONE_REPLACEMENTS
+    _write_json(output / "manifest.json", comparison_manifest)
     _write_json(
         output / "summary.json",
         {

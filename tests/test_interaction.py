@@ -213,6 +213,7 @@ async def test_look_and_inspect_emit_private_description_events():
     assert "blank sign" in looked[0].summary
     assert inspected[0].name == "blank sign"
     assert inspected[0].text == "Meet at dawn"
+    assert inspected[0].room_id == str(scenario.room_a)
 
 
 async def test_inspecting_self_emits_detailed_scored_component_facts():
