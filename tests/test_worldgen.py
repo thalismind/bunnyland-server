@@ -66,6 +66,7 @@ from bunnyland.foundation.tutorial.mechanics import (
     HungryCourierControllerComponent,
     TutorialGuideComponent,
     TutorialGuideReactor,
+    TutorialOrientationProgressComponent,
 )
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.persistence import WorldMeta, load_world, save_world
@@ -523,10 +524,24 @@ async def test_bell_green_generator_builds_online_sandbox_shape():
         character_names
     )
     assert "help Pip finish a delivery" in readable.text
+    assert (
+        "Required orientation circuit: visit Bell Green Post Office, Garden Walk, "
+        "Hearthwick Inn, and Old Bell Shrine."
+    ) in readable.text
+    assert "Optional starter errands:" in readable.text
     assert "north to Bell Green Post Office" in readable.text
     assert not notice.has_component(PortableComponent)
     assert "town hub" in green.get_component(DescriptionComponent).long
     assert guide.has_component(TutorialGuideComponent)
+    bram = actor.world.get_entity(world.characters["bram"])
+    assert bram.get_component(
+        TutorialOrientationProgressComponent
+    ).required_room_titles == (
+        "Bell Green Post Office",
+        "Garden Walk",
+        "Hearthwick Inn",
+        "Old Bell Shrine",
+    )
     assert "south exit to River Footbridge" in garden_sign.get_component(
         ReadableComponent
     ).text
@@ -567,6 +582,159 @@ async def test_bell_green_guide_answers_help_questions_with_validated_speech():
     assert queued[0].command_type == "say"
     assert "east exit to Garden Walk" in str(queued[0].payload["text"])
     assert "south exit to River Footbridge" in str(queued[0].payload["text"])
+    assert (
+        "Remaining required stops: Bell Green Post Office, Garden Walk, Hearthwick Inn, "
+        "and Old Bell Shrine."
+    ) in str(queued[0].payload["text"])
+
+
+async def test_bell_green_guide_reports_only_remaining_orientation_stops():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    world = await BELL_GREEN_DEMO.generate(actor, "bell-guide-progress", GenOptions())
+    bram_id = world.characters["bram"]
+
+    for room_key in ("post_office", "garden_walk"):
+        await actor.bus.publish(
+            ActorMovedEvent(
+                **event_base(
+                    actor.epoch,
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(bram_id),
+                    room_id=str(world.rooms[room_key]),
+                ),
+                from_room_id=str(world.rooms["green"]),
+                to_room_id=str(world.rooms[room_key]),
+                direction="test",
+            )
+        )
+
+    progress = actor.world.get_entity(bram_id).get_component(
+        TutorialOrientationProgressComponent
+    )
+    assert progress.visited_room_titles == ("Bell Green Post Office", "Garden Walk")
+
+    await actor.bus.publish(
+        SpeechSaidEvent(
+            **event_base(
+                actor.epoch,
+                visibility=EventVisibility.ROOM,
+                actor_id=str(bram_id),
+                room_id=str(world.rooms["green"]),
+            ),
+            text="Which required stops remain?",
+        )
+    )
+
+    queued = actor.pending_submissions()
+    assert len(queued) == 1
+    assert (
+        "Remaining required stops: Hearthwick Inn and Old Bell Shrine."
+        in str(queued[0].payload["text"])
+    )
+
+    await actor.tick(0)
+    for room_key in ("market_lane", "post_office", "inn"):
+        await actor.bus.publish(
+            ActorMovedEvent(
+                **event_base(
+                    actor.epoch,
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(bram_id),
+                    room_id=str(world.rooms[room_key]),
+                ),
+                from_room_id=str(world.rooms["green"]),
+                to_room_id=str(world.rooms[room_key]),
+                direction="test",
+            )
+        )
+    progress = actor.world.get_entity(bram_id).get_component(
+        TutorialOrientationProgressComponent
+    )
+    assert progress.visited_room_titles == (
+        "Bell Green Post Office",
+        "Garden Walk",
+        "Hearthwick Inn",
+    )
+
+    await actor.bus.publish(
+        SpeechSaidEvent(
+            **event_base(
+                actor.epoch,
+                visibility=EventVisibility.ROOM,
+                actor_id=str(bram_id),
+                room_id=str(world.rooms["green"]),
+            ),
+            text="Which required stop remains?",
+        )
+    )
+    assert "Remaining required stops: Old Bell Shrine." in str(
+        actor.pending_submissions()[0].payload["text"]
+    )
+
+    await actor.tick(0)
+    await actor.bus.publish(
+        ActorMovedEvent(
+            **event_base(
+                actor.epoch,
+                visibility=EventVisibility.ROOM,
+                actor_id=str(bram_id),
+                room_id=str(world.rooms["bell_shrine"]),
+            ),
+            from_room_id=str(world.rooms["footbridge"]),
+            to_room_id=str(world.rooms["bell_shrine"]),
+            direction="east",
+        )
+    )
+    await actor.bus.publish(
+        SpeechSaidEvent(
+            **event_base(
+                actor.epoch,
+                visibility=EventVisibility.ROOM,
+                actor_id=str(bram_id),
+                room_id=str(world.rooms["green"]),
+            ),
+            text="Is the required circuit complete?",
+        )
+    )
+    assert "You have visited every required orientation stop." in str(
+        actor.pending_submissions()[0].payload["text"]
+    )
+
+
+async def test_tutorial_orientation_progress_ignores_invalid_movement_events():
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    world = await BELL_GREEN_DEMO.generate(actor, "bell-progress-guards", GenOptions())
+    reactor = TutorialGuideReactor(actor)
+    bram_id = world.characters["bram"]
+
+    def moved(actor_id: str, destination_id: str) -> ActorMovedEvent:
+        return ActorMovedEvent(
+            **event_base(
+                actor.epoch,
+                visibility=EventVisibility.ROOM,
+                actor_id=actor_id,
+                room_id=destination_id,
+            ),
+            from_room_id=str(world.rooms["green"]),
+            to_room_id=destination_id,
+            direction="test",
+        )
+
+    reactor._on_moved(moved("invalid", str(world.rooms["green"])))
+    reactor._on_moved(moved(str(bram_id), "invalid"))
+    reactor._on_moved(moved("entity_999998", str(world.rooms["green"])))
+    reactor._on_moved(moved(str(bram_id), "entity_999999"))
+    reactor._on_moved(
+        moved(str(world.characters["guide"]), str(world.rooms["garden_walk"]))
+    )
+    reactor._on_moved(moved(str(bram_id), str(world.objects["notice"])))
+
+    progress = actor.world.get_entity(bram_id).get_component(
+        TutorialOrientationProgressComponent
+    )
+    assert progress.visited_room_titles == ()
 
 
 async def test_bell_green_guide_ignores_invalid_or_inapplicable_help_requests():

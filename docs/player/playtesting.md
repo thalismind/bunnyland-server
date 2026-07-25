@@ -112,16 +112,18 @@ What to try:
 
 - Claim Bram Hollow, Pippa Bramble, or another obvious resident.
 - Orient from the initial Bell Green room view.
-- Inspect the central notice board.
-- Ask Tansy Bell for directions if the route is unclear.
+- Inspect the central notice board for the required orientation circuit; optional errands
+  are listed separately.
+- Ask Tansy Bell for directions or which required stop remains.
 - Read the fixed shrine signs at Garden Walk or River Footbridge if needed.
 - Visit Bell Green Post Office, Garden Walk, Hearthwick Inn, and Old Bell Shrine.
 
 Pass criteria:
 
 - Tester can identify Bell Green as a town center.
-- Notice board text gives several possible goals.
-- Tansy's authored answer identifies the main routes without using an LLM provider.
+- Notice board text distinguishes the required circuit from optional goals.
+- Tansy's authored answer identifies the main routes and remaining required stops without
+  using an LLM provider.
 - Exits are readable enough to navigate back to Bell Green.
 - The post office, garden, store/workshop/inn, pet yard, and shrine feel distinct.
 

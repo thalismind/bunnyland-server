@@ -35,6 +35,9 @@ Possible pass means at least 1/5, likely pass at least 3/5, and consistent pass 
 
 Heatmap cells show completed sessions per model. The first row shows how many tested models
 reached each milestone at least once, which identifies shared onboarding bottlenecks.
+Five-session cells use the six-class
+[ColorBrewer RdYlGn](https://colorbrewer2.org/#type=diverging&scheme=RdYlGn&n=6) scale so
+0, 1, 2, 3, 4, and 5 completions each have a distinct color.
 
 {{DIAGRAMS}}
 

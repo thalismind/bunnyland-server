@@ -249,15 +249,20 @@ def test_cohort_report_separates_versions_and_styles_replacement_columns(tmp_pat
     assert "`post-fix` / `post-one`" in markdown
     assert "`post-fix` / `post-two`" in markdown
     heatmap = (output / "diagrams/apple-milestones.svg").read_text(encoding="utf-8")
-    assert "baseline / large" in heatmap
-    assert "post-fix / large" in heatmap
+    assert "large / baseline" in heatmap
+    assert "large / post-fix" in heatmap
+    assert heatmap.index("large / baseline") < heatmap.index("large / post-fix")
+    assert heatmap.index("large / post-fix") < heatmap.index("small / baseline")
     assert "replaced-column" in heatmap
     assert "replacement-column" in heatmap
-    assert "opacity:.42" in heatmap
-    assert "saturate(.25)" in heatmap
+    assert "opacity:.72" in heatmap
+    assert "saturate(.35)" in heatmap
     assert "stroke-width:4" in heatmap
     assert "looked_in_apple_crossing → oriented_in_apple_crossing" in heatmap
     assert "—" in heatmap
+    assert "Completed sessions · ColorBrewer RdYlGn" in heatmap
+    for color in ("#d73027", "#fc8d59", "#fee08b", "#d9ef8b", "#91cf60", "#1a9850"):
+        assert color in heatmap
 
 
 def test_non_cohort_report_rejects_mixed_schema_versions(tmp_path):

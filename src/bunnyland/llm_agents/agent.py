@@ -703,6 +703,7 @@ class OllamaAgent:
         history_turns: int = 12,
         max_retries: int = DEFAULT_PROVIDER_RETRIES,
         retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
+        request_timeout_seconds: float | None = None,
         response_observer: OllamaResponseObserver | None = None,
         log_thinking: bool = False,
     ) -> None:
@@ -714,7 +715,18 @@ class OllamaAgent:
             ) from exc
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
         client_cls = ollama.AsyncClient
-        self._client = client_cls(host=host, headers=headers) if host else client_cls()
+        if host and request_timeout_seconds is not None:
+            self._client = client_cls(
+                host=host,
+                headers=headers,
+                timeout=request_timeout_seconds,
+            )
+        elif host:
+            self._client = client_cls(host=host, headers=headers)
+        elif request_timeout_seconds is not None:
+            self._client = client_cls(timeout=request_timeout_seconds)
+        else:
+            self._client = client_cls()
         self._model = model
         self._think = think
         self._temperature = temperature
@@ -875,6 +887,11 @@ class OllamaAgent:
         if sampling_options:
             options["options"] = sampling_options
         return options
+
+    async def close(self) -> None:
+        """Release the provider client and any pending HTTP connection resources."""
+
+        await self._client.close()
 
     def _observe_response(self, response: object) -> None:
         if self._response_observer is not None:

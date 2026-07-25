@@ -1581,6 +1581,51 @@ async def test_ollama_agent_sends_configured_thinking_and_temperature(monkeypatc
     ]
 
 
+async def test_ollama_agent_configures_provider_request_timeout(monkeypatch):
+    configured: list[tuple[str, str, float]] = []
+    closed: list[bool] = []
+
+    class TimeoutOllamaClient:
+        def __init__(self, *, host, headers, timeout):
+            configured.append((host, headers["Authorization"], timeout))
+
+        async def close(self):
+            closed.append(True)
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = TimeoutOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(
+        model="reasoner",
+        host="https://ollama.example",
+        api_key="cloud-secret",
+        request_timeout_seconds=3600,
+    )
+    await agent.close()
+
+    assert configured == [
+        ("https://ollama.example", "Bearer cloud-secret", 3600),
+    ]
+    assert closed == [True]
+
+
+async def test_ollama_agent_configures_timeout_without_host(monkeypatch):
+    configured: list[float] = []
+
+    class TimeoutOllamaClient:
+        def __init__(self, *, timeout):
+            configured.append(timeout)
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = TimeoutOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    OllamaAgent(model="reasoner", request_timeout_seconds=600)
+
+    assert configured == [600]
+
+
 async def test_ollama_agent_observes_full_response_and_optionally_thinking(monkeypatch):
     class ThinkingOllamaClient(_FakeOllamaClient):
         async def chat(self, *, model, messages, tools):

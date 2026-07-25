@@ -72,8 +72,9 @@ OLLAMA_HOST=http://model-host:11434 scripts/benchmark-tutorials \
 
 The wall-clock session limit defaults to 600 seconds, but reasoning models can need much
 longer. Set it in seconds with `--session-timeout`; the configured value becomes the pass
-deadline and is recorded in the manifest. `--turn-limit` remains an independent action-loop
-safety limit.
+deadline, bounds each Ollama provider request so a stuck HTTP call cannot bypass that
+deadline, and is recorded in the manifest. `--turn-limit` remains an independent
+action-loop safety limit.
 
 ```bash
 scripts/benchmark-tutorials \
@@ -110,6 +111,17 @@ Use `--repeat-command-guard` to bound exact repetition without prescribing a tut
 solution. After five consecutive identical tool-and-argument calls, the next prompt warns
 the agent to choose a different action. A tenth identical call ends that session with
 `repeat_limit`; tutorial outcomes remain report-only.
+
+Use `--provider-session-retries N` for long research cohorts where an exhausted transient
+provider request must not become model behavior. The default is zero. When enabled, the
+harness discards the affected session attempt, creates a fresh agent and world from the same
+seed, and retries up to `N` times. The final scored artifacts contain only the successful
+attempt; the benchmark log retains explicit warnings for discarded infrastructure attempts.
+
+Use `--seed-helpful-memory` to add three authored, tutorial-specific notes to the controlled
+character's private memory before the first decision. The default is off. Seeded and
+unseeded runs are different experimental conditions, and the manifest and report record
+which condition was used.
 
 ## Running with Ollama Cloud
 
@@ -152,8 +164,10 @@ unset to preserve each model/provider default. OpenRouter defaults to
 The model receives a high-level tester objective, not a route or scripted solution. Apple
 uses Juniper's existing Hungry Courier goal. Bell asks Bram to orient himself, read the
 notice board, visit the documented destinations, interact with a resident, and carry an
-item between rooms. Clover asks Ada to read the bulletin, inspect major facilities, and
-observe city activity.
+item between rooms. Bell's board names the required orientation circuit separately from
+optional errands, and Tansy's authored response reports the required stops Bram has not yet
+visited. Clover asks Ada to read the bulletin, inspect major facilities, and observe city
+activity.
 
 A tutorial result never changes the process exit code. Configuration, provider, or artifact
 write failures return nonzero; a low tutorial score remains report data.
@@ -277,9 +291,10 @@ scripts/build-tutorial-report \
   --title "Bunnyland tutorial playability: baseline and post-fix"
 ```
 
-Cohort mode groups comparison and token rows by cohort and model. Its heatmaps keep old and
-replacement milestone columns separate, show unavailable cohort cells as em dashes, fade the
-replaced column, outline the replacement, and print the exact identifier mapping.
+Cohort mode groups comparison and token rows by cohort and model. Its heatmaps label and sort
+rows by model then cohort so the same model's commit history stays adjacent. They keep old
+and replacement milestone columns separate, show unavailable cohort cells as em dashes, fade
+the replaced column, outline the replacement, and print the exact identifier mapping.
 
 The generated directory contains:
 

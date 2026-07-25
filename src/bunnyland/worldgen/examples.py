@@ -18,6 +18,7 @@ from bunnyland.foundation.persona.mechanics import GoalComponent
 from bunnyland.foundation.tutorial.mechanics import (
     HungryCourierControllerComponent,
     TutorialGuideComponent,
+    TutorialOrientationProgressComponent,
 )
 
 from ..core.components import (
@@ -328,8 +329,9 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
                 {
                     "text": (
                         "Welcome to Bell Green. The notice board has a town map and errands. "
-                        "From here Bell Green Post Office is north, Garden Walk east, and "
-                        "Hearthwick Inn south. Ask me if you get lost."
+                        "The required orientation circuit visits Bell Green Post Office, "
+                        "Garden Walk, Hearthwick Inn, and Old Bell Shrine. Optional errands "
+                        "are listed separately. Ask me which required stop remains."
                     ),
                     "intent": "inform",
                     "approach": "friendly",
@@ -481,7 +483,10 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
                 name="central notice board",
                 kind="paper",
                 portable=False,
-                description="A fixed public board combining a town map with optional errands.",
+                description=(
+                    "A fixed public board separating the required orientation circuit from "
+                    "optional errands."
+                ),
             ),
             ObjectSpec(
                 key="mailbox",
@@ -581,11 +586,13 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
             ReadableComponent(
                 title="Bell Green Notice Board",
                 text=(
-                    "Town map from Bell Green: north to Bell Green Post Office; east to "
-                    "Garden Walk; south to Hearthwick Inn; west to Market Lane. For the Old "
-                    "Bell Shrine, go east to Garden Walk, south to River Footbridge, then "
-                    "east. Starter errands: help Pip finish a delivery, inspect the mail, "
-                    "carry Saffron's harvest basket, ask Jun what broke, or feed Button."
+                    "Required orientation circuit: visit Bell Green Post Office, Garden Walk, "
+                    "Hearthwick Inn, and Old Bell Shrine. Town map from Bell Green: north to "
+                    "Bell Green Post Office; east to Garden Walk; south to Hearthwick Inn; "
+                    "west to Market Lane. For Old Bell Shrine, go east to Garden Walk, south "
+                    "to River Footbridge, then east. Optional starter errands: help Pip finish "
+                    "a delivery, inspect the mail, carry Saffron's harvest basket, ask Jun "
+                    "what broke, or feed Button."
                 ),
             ),
         )
@@ -594,10 +601,24 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
             world.characters["guide"],
             TutorialGuideComponent(
                 help_text=(
-                    "From Bell Green: the north exit reaches Bell Green Post Office, the east "
-                    "exit reaches Garden Walk, and the south exit reaches Hearthwick Inn. For "
-                    "Old Bell Shrine, take the east exit to Garden Walk, the south exit to "
-                    "River Footbridge, then the east exit to Old Bell Shrine."
+                    "The required orientation circuit is Bell Green Post Office, Garden Walk, "
+                    "Hearthwick Inn, and Old Bell Shrine. From Bell Green: take north for Bell "
+                    "Green Post Office, east for Garden Walk, and south for Hearthwick Inn. "
+                    "For Old Bell Shrine, take the east exit to Garden Walk, the south exit to "
+                    "River Footbridge, then the east exit to Old Bell Shrine. Optional errands "
+                    "do not replace these stops."
+                )
+            ),
+        )
+        _augment(
+            actor,
+            world.characters["bram"],
+            TutorialOrientationProgressComponent(
+                required_room_titles=(
+                    "Bell Green Post Office",
+                    "Garden Walk",
+                    "Hearthwick Inn",
+                    "Old Bell Shrine",
                 )
             ),
         )

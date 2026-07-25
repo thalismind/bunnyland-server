@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from pydantic.dataclasses import dataclass
 from relics import Component, Entity
 
@@ -14,9 +16,16 @@ from ...core.components import (
     ReadableComponent,
     RoomComponent,
 )
-from ...core.ecs import container_of, contents, entity_name, parse_entity_id, reachable_ids
+from ...core.ecs import (
+    container_of,
+    contents,
+    entity_name,
+    parse_entity_id,
+    reachable_ids,
+    replace_component,
+)
 from ...core.edges import ControlledBy
-from ...core.events import SpeechSaidEvent, SpeechToldEvent
+from ...core.events import ActorMovedEvent, SpeechSaidEvent, SpeechToldEvent
 from ...core.world_actor import WorldActor
 from ...llm_agents.dispatch import ControllerDispatch, register_autonomous_controller
 from ...llm_agents.tools import ToolCall, command_from_tool_call
@@ -32,6 +41,14 @@ class TutorialGuideComponent(Component):
     help_text: str
 
 
+@dataclass(frozen=True)
+class TutorialOrientationProgressComponent(Component):
+    """Singleton progress for one active authored orientation circuit on a character."""
+
+    required_room_titles: tuple[str, ...]
+    visited_room_titles: tuple[str, ...] = ()
+
+
 class TutorialGuideReactor:
     def __init__(self, actor: WorldActor) -> None:
         self.actor = actor
@@ -39,11 +56,57 @@ class TutorialGuideReactor:
     def subscribe(self) -> None:
         self.actor.bus.subscribe(SpeechSaidEvent, self._on_speech)
         self.actor.bus.subscribe(SpeechToldEvent, self._on_speech)
+        self.actor.bus.subscribe(ActorMovedEvent, self._on_moved)
 
     @staticmethod
     def _asks_for_help(text: str) -> bool:
         words = {word.strip(".,!?;:").lower() for word in text.split()}
         return "?" in text or bool(words.intersection(_HELP_WORDS))
+
+    def _on_moved(self, event: ActorMovedEvent) -> None:
+        character_id = parse_entity_id(event.actor_id)
+        room_id = parse_entity_id(event.to_room_id)
+        if (
+            character_id is None
+            or room_id is None
+            or not self.actor.world.has_entity(character_id)
+            or not self.actor.world.has_entity(room_id)
+        ):
+            return
+        character = self.actor.world.get_entity(character_id)
+        room = self.actor.world.get_entity(room_id)
+        if not character.has_component(
+            TutorialOrientationProgressComponent
+        ) or not room.has_component(RoomComponent):
+            return
+        progress = character.get_component(TutorialOrientationProgressComponent)
+        room_title = room.get_component(RoomComponent).title
+        if (
+            room_title not in progress.required_room_titles
+            or room_title in progress.visited_room_titles
+        ):
+            return
+        replace_component(
+            character,
+            replace(
+                progress,
+                visited_room_titles=(*progress.visited_room_titles, room_title),
+            ),
+        )
+
+    @staticmethod
+    def _guide_text(speaker: Entity, guide: Entity) -> str:
+        help_text = guide.get_component(TutorialGuideComponent).help_text
+        if not speaker.has_component(TutorialOrientationProgressComponent):
+            return help_text
+        progress = speaker.get_component(TutorialOrientationProgressComponent)
+        visited = set(progress.visited_room_titles)
+        missing = tuple(
+            title for title in progress.required_room_titles if title not in visited
+        )
+        if not missing:
+            return f"{help_text} You have visited every required orientation stop."
+        return f"{help_text} Remaining required stops: {_join_names(missing)}."
 
     def _on_speech(self, event: SpeechSaidEvent | SpeechToldEvent) -> None:
         speaker_id = parse_entity_id(event.actor_id)
@@ -73,7 +136,7 @@ class TutorialGuideReactor:
             call = ToolCall(
                 "say",
                 {
-                    "text": guide.get_component(TutorialGuideComponent).help_text,
+                    "text": self._guide_text(speaker, guide),
                     "intent": "inform",
                     "approach": "friendly",
                 },
@@ -89,6 +152,14 @@ class TutorialGuideReactor:
                 )
             )
             return
+
+
+def _join_names(names: tuple[str, ...]) -> str:
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return f"{', '.join(names[:-1])}, and {names[-1]}"
 
 
 @dataclass(frozen=True)
@@ -301,5 +372,6 @@ __all__ = [
     "HungryCourierControllerComponent",
     "TutorialGuideComponent",
     "TutorialGuideReactor",
+    "TutorialOrientationProgressComponent",
     "install_tutorial",
 ]

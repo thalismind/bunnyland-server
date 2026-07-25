@@ -546,7 +546,7 @@ def _milestone_matrix(
     models: dict[str, dict[str, list[bool]]] = defaultdict(lambda: defaultdict(list))
     for item in selected:
         row_name = (
-            f"{item.cohort} / {item.result.model}"
+            f"{item.result.model} / {item.cohort}"
             if item.cohort is not None
             else item.result.model
         )
@@ -565,14 +565,19 @@ def _milestone_matrix(
     return milestones, matrix
 
 
-def _heat_color(rate: float) -> str:
-    if rate >= 0.8:
-        return "#2f9e44"
-    if rate >= 0.4:
-        return "#f59f00"
-    if rate > 0:
-        return "#e8590c"
-    return "#c92a2a"
+COLORBREWER_RDYLGN_6 = (
+    "#d73027",
+    "#fc8d59",
+    "#fee08b",
+    "#d9ef8b",
+    "#91cf60",
+    "#1a9850",
+)
+
+
+def _heat_color(hit: int, total: int) -> str:
+    palette_index = round(5 * hit / total) if total else 0
+    return COLORBREWER_RDYLGN_6[palette_index]
 
 
 def render_heatmap_svg(
@@ -589,12 +594,16 @@ def render_heatmap_svg(
         for old, new in replacements.items()
         if old in milestones and new in milestones
     )
-    legend_height = 26 + 18 * len(visible_replacements) if visible_replacements else 0
+    replacement_legend_height = (
+        26 + 18 * len(visible_replacements) if visible_replacements else 0
+    )
+    scale_legend_height = 48
+    legend_height = replacement_legend_height + scale_legend_height
     height = 118 + cell_height * (len(models) + 1) + legend_height
     lines = _svg_start(width, height, f"{tutorial.title()} milestone completion")
     lines.insert(
         2,
-        ".replaced-column{opacity:.42;filter:saturate(.25)}"
+        ".replaced-column{opacity:.72;filter:saturate(.35)}"
         ".replacement-column{stroke:#1971c2;"
         "stroke-width:4}.not-applicable{fill:#adb5bd}",
     )
@@ -624,7 +633,6 @@ def render_heatmap_svg(
                 hit, total = model_reach[milestone]
             else:
                 hit, total = matrix[model][milestone]
-            rate = hit / total if total else 0
             classes = []
             if milestone in replacements:
                 classes.append("replaced-column")
@@ -633,20 +641,22 @@ def render_heatmap_svg(
             if not total:
                 classes.append("not-applicable")
             class_attr = f' class="{" ".join(classes)}"' if classes else ""
-            fill = "#adb5bd" if not total else _heat_color(rate)
+            fill = "#adb5bd" if not total else _heat_color(hit, total)
             lines.append(
                 f'<rect{class_attr} x="{x}" y="{y}" width="{cell_width - 2}" '
                 f'height="{cell_height - 2}" fill="{fill}"/>'
             )
-            text_css = ' class="replaced-column"' if milestone in replacements else ""
             cell_text = f"{hit}/{total}" if total else "—"
+            palette_index = round(5 * hit / total) if total else 0
+            text_fill = "#17202a" if total and palette_index in (2, 3, 4) else "white"
             lines.append(
-                f'<text{text_css} x="{x + cell_width // 2}" y="{y + 22}" text-anchor="middle" '
-                'style="font-family:sans-serif;font-size:12px;font-weight:700;fill:white">'
+                f'<text x="{x + cell_width // 2}" y="{y + 22}" text-anchor="middle" '
+                f'style="font-family:sans-serif;font-size:12px;font-weight:700;'
+                f'fill:{text_fill}">'
                 f"{cell_text}</text>"
             )
+    legend_y = 124 + cell_height * (len(models) + 1)
     if visible_replacements:
-        legend_y = 124 + cell_height * (len(models) + 1)
         lines.append(
             f'<text class="label" x="12" y="{legend_y}">Milestone replacements</text>'
         )
@@ -655,6 +665,19 @@ def render_heatmap_svg(
                 f'<text class="small" x="12" y="{legend_y + index * 18}">'
                 f"{escape(old)} → {escape(new)}</text>"
             )
+    scale_y = legend_y + replacement_legend_height
+    lines.append(
+        f'<text class="label" x="12" y="{scale_y}">'
+        "Completed sessions · ColorBrewer RdYlGn</text>"
+    )
+    for count, color in enumerate(COLORBREWER_RDYLGN_6):
+        x = 12 + count * 62
+        lines.append(
+            f'<rect x="{x}" y="{scale_y + 8}" width="32" height="20" fill="{color}"/>'
+        )
+        lines.append(
+            f'<text class="small" x="{x + 39}" y="{scale_y + 23}">{count}</text>'
+        )
     lines.append("</svg>")
     return "\n".join(lines) + "\n"
 

@@ -10,7 +10,9 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+import benchmarks.tutorials as tutorial_benchmark_module
 from benchmarks.tutorials import (
+    HELPFUL_MEMORY_NOTES,
     SCHEMA_VERSION,
     BenchmarkConfig,
     BenchmarkConfigurationError,
@@ -365,6 +367,36 @@ async def test_starting_room_projection_counts_as_orientation_without_redundant_
     assert dict(result.milestone_results)["oriented_in_bell_green"] is True
 
 
+@pytest.mark.parametrize("tutorial", ("apple", "bell", "clover"))
+async def test_optional_helpful_memory_seed_appears_in_initial_prompt(tutorial):
+    _result, traces = await run_session(
+        tutorial_scenarios()[tutorial],
+        model="deterministic",
+        provider="ollama-local",
+        run=1,
+        timeout_seconds=5,
+        turn_limit=1,
+        agent=ScriptedAgent(()),
+        seed_helpful_memory=True,
+    )
+
+    assert all(note in traces[0].prompt for note in HELPFUL_MEMORY_NOTES[tutorial])
+
+
+async def test_helpful_memory_seed_is_disabled_by_default():
+    _result, traces = await run_session(
+        tutorial_scenarios()["bell"],
+        model="deterministic",
+        provider="ollama-local",
+        run=1,
+        timeout_seconds=5,
+        turn_limit=1,
+        agent=ScriptedAgent(()),
+    )
+
+    assert all(note not in traces[0].prompt for note in HELPFUL_MEMORY_NOTES["bell"])
+
+
 async def test_initial_projection_perceives_apple_scene_without_look():
     result, traces = await run_session(
         tutorial_scenarios()["apple"],
@@ -665,6 +697,62 @@ async def test_provider_failure_is_in_durable_trace_callback():
     assert recorded[0].provider_error == "provider unavailable"
 
 
+class _ExhaustedProviderAgent:
+    async def decide(self, prompt, context, **kwargs):
+        del prompt, context, kwargs
+        return InvalidAgentResponse(
+            reason="provider returned no response after retries",
+            feedback="provider failed",
+        )
+
+
+async def test_benchmark_discards_and_retries_provider_failed_session():
+    agents: list[object] = []
+
+    def factory(model, host, api_key):
+        del model, host, api_key
+        agent: object
+        if agents:
+            agent = ScriptedAgent(_apple_calls())
+        else:
+            agent = _ExhaustedProviderAgent()
+        agents.append(agent)
+        return agent
+
+    async def preflight(models, host, api_key):
+        del host, api_key
+        return tuple(ModelMetadata(model=model) for model in models)
+
+    _summary, sessions, traces, responses, _metadata = await run_benchmark(
+        BenchmarkConfig(
+            models=("tiny",),
+            tutorials=("apple",),
+            sessions=1,
+            turn_limit=20,
+            provider_session_retries=1,
+        ),
+        agent_factory=factory,
+        preflight=preflight,
+    )
+
+    assert len(agents) == 2
+    assert len(sessions) == 1
+    assert sessions[0].passed is True
+    assert all(trace.provider_error == "" for trace in traces)
+    assert responses == ()
+
+
+async def test_benchmark_rejects_negative_provider_session_retries():
+    with pytest.raises(
+        BenchmarkConfigurationError,
+        match="provider session retries cannot be negative",
+    ):
+        BenchmarkConfig(
+            models=("tiny",),
+            provider_session_retries=-1,
+        ).validated()
+
+
 @dataclass
 class _FreshAgent(ScriptedAgent):
     prompts_seen: int = 0
@@ -705,6 +793,70 @@ async def test_benchmark_builds_fresh_world_agent_and_history_per_session():
     ranking = summary["tutorial_rankings"]
     assert isinstance(ranking, dict)
     assert ranking["apple"][0]["completed_within_session_limit"] == 2
+
+
+async def test_benchmark_applies_session_timeout_to_ollama_requests(monkeypatch):
+    request_timeouts: list[float] = []
+
+    class TimeoutRecordingAgent(ScriptedAgent):
+        def __init__(
+            self,
+            *,
+            model,
+            host,
+            api_key,
+            history_turns,
+            think,
+            temperature,
+            max_output_tokens,
+            request_timeout_seconds,
+            response_observer,
+            log_thinking,
+        ) -> None:
+            del (
+                model,
+                host,
+                api_key,
+                history_turns,
+                think,
+                temperature,
+                max_output_tokens,
+                response_observer,
+                log_thinking,
+            )
+            super().__init__(_apple_calls())
+            request_timeouts.append(request_timeout_seconds)
+
+        async def close(self) -> None:
+            pass
+
+    async def preflight(models, host, api_key):
+        del host, api_key
+        return tuple(
+            ModelMetadata(model=model, parameter_count=1_000_000_000)
+            for model in models
+        )
+
+    monkeypatch.setattr(
+        tutorial_benchmark_module,
+        "OllamaAgent",
+        TimeoutRecordingAgent,
+    )
+    _summary, sessions, _traces, _responses, _metadata = await run_benchmark(
+        BenchmarkConfig(
+            models=("tiny",),
+            tutorials=("apple",),
+            provider="ollama-cloud",
+            api_key="cloud-secret",
+            sessions=1,
+            timeout_seconds=37,
+            turn_limit=20,
+        ),
+        preflight=preflight,
+    )
+
+    assert request_timeouts == [37]
+    assert sessions[0].passed is True
 
 
 def _session(model: str, tutorial: str, run: int, *, passed: bool) -> SessionResult:
@@ -777,6 +929,9 @@ async def test_ollama_preflight_uses_show_without_pull_and_extracts_metadata(mon
                 )
             )
 
+        async def close(self):
+            calls.append(("close", "client"))
+
     fake = ModuleType("ollama")
     fake.AsyncClient = FakeClient
     monkeypatch.setitem(sys.modules, "ollama", fake)
@@ -786,6 +941,7 @@ async def test_ollama_preflight_uses_show_without_pull_and_extracts_metadata(mon
     assert calls == [
         ("https://ollama.example", "Bearer cloud-secret"),
         ("show", "reasoner"),
+        ("close", "client"),
     ]
     assert result == (
         ModelMetadata(
@@ -807,11 +963,43 @@ async def test_preflight_failure_is_provider_error(monkeypatch):
         async def show(self, model):
             raise OSError(f"missing {model}")
 
+        async def close(self):
+            pass
+
     fake = ModuleType("ollama")
     fake.AsyncClient = FakeClient
     monkeypatch.setitem(sys.modules, "ollama", fake)
     with pytest.raises(ProviderBenchmarkError, match="preflight failed"):
         await preflight_ollama_models(("missing",), "http://local", None)
+
+
+async def test_ollama_preflight_configures_request_timeout(monkeypatch):
+    configured: list[float] = []
+
+    class FakeClient:
+        def __init__(self, *, host, headers, timeout):
+            del host, headers
+            configured.append(timeout)
+
+        async def show(self, model):
+            del model
+            return SimpleNamespace(details=None)
+
+        async def close(self):
+            pass
+
+    fake = ModuleType("ollama")
+    fake.AsyncClient = FakeClient
+    monkeypatch.setitem(sys.modules, "ollama", fake)
+
+    await preflight_ollama_models(
+        ("reasoner",),
+        "https://ollama.example",
+        "cloud-secret",
+        request_timeout_seconds=60,
+    )
+
+    assert configured == [60]
 
 
 async def test_openrouter_preflight_lists_models_without_inference(monkeypatch):
@@ -871,6 +1059,7 @@ def test_artifacts_have_stable_schemas_and_never_record_credentials(tmp_path):
         provider="ollama-cloud",
         host="https://user:host-secret@ollama.example/api?token=query-secret",
         api_key="never-write-this-secret",
+        seed_helpful_memory=True,
     )
     result = _session("model", "apple", 1, passed=True)
     metadata = (ModelMetadata("model", parameter_count=1_000_000_000),)
@@ -895,6 +1084,7 @@ def test_artifacts_have_stable_schemas_and_never_record_credentials(tmp_path):
     assert manifest["schema_version"] == SCHEMA_VERSION
     assert manifest["session_timeout_seconds"] == 3600
     assert manifest["max_output_tokens"] == 8192
+    assert manifest["seed_helpful_memory"] is True
     assert manifest["host"] == "https://ollama.example/api"
     session = json.loads((tmp_path / "sessions.jsonl").read_text(encoding="utf-8"))
     assert session["schema_version"] == SCHEMA_VERSION
@@ -902,7 +1092,16 @@ def test_artifacts_have_stable_schemas_and_never_record_credentials(tmp_path):
     assert (tmp_path / "responses.jsonl").read_text(encoding="utf-8") == ""
     report = (tmp_path / "report.md").read_text(encoding="utf-8")
     assert "LLM tutorial-ladder comparison" in report
+    assert "Helpful memory seed: `enabled`" in report
     assert "Adding models" in report
+
+
+def test_parser_accepts_helpful_memory_seed_flag():
+    args = tutorial_benchmark_module.build_parser().parse_args(
+        ["--model", "tiny", "--seed-helpful-memory"]
+    )
+
+    assert args.seed_helpful_memory is True
 
 
 def test_live_artifacts_checkpoint_each_trace_and_session(tmp_path):

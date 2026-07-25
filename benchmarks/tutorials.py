@@ -30,6 +30,7 @@ from bunnyland.core import (
     FocusPointsComponent,
     IdentityComponent,
     LLMControllerComponent,
+    MemoryProfileComponent,
     PortableComponent,
     ReadableComponent,
     RoomComponent,
@@ -95,6 +96,29 @@ DEFAULT_TIMEOUT_SECONDS = 600.0
 DEFAULT_TURN_LIMIT = 60
 TURN_GAME_SECONDS = 600.0
 TUTORIAL_NAMES = ("apple", "bell", "clover")
+HELPFUL_MEMORY_NOTES: Mapping[str, tuple[str, ...]] = {
+    "apple": (
+        "Pip needs reachable food and the courier letter before leaving Apple Crossing.",
+        "The red crossing apple grows in Apple Hedge, east of Apple Crossing.",
+        "The delivery route is south to Old Footbridge, west to Mira's Cottage Lane, then in "
+        "to Mira's Cottage; inspect the delivery ledger there to confirm completion.",
+    ),
+    "bell": (
+        "The required Bell Green orientation circuit visits Bell Green Post Office, Garden "
+        "Walk, Hearthwick Inn, and Old Bell Shrine; optional errands do not replace a stop.",
+        "Old Bell Shrine is east to Garden Walk, south to River Footbridge, then east.",
+        "The community mailbox is a fixed fixture to inspect, while the harvest basket at "
+        "Garden Walk is portable.",
+    ),
+    "clover": (
+        "Read the daily bulletin, inspect the mailroom parcel locker or city record, and visit "
+        "residents across the named facilities.",
+        "Courtyard and Stairwell directories list the facility routes; Street Stop has Rook's "
+        "timetable.",
+        "Rook alternates movement with route announcements, so ordinary exploration can reveal "
+        "recurring city activity.",
+    ),
+}
 
 logger = logging.getLogger("bunnyland.benchmark.tutorials")
 
@@ -140,6 +164,8 @@ class BenchmarkConfig:
     max_output_tokens: int | None = None
     log_thinking: bool = False
     repeat_command_guard: bool = False
+    provider_session_retries: int = 0
+    seed_helpful_memory: bool = False
 
     def validated(self) -> BenchmarkConfig:
         if not self.models or any(not model.strip() for model in self.models):
@@ -155,6 +181,8 @@ class BenchmarkConfig:
             raise BenchmarkConfigurationError("turn limit must be positive")
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
             raise BenchmarkConfigurationError("max output tokens must be positive")
+        if self.provider_session_retries < 0:
+            raise BenchmarkConfigurationError("provider session retries cannot be negative")
         if self.provider == "ollama-cloud" and not self.api_key:
             raise BenchmarkConfigurationError(
                 "ollama-cloud needs OLLAMA_CLOUD_API_KEY in the environment"
@@ -339,6 +367,12 @@ class _RecordingAgent:
                 tool=call.name if isinstance(call, ToolCall) else None,
                 arguments=dict(call.arguments) if isinstance(call, ToolCall) else {},
                 latency_seconds=time.perf_counter() - started,
+                error=(
+                    call.reason
+                    if isinstance(call, InvalidAgentResponse)
+                    and call.reason == "provider returned no response after retries"
+                    else ""
+                ),
             )
         )
         return call
@@ -821,7 +855,11 @@ def _parameter_count(value: str | None) -> int | None:
 
 
 async def preflight_ollama_models(
-    models: tuple[str, ...], host: str, api_key: str | None
+    models: tuple[str, ...],
+    host: str,
+    api_key: str | None,
+    *,
+    request_timeout_seconds: float | None = None,
 ) -> tuple[ModelMetadata, ...]:
     """Confirm models exist with Ollama's show endpoint; never pull or record credentials."""
 
@@ -832,27 +870,37 @@ async def preflight_ollama_models(
             "tutorial benchmark requires the 'llm' extra: uv sync --extra llm"
         ) from exc
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
-    client = ollama.AsyncClient(host=host, headers=headers)
-    metadata = []
-    for model in models:
-        try:
-            response = await client.show(model)
-        except Exception as exc:
-            raise ProviderBenchmarkError(
-                f"Ollama model preflight failed for {model!r}: {exc}"
-            ) from exc
-        details = response.details
-        parameter_size = details.parameter_size if details else None
-        metadata.append(
-            ModelMetadata(
-                model=model,
-                parameter_count=_parameter_count(parameter_size),
-                parameter_size=parameter_size,
-                family=details.family if details else None,
-                quantization=details.quantization_level if details else None,
-            )
+    if request_timeout_seconds is None:
+        client = ollama.AsyncClient(host=host, headers=headers)
+    else:
+        client = ollama.AsyncClient(
+            host=host,
+            headers=headers,
+            timeout=request_timeout_seconds,
         )
-    return tuple(metadata)
+    try:
+        metadata = []
+        for model in models:
+            try:
+                response = await client.show(model)
+            except Exception as exc:
+                raise ProviderBenchmarkError(
+                    f"Ollama model preflight failed for {model!r}: {exc}"
+                ) from exc
+            details = response.details
+            parameter_size = details.parameter_size if details else None
+            metadata.append(
+                ModelMetadata(
+                    model=model,
+                    parameter_count=_parameter_count(parameter_size),
+                    parameter_size=parameter_size,
+                    family=details.family if details else None,
+                    quantization=details.quantization_level if details else None,
+                )
+            )
+        return tuple(metadata)
+    finally:
+        await client.close()
 
 
 async def preflight_openrouter_models(
@@ -902,6 +950,23 @@ def _set_goal(character, brief: str) -> None:
         character.add_component(GoalComponent(active_goals=(brief,)))
 
 
+def _seed_helpful_memory(actor: WorldActor, character, tutorial: str) -> None:
+    if not character.has_component(MemoryProfileComponent):
+        raise BenchmarkError("tutorial character has no memory profile")
+    store = actor.memory_store
+    if store is None:
+        raise BenchmarkError("tutorial benchmark has no memory store")
+    collection = character.get_component(MemoryProfileComponent).vector_collection
+    for text in HELPFUL_MEMORY_NOTES[tutorial]:
+        store.add(
+            collection,
+            text=text,
+            tags=("tutorial", tutorial, "seeded"),
+            created_at_epoch=actor.epoch,
+            source="tutorial-benchmark-seed",
+        )
+
+
 async def _build_session(
     scenario: TutorialScenario,
     *,
@@ -909,6 +974,7 @@ async def _build_session(
     provider: Provider,
     seed: str,
     agent: CharacterAgent,
+    seed_helpful_memory: bool = False,
 ) -> tuple[TutorialState, ControllerDispatch, _RecordingAgent]:
     actor = WorldActor()
     plugins = bunnyland_plugins()
@@ -936,6 +1002,8 @@ async def _build_session(
     )
     if scenario.tester_brief:
         _set_goal(player, scenario.tester_brief)
+    if seed_helpful_memory:
+        _seed_helpful_memory(actor, player, scenario.name)
     controller = spawn_entity(
         actor.world,
         [LLMControllerComponent(profile_name="tutorial-benchmark", model=model, provider=provider)],
@@ -951,6 +1019,7 @@ async def _build_session(
         actor,
         PromptBuilder(
             actor.world,
+            memory_store=actor.memory_store,
             fragment_providers=actor.prompt_fragment_providers,
             persona_providers=collect_persona_fragments(plugins),
         ),
@@ -1020,11 +1089,17 @@ async def run_session(
     agent: CharacterAgent,
     on_trace_recorded: Callable[[TurnTrace], None] | None = None,
     repeat_command_guard: bool = False,
+    seed_helpful_memory: bool = False,
 ) -> tuple[SessionResult, tuple[TurnTrace, ...]]:
     session_id = f"{scenario.name}-{_slug(model)}-{run:02d}"
     seed = f"tutorial-benchmark-{session_id}"
     state, dispatch, recording = await _build_session(
-        scenario, model=model, provider=provider, seed=seed, agent=agent
+        scenario,
+        model=model,
+        provider=provider,
+        seed=seed,
+        agent=agent,
+        seed_helpful_memory=seed_helpful_memory,
     )
     decisions: list[Decision] = []
     traces: list[TurnTrace] = []
@@ -1343,18 +1418,25 @@ async def run_benchmark(
     tuple[ModelMetadata, ...],
 ]:
     config = config.validated()
-    resolved_preflight = preflight
-    if resolved_preflight is None:
-        resolved_preflight = (
-            preflight_openrouter_models
-            if config.provider == "openrouter"
-            else preflight_ollama_models
+    if preflight is not None:
+        metadata = await preflight(
+            config.models,
+            config.resolved_host,
+            config.api_key,
         )
-    metadata = await resolved_preflight(
-        config.models,
-        config.resolved_host,
-        config.api_key,
-    )
+    elif config.provider == "openrouter":
+        metadata = await preflight_openrouter_models(
+            config.models,
+            config.resolved_host,
+            config.api_key,
+        )
+    else:
+        metadata = await preflight_ollama_models(
+            config.models,
+            config.resolved_host,
+            config.api_key,
+            request_timeout_seconds=config.timeout_seconds,
+        )
     if on_preflight_completed is not None:
         on_preflight_completed(metadata)
     scenarios = tutorial_scenarios()
@@ -1364,6 +1446,7 @@ async def run_benchmark(
 
     def response_recorder(
         current_session_id: str,
+        attempt_responses: list[ModelResponseTrace],
     ) -> Callable[[dict[str, JsonValue]], None]:
         response_turn = 0
 
@@ -1376,7 +1459,7 @@ async def run_benchmark(
                 turn=response_turn,
                 response=response,
             )
-            responses.append(trace)
+            attempt_responses.append(trace)
             if on_response_recorded is not None:
                 on_response_recorded(trace)
 
@@ -1386,44 +1469,67 @@ async def run_benchmark(
         for tutorial in config.tutorials:
             for run in range(1, config.sessions + 1):
                 session_id = f"{tutorial}-{_slug(model)}-{run:02d}"
-                record_response = response_recorder(session_id)
-                if agent_factory is not None:
-                    agent = agent_factory(model, config.resolved_host, config.api_key)
-                elif config.provider == "openrouter":
-                    agent = OpenRouterAgent(
-                        model=model,
-                        api_key=config.api_key,
-                        server_url=config.resolved_host,
-                        history_turns=60,
-                        reasoning=config.thinking,
-                        temperature=config.temperature,
-                        max_output_tokens=config.max_output_tokens,
-                        response_observer=record_response,
-                        log_thinking=config.log_thinking,
-                    )
-                else:
-                    agent = OllamaAgent(
-                        model=model,
-                        host=config.resolved_host,
-                        api_key=config.api_key,
-                        history_turns=60,
-                        think=config.thinking,
-                        temperature=config.temperature,
-                        max_output_tokens=config.max_output_tokens,
-                        response_observer=record_response,
-                        log_thinking=config.log_thinking,
-                    )
-                result, session_traces = await run_session(
-                    scenarios[tutorial],
-                    model=model,
-                    provider=config.provider,
-                    run=run,
-                    timeout_seconds=config.timeout_seconds,
-                    turn_limit=config.turn_limit,
-                    agent=agent,
-                    on_trace_recorded=on_trace_recorded,
-                    repeat_command_guard=config.repeat_command_guard,
-                )
+                for attempt in range(config.provider_session_retries + 1):
+                    attempt_responses: list[ModelResponseTrace] = []
+                    record_response = response_recorder(session_id, attempt_responses)
+                    owned_ollama_agent: OllamaAgent | None = None
+                    if agent_factory is not None:
+                        agent = agent_factory(model, config.resolved_host, config.api_key)
+                    elif config.provider == "openrouter":
+                        agent = OpenRouterAgent(
+                            model=model,
+                            api_key=config.api_key,
+                            server_url=config.resolved_host,
+                            history_turns=60,
+                            reasoning=config.thinking,
+                            temperature=config.temperature,
+                            max_output_tokens=config.max_output_tokens,
+                            response_observer=record_response,
+                            log_thinking=config.log_thinking,
+                        )
+                    else:
+                        owned_ollama_agent = OllamaAgent(
+                            model=model,
+                            host=config.resolved_host,
+                            api_key=config.api_key,
+                            history_turns=60,
+                            think=config.thinking,
+                            temperature=config.temperature,
+                            max_output_tokens=config.max_output_tokens,
+                            request_timeout_seconds=config.timeout_seconds,
+                            response_observer=record_response,
+                            log_thinking=config.log_thinking,
+                        )
+                        agent = owned_ollama_agent
+                    try:
+                        result, session_traces = await run_session(
+                            scenarios[tutorial],
+                            model=model,
+                            provider=config.provider,
+                            run=run,
+                            timeout_seconds=config.timeout_seconds,
+                            turn_limit=config.turn_limit,
+                            agent=agent,
+                            on_trace_recorded=on_trace_recorded,
+                            repeat_command_guard=config.repeat_command_guard,
+                            seed_helpful_memory=config.seed_helpful_memory,
+                        )
+                    except ProviderBenchmarkError:
+                        if attempt >= config.provider_session_retries:
+                            raise
+                        logger.warning(
+                            "discarding provider-failed session attempt "
+                            "session=%s attempt=%d/%d; retrying from the same seed",
+                            session_id,
+                            attempt + 1,
+                            config.provider_session_retries + 1,
+                        )
+                        continue
+                    finally:
+                        if owned_ollama_agent is not None:
+                            await owned_ollama_agent.close()
+                    responses.extend(attempt_responses)
+                    break
                 results.append(result)
                 traces.extend(session_traces)
                 if on_session_completed is not None:
@@ -1504,6 +1610,8 @@ def _manifest(
         "max_output_tokens": config.max_output_tokens,
         "log_thinking": config.log_thinking,
         "repeat_command_guard": config.repeat_command_guard,
+        "provider_session_retries": config.provider_session_retries,
+        "seed_helpful_memory": config.seed_helpful_memory,
         "milestone_replacements": MILESTONE_REPLACEMENTS,
     }
 
@@ -1529,6 +1637,8 @@ def render_report(
         f"Maximum output tokens: `{max_output_tokens}`  ",
         f"Thinking logged: `{'yes' if config.log_thinking else 'no'}`",
         f"Repeat-command guard: `{'enabled' if config.repeat_command_guard else 'disabled'}`",
+        f"Provider session retries: `{config.provider_session_retries}`",
+        f"Helpful memory seed: `{'enabled' if config.seed_helpful_memory else 'disabled'}`",
         "",
         "## Models",
         "",
@@ -1689,7 +1799,7 @@ class LiveArtifactWriter:
             "benchmark started provider=%s models=%s tutorials=%s sessions=%d "
             "timeout=%g turn_limit=%d thinking=%s temperature=%s max_output_tokens=%s "
             "log_thinking=%s "
-            "repeat_command_guard=%s",
+            "repeat_command_guard=%s provider_session_retries=%d seed_helpful_memory=%s",
             self.config.provider,
             ",".join(self.config.models),
             ",".join(self.config.tutorials),
@@ -1701,6 +1811,8 @@ class LiveArtifactWriter:
             self.config.max_output_tokens or "provider-default",
             self.config.log_thinking,
             self.config.repeat_command_guard,
+            self.config.provider_session_retries,
+            self.config.seed_helpful_memory,
         )
 
     def record_preflight(self, metadata: tuple[ModelMetadata, ...]) -> None:
@@ -1794,6 +1906,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="warn after 5 identical consecutive calls and end the session after 10",
     )
+    parser.add_argument(
+        "--provider-session-retries",
+        type=int,
+        default=0,
+        help=(
+            "discard and restart a session after an exhausted provider request "
+            "(default: 0)"
+        ),
+    )
+    parser.add_argument(
+        "--seed-helpful-memory",
+        action="store_true",
+        help="seed the tutorial character's private memory with authored helpful notes",
+    )
     parser.add_argument("--output", type=Path, default=BenchmarkConfig.output)
     return parser
 
@@ -1824,6 +1950,8 @@ async def _async_main(args: argparse.Namespace) -> None:
         max_output_tokens=args.max_output_tokens,
         log_thinking=args.log_thinking,
         repeat_command_guard=args.repeat_command_guard,
+        provider_session_retries=args.provider_session_retries,
+        seed_helpful_memory=args.seed_helpful_memory,
     )
     completed_count = 0
     total_sessions = len(config.models) * len(config.tutorials) * config.sessions
