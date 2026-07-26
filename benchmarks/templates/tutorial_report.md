@@ -8,6 +8,8 @@ Authoritative passes: **{{PASSES}}**
 
 {{SOURCES}}
 
+{{COVERAGE_GAPS}}
+
 ## Runtime and token use
 
 {{RUNTIME_SUMMARY}}
@@ -19,6 +21,13 @@ same provider and reasoning settings. These are logical provider-reported tokens
 tokens; cached prompt tokens may still be included.
 
 {{TOKEN_TABLE}}
+
+## Latency distribution
+
+Decision latency is measured from the benchmark's scored turn traces. Provider and hardware
+panels are reported separately because local and cloud timing are not directly interchangeable.
+
+{{LATENCY_SECTION}}
 
 ## Model comparison
 
@@ -38,6 +47,36 @@ shown as an em dash and are not treated as failures. Tutorial totals reflect eac
 tested model mix; matching model/tutorial rows provide the like-for-like comparison.
 
 {{COHORT_DELTAS}}
+
+## Additional analytical questions
+
+### How broadly were cohort gains shared?
+
+Counts compare pass-rate changes for exact model/tutorial cells present in both cohorts,
+separating improvements, ties, and regressions.
+
+{{CHANGE_BREADTH_TABLE}}
+
+### Where does tutorial progress break?
+
+The table lists the three lowest-completion exact milestone identifiers in each
+tutorial/cohort. Historical and replacement identifiers remain separate.
+
+{{MILESTONE_BOTTLENECKS}}
+
+### Are failures mostly invalid actions?
+
+Action validity measures accepted actions among all submitted actions. Rejection recovery
+measures rejected actions followed by recovery within the benchmark's existing window.
+
+{{BEHAVIOR_TABLE}}
+
+### How sensitive is Qwen 3.6 35B to quantization?
+
+These are like-for-like pass counts for the tested Q4, Q6, and Q8 identifiers. The table does
+not infer monotonic quantization quality from a single five-session cell.
+
+{{QUANTIZATION_TABLE}}
 
 ## Tutorial maps and milestone heatmaps
 

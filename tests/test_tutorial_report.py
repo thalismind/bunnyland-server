@@ -23,6 +23,7 @@ from benchmarks.tutorials import (
     ModelMetadata,
     ModelResponseTrace,
     SessionResult,
+    TurnTrace,
     summarize,
     write_artifacts,
 )
@@ -71,11 +72,36 @@ def _source(path: Path) -> None:
         )
         for result in results
     )
+    traces = tuple(
+        TurnTrace(
+            schema_version=SCHEMA_VERSION,
+            session_id=result.session_id,
+            turn=1,
+            prompt="prompt",
+            selected_tool="look",
+            arguments={},
+            decision_latency_seconds=2 if result.model == "small" else 4,
+            candidate_actions=("look",),
+            command_id="command",
+            submission_accepted=True,
+            submission_reason="",
+            receipt_status="committed",
+            receipt_reason="",
+            decision_summary="look",
+            policy_rejections=(),
+            provider_error="",
+            consecutive_repeat_count=0,
+            repeat_guard_warning=False,
+            result_events=(),
+            milestones=("start",),
+        )
+        for result in results
+    )
     write_artifacts(
         config,
         summarize(results, metadata, tutorials),
         results,
-        (),
+        traces,
         responses,
         metadata,
     )
@@ -160,6 +186,49 @@ def _complete_source(path: Path) -> None:
     )
 
 
+def _complete_bell_source(path: Path) -> None:
+    models = ("small", "large")
+    results = tuple(
+        _result(model, "bell", passed=model == "large", run=run)
+        for model in models
+        for run in range(1, 6)
+    )
+    metadata = (
+        ModelMetadata("small", parameter_count=4_000_000_000),
+        ModelMetadata("large", parameter_count=20_000_000_000),
+    )
+    config = BenchmarkConfig(
+        models=models,
+        tutorials=("bell",),
+        sessions=5,
+        output=path,
+    )
+    write_artifacts(
+        config,
+        summarize(results, metadata, ("bell",)),
+        results,
+        (),
+        (),
+        metadata,
+    )
+
+
+def _make_v1_coverage_gaps(path: Path) -> None:
+    sessions_path = path / "sessions.jsonl"
+    retained = []
+    for line in sessions_path.read_text(encoding="utf-8").splitlines():
+        session = json.loads(line)
+        if session["model"] != "large":
+            continue
+        if session["tutorial"] == "bell" and session["run"] > 2:
+            continue
+        retained.append(session)
+    sessions_path.write_text(
+        "".join(json.dumps(session) + "\n" for session in retained),
+        encoding="utf-8",
+    )
+
+
 def _as_schema_five_baseline(path: Path) -> None:
     manifest_path = path / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -225,6 +294,20 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     assert "720 tokens" in markdown
     assert "| `large` | 300 | 60 | 360 | 3/3 (100.0%) | 2.50 | 16,666.67 |" in markdown
     assert "| `large` | 3/3 | 6/6 | 75.0% | 0.500 |" in markdown
+    assert "## Latency distribution" in markdown
+    assert (
+        "Across **6 scored decisions**, median end-to-end decision latency was **3.00s**"
+        in markdown
+    )
+    assert (
+        "| `large` | `Unlabeled` | `ollama-local` | 3 | 4.00 | 4.00 | 4.00 | "
+        "3/3 | 0.2000 | 5.0000 |"
+    ) in markdown
+    assert "## Additional analytical questions" in markdown
+    assert "### How broadly were cohort gains shared?" in markdown
+    assert "### Where does tutorial progress break?" in markdown
+    assert "### Are failures mostly invalid actions?" in markdown
+    assert "### How sensitive is Qwen 3.6 35B to quantization?" in markdown
     assert "{{" not in markdown
     heatmap = (output / "diagrams/apple-milestones.svg").read_text(encoding="utf-8")
     assert "Models reaching milestone" in heatmap
@@ -233,6 +316,10 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     assert '#image("diagrams/apple-tabletop.png"' in typst
     assert '#image("diagrams/apple-map.svg"' in typst
     assert '#text("large")' in typst
+    assert 'set table(inset: 4pt, stroke: 0.5pt + rgb("ccd3dc"))' in typst
+    assert "== Latency distribution" in typst
+    assert "== Additional analytical questions" in typst
+    assert "=== How broadly were cohort gains shared?" in typst
     assert str(source.resolve()) not in typst
 
 
@@ -302,6 +389,56 @@ def test_cohort_difficulty_table_sorts_by_tutorial_then_version(tmp_path):
     )
 
 
+def test_cohort_report_distinguishes_gaps_from_not_applicable_cells(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    third = tmp_path / "third"
+    output = tmp_path / "report"
+    _complete_source(first)
+    _complete_source(second)
+    _complete_bell_source(third)
+    _make_v1_coverage_gaps(first)
+
+    build_report(
+        (),
+        output,
+        title="Coverage gaps",
+        cohorts=(
+            CohortInput("v1", first),
+            CohortInput("v2", second),
+            CohortInput("v3", third),
+        ),
+    )
+
+    markdown = (output / "report.md").read_text(encoding="utf-8")
+    assert "## Data coverage gaps" in markdown
+    assert "2 exact model identifiers" in markdown
+    assert "Tutorials absent from a cohort's manifest are **not applicable (N/A)**" in markdown
+    assert "| `v1` | `apple`, `bell`, `clover` | 12/30 | 2 | 1 | 3 | 0 |" in markdown
+    assert "| `v2` | `apple`, `bell`, `clover` | 30/30 | 6 | 0 | 0 | 0 |" in markdown
+    assert "| `v3` | `bell` | 10/10 | 2 | 0 | 0 | 4 |" in markdown
+    large_gap = "| `large` | `v1` | 12/15 | 3 | `bell 2/5` |"
+    small_gap = (
+        "| `small` | `v1` | 0/15 | 15 | "
+        "`apple 0/5`, `bell 0/5`, `clover 0/5` |"
+    )
+    assert large_gap in markdown
+    assert small_gap in markdown
+    assert markdown.index(large_gap) < markdown.index(small_gap)
+    gap_table = markdown.split(
+        "### Missing and partial in-scope coverage", maxsplit=1
+    )[1].split("## Runtime and token use", maxsplit=1)[0]
+    assert "| `large` | `v3` |" not in gap_table
+    assert "| `small` | `v3` |" not in gap_table
+
+    typst = (output / "report.typ").read_text(encoding="utf-8")
+    assert "== Data coverage gaps" in typst
+    assert '#text("10/10")' in typst
+    assert '#text("4")' in typst
+    assert '#text("bell 2/5")' in typst
+    assert "not applicable (N/A), not missing" in typst
+
+
 def test_cohort_report_separates_versions_and_styles_replacement_columns(tmp_path):
     baseline = tmp_path / "baseline"
     post_one = tmp_path / "post-one"
@@ -335,6 +472,7 @@ def test_cohort_report_separates_versions_and_styles_replacement_columns(tmp_pat
     assert "`v2` / `post-one`" in markdown
     assert "`v2` / `post-two`" in markdown
     assert "## Cohort deltas" in markdown
+    assert "| Tutorial | Transition | Shared models | Improved | Tied | Regressed |" in markdown
     assert "| `v1 → v2` | `apple` | 1/2 (50.0%) | 2/4 (50.0%) | +0.0 pp |" in markdown
     assert "| `v2 → v3` | `small` | `bell` | 0/2 (0.0%) | — | — |" in markdown
     aggregate_deltas = markdown.split("### Tutorial totals", maxsplit=1)[1].split(

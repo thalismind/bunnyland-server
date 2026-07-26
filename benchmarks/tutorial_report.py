@@ -16,7 +16,7 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from benchmarks.tutorial_comparison import LoadedSource, SourceSelection, load_source
-from benchmarks.tutorials import JsonValue, ModelResponseTrace, SessionResult
+from benchmarks.tutorials import JsonValue, ModelResponseTrace, SessionResult, TurnTrace
 
 
 @dataclass(frozen=True)
@@ -117,6 +117,20 @@ class CohortDeltaRow:
 
 
 @dataclass(frozen=True)
+class ChangeBreadthRow:
+    before_cohort: str
+    after_cohort: str
+    tutorial: str
+    improved_models: int
+    tied_models: int
+    regressed_models: int
+
+    @property
+    def shared_models(self) -> int:
+        return self.improved_models + self.tied_models + self.regressed_models
+
+
+@dataclass(frozen=True)
 class ResponseUsage:
     input_tokens: int
     output_tokens: int
@@ -146,6 +160,123 @@ class CohortInput:
 class LabeledResult:
     cohort: str | None
     result: SessionResult
+
+
+@dataclass(frozen=True)
+class CoverageSummaryRow:
+    cohort: str
+    tutorials: tuple[str, ...]
+    observed_sessions: int
+    expected_sessions: int
+    complete_cells: int
+    partial_cells: int
+    missing_cells: int
+    not_applicable_cells: int
+
+
+@dataclass(frozen=True)
+class CoverageGapRow:
+    cohort: str
+    model: str
+    observed_sessions: int
+    expected_sessions: int
+    missing_sessions: int
+    incomplete_tutorials: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CoverageAnalysis:
+    reference_cohort: str
+    reference_models: int
+    target_sessions: int
+    summary_rows: tuple[CoverageSummaryRow, ...]
+    gap_rows: tuple[CoverageGapRow, ...]
+
+
+@dataclass(frozen=True)
+class LatencyRow:
+    cohort: str | None
+    model: str
+    provider: str
+    decisions: int
+    median_seconds: float
+    p95_seconds: float
+    p99_seconds: float
+    maximum_seconds: float
+    token_decisions: int
+    output_tokens: int
+    token_seconds: float
+
+    @property
+    def seconds_per_output_token(self) -> float | None:
+        if not self.output_tokens:
+            return None
+        return self.token_seconds / self.output_tokens
+
+    @property
+    def output_tokens_per_second(self) -> float | None:
+        if not self.token_seconds:
+            return None
+        return self.output_tokens / self.token_seconds
+
+
+@dataclass(frozen=True)
+class LatencyAnalysis:
+    overall: LatencyRow
+    cohort_rows: tuple[LatencyRow, ...]
+    model_rows: tuple[LatencyRow, ...]
+
+
+@dataclass(frozen=True)
+class LatencySample:
+    cohort: str | None
+    model: str
+    provider: str
+    seconds: float
+    output_tokens: int | None
+
+
+@dataclass(frozen=True)
+class MilestoneBottleneckRow:
+    cohort: str | None
+    tutorial: str
+    milestone: str
+    completions: int
+    sessions: int
+
+
+@dataclass(frozen=True)
+class BehaviorRow:
+    cohort: str | None
+    tutorial: str
+    passes: int
+    sessions: int
+    valid_actions: int
+    rejected_actions: int
+    recovered_rejections: int
+
+    @property
+    def validity(self) -> float:
+        attempted = self.valid_actions + self.rejected_actions
+        return self.valid_actions / attempted if attempted else 1
+
+    @property
+    def recovery(self) -> float:
+        return (
+            self.recovered_rejections / self.rejected_actions
+            if self.rejected_actions
+            else 1
+        )
+
+
+@dataclass(frozen=True)
+class QuantizationRow:
+    cohort: str | None
+    tutorial: str
+    model: str
+    quantization: str
+    passes: int
+    sessions: int
 
 
 TUTORIAL_MAPS: dict[str, TutorialMap] = {
@@ -417,6 +548,118 @@ def _read_responses(path: Path) -> tuple[ModelResponseTrace, ...]:
     return tuple(rows)
 
 
+def _read_traces(path: Path) -> tuple[TurnTrace, ...]:
+    trace_path = path / "traces.jsonl"
+    if not trace_path.exists():
+        return ()
+    rows = []
+    adapter = TypeAdapter(TurnTrace)
+    for line in trace_path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(adapter.validate_json(line))
+    return tuple(rows)
+
+
+def _percentile(values: Sequence[float], fraction: float) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        return 0
+    position = (len(ordered) - 1) * fraction
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _latency_row(
+    samples: Sequence[LatencySample],
+    *,
+    cohort: str | None,
+    model: str,
+) -> LatencyRow:
+    seconds = tuple(sample.seconds for sample in samples)
+    token_samples = tuple(
+        sample
+        for sample in samples
+        if sample.output_tokens is not None and sample.output_tokens > 0
+    )
+    return LatencyRow(
+        cohort=cohort,
+        model=model,
+        provider=", ".join(sorted({sample.provider for sample in samples})),
+        decisions=len(samples),
+        median_seconds=statistics.median(seconds),
+        p95_seconds=_percentile(seconds, 0.95),
+        p99_seconds=_percentile(seconds, 0.99),
+        maximum_seconds=max(seconds),
+        token_decisions=len(token_samples),
+        output_tokens=sum(sample.output_tokens or 0 for sample in token_samples),
+        token_seconds=sum(sample.seconds for sample in token_samples),
+    )
+
+
+def _latency_analysis(
+    sources: Sequence[tuple[str | None, LoadedSource]],
+) -> LatencyAnalysis | None:
+    samples: list[LatencySample] = []
+    cohort_order = tuple(dict.fromkeys(cohort for cohort, _source in sources))
+    for cohort, source in sources:
+        for evidence in _evidence_slices(source):
+            model_by_session = {
+                result.session_id: result.model for result in evidence.results
+            }
+            usage_by_turn: dict[tuple[str, int], ResponseUsage] = {}
+            for response in _read_responses(evidence.path):
+                if response.session_id not in model_by_session:
+                    continue
+                usage = _response_usage(response.response)
+                if usage is not None:
+                    usage_by_turn[(response.session_id, response.turn)] = usage
+            for trace in _read_traces(evidence.path):
+                model = model_by_session.get(trace.session_id)
+                if model is None:
+                    continue
+                usage = usage_by_turn.get((trace.session_id, trace.turn))
+                samples.append(
+                    LatencySample(
+                        cohort=cohort,
+                        model=model,
+                        provider=source.manifest.provider,
+                        seconds=trace.decision_latency_seconds,
+                        output_tokens=usage.output_tokens if usage is not None else None,
+                    )
+                )
+    if not samples:
+        return None
+    samples_by_cohort: dict[str | None, list[LatencySample]] = defaultdict(list)
+    samples_by_model: dict[tuple[str | None, str], list[LatencySample]] = defaultdict(list)
+    for sample in samples:
+        samples_by_cohort[sample.cohort].append(sample)
+        samples_by_model[(sample.cohort, sample.model)].append(sample)
+    cohort_rank = {cohort: index for index, cohort in enumerate(cohort_order)}
+    cohort_rows = tuple(
+        _latency_row(samples_by_cohort[cohort], cohort=cohort, model="All models")
+        for cohort in cohort_order
+        if samples_by_cohort[cohort]
+    )
+    model_rows = tuple(
+        _latency_row(grouped, cohort=cohort, model=model)
+        for (cohort, model), grouped in sorted(
+            samples_by_model.items(),
+            key=lambda item: (
+                item[0][1].casefold(),
+                item[0][1],
+                cohort_rank[item[0][0]],
+            ),
+        )
+    )
+    return LatencyAnalysis(
+        overall=_latency_row(samples, cohort=None, model="All models"),
+        cohort_rows=cohort_rows,
+        model_rows=model_rows,
+    )
+
+
 def _model_usage(
     sources: Sequence[tuple[str | None, LoadedSource]],
 ) -> dict[tuple[str | None, str], ModelUsage]:
@@ -617,7 +860,7 @@ def render_heatmap_svg(
     replacements: dict[str, str],
 ) -> str:
     milestones, matrix = _milestone_matrix(results, tutorial, replacements)
-    models = tuple(sorted(matrix))
+    models = tuple(sorted(matrix, key=lambda model: (model.casefold(), model)))
     cell_width, cell_height, label_width = 82, 34, 230
     width = max(720, label_width + cell_width * len(milestones) + 24)
     visible_replacements = tuple(
@@ -810,6 +1053,265 @@ def _difficulty_table(rows: Sequence[DifficultyRow]) -> str:
     return "\n".join(lines)
 
 
+def _milestone_bottleneck_rows(
+    results: Sequence[LabeledResult],
+) -> tuple[MilestoneBottleneckRow, ...]:
+    counts: dict[tuple[str | None, str, str], list[bool]] = defaultdict(list)
+    cohort_rank = {
+        cohort: index
+        for index, cohort in enumerate(
+            dict.fromkeys(item.cohort for item in results)
+        )
+    }
+    tutorial_rank = {tutorial: index for index, tutorial in enumerate(TUTORIAL_MAPS)}
+    for item in results:
+        for milestone, complete in item.result.milestone_results:
+            counts[(item.cohort, item.result.tutorial, milestone)].append(complete)
+    grouped: dict[tuple[str | None, str], list[MilestoneBottleneckRow]] = defaultdict(list)
+    for (cohort, tutorial, milestone), completions in counts.items():
+        grouped[(cohort, tutorial)].append(
+            MilestoneBottleneckRow(
+                cohort=cohort,
+                tutorial=tutorial,
+                milestone=milestone,
+                completions=sum(completions),
+                sessions=len(completions),
+            )
+        )
+    selected = []
+    for rows in grouped.values():
+        selected.extend(
+            sorted(
+                rows,
+                key=lambda row: (
+                    row.completions / row.sessions,
+                    row.milestone,
+                ),
+            )[:3]
+        )
+    return tuple(
+        sorted(
+            selected,
+            key=lambda row: (
+                tutorial_rank.get(row.tutorial, len(tutorial_rank)),
+                row.tutorial,
+                cohort_rank[row.cohort],
+                row.completions / row.sessions,
+                row.milestone,
+            ),
+        )
+    )
+
+
+def _milestone_bottleneck_table(rows: Sequence[MilestoneBottleneckRow]) -> str:
+    lines = [
+        "| Tutorial | Cohort | Milestone | Completed sessions | Completion rate |",
+        "| --- | --- | --- | ---: | ---: |",
+    ]
+    for row in rows:
+        lines.append(
+            f"| `{row.tutorial}` | `{row.cohort}` | `{row.milestone}` | "
+            f"{row.completions}/{row.sessions} | {row.completions / row.sessions:.1%} |"
+        )
+    return "\n".join(lines)
+
+
+def _behavior_rows(results: Sequence[LabeledResult]) -> tuple[BehaviorRow, ...]:
+    grouped: dict[tuple[str | None, str], list[SessionResult]] = defaultdict(list)
+    cohort_rank = {
+        cohort: index
+        for index, cohort in enumerate(
+            dict.fromkeys(item.cohort for item in results)
+        )
+    }
+    tutorial_rank = {tutorial: index for index, tutorial in enumerate(TUTORIAL_MAPS)}
+    for item in results:
+        grouped[(item.cohort, item.result.tutorial)].append(item.result)
+    rows = (
+        BehaviorRow(
+            cohort=cohort,
+            tutorial=tutorial,
+            passes=sum(result.passed for result in sessions),
+            sessions=len(sessions),
+            valid_actions=sum(result.valid_actions for result in sessions),
+            rejected_actions=sum(result.rejected_actions for result in sessions),
+            recovered_rejections=sum(
+                result.recovered_rejections for result in sessions
+            ),
+        )
+        for (cohort, tutorial), sessions in grouped.items()
+    )
+    return tuple(
+        sorted(
+            rows,
+            key=lambda row: (
+                tutorial_rank.get(row.tutorial, len(tutorial_rank)),
+                row.tutorial,
+                cohort_rank[row.cohort],
+            ),
+        )
+    )
+
+
+def _behavior_table(rows: Sequence[BehaviorRow]) -> str:
+    lines = [
+        "| Tutorial | Cohort | Pass rate | Valid actions | Rejected actions | "
+        "Action validity | Rejection recovery |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in rows:
+        recovery = (
+            f"{row.recovered_rejections}/{row.rejected_actions} "
+            f"({row.recovery:.1%})"
+            if row.rejected_actions
+            else "—"
+        )
+        lines.append(
+            f"| `{row.tutorial}` | `{row.cohort}` | "
+            f"{row.passes}/{row.sessions} ({row.passes / row.sessions:.1%}) | "
+            f"{row.valid_actions} | {row.rejected_actions} | {row.validity:.1%} | "
+            f"{recovery} |"
+        )
+    return "\n".join(lines)
+
+
+def _quantization_label(model: str, manifest_label: str | None) -> str:
+    if model.endswith(":Q8_0"):
+        return "Q8_0"
+    if model.endswith(":UD-Q6_K"):
+        return "UD-Q6_K"
+    if model == "qwen3.6:35b-a3b":
+        return manifest_label or "Q4_K_M"
+    return manifest_label or "unknown"
+
+
+def _quantization_rows(
+    results: Sequence[LabeledResult],
+    sources: Sequence[tuple[str | None, LoadedSource]],
+) -> tuple[QuantizationRow, ...]:
+    qwen_models = {
+        "qwen3.6:35b-a3b",
+        "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q6_K",
+        "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:Q8_0",
+    }
+    labels: dict[tuple[str | None, str], str] = {}
+    for cohort, source in sources:
+        for metadata in source.manifest.models:
+            if metadata.model in qwen_models:
+                labels[(cohort, metadata.model)] = _quantization_label(
+                    metadata.model,
+                    metadata.quantization,
+                )
+    grouped: dict[tuple[str | None, str, str], list[SessionResult]] = defaultdict(list)
+    cohort_rank = {
+        cohort: index
+        for index, cohort in enumerate(
+            dict.fromkeys(item.cohort for item in results)
+        )
+    }
+    tutorial_rank = {tutorial: index for index, tutorial in enumerate(TUTORIAL_MAPS)}
+    for item in results:
+        if item.result.model in qwen_models:
+            grouped[
+                (item.cohort, item.result.tutorial, item.result.model)
+            ].append(item.result)
+    rows = (
+        QuantizationRow(
+            cohort=cohort,
+            tutorial=tutorial,
+            model=model,
+            quantization=labels.get(
+                (cohort, model),
+                _quantization_label(model, None),
+            ),
+            passes=sum(result.passed for result in sessions),
+            sessions=len(sessions),
+        )
+        for (cohort, tutorial, model), sessions in grouped.items()
+    )
+    return tuple(
+        sorted(
+            rows,
+            key=lambda row: (
+                tutorial_rank.get(row.tutorial, len(tutorial_rank)),
+                row.tutorial,
+                cohort_rank[row.cohort],
+                row.quantization,
+                row.model,
+            ),
+        )
+    )
+
+
+def _quantization_table(rows: Sequence[QuantizationRow]) -> str:
+    lines = [
+        "| Tutorial | Cohort | Quantization | Model | Passes |",
+        "| --- | --- | --- | --- | ---: |",
+    ]
+    for row in rows:
+        lines.append(
+            f"| `{row.tutorial}` | `{row.cohort}` | `{row.quantization}` | "
+            f"`{row.model}` | {row.passes}/{row.sessions} |"
+        )
+    return "\n".join(lines)
+
+
+def _token_latency_cell(value: float | None) -> str:
+    return "—" if value is None else f"{value:.4f}"
+
+
+def _latency_section(analysis: LatencyAnalysis | None) -> str:
+    if analysis is None:
+        return "No retained turn-latency evidence was available."
+    overall_rows = (analysis.overall, *analysis.cohort_rows)
+    lines = [
+        f"Across **{analysis.overall.decisions:,} scored decisions**, median end-to-end "
+        f"decision latency was **{analysis.overall.median_seconds:.2f}s**, p95 was "
+        f"**{analysis.overall.p95_seconds:.2f}s**, p99 was "
+        f"**{analysis.overall.p99_seconds:.2f}s**, and the maximum was "
+        f"**{analysis.overall.maximum_seconds:.2f}s**.",
+        "",
+        "Token-normalized figures divide complete end-to-end decision latency—including "
+        "prompt evaluation, provider overhead, retries, and generation—by output tokens. "
+        "They are not pure decoder throughput.",
+        "",
+        "### Overall and cohort latency",
+        "",
+        "| Scope | Provider(s) | Decisions | Median sec | P95 sec | P99 sec | Max sec | "
+        "Token coverage | Sec/output token | Output tokens/sec |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for index, row in enumerate(overall_rows):
+        scope = "Overall" if index == 0 else row.cohort or "Unlabeled"
+        lines.append(
+            f"| `{scope}` | `{row.provider}` | {row.decisions:,} | "
+            f"{row.median_seconds:.2f} | {row.p95_seconds:.2f} | "
+            f"{row.p99_seconds:.2f} | {row.maximum_seconds:.2f} | "
+            f"{row.token_decisions:,}/{row.decisions:,} | "
+            f"{_token_latency_cell(row.seconds_per_output_token)} | "
+            f"{_token_latency_cell(row.output_tokens_per_second)} |"
+        )
+    lines.extend(
+        (
+            "",
+            "### Per-model latency",
+            "",
+            "| Model | Cohort | Provider | Decisions | Median sec | P95 sec | P99 sec | "
+            "Token coverage | Sec/output token | Output tokens/sec |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        )
+    )
+    for row in analysis.model_rows:
+        lines.append(
+            f"| `{row.model}` | `{row.cohort or 'Unlabeled'}` | `{row.provider}` | "
+            f"{row.decisions:,} | {row.median_seconds:.2f} | {row.p95_seconds:.2f} | "
+            f"{row.p99_seconds:.2f} | {row.token_decisions:,}/{row.decisions:,} | "
+            f"{_token_latency_cell(row.seconds_per_output_token)} | "
+            f"{_token_latency_cell(row.output_tokens_per_second)} |"
+        )
+    return "\n".join(lines)
+
+
 def _cohort_delta_rows(
     results: Sequence[LabeledResult],
     cohort_order: Sequence[str],
@@ -963,6 +1465,217 @@ def _cohort_delta_table(
     return "\n".join(lines)
 
 
+def _change_breadth_rows(
+    model_rows: Sequence[CohortDeltaRow],
+) -> tuple[ChangeBreadthRow, ...]:
+    grouped: dict[tuple[str, str, str], list[float]] = defaultdict(list)
+    for row in model_rows:
+        delta = row.delta_percentage_points
+        if delta is not None:
+            grouped[(row.before_cohort, row.after_cohort, row.tutorial)].append(delta)
+    tutorial_rank = {name: index for index, name in enumerate(TUTORIAL_MAPS)}
+    return tuple(
+        ChangeBreadthRow(
+            before_cohort=before,
+            after_cohort=after,
+            tutorial=tutorial,
+            improved_models=sum(delta > 0 for delta in deltas),
+            tied_models=sum(delta == 0 for delta in deltas),
+            regressed_models=sum(delta < 0 for delta in deltas),
+        )
+        for (before, after, tutorial), deltas in sorted(
+            grouped.items(),
+            key=lambda item: (
+                tutorial_rank.get(item[0][2], len(tutorial_rank)),
+                item[0][2],
+                item[0][0],
+                item[0][1],
+            ),
+        )
+    )
+
+
+def _change_breadth_table(rows: Sequence[ChangeBreadthRow]) -> str:
+    if not rows:
+        return "At least two cohorts with shared model/tutorial cells are required."
+    lines = [
+        "| Tutorial | Transition | Shared models | Improved | Tied | Regressed |",
+        "| --- | --- | ---: | ---: | ---: | ---: |",
+    ]
+    for row in rows:
+        lines.append(
+            f"| `{row.tutorial}` | `{row.before_cohort} → {row.after_cohort}` | "
+            f"{row.shared_models} | {row.improved_models} | {row.tied_models} | "
+            f"{row.regressed_models} |"
+        )
+    return "\n".join(lines)
+
+
+def _coverage_analysis(
+    results: Sequence[LabeledResult],
+    sources: Sequence[tuple[str | None, LoadedSource]],
+) -> CoverageAnalysis | None:
+    cohort_order = tuple(
+        dict.fromkeys(cohort for cohort, _source in sources if cohort is not None)
+    )
+    if not cohort_order:
+        return None
+    reference_cohort = cohort_order[-1]
+    reference_sources = tuple(
+        source for cohort, source in sources if cohort == reference_cohort
+    )
+    reference_models = tuple(
+        dict.fromkeys(
+            model
+            for source in reference_sources
+            for model in (
+                source.selected_models
+                or tuple(metadata.model for metadata in source.manifest.models)
+            )
+        )
+    )
+    if not reference_models:
+        return None
+    target_sessions = max(
+        source.manifest.sessions_per_model_tutorial for source in reference_sources
+    )
+    tutorial_order = tuple(TUTORIAL_MAPS)
+    cohort_tutorials = {
+        cohort: tuple(
+            tutorial
+            for tutorial in tutorial_order
+            if any(
+                source_cohort == cohort and tutorial in source.manifest.tutorials
+                for source_cohort, source in sources
+            )
+        )
+        for cohort in cohort_order
+    }
+    counts = Counter(
+        (item.cohort, item.result.model, item.result.tutorial)
+        for item in results
+        if item.cohort is not None
+    )
+    summary_rows: list[CoverageSummaryRow] = []
+    gap_rows: list[CoverageGapRow] = []
+    cohort_rank = {cohort: index for index, cohort in enumerate(cohort_order)}
+    for cohort in cohort_order:
+        tutorials = cohort_tutorials[cohort]
+        observed_sessions = 0
+        complete_cells = 0
+        partial_cells = 0
+        missing_cells = 0
+        for model in reference_models:
+            model_observed = 0
+            incomplete_tutorials: list[str] = []
+            for tutorial in tutorials:
+                observed = min(counts[cohort, model, tutorial], target_sessions)
+                observed_sessions += observed
+                model_observed += observed
+                if observed >= target_sessions:
+                    complete_cells += 1
+                elif observed:
+                    partial_cells += 1
+                    incomplete_tutorials.append(
+                        f"{tutorial} {observed}/{target_sessions}"
+                    )
+                else:
+                    missing_cells += 1
+                    incomplete_tutorials.append(f"{tutorial} 0/{target_sessions}")
+            model_expected = len(tutorials) * target_sessions
+            if incomplete_tutorials:
+                gap_rows.append(
+                    CoverageGapRow(
+                        cohort=cohort,
+                        model=model,
+                        observed_sessions=model_observed,
+                        expected_sessions=model_expected,
+                        missing_sessions=model_expected - model_observed,
+                        incomplete_tutorials=tuple(incomplete_tutorials),
+                    )
+                )
+        expected_sessions = len(reference_models) * len(tutorials) * target_sessions
+        summary_rows.append(
+            CoverageSummaryRow(
+                cohort=cohort,
+                tutorials=tutorials,
+                observed_sessions=observed_sessions,
+                expected_sessions=expected_sessions,
+                complete_cells=complete_cells,
+                partial_cells=partial_cells,
+                missing_cells=missing_cells,
+                not_applicable_cells=len(reference_models)
+                * (len(tutorial_order) - len(tutorials)),
+            )
+        )
+    gap_rows.sort(
+        key=lambda row: (
+            row.model.casefold(),
+            row.model,
+            cohort_rank[row.cohort],
+        )
+    )
+    return CoverageAnalysis(
+        reference_cohort=reference_cohort,
+        reference_models=len(reference_models),
+        target_sessions=target_sessions,
+        summary_rows=tuple(summary_rows),
+        gap_rows=tuple(gap_rows),
+    )
+
+
+def _coverage_gap_section(analysis: CoverageAnalysis | None) -> str:
+    if analysis is None:
+        return ""
+    lines = [
+        "## Data coverage gaps",
+        "",
+        f"Coverage uses the **{analysis.reference_models} exact model identifiers** in "
+        f"the final supplied cohort, `{analysis.reference_cohort}`, as the reference "
+        f"roster and targets **{analysis.target_sessions} sessions per in-scope cell**. "
+        "Identifiers are not aliased across model names. Tutorials absent from a cohort's "
+        "manifest are **not applicable (N/A)** rather than missing.",
+        "",
+        "### Cohort coverage",
+        "",
+        "| Cohort | In-scope tutorials | Session coverage | Complete cells | "
+        "Partial cells | Missing cells | N/A cells |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in analysis.summary_rows:
+        tutorials = ", ".join(f"`{tutorial}`" for tutorial in row.tutorials) or "—"
+        lines.append(
+            f"| `{row.cohort}` | {tutorials} | "
+            f"{row.observed_sessions}/{row.expected_sessions} | "
+            f"{row.complete_cells} | {row.partial_cells} | {row.missing_cells} | "
+            f"{row.not_applicable_cells} |"
+        )
+    lines.extend(
+        (
+            "",
+            "### Missing and partial in-scope coverage",
+            "",
+        )
+    )
+    if not analysis.gap_rows:
+        lines.append("No in-scope coverage gaps remain.")
+        return "\n".join(lines)
+    lines.extend(
+        (
+            "| Model | Cohort | Coverage | Missing sessions | Incomplete tutorials |",
+            "| --- | --- | ---: | ---: | --- |",
+        )
+    )
+    for row in analysis.gap_rows:
+        lines.append(
+            f"| `{row.model}` | `{row.cohort}` | "
+            f"{row.observed_sessions}/{row.expected_sessions} | "
+            f"{row.missing_sessions} | "
+            f"{', '.join(f'`{tutorial}`' for tutorial in row.incomplete_tutorials)} |"
+        )
+    return "\n".join(lines)
+
+
 def _token_table(rows: Sequence[ModelRow]) -> str:
     cohort_mode = any(row.cohort is not None for row in rows)
     lines = (
@@ -1026,12 +1739,250 @@ def _typst_text(value: str) -> str:
     return f"#text({json.dumps(value, ensure_ascii=False)})"
 
 
+def _typst_table(
+    columns: str,
+    cells: Sequence[str],
+    *,
+    text_size: str | None = None,
+) -> tuple[str, ...]:
+    lines = []
+    if text_size is not None:
+        lines.append(f"#set text(size: {text_size})")
+    lines.extend(
+        (
+            "#table(",
+            f"  columns: {columns},",
+            "  " + ",\n  ".join(cells),
+            ")",
+        )
+    )
+    if text_size is not None:
+        lines.append("#set text(size: 9pt)")
+    return tuple(lines)
+
+
+def _typst_latency_block(analysis: LatencyAnalysis | None) -> tuple[str, ...]:
+    if analysis is None:
+        return (_typst_text("No retained turn-latency evidence was available."),)
+    overall_cells = [
+        "[*Scope*]",
+        "[*Provider(s)*]",
+        "[*Decisions*]",
+        "[*Median sec*]",
+        "[*P95 sec*]",
+        "[*P99 sec*]",
+        "[*Max sec*]",
+        "[*Token coverage*]",
+        "[*Sec/output token*]",
+        "[*Output tokens/sec*]",
+    ]
+    for index, row in enumerate((analysis.overall, *analysis.cohort_rows)):
+        values = (
+            "Overall" if index == 0 else row.cohort or "Unlabeled",
+            row.provider,
+            f"{row.decisions:,}",
+            f"{row.median_seconds:.2f}",
+            f"{row.p95_seconds:.2f}",
+            f"{row.p99_seconds:.2f}",
+            f"{row.maximum_seconds:.2f}",
+            f"{row.token_decisions:,}/{row.decisions:,}",
+            _token_latency_cell(row.seconds_per_output_token),
+            _token_latency_cell(row.output_tokens_per_second),
+        )
+        overall_cells.extend(f"[{_typst_text(value)}]" for value in values)
+    model_cells = [
+        "[*Model*]",
+        "[*Cohort*]",
+        "[*Provider*]",
+        "[*Decisions*]",
+        "[*Median sec*]",
+        "[*P95 sec*]",
+        "[*P99 sec*]",
+        "[*Token coverage*]",
+        "[*Sec/output token*]",
+        "[*Output tokens/sec*]",
+    ]
+    for row in analysis.model_rows:
+        values = (
+            row.model,
+            row.cohort or "Unlabeled",
+            row.provider,
+            f"{row.decisions:,}",
+            f"{row.median_seconds:.2f}",
+            f"{row.p95_seconds:.2f}",
+            f"{row.p99_seconds:.2f}",
+            f"{row.token_decisions:,}/{row.decisions:,}",
+            _token_latency_cell(row.seconds_per_output_token),
+            _token_latency_cell(row.output_tokens_per_second),
+        )
+        model_cells.extend(f"[{_typst_text(value)}]" for value in values)
+    return (
+        _typst_text(
+            f"Across {analysis.overall.decisions:,} scored decisions, median end-to-end "
+            f"decision latency was {analysis.overall.median_seconds:.2f}s, p95 was "
+            f"{analysis.overall.p95_seconds:.2f}s, p99 was "
+            f"{analysis.overall.p99_seconds:.2f}s, and the maximum was "
+            f"{analysis.overall.maximum_seconds:.2f}s."
+        ),
+        _typst_text(
+            "Token-normalized figures divide complete end-to-end decision latency by "
+            "output tokens. They are not pure decoder throughput."
+        ),
+        "=== Overall and cohort latency",
+        *_typst_table(
+            "(0.8fr, 1.2fr, 0.8fr, 0.8fr, 0.8fr, 0.8fr, 0.8fr, 0.9fr, 1fr, 1fr)",
+            overall_cells,
+            text_size="6pt",
+        ),
+        "#pagebreak()",
+        "=== Per-model latency",
+        *_typst_table(
+            "(2fr, 0.6fr, 0.9fr, 0.7fr, 0.7fr, 0.7fr, 0.7fr, 0.8fr, 0.9fr, 0.9fr)",
+            model_cells,
+            text_size="5.5pt",
+        ),
+    )
+
+
+def _typst_analysis_block(
+    change_breadth_rows: Sequence[ChangeBreadthRow],
+    bottlenecks: Sequence[MilestoneBottleneckRow],
+    behavior_rows: Sequence[BehaviorRow],
+    quantization_rows: Sequence[QuantizationRow],
+) -> tuple[str, ...]:
+    change_breadth_cells = [
+        "[*Tutorial*]",
+        "[*Transition*]",
+        "[*Shared*]",
+        "[*Improved*]",
+        "[*Tied*]",
+        "[*Regressed*]",
+    ]
+    for row in change_breadth_rows:
+        values = (
+            row.tutorial,
+            f"{row.before_cohort} → {row.after_cohort}",
+            str(row.shared_models),
+            str(row.improved_models),
+            str(row.tied_models),
+            str(row.regressed_models),
+        )
+        change_breadth_cells.extend(f"[{_typst_text(value)}]" for value in values)
+    bottleneck_cells = [
+        "[*Tutorial*]",
+        "[*Cohort*]",
+        "[*Milestone*]",
+        "[*Completed*]",
+        "[*Rate*]",
+    ]
+    for row in bottlenecks:
+        values = (
+            row.tutorial,
+            row.cohort or "Unlabeled",
+            row.milestone,
+            f"{row.completions}/{row.sessions}",
+            f"{row.completions / row.sessions:.1%}",
+        )
+        bottleneck_cells.extend(f"[{_typst_text(value)}]" for value in values)
+    behavior_cells = [
+        "[*Tutorial*]",
+        "[*Cohort*]",
+        "[*Pass rate*]",
+        "[*Valid*]",
+        "[*Rejected*]",
+        "[*Validity*]",
+        "[*Recovery*]",
+    ]
+    for row in behavior_rows:
+        recovery = (
+            f"{row.recovered_rejections}/{row.rejected_actions} ({row.recovery:.1%})"
+            if row.rejected_actions
+            else "—"
+        )
+        values = (
+            row.tutorial,
+            row.cohort or "Unlabeled",
+            f"{row.passes}/{row.sessions} ({row.passes / row.sessions:.1%})",
+            str(row.valid_actions),
+            str(row.rejected_actions),
+            f"{row.validity:.1%}",
+            recovery,
+        )
+        behavior_cells.extend(f"[{_typst_text(value)}]" for value in values)
+    quantization_cells = [
+        "[*Tutorial*]",
+        "[*Cohort*]",
+        "[*Quantization*]",
+        "[*Model*]",
+        "[*Passes*]",
+    ]
+    for row in quantization_rows:
+        values = (
+            row.tutorial,
+            row.cohort or "Unlabeled",
+            row.quantization,
+            row.model,
+            f"{row.passes}/{row.sessions}",
+        )
+        quantization_cells.extend(f"[{_typst_text(value)}]" for value in values)
+    return (
+        "== Additional analytical questions",
+        "=== How broadly were cohort gains shared?",
+        _typst_text(
+            "Counts compare pass-rate changes for exact model/tutorial cells present "
+            "in both cohorts, separating improvements, ties, and regressions."
+        ),
+        *_typst_table(
+            "(0.8fr, 1.2fr, 0.8fr, 0.8fr, 0.8fr, 0.8fr)",
+            change_breadth_cells,
+            text_size="7pt",
+        ),
+        "=== Where does tutorial progress break?",
+        _typst_text(
+            "The table lists the three lowest-completion exact milestone identifiers "
+            "in each tutorial/cohort. Historical and replacement identifiers remain separate."
+        ),
+        *_typst_table(
+            "(0.8fr, 0.6fr, 2fr, 0.8fr, 0.8fr)",
+            bottleneck_cells,
+            text_size="7pt",
+        ),
+        "#pagebreak()",
+        "=== Are failures mostly invalid actions?",
+        _typst_text(
+            "Action validity measures accepted actions among all submitted actions. "
+            "Rejection recovery uses the benchmark's existing recovery window."
+        ),
+        *_typst_table(
+            "(0.8fr, 0.6fr, 1fr, 0.8fr, 0.8fr, 0.8fr, 1fr)",
+            behavior_cells,
+            text_size="7pt",
+        ),
+        "=== How sensitive is Qwen 3.6 35B to quantization?",
+        _typst_text(
+            "These are like-for-like pass counts for the tested Q4, Q6, and Q8 "
+            "identifiers; one five-session cell does not establish monotonic quality."
+        ),
+        *_typst_table(
+            "(0.8fr, 0.6fr, 0.9fr, 2fr, 0.7fr)",
+            quantization_cells,
+            text_size="7pt",
+        ),
+    )
+
+
 def _typst_report(
     title: str,
     rows: Sequence[ModelRow],
     difficulty_rows: Sequence[DifficultyRow],
     aggregate_deltas: Sequence[CohortDeltaRow],
     model_deltas: Sequence[CohortDeltaRow],
+    change_breadth_rows: Sequence[ChangeBreadthRow],
+    coverage: CoverageAnalysis | None,
+    latency: LatencyAnalysis | None,
+    bottlenecks: Sequence[MilestoneBottleneckRow],
+    behavior_rows: Sequence[BehaviorRow],
+    quantization_rows: Sequence[QuantizationRow],
     diagrams: Sequence[str],
     sources: Sequence[str],
 ) -> str:
@@ -1106,8 +2057,6 @@ def _typst_report(
                 if difficulty_cohort_mode
                 else "  columns: (1fr, 1fr, 1fr, 1fr, 1fr),"
             ),
-            "  inset: 5pt,",
-            '  stroke: 0.5pt + rgb("ccd3dc"),',
             "  " + ",\n  ".join(difficulty_cells),
             ")",
         )
@@ -1154,8 +2103,6 @@ def _typst_report(
             "=== Tutorial totals",
             "#table(",
             "  columns: (1.2fr, 1fr, 1fr, 1fr, 1fr),",
-            "  inset: 5pt,",
-            '  stroke: 0.5pt + rgb("ccd3dc"),',
             "  " + ",\n  ".join(aggregate_cells),
             ")",
             "#pagebreak()",
@@ -1163,8 +2110,6 @@ def _typst_report(
             "#set text(size: 7pt)",
             "#table(",
             "  columns: (1.2fr, 2fr, 1fr, 1fr, 1fr, 1fr),",
-            "  inset: 3pt,",
-            '  stroke: 0.5pt + rgb("ccd3dc"),',
             "  " + ",\n  ".join(model_cells),
             ")",
             "#set text(size: 9pt)",
@@ -1172,6 +2117,77 @@ def _typst_report(
     else:
         delta_block = (
             _typst_text("At least two cohorts with a shared tutorial are required."),
+        )
+    coverage_block: tuple[str, ...] = ()
+    if coverage is not None:
+        summary_cells = [
+            "[*Cohort*]",
+            "[*In scope*]",
+            "[*Sessions*]",
+            "[*Complete*]",
+            "[*Partial*]",
+            "[*Missing*]",
+            "[*N/A*]",
+        ]
+        for row in coverage.summary_rows:
+            values = (
+                row.cohort,
+                ", ".join(row.tutorials) or "—",
+                f"{row.observed_sessions}/{row.expected_sessions}",
+                str(row.complete_cells),
+                str(row.partial_cells),
+                str(row.missing_cells),
+                str(row.not_applicable_cells),
+            )
+            summary_cells.extend(f"[{_typst_text(value)}]" for value in values)
+        gap_lines: tuple[str, ...]
+        if coverage.gap_rows:
+            gap_cells = [
+                "[*Model*]",
+                "[*Cohort*]",
+                "[*Coverage*]",
+                "[*Missing sessions*]",
+                "[*Incomplete tutorials*]",
+            ]
+            for row in coverage.gap_rows:
+                values = (
+                    row.model,
+                    row.cohort,
+                    f"{row.observed_sessions}/{row.expected_sessions}",
+                    str(row.missing_sessions),
+                    ", ".join(row.incomplete_tutorials),
+                )
+                gap_cells.extend(f"[{_typst_text(value)}]" for value in values)
+            gap_lines = (
+                "=== Missing and partial in-scope coverage",
+                "#set text(size: 7pt)",
+                "#table(",
+                "  columns: (2fr, 0.7fr, 0.8fr, 0.8fr, 2fr),",
+                "  " + ",\n  ".join(gap_cells),
+                ")",
+                "#set text(size: 9pt)",
+            )
+        else:
+            gap_lines = (
+                "=== Missing and partial in-scope coverage",
+                _typst_text("No in-scope coverage gaps remain."),
+            )
+        coverage_block = (
+            "== Data coverage gaps",
+            _typst_text(
+                f"Coverage uses the {coverage.reference_models} exact model identifiers "
+                f"in the final supplied cohort, {coverage.reference_cohort}, as the "
+                f"reference roster and targets {coverage.target_sessions} sessions per "
+                "in-scope cell. Identifiers are not aliased across model names. Tutorials "
+                "absent from a cohort's manifest are not applicable (N/A), not missing."
+            ),
+            "=== Cohort coverage",
+            "#table(",
+            "  columns: (0.7fr, 1.4fr, 1fr, 0.8fr, 0.8fr, 0.8fr, 0.6fr),",
+            "  " + ",\n  ".join(summary_cells),
+            ")",
+            *gap_lines,
+            "#pagebreak()",
         )
     images = []
     for path in diagrams:
@@ -1187,6 +2203,7 @@ def _typst_report(
             '#set page(paper: "a4", flipped: true, margin: 12mm)',
             "#set text(size: 9pt)",
             "#set heading(numbering: none)",
+            '#set table(inset: 4pt, stroke: 0.5pt + rgb("ccd3dc"))',
             f"= {_typst_text(title)}",
             "",
             "Generated from authoritative benchmark artifacts.",
@@ -1194,6 +2211,8 @@ def _typst_report(
             "== Evidence sources",
             "",
             *(_typst_text(path) for path in sources),
+            "",
+            *coverage_block,
             "",
             "== Runtime and token use",
             "",
@@ -1209,11 +2228,17 @@ def _typst_report(
                 if cohort_mode
                 else "  columns: (2fr, 1fr, 0.8fr, 1fr, 0.8fr, 0.8fr, 1fr),"
             ),
-            "  inset: 3pt,",
-            "  stroke: 0.5pt + rgb(\"ccd3dc\"),",
             "  " + ",\n  ".join(token_cells),
             ")",
             "#set text(size: 9pt)",
+            "",
+            "== Latency distribution",
+            "",
+            "Decision latency comes from scored turn traces. Provider and hardware panels "
+            "are separate because local and cloud timing are not directly interchangeable.",
+            "",
+            *_typst_latency_block(latency),
+            "#pagebreak()",
             "",
             "== Model comparison",
             "",
@@ -1223,8 +2248,6 @@ def _typst_report(
                 if cohort_mode
                 else "  columns: (2.2fr, 1fr, 1fr, 1fr, 1fr),"
             ),
-            "  inset: 5pt,",
-            "  stroke: 0.5pt + rgb(\"ccd3dc\"),",
             "  " + ",\n  ".join(cells),
             ")",
             "",
@@ -1242,6 +2265,13 @@ def _typst_report(
             "tested model mix; matching model/tutorial rows are like-for-like.",
             "",
             *delta_block,
+            "#pagebreak()",
+            *_typst_analysis_block(
+                change_breadth_rows,
+                bottlenecks,
+                behavior_rows,
+                quantization_rows,
+            ),
             *images,
             "",
         )
@@ -1328,6 +2358,12 @@ def build_report(
         )
     )
     aggregate_deltas, model_deltas = _cohort_delta_rows(results, cohort_order)
+    change_breadth_rows = _change_breadth_rows(model_deltas)
+    coverage = _coverage_analysis(results, labeled_sources)
+    latency = _latency_analysis(labeled_sources)
+    bottlenecks = _milestone_bottleneck_rows(results)
+    behavior_rows = _behavior_rows(results)
+    quantization_rows = _quantization_rows(results, labeled_sources)
     template = (Path(__file__).parent / "templates" / "tutorial_report.md").read_text(
         encoding="utf-8"
     )
@@ -1345,13 +2381,28 @@ def build_report(
                 for cohort, source in labeled_sources
             ),
         )
+        .replace("{{COVERAGE_GAPS}}", _coverage_gap_section(coverage))
         .replace("{{RUNTIME_SUMMARY}}", _runtime_summary(rows))
         .replace("{{TOKEN_TABLE}}", _token_table(rows))
+        .replace("{{LATENCY_SECTION}}", _latency_section(latency))
         .replace("{{COMPARISON_TABLE}}", _comparison_table(rows))
         .replace("{{DIFFICULTY_TABLE}}", _difficulty_table(difficulty_rows))
         .replace(
             "{{COHORT_DELTAS}}",
             _cohort_delta_table(aggregate_deltas, model_deltas),
+        )
+        .replace(
+            "{{CHANGE_BREADTH_TABLE}}",
+            _change_breadth_table(change_breadth_rows),
+        )
+        .replace(
+            "{{MILESTONE_BOTTLENECKS}}",
+            _milestone_bottleneck_table(bottlenecks),
+        )
+        .replace("{{BEHAVIOR_TABLE}}", _behavior_table(behavior_rows))
+        .replace(
+            "{{QUANTIZATION_TABLE}}",
+            _quantization_table(quantization_rows),
         )
         .replace(
             "{{DIAGRAMS}}",
@@ -1366,6 +2417,12 @@ def build_report(
             difficulty_rows,
             aggregate_deltas,
             model_deltas,
+            change_breadth_rows,
+            coverage,
+            latency,
+            bottlenecks,
+            behavior_rows,
+            quantization_rows,
             diagram_paths,
             tuple(
                 f"{cohort} / {source.path.name}" if cohort is not None else source.path.name
