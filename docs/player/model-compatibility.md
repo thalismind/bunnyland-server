@@ -1,0 +1,100 @@
+# Model compatibility
+
+Bunnyland asks models to act through validated character tools. A model only passes when
+the world reaches the tutorial's authoritative completion state; describing or claiming
+success does not count.
+
+The three tutorials represent increasing levels of play:
+
+- **Apple Crossing:** basic quests and object use.
+- **Bell Green:** town navigation, readable fixtures, and NPC interaction.
+- **Clover City:** complex navigation, multiple facilities and residents, and recurring
+  world activity.
+
+Each result below is a five-session cell. **Consistent** means 4--5/5, **likely** means
+3/5, **possible** means 1--2/5, and **not demonstrated** means 0/5. A recommendation
+requires at least a likely pass at that level. A 0/5 result means no pass was observed in
+five trials, not that success is impossible.
+
+## Compatibility at a glance
+
+The recommended level is the hardest tutorial where the model reached at least 3/5.
+The pass rate shown is for that level, so readers do not need to compare all three
+tutorial columns.
+
+| Model | Size | Runs on | Best demonstrated level | Pass rate |
+| --- | ---: | --- | --- | ---: |
+| Gemma 4 | 31B | Cloud | Complex worlds | 5/5 |
+| Qwen 3.6 Genesis Hermes V5 Q8 | 35B-A3B | Local | Complex worlds | 4/5 |
+| Qwen 3.6 Q4 | 35B-A3B | Local | Complex worlds | 4/5 |
+| Qwen 3.6 Q6 | 35B-A3B | Local | Complex worlds | 3/5 |
+| Qwen 3.6 Q8 | 35B-A3B | Local | Complex worlds | 3/5 |
+| MiniMax M2.7 | 230B | Cloud | Complex worlds | 3/5 |
+| DeepSeek V4 Flash | 284B | Cloud | Complex worlds | 4/5 |
+| Qwen 3.5 | 397B-A17B | Cloud | Complex worlds | 4/5 |
+| GLM-5.2 | 753B | Cloud | Complex worlds | 4/5 |
+| Kimi K2.6 | 1T | Cloud | Complex worlds | 5/5 |
+| Kimi K2.7 Code | 1T | Cloud | Complex worlds | 5/5 |
+| DeepSeek V4 Pro | 1.6T | Cloud | Complex worlds | 5/5 |
+| Qwen 3.5 4B | 4B | Local | Town and NPCs | 4/5 |
+| Qwen 3.5 4B HauhauCS | 4B | Local | Town and NPCs | 5/5 |
+| Qwen 3.5 9B | 9B | Local | Town and NPCs | 5/5 |
+| Qwen 3.5 9B Defiant Fable | 9B | Local | Town and NPCs | 5/5 |
+| GPT-OSS 20B | 21B | Cloud | Town and NPCs | 5/5 |
+| Nemotron 3 Nano | 31.6B-A3B | Cloud | Town and NPCs | 5/5 |
+| Laguna XS 2.1 | 33B | Local | Town and NPCs | 5/5 |
+| Qwen 3.6 Bahushruth v4 Q4 | 35B-A3B | Local | Town and NPCs | 5/5 |
+| GPT-OSS 120B | 117B | Cloud | Town and NPCs | 5/5 |
+| Nemotron 3 Super | 120B-A12B | Cloud | Town and NPCs | 4/5 |
+| MiniMax M3 | 428B | Cloud | Town and NPCs | 5/5 |
+| Nemotron 3 Ultra | 550B-A55B | Cloud | Town and NPCs | 5/5 |
+| Mistral Large 3 | 675B | Cloud | Town and NPCs | 4/5 |
+
+No rated model stopped at basic gameplay: every model reached at least a likely pass on
+Bell Green.
+
+For local town and NPC play, Qwen 3.5 4B is the smallest recommendation, while Qwen 3.5
+9B provides more headroom. For local complex worlds, Qwen 3.6 Genesis Hermes V5 Q8 had
+the strongest tested completion rate. It needs roughly 41 GB of GPU memory with the
+benchmark's 262K context; the Q4 base model is the more practical 24 GB-class option.
+
+For cloud complex-world play, DeepSeek V4 Flash is the efficiency-oriented
+recommendation. Kimi K2.6, Kimi K2.7 Code, and DeepSeek V4 Pro were the most consistent,
+but are much larger models.
+
+## Local Ollama model IDs
+
+Admins can use these exact tested identifiers:
+
+| Model | Ollama model ID |
+| --- | --- |
+| Qwen 3.5 4B | `qwen3.5:4b` |
+| Qwen 3.5 4B HauhauCS | `hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M` |
+| Qwen 3.5 9B | `qwen3.5:9b` |
+| Qwen 3.5 9B Defiant Fable | `hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF:Q4_K_M` |
+| Laguna XS 2.1 | `laguna-xs-2.1:latest` |
+| Qwen 3.6 Q4 | `qwen3.6:35b-a3b` |
+| Qwen 3.6 Q6 | `hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q6_K` |
+| Qwen 3.6 Q8 | `hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:Q8_0` |
+| Qwen 3.6 Bahushruth v4 Q4 | `hf.co/Bahushruth/Qwen3.6-35B-A3B-abliterated-v4-GGUF:Q4_K_M` |
+| Qwen 3.6 Genesis Hermes V5 Q8 | `hf.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V5-GGUF:Q8_0` |
+
+The local Gemma 4 31B HauhauCS Q4 variant is not rated. It does not expose the benchmark's
+high-thinking option, and a provider-default diagnostic was stopped after 14 Apple turns:
+it still carried the apple, had completed 6/13 milestones, and was taking 35--90 seconds
+per decision. The separate `gemma4:cloud` result above completed its full rated cells.
+
+Uncensored and abliterated derivatives remove or weaken model safeguards. Their gameplay
+results are not a recommendation to expose them directly to untrusted public prompts;
+server operators remain responsible for appropriate policy controls.
+
+## Test conditions and detailed results
+
+The established models use the latest applicable complete cells: Apple and Clover from
+`v2` (`3a662413`) and Bell from `v4` (`0abb32b`). The four rated derivatives ran against
+`c3f2729`, whose gameplay code retains the same latest tutorial semantics. Runs used five
+fresh worlds per model/tutorial pair, provider-default temperature, and high thinking where
+the model supported it.
+
+See the [tutorial benchmark methodology](../developer/tutorial-benchmark.md) for scoring,
+artifacts, latency, milestone completion, and turn-efficiency analysis.

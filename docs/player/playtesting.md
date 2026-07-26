@@ -12,8 +12,9 @@ The ladder uses layered guidance rather than a forced walkthrough. Room summarie
 destinations, fixed boards provide route information, and hub guides answer spoken direction
 questions through normal validated speech actions. Players can ignore those hints and explore.
 
-For model reasoning through these same tutorial objectives, use the
-[Ollama tutorial-ladder benchmark](../developer/tutorial-benchmark.md). That harness measures
+For model reasoning through these same tutorial objectives, see the
+[model compatibility list](model-compatibility.md) and
+[Ollama tutorial-ladder benchmark](../developer/tutorial-benchmark.md). The harness measures
 validated character-tool decisions in fresh worlds; it does not replace the browser,
 Discord, multi-client, or human-usability checks in this guide.
 
