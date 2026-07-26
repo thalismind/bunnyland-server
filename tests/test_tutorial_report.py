@@ -566,6 +566,7 @@ def test_package_report_includes_only_shareable_report_files(tmp_path):
     build_report((tmp_path / "source",), report, title="Test ladder")
     (report / "report.pdf").write_bytes(b"%PDF-1.7\n")
     (report / "private-traces.jsonl").write_text("private", encoding="utf-8")
+    (report / "diagrams" / "stale-map.png").write_bytes(b"stale")
 
     package_report(report, output)
 
@@ -576,3 +577,4 @@ def test_package_report_includes_only_shareable_report_files(tmp_path):
     assert "tutorial-report/token-stats.md" in names
     assert "tutorial-report/private-traces.jsonl" not in names
     assert "tutorial-report/report.typ" not in names
+    assert "tutorial-report/diagrams/stale-map.png" not in names

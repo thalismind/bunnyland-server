@@ -2443,7 +2443,15 @@ def package_report(report: Path, archive: Path) -> None:
         "token-stats.md",
         "findings.md",
     )
-    diagrams = tuple(sorted((report / "diagrams").glob("*")))
+    diagrams = tuple(
+        sorted(
+            (
+                *(report / "diagrams").glob("*-tabletop.png"),
+                *(report / "diagrams").glob("*-map.svg"),
+                *(report / "diagrams").glob("*-milestones.svg"),
+            )
+        )
+    )
     selected = tuple(report / name for name in files if (report / name).is_file()) + diagrams
     if not (report / "report.md").is_file() or not (report / "report.pdf").is_file():
         raise ValueError("shareable report needs report.md and report.pdf")
