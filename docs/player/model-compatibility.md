@@ -24,31 +24,31 @@ tutorial columns.
 
 | Model | Size | Runs on | Best demonstrated level | Pass rate |
 | --- | ---: | --- | --- | ---: |
+| DeepSeek V4 Pro | 1.6T | Cloud | Complex worlds | 5/5 |
 | Gemma 4 | 31B | Cloud | Complex worlds | 5/5 |
-| Qwen 3.6 Genesis Hermes V5 Q8 | 35B-A3B | Local | Complex worlds | 4/5 |
-| Qwen 3.6 Q4 | 35B-A3B | Local | Complex worlds | 4/5 |
-| Qwen 3.6 Q6 | 35B-A3B | Local | Complex worlds | 3/5 |
-| Qwen 3.6 Q8 | 35B-A3B | Local | Complex worlds | 3/5 |
-| MiniMax M2.7 | 230B | Cloud | Complex worlds | 3/5 |
-| DeepSeek V4 Flash | 284B | Cloud | Complex worlds | 4/5 |
-| Qwen 3.5 | 397B-A17B | Cloud | Complex worlds | 4/5 |
-| GLM-5.2 | 753B | Cloud | Complex worlds | 4/5 |
 | Kimi K2.6 | 1T | Cloud | Complex worlds | 5/5 |
 | Kimi K2.7 Code | 1T | Cloud | Complex worlds | 5/5 |
-| DeepSeek V4 Pro | 1.6T | Cloud | Complex worlds | 5/5 |
-| Qwen 3.5 4B | 4B | Local | Town and NPCs | 4/5 |
+| DeepSeek V4 Flash | 284B | Cloud | Complex worlds | 4/5 |
+| GLM-5.2 | 753B | Cloud | Complex worlds | 4/5 |
+| Qwen 3.5 | 397B-A17B | Cloud | Complex worlds | 4/5 |
+| Qwen 3.6 Genesis Hermes V5 Q8 | 35B-A3B | Local | Complex worlds | 4/5 |
+| Qwen 3.6 Q4 | 35B-A3B | Local | Complex worlds | 4/5 |
+| MiniMax M2.7 | 230B | Cloud | Complex worlds | 3/5 |
+| Qwen 3.6 Q6 | 35B-A3B | Local | Complex worlds | 3/5 |
+| Qwen 3.6 Q8 | 35B-A3B | Local | Complex worlds | 3/5 |
+| GPT-OSS 120B | 117B | Cloud | Town and NPCs | 5/5 |
+| GPT-OSS 20B | 21B | Cloud | Town and NPCs | 5/5 |
+| Laguna XS 2.1 | 33B | Local | Town and NPCs | 5/5 |
+| MiniMax M3 | 428B | Cloud | Town and NPCs | 5/5 |
+| Nemotron 3 Nano | 31.6B-A3B | Cloud | Town and NPCs | 5/5 |
+| Nemotron 3 Ultra | 550B-A55B | Cloud | Town and NPCs | 5/5 |
 | Qwen 3.5 4B HauhauCS | 4B | Local | Town and NPCs | 5/5 |
 | Qwen 3.5 9B | 9B | Local | Town and NPCs | 5/5 |
 | Qwen 3.5 9B Defiant Fable | 9B | Local | Town and NPCs | 5/5 |
-| GPT-OSS 20B | 21B | Cloud | Town and NPCs | 5/5 |
-| Nemotron 3 Nano | 31.6B-A3B | Cloud | Town and NPCs | 5/5 |
-| Laguna XS 2.1 | 33B | Local | Town and NPCs | 5/5 |
 | Qwen 3.6 Bahushruth v4 Q4 | 35B-A3B | Local | Town and NPCs | 5/5 |
-| GPT-OSS 120B | 117B | Cloud | Town and NPCs | 5/5 |
-| Nemotron 3 Super | 120B-A12B | Cloud | Town and NPCs | 4/5 |
-| MiniMax M3 | 428B | Cloud | Town and NPCs | 5/5 |
-| Nemotron 3 Ultra | 550B-A55B | Cloud | Town and NPCs | 5/5 |
 | Mistral Large 3 | 675B | Cloud | Town and NPCs | 4/5 |
+| Nemotron 3 Super | 120B-A12B | Cloud | Town and NPCs | 4/5 |
+| Qwen 3.5 4B | 4B | Local | Town and NPCs | 4/5 |
 
 No rated model stopped at basic gameplay: every model reached at least a likely pass on
 Bell Green.
