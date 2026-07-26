@@ -820,7 +820,8 @@ def tutorial_scenarios() -> dict[str, TutorialScenario]:
             player_key="bram",
             tester_brief=(
                 "Orient yourself in Bell Green: read the notice board, visit the documented "
-                "destinations, interact with a resident, and carry an item between rooms."
+                "destinations, check how the town handles local mail, interact with a "
+                "resident, and carry an item between rooms."
             ),
             milestones=bell,
             completion=lambda state: _all_milestones(state, bell),

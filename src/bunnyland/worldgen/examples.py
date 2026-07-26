@@ -331,7 +331,9 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
                         "Welcome to Bell Green. The notice board has a town map and errands. "
                         "The required orientation circuit visits Bell Green Post Office, "
                         "Garden Walk, Hearthwick Inn, and Old Bell Shrine. Optional errands "
-                        "are listed separately. Ask me which required stop remains."
+                        "are listed separately. The required civic check is to check local "
+                        "mail at the community mailbox or the sorted letters. Ask me which "
+                        "required stop remains."
                     ),
                     "intent": "inform",
                     "approach": "friendly",
@@ -590,9 +592,11 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
                     "Hearthwick Inn, and Old Bell Shrine. Town map from Bell Green: north to "
                     "Bell Green Post Office; east to Garden Walk; south to Hearthwick Inn; "
                     "west to Market Lane. For Old Bell Shrine, go east to Garden Walk, south "
-                    "to River Footbridge, then east. Optional starter errands: help Pip finish "
-                    "a delivery, inspect the mail, carry Saffron's harvest basket, ask Jun "
-                    "what broke, or feed Button."
+                    "to River Footbridge, then east. Required civic check: check local mail "
+                    "at the fixed community mailbox in Bell Green or Pippa's fixed sorted "
+                    "letters in Bell Green Post Office. Optional starter errands: help Pip "
+                    "finish a delivery, carry Saffron's harvest basket, ask Jun what broke, "
+                    "or feed Button."
                 ),
             ),
         )
@@ -605,8 +609,9 @@ async def bell_green_example(actor, seed: str, options: GenOptions) -> Instantia
                     "Hearthwick Inn, and Old Bell Shrine. From Bell Green: take north for Bell "
                     "Green Post Office, east for Garden Walk, and south for Hearthwick Inn. "
                     "For Old Bell Shrine, take the east exit to Garden Walk, the south exit to "
-                    "River Footbridge, then the east exit to Old Bell Shrine. Optional errands "
-                    "do not replace these stops."
+                    "River Footbridge, then the east exit to Old Bell Shrine. The required "
+                    "civic check is to check local mail at the community mailbox or the "
+                    "sorted letters. Optional errands do not replace these requirements."
                 )
             ),
         )

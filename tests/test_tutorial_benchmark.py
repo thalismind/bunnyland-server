@@ -367,6 +367,20 @@ async def test_starting_room_projection_counts_as_orientation_without_redundant_
     assert dict(result.milestone_results)["oriented_in_bell_green"] is True
 
 
+async def test_bell_goal_explicitly_requires_checking_local_mail():
+    _result, traces = await run_session(
+        tutorial_scenarios()["bell"],
+        model="deterministic",
+        provider="ollama-local",
+        run=1,
+        timeout_seconds=5,
+        turn_limit=1,
+        agent=ScriptedAgent(()),
+    )
+
+    assert "check how the town handles local mail" in traces[0].prompt
+
+
 @pytest.mark.parametrize("tutorial", ("apple", "bell", "clover"))
 async def test_optional_helpful_memory_seed_appears_in_initial_prompt(tutorial):
     _result, traces = await run_session(

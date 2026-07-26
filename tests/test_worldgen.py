@@ -528,11 +528,20 @@ async def test_bell_green_generator_builds_online_sandbox_shape():
         "Required orientation circuit: visit Bell Green Post Office, Garden Walk, "
         "Hearthwick Inn, and Old Bell Shrine."
     ) in readable.text
+    assert (
+        "Required civic check: check local mail at the fixed community mailbox in Bell Green "
+        "or Pippa's fixed sorted letters in Bell Green Post Office."
+    ) in readable.text
     assert "Optional starter errands:" in readable.text
+    assert "inspect the mail" not in readable.text
     assert "north to Bell Green Post Office" in readable.text
     assert not notice.has_component(PortableComponent)
     assert "town hub" in green.get_component(DescriptionComponent).long
     assert guide.has_component(TutorialGuideComponent)
+    assert (
+        "required civic check is to check local mail at the community mailbox or the sorted "
+        "letters"
+    ) in guide.get_component(TutorialGuideComponent).help_text
     bram = actor.world.get_entity(world.characters["bram"])
     assert bram.get_component(
         TutorialOrientationProgressComponent
