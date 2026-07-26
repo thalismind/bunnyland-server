@@ -40,6 +40,27 @@ flowchart LR
     output -. "context for the next turn" .-> controllers
 ```
 
+## Which models can play?
+
+We tested 21 local and cloud model configurations in 855 sessions. Models had to complete
+validated world actions; narrating success did not count.
+
+| Gameplay tier | Recommendation | Practical hardware | Representative result |
+| --- | --- | --- | ---: |
+| Basic gameplay and NPCs | Qwen 3.5 4B | Recent iPhone with a compatible Q4 runtime | Apple 5/5 |
+| Multi-step adventures | Qwen 3.5 9B | Modern laptop | Bell 5/5 |
+| Complex gameplay and agents | Qwen 3.6 35B-A3B Q4_K_M | One 24 GB desktop GPU | Clover 4/5 |
+
+Qwen 3.5 9B is the default local recommendation for most players. For efficient cloud
+play, DeepSeek V4 Flash completed 14/15 sessions in the full three-tutorial cohort. Kimi
+K2.6, Kimi K2.7 Code, and DeepSeek V4 Pro each completed 15/15.
+
+Across the latest applicable tutorial versions, Apple passed 103/105 sessions (98.1%),
+Bell passed 102/105 (97.1%), and Clover passed 49/105 (46.7%). These are practical
+recommendations from five-session model/tutorial cells, not universal parameter cutoffs.
+See the [tutorial benchmark methodology](docs/developer/tutorial-benchmark.md) for the
+evaluation contract and reproducibility details.
+
 ## 🚀 Quickstart
 
 ```bash
