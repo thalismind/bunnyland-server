@@ -42,9 +42,9 @@ flowchart LR
 
 ## Which models can play?
 
-We tested 25 rated local and cloud model configurations plus four preliminary frontier
-models across more than 900 completed sessions. Models had to complete validated world
-actions; narrating success did not count.
+We tested 25 rated local and cloud model configurations plus four frontier models with
+two sessions per cell across more than 900 completed sessions. Models had to complete
+validated world actions; narrating success did not count.
 
 | Gameplay tier | Recommendation | Practical hardware | Representative result |
 | --- | --- | --- | ---: |

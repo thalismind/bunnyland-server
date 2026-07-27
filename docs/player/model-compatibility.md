@@ -58,7 +58,7 @@ pass counts.
 
 | Rank | Model | Deployment | Best for | Evidence and tradeoff |
 | ---: | --- | --- | --- | --- |
-| 1 | [GPT-5.6 Luna](https://openrouter.ai/openai/gpt-5.6-luna) | OpenRouter | Best hosted value | 14/16 passes and the highest measured token efficiency; preliminary two-session cells |
+| 1 | [GPT-5.6 Luna](https://openrouter.ai/openai/gpt-5.6-luna) | OpenRouter | Best hosted value | 14/16 passes and the highest measured token efficiency; two-session cells |
 | 2 | [Kimi K2.7 Code](https://ollama.com/library/kimi-k2.7-code%3Acloud) | Ollama Cloud | Proven cloud reliability | Clover 5/5, fastest overall at 1.51 seconds per decision, and strong token efficiency |
 | 3 | [Qwen 3.6 35B-A3B Q4](https://ollama.com/library/qwen3.6%3A35b-a3b) | Local Ollama | Practical local hosting | Clover 4/5 and current Bell 5/5 on one 24 GB-class GPU |
 | 4 | [DeepSeek V4 Flash](https://ollama.com/library/deepseek-v4-flash%3Acloud) | Ollama Cloud | Fast open-weight cloud play | Clover 4/5 and third-fastest overall at 1.81 seconds per decision |
@@ -83,14 +83,14 @@ but are much larger models.
 ## Frontier API preview
 
 Four newly released hosted models received a breadth-first, two-session evaluation across
-the applicable `v1`--`v4` tutorials. These cells are preliminary and do not meet the
-five-session threshold used by the compatibility table above.
+the applicable `v1`--`v4` tutorials. These cells do not meet the five-session threshold
+used by the compatibility table above.
 
 | Model | Observed level | Overall passes | Milestones | Estimated API cost | Player guidance |
 | --- | --- | ---: | ---: | ---: | --- |
 | GPT-5.6 Luna | Complex worlds | 14/16 | 166/172 | $2.50 | Recommended hosted frontier option |
 | GPT-5.6 Sol | Complex worlds | 14/16 | 166/172 | $15.11 | Capable, but costlier than Luna |
-| Claude Haiku 4.5 | Complex worlds, preliminary | 10/16 | 160/172 | $7.60 | Promising; needs a full cell |
+| Claude Haiku 4.5 | Complex worlds | 10/16 | 160/172 | $7.60 | Promising; needs a full cell |
 | Claude Opus 5 | Town and NPCs | 12/16 | 155/172 | $46.19 | Avoid for routine gameplay |
 
 For hosted play, **GPT-5.6 Luna is the recommendation**. It passed more sessions and

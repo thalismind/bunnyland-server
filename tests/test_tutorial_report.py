@@ -433,6 +433,7 @@ def test_frontier_report_prices_cached_tokens_and_recommends_luna(tmp_path):
     assert "## Frontier API cost and recommendation" in markdown
     assert "use **GPT-5.6 Luna**" in markdown
     assert "avoid **Claude Opus 5**" in markdown
+    assert "preliminary" not in markdown
     assert "| `GPT-5.6 Luna` | 2/2 (100.0%) | 4/4 | $0.18 |" in markdown
     assert "| `Claude Opus 5` | 1/2 (50.0%) | 3/4 | $0.81 |" in markdown
     assert "two sessions per applicable model/version/tutorial cell" in markdown

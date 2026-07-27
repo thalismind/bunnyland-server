@@ -1892,8 +1892,8 @@ def _frontier_cost_section(
     return (
         "## Frontier API cost and recommendation\n\n"
         "These four models were breadth-tested with two sessions per applicable "
-        "model/version/tutorial cell, so the results are preliminary and are not "
-        "classified by the five-session possible/likely/consistent rubric. Costs are "
+        "model/version/tutorial cell and are not classified by the five-session "
+        "possible/likely/consistent rubric. Costs are "
         "reconstructed from retained OpenRouter usage details and the model list prices "
         "for [Claude Opus 5](https://openrouter.ai/anthropic/claude-opus-5), "
         "[Claude Haiku 4.5](https://openrouter.ai/anthropic/claude-haiku-4.5), "
@@ -3291,8 +3291,8 @@ def _typst_frontier_cost_block(
         "== Frontier API cost and recommendation",
         "",
         _typst_text(
-            "These four models used two sessions per applicable cell, so their results "
-            "are preliminary and are not classified by the five-session threshold rubric. "
+            "These four models used two sessions per applicable cell and are not classified "
+            "by the five-session threshold rubric. "
             "Costs are reconstructed from retained OpenRouter usage and list prices, "
             "including observed cache reads and writes; they are estimates, not invoices."
         ),
