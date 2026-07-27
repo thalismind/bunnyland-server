@@ -135,18 +135,21 @@ A tutorial ladder should increase planning and world-model demands, not obscurit
 Use two complementary acceptance measures:
 
 1. **Representative reliability:** preselect one strong, commonly used model for the target
-   parameter class using a public metric such as Hugging Face downloads or likes. That
-   representative should complete at least four of five sessions.
+   parameter class using a public metric such as Hugging Face downloads or likes. For Apple
+   and Bell, that representative should complete at least four of five sessions; 5/5 is
+   desirable but not required.
 2. **Cohort distribution:** report how many models achieve a possible pass (at least 1/5), a
    likely pass (at least 3/5), and a consistent pass (at least 4/5). A 0/5 result is evidence
    about that model and provider, not by itself proof that the world is undiscoverable.
 
-An initial target may be small 3--4B models for the first tutorial, 7--8B models for the
-second, and 20--25B models for the third. Treat those as hypotheses, not reasons to preserve
-an unpleasant difficulty spike. Choose representatives before reading their tutorial
-outcomes, record the metric source, value, and retrieval date, and do not silently replace a
-representative after a poor result. If nearly every model misses the same milestone, first
-inspect the world's clues, action visibility, and evaluator semantics.
+Many or most models should reach likely pass on Apple and Bell, while preselected strong
+models should reach consistent pass. Clover is the primary filter point: preserve and report
+meaningful separation across possible, likely, and consistent pass rather than applying a
+blanket 4/5 requirement to every strong model. Treat model-size targets as hypotheses, not
+reasons to preserve an unpleasant difficulty spike. Choose representatives before reading
+their tutorial outcomes, record the metric source, value, and retrieval date, and do not
+silently replace a representative after a poor result. If nearly every model misses the same
+milestone, first inspect the world's clues, action visibility, and evaluator semantics.
 
 Milestone analysis should report:
 

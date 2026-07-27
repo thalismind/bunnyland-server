@@ -50,6 +50,24 @@ tutorial columns.
 | Nemotron 3 Super | 120B-A12B | Cloud | Town and NPCs | 4/5 |
 | Qwen 3.5 4B | 4B | Local | Town and NPCs | 4/5 |
 
+## Recommended top five
+
+These recommendations balance demonstrated gameplay, latency, token or cost efficiency,
+deployment practicality, and strength of evidence. They are not simply the five highest
+pass counts.
+
+| Rank | Model | Deployment | Best for | Evidence and tradeoff |
+| ---: | --- | --- | --- | --- |
+| 1 | [GPT-5.6 Luna](https://openrouter.ai/openai/gpt-5.6-luna) | OpenRouter | Best hosted value | 14/16 passes and the highest measured token efficiency; preliminary two-session cells |
+| 2 | [Kimi K2.7 Code](https://ollama.com/library/kimi-k2.7-code%3Acloud) | Ollama Cloud | Proven cloud reliability | Clover 5/5, fastest overall at 1.51 seconds per decision, and strong token efficiency |
+| 3 | [Qwen 3.6 35B-A3B Q4](https://ollama.com/library/qwen3.6%3A35b-a3b) | Local Ollama | Practical local hosting | Clover 4/5 and current Bell 5/5 on one 24 GB-class GPU |
+| 4 | [DeepSeek V4 Flash](https://ollama.com/library/deepseek-v4-flash%3Acloud) | Ollama Cloud | Fast open-weight cloud play | Clover 4/5 and third-fastest overall at 1.81 seconds per decision |
+| 5 | [Qwen 3.6 Genesis Hermes V5 Q8](https://huggingface.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V5-GGUF) | Local Ollama from Hugging Face | High-end local roleplay | Clover 4/5; needs roughly 41 GB with the benchmark context and is an uncensored derivative |
+
+For a cloud-only list, replace Genesis Hermes with
+[DeepSeek V4 Pro](https://ollama.com/library/deepseek-v4-pro%3Acloud), which reached
+Clover 5/5 and a 1.99-second median decision latency but uses a much larger architecture.
+
 No rated model stopped at basic gameplay: every model reached at least a likely pass on
 Bell Green.
 
@@ -61,6 +79,31 @@ benchmark's 262K context; the Q4 base model is the more practical 24 GB-class op
 For cloud complex-world play, DeepSeek V4 Flash is the efficiency-oriented
 recommendation. Kimi K2.6, Kimi K2.7 Code, and DeepSeek V4 Pro were the most consistent,
 but are much larger models.
+
+## Frontier API preview
+
+Four newly released hosted models received a breadth-first, two-session evaluation across
+the applicable `v1`--`v4` tutorials. These cells are preliminary and do not meet the
+five-session threshold used by the compatibility table above.
+
+| Model | Observed level | Overall passes | Milestones | Estimated API cost | Player guidance |
+| --- | --- | ---: | ---: | ---: | --- |
+| GPT-5.6 Luna | Complex worlds | 14/16 | 166/172 | $2.50 | Recommended hosted frontier option |
+| GPT-5.6 Sol | Complex worlds | 14/16 | 166/172 | $15.11 | Capable, but costlier than Luna |
+| Claude Haiku 4.5 | Complex worlds, preliminary | 10/16 | 160/172 | $7.60 | Promising; needs a full cell |
+| Claude Opus 5 | Town and NPCs | 12/16 | 155/172 | $46.19 | Avoid for routine gameplay |
+
+For hosted play, **GPT-5.6 Luna is the recommendation**. It passed more sessions and
+completed more milestones than Claude Opus 5 while costing dramatically less. Across all
+retained frontier runs it delivered about 22 times as many authoritative passes per dollar;
+the `v2` and `v4` comparison was about 28 times. In practical terms, Luna appears **about
+25 times better per dollar** for Bunnyland. We recommend avoiding Opus for routine gameplay
+because its cost/performance ratio is poor here, even though it may remain useful for
+different long-horizon workloads.
+
+Costs cover all 16 retained sessions for each model and are reconstructed from OpenRouter
+usage records and list prices, including observed prompt caching. They are estimates, not
+per-session prices or invoice totals.
 
 ## Local Ollama model IDs
 

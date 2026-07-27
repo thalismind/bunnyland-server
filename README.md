@@ -42,14 +42,24 @@ flowchart LR
 
 ## Which models can play?
 
-We tested 25 rated local and cloud model configurations in 915 completed sessions. Models
-had to complete validated world actions; narrating success did not count.
+We tested 25 rated local and cloud model configurations plus four preliminary frontier
+models across more than 900 completed sessions. Models had to complete validated world
+actions; narrating success did not count.
 
 | Gameplay tier | Recommendation | Practical hardware | Representative result |
 | --- | --- | --- | ---: |
 | Basic gameplay and NPCs | Qwen 3.5 4B | Recent iPhone with a compatible Q4 runtime | Apple 5/5 |
 | Multi-step adventures | Qwen 3.5 9B | Modern laptop | Bell 5/5 |
 | Complex gameplay and agents | Qwen 3.6 35B-A3B Q4_K_M | One 24 GB desktop GPU | Clover 4/5 |
+
+Across deployment profiles, our current top five are
+[GPT-5.6 Luna](https://openrouter.ai/openai/gpt-5.6-luna),
+[Kimi K2.7 Code](https://ollama.com/library/kimi-k2.7-code%3Acloud),
+[Qwen 3.6 35B-A3B Q4](https://ollama.com/library/qwen3.6%3A35b-a3b),
+[DeepSeek V4 Flash](https://ollama.com/library/deepseek-v4-flash%3Acloud), and
+[Qwen 3.6 Genesis Hermes V5 Q8](https://huggingface.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V5-GGUF).
+See the [ranked recommendations](docs/player/model-compatibility.md#recommended-top-five)
+for evidence and deployment caveats.
 
 Qwen 3.5 9B is the default local recommendation for most players. For efficient cloud
 play, DeepSeek V4 Flash completed 14/15 sessions in the full three-tutorial cohort. Kimi

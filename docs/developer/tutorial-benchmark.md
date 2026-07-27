@@ -31,9 +31,11 @@ Use complete five-session cells for tutorial-difficulty decisions:
 Preselect one representative for each target parameter class before reading its tutorial
 results. Prefer a strong, commonly used model and record a reproducible public metric such as
 Hugging Face downloads or likes, the source model id, and the retrieval date. The
-representative carries the consistent-pass target. Other models describe the difficulty
-distribution: reports count how many reach possible, likely, and consistent pass rather than
-requiring every family to succeed.
+Apple and Bell representatives carry the consistent-pass target, with 5/5 desirable but not
+required. Many or most models should reach likely pass on those two tutorials. Clover is the
+filter point: its spread across possible, likely, and consistent pass is the result, and it
+does not impose a blanket 4/5 gate on every strong model. Other models describe the
+difficulty distribution rather than being required to succeed.
 
 For the server-`5b33e2a69301` research round, the representatives use the Hugging Face
 `downloads` field retrieved 2026-07-24:
@@ -305,6 +307,13 @@ The generated directory contains:
   median seconds per turn, and completed milestones per million total tokens for every
   model.
 - `report.typ`, the deterministic print layout.
+- `diagrams/tutorial-success-trend-chart.svg`, authoritative session success by cohort and
+  tutorial.
+- `diagrams/threshold-attainment-chart.svg`, the share of complete model/tutorial cells
+  reaching possible, likely, and consistent pass.
+- `diagrams/*-parameter-milestone-scatter-chart.svg`, one plot per tutorial comparing total
+  upstream architecture parameters on a logarithmic scale with milestone completion in the
+  latest supplied cohort containing that tutorial.
 - `diagrams/*-tabletop.png`, illustrated top-down world maps in Bunnyland's visual style.
 - `diagrams/*-map.svg`, exact tutorial topology with milestone locations and persistent clue
   notes.
@@ -312,6 +321,8 @@ The generated directory contains:
   milestone at least once and whose remaining rows show session reliability by model.
 - The difficulty-distribution table counts complete cells reaching possible pass (1/5),
   likely pass (3/5), and consistent pass (4/5) for each cohort and tutorial.
+- The tutorial-acceptance table treats Apple and Bell as broad-playability checks and Clover
+  as the model-discrimination filter. These calibration goals do not alter milestone scoring.
 
 Install [Typst](https://typst.app/open-source/) and render the PDF with:
 

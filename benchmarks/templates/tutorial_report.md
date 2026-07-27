@@ -22,6 +22,10 @@ tokens; cached prompt tokens may still be included.
 
 {{TOKEN_TABLE}}
 
+## Performance leaders
+
+{{PERFORMANCE_LEADERBOARDS}}
+
 ## Latency distribution
 
 Decision latency is measured from the benchmark's scored turn traces. Provider and hardware
@@ -33,12 +37,42 @@ panels are reported separately because local and cloud timing are not directly i
 
 {{COMPARISON_TABLE}}
 
+{{FRONTIER_COST_SECTION}}
+
+## Tutorial acceptance policy
+
+These are calibration goals, not changes to per-session milestone scoring. “Strong” models
+are selected before results are read, using a reproducible public popularity or usage
+metric.
+
+{{ACCEPTANCE_POLICY}}
+
 ## Difficulty distribution
 
 Possible pass means at least 1/5, likely pass at least 3/5, and consistent pass at least
 4/5. Only complete five-session model/tutorial cells are classified.
 
 {{DIFFICULTY_TABLE}}
+
+## Cohort charts
+
+The success chart uses authoritative session pass rate. The threshold chart uses the share
+of complete five-session model/tutorial cells reaching possible (1/5), likely (3/5), and
+consistent (4/5) pass. Missing tutorial/version combinations are shown as gaps, not zeroes.
+
+{{SUMMARY_CHARTS}}
+
+## Model size and milestone completion
+
+Each scatter plot uses the latest supplied cohort containing that tutorial. The logarithmic
+X-axis shows total upstream architecture parameters; the Y-axis shows completed milestone
+checks divided by possible milestone checks across the model's sessions. Each numbered point
+is one exact model identifier. Circles are local models and diamonds are cloud models.
+Overlapping points are offset slightly. MoE models are plotted by total, not active,
+parameters. Closed models without a published parameter count are omitted rather than assigned
+an inferred size.
+
+{{PARAMETER_SCATTER_PLOTS}}
 
 ## Cohort deltas
 

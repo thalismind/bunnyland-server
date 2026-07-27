@@ -10,6 +10,7 @@ import pytest
 
 from benchmarks.tutorial_comparison import SourceSelection, write_comparison
 from benchmarks.tutorial_report import (
+    MODEL_ARCHITECTURES,
     TUTORIAL_MAPS,
     CohortInput,
     build_report,
@@ -102,6 +103,59 @@ def _source(path: Path) -> None:
         summarize(results, metadata, tutorials),
         results,
         traces,
+        responses,
+        metadata,
+    )
+
+
+def _frontier_source(path: Path) -> None:
+    models = (
+        "anthropic/claude-haiku-4.5",
+        "anthropic/claude-opus-5",
+        "openai/gpt-5.6-luna",
+        "openai/gpt-5.6-sol",
+    )
+    results = tuple(
+        _result(
+            model,
+            "bell",
+            passed=model != "anthropic/claude-opus-5" or run == 1,
+            run=run,
+        )
+        for model in models
+        for run in range(1, 3)
+    )
+    metadata = tuple(ModelMetadata(model) for model in models)
+    config = BenchmarkConfig(
+        models=models,
+        tutorials=("bell",),
+        sessions=2,
+        provider="openrouter",
+        output=path,
+    )
+    responses = tuple(
+        ModelResponseTrace(
+            schema_version=SCHEMA_VERSION,
+            session_id=result.session_id,
+            turn=1,
+            response={
+                "usage": {
+                    "prompt_tokens": 100_000,
+                    "completion_tokens": 10_000,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 80_000,
+                        "cache_write_tokens": 10_000,
+                    },
+                }
+            },
+        )
+        for result in results
+    )
+    write_artifacts(
+        config,
+        summarize(results, metadata, ("bell",)),
+        results,
+        (),
         responses,
         metadata,
     )
@@ -285,15 +339,31 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
         "report.typ",
         "token-stats.md",
     }
-    assert len(tuple((output / "diagrams").glob("*.svg"))) == 6
+    assert len(tuple((output / "diagrams").glob("*.svg"))) == 11
     assert len(tuple((output / "diagrams").glob("*-tabletop.png"))) == 3
     markdown = (output / "report.md").read_text(encoding="utf-8")
     assert "# Test ladder" in markdown
     assert "`source` — 6 completed sessions" in markdown
     assert str(source.resolve()) not in markdown
     assert "720 tokens" in markdown
-    assert "| `large` | 300 | 60 | 360 | 3/3 (100.0%) | 2.50 | 16,666.67 |" in markdown
+    assert "| `large` | 300 | 60 | 360 | 2.50 | 16,666.67 |" in markdown
+    runtime_table = markdown.split("## Runtime and token use", maxsplit=1)[1].split(
+        "## Performance leaders", maxsplit=1
+    )[0]
+    assert "Usage coverage" not in runtime_table
     assert "| `large` | 3/3 | 6/6 | 75.0% | 0.500 |" in markdown
+    assert "## Performance leaders" in markdown
+    assert "### Top 5 fastest models" in markdown
+    assert (
+        "| 1 | `small` | `ollama-local` | 3 | 2.00 | 2.00 | 10.0000 |"
+        in markdown
+    )
+    assert "### Top 5 most token-efficient models" in markdown
+    assert "| 1 | `large` | 6/6 | 360 | 16,666.67 |" in markdown
+    leaderboard = markdown.split("## Performance leaders", maxsplit=1)[1].split(
+        "## Latency distribution", maxsplit=1
+    )[0]
+    assert "Usage coverage" not in leaderboard
     assert "## Latency distribution" in markdown
     assert (
         "Across **6 scored decisions**, median end-to-end decision latency was **3.00s**"
@@ -301,13 +371,21 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     )
     assert (
         "| `large` | `Unlabeled` | `ollama-local` | 3 | 4.00 | 4.00 | 4.00 | "
-        "3/3 | 0.2000 | 5.0000 |"
+        "3/3 | 5.0000 |"
     ) in markdown
+    assert "Sec/output token" not in markdown
     assert "## Additional analytical questions" in markdown
     assert "### How broadly were cohort gains shared?" in markdown
     assert "### Where does tutorial progress break?" in markdown
     assert "### Are failures mostly invalid actions?" in markdown
     assert "### How sensitive is Qwen 3.6 35B to quantization?" in markdown
+    assert "## Cohort charts" in markdown
+    assert "diagrams/tutorial-success-trend-chart.svg" in markdown
+    assert "diagrams/threshold-attainment-chart.svg" in markdown
+    assert "## Model size and milestone completion" in markdown
+    assert "diagrams/apple-parameter-milestone-scatter-chart.svg" in markdown
+    assert "diagrams/bell-parameter-milestone-scatter-chart.svg" in markdown
+    assert "diagrams/clover-parameter-milestone-scatter-chart.svg" in markdown
     assert "{{" not in markdown
     heatmap = (output / "diagrams/apple-milestones.svg").read_text(encoding="utf-8")
     assert "Models reaching milestone" in heatmap
@@ -315,9 +393,15 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     typst = (output / "report.typ").read_text(encoding="utf-8")
     assert '#image("diagrams/apple-tabletop.png"' in typst
     assert '#image("diagrams/apple-map.svg"' in typst
+    assert '#image("diagrams/tutorial-success-trend-chart.svg"' in typst
+    assert '#image("diagrams/threshold-attainment-chart.svg"' in typst
+    assert '#image("diagrams/apple-parameter-milestone-scatter-chart.svg"' in typst
     assert '#text("large")' in typst
     assert 'set table(inset: 4pt, stroke: 0.5pt + rgb("ccd3dc"))' in typst
     assert "== Latency distribution" in typst
+    assert "== Performance leaders" in typst
+    assert "=== Top 5 fastest models" in typst
+    assert "=== Top 5 most token-efficient models" in typst
     assert "== Additional analytical questions" in typst
     assert "=== How broadly were cohort gains shared?" in typst
     assert str(source.resolve()) not in typst
@@ -338,6 +422,39 @@ def test_build_report_accepts_derived_comparison_artifact(tmp_path):
     assert "| `large` | 3/3 |" in markdown
 
 
+def test_frontier_report_prices_cached_tokens_and_recommends_luna(tmp_path):
+    source = tmp_path / "frontier"
+    output = tmp_path / "report"
+    _frontier_source(source)
+
+    build_report((source,), output, title="Frontier preview")
+
+    markdown = (output / "report.md").read_text(encoding="utf-8")
+    assert "## Frontier API cost and recommendation" in markdown
+    assert "use **GPT-5.6 Luna**" in markdown
+    assert "avoid **Claude Opus 5**" in markdown
+    assert "| `GPT-5.6 Luna` | 2/2 (100.0%) | 4/4 | $0.18 |" in markdown
+    assert "| `Claude Opus 5` | 1/2 (50.0%) | 3/4 | $0.81 |" in markdown
+    assert "two sessions per applicable model/version/tutorial cell" in markdown
+    chart = (
+        output / "diagrams" / "frontier-api-cost-performance-chart.svg"
+    ).read_text(encoding="utf-8")
+    for model in (
+        "anthropic/claude-haiku-4.5",
+        "anthropic/claude-opus-5",
+        "openai/gpt-5.6-luna",
+        "openai/gpt-5.6-sol",
+    ):
+        assert f'data-model="{model}"' in chart
+    assert "USD, linear scale" in chart
+    assert "log scale" not in chart
+    assert "recommended" in chart
+    typst = (output / "report.typ").read_text(encoding="utf-8")
+    assert "== Frontier API cost and recommendation" in typst
+    assert "about 25" not in typst
+    assert '#image("diagrams/frontier-api-cost-performance-chart.svg"' in typst
+
+
 def test_report_classifies_possible_likely_and_consistent_passes(tmp_path):
     source = tmp_path / "source"
     output = tmp_path / "report"
@@ -347,8 +464,17 @@ def test_report_classifies_possible_likely_and_consistent_passes(tmp_path):
 
     markdown = (output / "report.md").read_text(encoding="utf-8")
     assert "Possible pass means at least 1/5" in markdown
+    assert "## Tutorial acceptance policy" in markdown
+    assert (
+        "| `apple` | Many or most models reach likely pass (at least 3/5). |"
+        in markdown
+    )
+    assert "| `clover` | Retain a meaningful spread" in markdown
+    assert "Primary filter point." in markdown
     assert "| `apple` | 4 | 3/4 | 2/4 | 1/4 |" in markdown
     typst = (output / "report.typ").read_text(encoding="utf-8")
+    assert "== Tutorial acceptance policy" in typst
+    assert '[#text("Primary filter point.")]' in typst
     assert "== Difficulty distribution" in typst
     assert "[*Possible ≥1/5*]" in typst
     assert "[#text(\"3/4\")]" in typst
@@ -386,6 +512,81 @@ def test_cohort_difficulty_table_sorts_by_tutorial_then_version(tmp_path):
     )
     assert difficulty.index("| `v3` | `apple` |") < difficulty.index(
         "| `v1` | `bell` |"
+    )
+    success_chart = (output / "diagrams/tutorial-success-trend-chart.svg").read_text(
+        encoding="utf-8"
+    )
+    assert "Session success rate" in success_chart
+    assert 'data-tutorial="apple"' in success_chart
+    assert "50.0%" in success_chart
+    assert success_chart.index(">v1</text>") < success_chart.index(">v2</text>")
+    assert success_chart.index(">v2</text>") < success_chart.index(">v3</text>")
+    threshold_chart = (output / "diagrams/threshold-attainment-chart.svg").read_text(
+        encoding="utf-8"
+    )
+    assert "Share of complete model cells" in threshold_chart
+    assert "Possible ≥1/5" in threshold_chart
+    assert 'data-threshold="likely_passes"' in threshold_chart
+    assert "1/2" in threshold_chart
+
+
+def test_parameter_scatter_uses_latest_applicable_tutorial_cohort(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    latest_bell = tmp_path / "latest-bell"
+    output = tmp_path / "report"
+    _complete_source(first)
+    _complete_source(second)
+    _complete_bell_source(latest_bell)
+
+    build_report(
+        (),
+        output,
+        title="Latest applicable cohorts",
+        cohorts=(
+            CohortInput("v1", first),
+            CohortInput("v2", second),
+            CohortInput("v3", latest_bell),
+        ),
+    )
+
+    apple = (
+        output / "diagrams" / "apple-parameter-milestone-scatter-chart.svg"
+    ).read_text(encoding="utf-8")
+    bell = (
+        output / "diagrams" / "bell-parameter-milestone-scatter-chart.svg"
+    ).read_text(encoding="utf-8")
+    clover = (
+        output / "diagrams" / "clover-parameter-milestone-scatter-chart.svg"
+    ).read_text(encoding="utf-8")
+
+    assert "Latest applicable cohort: v2" in apple
+    assert "Latest applicable cohort: v3" in bell
+    assert "Latest applicable cohort: v2" in clover
+    assert 'data-model="small"' in apple
+    assert 'data-parameters="4000000000"' in apple
+    assert 'data-milestone-rate="0.500000"' in apple
+    assert "Total architecture parameters (log scale)" in apple
+    assert "Milestone completion rate" in apple
+    assert "Qwen" not in apple
+
+
+def test_parameter_scatter_catalogue_covers_full_study_roster():
+    assert len(MODEL_ARCHITECTURES) == 21
+    assert (
+        MODEL_ARCHITECTURES["deepseek-v4-flash:cloud"].total_parameters
+        == 284_000_000_000
+    )
+    assert MODEL_ARCHITECTURES["minimax-m3:cloud"].total_parameters == 428_000_000_000
+    assert (
+        MODEL_ARCHITECTURES["deepseek-v4-pro:cloud"].total_parameters
+        == 1_600_000_000_000
+    )
+    assert (
+        MODEL_ARCHITECTURES[
+            "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:Q8_0"
+        ].total_parameters
+        == 35_000_000_000
     )
 
 
@@ -437,6 +638,10 @@ def test_cohort_report_distinguishes_gaps_from_not_applicable_cells(tmp_path):
     assert '#text("4")' in typst
     assert '#text("bell 2/5")' in typst
     assert "not applicable (N/A), not missing" in typst
+    threshold_chart = (output / "diagrams/threshold-attainment-chart.svg").read_text(
+        encoding="utf-8"
+    )
+    assert "—" in threshold_chart
 
 
 def test_cohort_report_separates_versions_and_styles_replacement_columns(tmp_path):
