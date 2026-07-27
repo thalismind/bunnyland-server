@@ -5,19 +5,22 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, OptionList, Select, Static
+from textual.widgets import Button, Checkbox, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
 from ..server.v1_models import CharacterProfileResource
 from ..terminal_chat import load_history, save_history
 from ..terminal_config import TerminalConfig
 from .backend import Backend, CharacterChatAccess, CharacterChatJob
+
+WorldIntroductionSkip = Literal["none", "world", "all"]
 
 
 @dataclass(frozen=True)
@@ -270,6 +273,63 @@ class ContentWarningScreen(ModalScreen[bool]):
 
     def action_decline(self) -> None:
         self.dismiss(False)
+
+
+class WorldIntroductionScreen(ModalScreen[WorldIntroductionSkip]):
+    """Show public world identity before a terminal player joins."""
+
+    CSS = """
+    WorldIntroductionScreen { align: center middle; }
+    #world-introduction-panel {
+        width: 72; height: auto; max-height: 85%; border: thick $accent;
+        background: $surface; padding: 1 2;
+    }
+    #world-introduction-title { text-style: bold; margin-bottom: 1; }
+    #world-introduction-description { height: auto; max-height: 16; }
+    #world-introduction-options { height: auto; margin-top: 1; }
+    #world-introduction-buttons { height: auto; margin-top: 1; }
+    """
+
+    def __init__(self, title: str, description: str) -> None:
+        super().__init__()
+        self.world_title = title
+        self.world_description = description
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="world-introduction-panel"):
+            yield Label(self.world_title, id="world-introduction-title")
+            with VerticalScroll(id="world-introduction-description"):
+                yield Static(self.world_description)
+            with Vertical(id="world-introduction-options"):
+                yield Checkbox(
+                    "Skip this introduction for this world and server.",
+                    id="world-introduction-skip-world",
+                )
+                yield Checkbox(
+                    "Skip introductions for all worlds and servers.",
+                    id="world-introduction-skip-all",
+                )
+            with Horizontal(id="world-introduction-buttons"):
+                yield Button("Continue", id="world-introduction-continue", variant="primary")
+
+    @on(Checkbox.Changed, "#world-introduction-skip-world")
+    def _skip_world_changed(self, event: Checkbox.Changed) -> None:
+        if event.value:
+            self.query_one("#world-introduction-skip-all", Checkbox).value = False
+
+    @on(Checkbox.Changed, "#world-introduction-skip-all")
+    def _skip_all_changed(self, event: Checkbox.Changed) -> None:
+        if event.value:
+            self.query_one("#world-introduction-skip-world", Checkbox).value = False
+
+    @on(Button.Pressed, "#world-introduction-continue")
+    def _continue_pressed(self, _event: Button.Pressed) -> None:
+        if self.query_one("#world-introduction-skip-all", Checkbox).value:
+            self.dismiss("all")
+        elif self.query_one("#world-introduction-skip-world", Checkbox).value:
+            self.dismiss("world")
+        else:
+            self.dismiss("none")
 
 
 class ConversationScreen(ModalScreen[None]):

@@ -349,6 +349,19 @@ class Backend(ABC):
     async def fetch_content_flags(self) -> tuple[str, ...]:
         return ()
 
+    async def fetch_public_world(self) -> PublicWorldResource:
+        return PublicWorldResource(
+            world_id="",
+            world_epoch=0,
+            title="",
+            description="",
+            content_flags=list(await self.fetch_content_flags()),
+        )
+
+    @property
+    def world_introduction_server(self) -> str:
+        return self.label or "unknown"
+
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         return None
 
@@ -620,6 +633,21 @@ class LocalBackend(Backend):
 
     async def fetch_content_flags(self) -> tuple[str, ...]:
         return world_content_flags(self.actor)
+
+    async def fetch_public_world(self) -> PublicWorldResource:
+        if self.actor is None or self.meta is None:
+            return await super().fetch_public_world()
+        return PublicWorldResource(
+            world_id=self.meta.world_id,
+            world_epoch=self.actor.epoch,
+            title=self.actor.world_info.title,
+            description=self.actor.world_info.description,
+            content_flags=list(await self.fetch_content_flags()),
+        )
+
+    @property
+    def world_introduction_server(self) -> str:
+        return "local"
 
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         return serialize_character_projection(self.actor, character_id).model_dump(mode="json")
@@ -1170,9 +1198,16 @@ class RemoteBackend(Backend):
         )
 
     async def fetch_content_flags(self) -> tuple[str, ...]:
+        return tuple((await self.fetch_public_world()).content_flags)
+
+    async def fetch_public_world(self) -> PublicWorldResource:
         res = await self._client.get(f"{self.base}/public/world")
         res.raise_for_status()
-        return tuple(PublicWorldResource.model_validate(res.json()).content_flags)
+        return PublicWorldResource.model_validate(res.json())
+
+    @property
+    def world_introduction_server(self) -> str:
+        return self.base
 
     async def fetch_character_projection(self, character_id: str) -> dict | None:
         data = await self._fetch_claim_resource(character_id, "projection")

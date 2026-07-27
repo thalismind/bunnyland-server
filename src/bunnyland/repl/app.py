@@ -22,12 +22,17 @@ from textual.widgets import Footer, Header, Input, RichLog
 
 from ..content_warnings import visible_content_flags
 from ..core.claim_timeout import normalize_claim_timeout
+from ..server.v1_models import PublicWorldResource
 from ..terminal_config import (
+    TerminalConfig,
     TerminalConfigError,
     load_terminal_config,
     resolve_ignored_content_flags,
     resolve_terminal_chat_config,
     save_terminal_config,
+    should_skip_world_introduction,
+    with_skipped_world_introduction,
+    world_introduction_scope,
 )
 from ..tui.backend import Backend, LocalBackend, RemoteBackend, is_authentication_required
 from ..tui.generator_selector import (
@@ -42,6 +47,8 @@ from ..tui.screens import (
     SignInCredentials,
     SignInScreen,
     TerminalSetupScreen,
+    WorldIntroductionScreen,
+    WorldIntroductionSkip,
 )
 from ..tui.splash import IntroSplash
 from .client import (
@@ -128,11 +135,16 @@ class BunnylandReplApp(App[None]):
         ignored_content_flags: tuple[str, ...] = (),
         show_intro: bool = False,
         show_icons: bool = True,
+        terminal_config: TerminalConfig | None = None,
     ) -> None:
         super().__init__()
         self.repl = BunnylandRepl(backend, show_icons=show_icons)
         self.show_intro = show_intro
         self.ignored_content_flags = ignored_content_flags
+        self.terminal_config = terminal_config or TerminalConfig()
+        self.persist_world_introduction_preferences = False
+        self._pending_public_world: PublicWorldResource | None = None
+        self._introduced_worlds: set[str] = set()
         self.log_view = RichLog(id="log", wrap=True)
         self.command = ReplInput(
             id="cmd", placeholder="type a command — 'help' for a list, 'quit' to exit"
@@ -186,6 +198,7 @@ class BunnylandReplApp(App[None]):
             self._show_chat_setup()
             return
         self.repl.backend.chat_config = settings
+        self.terminal_config = config
         self.needs_chat_setup = False
         if self.show_generator_selector:
             self._show_generator_selector()
@@ -258,21 +271,60 @@ class BunnylandReplApp(App[None]):
 
     async def _start_backend(self) -> None:
         await self.repl.backend.start()
+        self._pending_public_world = await self.repl.backend.fetch_public_world()
         flags = visible_content_flags(
-            await self.repl.backend.fetch_content_flags(), self.ignored_content_flags
+            self._pending_public_world.content_flags, self.ignored_content_flags
         )
         if flags:
             self.push_screen(ContentWarningScreen(flags), callback=self._content_warning_decided)
             return
-        await self._finish_backend_start()
+        if not self._show_world_introduction():
+            await self._finish_backend_start()
 
     def _content_warning_decided(self, accepted: bool) -> None:
         if not accepted:
             self.exit()
             return
+        if not self._show_world_introduction():
+            self.run_worker(self._finish_backend_start(), exclusive=True)
+
+    def _show_world_introduction(self) -> bool:
+        world = self._pending_public_world
+        if world is None or not world.world_id:
+            return False
+        server = self.repl.backend.world_introduction_server
+        scope = world_introduction_scope(server, world.world_id)
+        if scope in self._introduced_worlds or should_skip_world_introduction(
+            self.terminal_config, server=server, world_id=world.world_id
+        ):
+            return False
+        self.push_screen(
+            WorldIntroductionScreen(world.title, world.description),
+            callback=lambda skip: self._world_introduction_decided(world, skip),
+        )
+        return True
+
+    def _world_introduction_decided(
+        self, world: PublicWorldResource, skip: WorldIntroductionSkip
+    ) -> None:
+        server = self.repl.backend.world_introduction_server
+        self._introduced_worlds.add(world_introduction_scope(server, world.world_id))
+        if skip in {"world", "all"}:
+            self.terminal_config = with_skipped_world_introduction(
+                self.terminal_config,
+                server=server,
+                world_id=world.world_id,
+                all_worlds=skip == "all",
+            )
+            if self.persist_world_introduction_preferences:
+                try:
+                    save_terminal_config(self.terminal_config)
+                except TerminalConfigError as exc:
+                    self.notify(str(exc), severity="warning")
         self.run_worker(self._finish_backend_start(), exclusive=True)
 
     async def _finish_backend_start(self) -> None:
+        self._pending_public_world = None
         self._load_history()
         await self._safe_refresh(prime=True)  # seed event history without dumping the backlog
         self.write_log(
@@ -546,6 +598,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     app = BunnylandReplApp(backend)
     app.ignored_content_flags = ignored_content_flags
+    app.terminal_config = saved_config or TerminalConfig()
+    app.persist_world_introduction_preferences = True
     app.show_generator_selector = show_generator_selector
     app.needs_chat_setup = not args.server and saved_chat is None and not explicit_chat
     if hasattr(app, "repl"):

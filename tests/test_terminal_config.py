@@ -14,7 +14,9 @@ from bunnyland.terminal_config import (
     resolve_ignored_content_flags,
     resolve_terminal_chat_config,
     save_terminal_config,
+    should_skip_world_introduction,
     terminal_config_path,
+    with_skipped_world_introduction,
 )
 
 
@@ -47,6 +49,35 @@ def test_ignored_content_flags_merge_saved_repeatable_and_comma_separated_values
         saved, ["adult:violence,theft", "pvp"]
     ) == ("adult:violence", "pvp", "theft")
     assert resolve_ignored_content_flags(None) == ()
+
+
+def test_world_introduction_preferences_scope_to_world_server_or_all():
+    initial = TerminalConfig()
+    scoped = with_skipped_world_introduction(
+        initial,
+        server="https://one.example/api/",
+        world_id="world-1",
+        all_worlds=False,
+    )
+    assert should_skip_world_introduction(
+        scoped, server="https://one.example/api", world_id="world-1"
+    )
+    assert not should_skip_world_introduction(
+        scoped, server="https://two.example/api", world_id="world-1"
+    )
+    assert not should_skip_world_introduction(
+        scoped, server="https://one.example/api", world_id="world-2"
+    )
+
+    global_skip = with_skipped_world_introduction(
+        scoped,
+        server="https://two.example/api",
+        world_id="world-2",
+        all_worlds=True,
+    )
+    assert should_skip_world_introduction(
+        global_skip, server="https://three.example/api", world_id="world-3"
+    )
 
 
 def test_terminal_config_never_serializes_credentials(tmp_path):

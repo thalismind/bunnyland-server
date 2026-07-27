@@ -44,6 +44,9 @@ Useful local options include `--seed`, `--generator`, `--claim-fallback`, and
 `--claim-timeout-minutes`. Before loading a local plugin world or joining a flagged remote
 world, the TUI requires you to accept its content warning. See
 [Content warnings](README.md#content-warnings) for saved and command-line ignore options.
+It then shows the world's title and welcome or message-of-the-day text. The introduction
+screen can remember a skip for that world/server pair or for every world/server; both
+choices are saved in the shared terminal configuration and do not bypass content warnings.
 
 On the first local launch, the TUI asks whether character chat should use local Ollama,
 Ollama Cloud, OpenRouter, or remain disabled. The choice and model are saved in

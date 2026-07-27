@@ -49,6 +49,9 @@ Useful options mirror the TUI: `--seed`, `--generator`, `--claim-fallback`, and
 not through a pipe. Before loading a local plugin world or joining a flagged remote world,
 the REPL requires you to accept its content warning. See
 [Content warnings](README.md#content-warnings) for saved and command-line ignore options.
+It then shows the world's title and welcome or message-of-the-day text. The introduction
+screen can remember a skip for that world/server pair or for every world/server; both
+choices are saved in the shared terminal configuration and do not bypass content warnings.
 
 The first local launch also opens the shared terminal chat setup. It saves only the
 provider, model, endpoints, and enabled state in

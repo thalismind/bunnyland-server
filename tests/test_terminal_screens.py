@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Input, Select, Static
+from textual.widgets import Checkbox, Input, Select, Static
 
 from bunnyland.server.models import CharacterChatActionResult, CharacterSummaryView
 from bunnyland.server.v1_models import CharacterProfileResource
@@ -22,6 +22,7 @@ from bunnyland.tui.screens import (
     ContentWarningScreen,
     ConversationScreen,
     TerminalSetupScreen,
+    WorldIntroductionScreen,
     render_character_profile,
 )
 
@@ -167,6 +168,42 @@ async def test_content_warning_requires_acceptance_or_decline():
         await pilot.click("#content-warning-decline")
         await pilot.pause()
         assert declined.result is False
+
+
+async def test_world_introduction_has_padded_content_and_mutually_exclusive_skip_scopes():
+    host = ScreenHost(
+        WorldIntroductionScreen("Clover City", "Mind the foxes after dark.")
+    )
+    async with host.run_test(size=(100, 35)) as pilot:
+        screen = host.screen_to_push
+        assert screen.world_title == "Clover City"
+        assert screen.world_description == "Mind the foxes after dark."
+        assert "padding: 1 2" in screen.CSS
+        world = screen.query_one("#world-introduction-skip-world", Checkbox)
+        all_worlds = screen.query_one("#world-introduction-skip-all", Checkbox)
+        world.value = True
+        await pilot.pause()
+        all_worlds.value = True
+        await pilot.pause()
+        assert world.value is False
+        assert all_worlds.value is True
+        await pilot.click("#world-introduction-continue")
+        await pilot.pause()
+        assert host.result == "all"
+
+    world_host = ScreenHost(WorldIntroductionScreen("Clover City", "Welcome."))
+    async with world_host.run_test(size=(100, 35)) as pilot:
+        screen = world_host.screen_to_push
+        all_worlds = screen.query_one("#world-introduction-skip-all", Checkbox)
+        all_worlds.value = True
+        await pilot.pause()
+        all_worlds.value = False
+        await pilot.pause()
+        screen.query_one("#world-introduction-skip-world", Checkbox).value = True
+        await pilot.pause()
+        await pilot.click("#world-introduction-continue")
+        await pilot.pause()
+        assert world_host.result == "world"
 
 
 async def test_terminal_setup_saves_provider_and_no_chat():

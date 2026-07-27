@@ -39,6 +39,8 @@ class TerminalConfig(BaseModel):
     ollama_host: str | None = None
     openrouter_server_url: str | None = None
     ignored_content_flags: tuple[BoundaryScope, ...] = ()
+    skip_all_world_introductions: bool = False
+    skipped_world_introductions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -178,6 +180,43 @@ def resolve_ignored_content_flags(
     return normalize_content_flags(configured)
 
 
+def world_introduction_scope(server: str, world_id: str) -> str:
+    """Return the durable preference key for one world on one server."""
+
+    return f"{server.rstrip('/')}\n{world_id}"
+
+
+def should_skip_world_introduction(
+    config: TerminalConfig,
+    *,
+    server: str,
+    world_id: str,
+) -> bool:
+    return config.skip_all_world_introductions or world_introduction_scope(
+        server, world_id
+    ) in set(config.skipped_world_introductions)
+
+
+def with_skipped_world_introduction(
+    config: TerminalConfig,
+    *,
+    server: str,
+    world_id: str,
+    all_worlds: bool,
+) -> TerminalConfig:
+    if all_worlds:
+        return config.model_copy(update={"skip_all_world_introductions": True})
+    scopes = tuple(
+        sorted(
+            {
+                *config.skipped_world_introductions,
+                world_introduction_scope(server, world_id),
+            }
+        )
+    )
+    return config.model_copy(update={"skipped_world_introductions": scopes})
+
+
 def build_terminal_chat_agent(settings: ResolvedTerminalChatConfig):
     """Create the provider used only by direct terminal character chat."""
 
@@ -241,5 +280,8 @@ __all__ = [
     "resolve_terminal_chat_config",
     "resolve_ignored_content_flags",
     "save_terminal_config",
+    "should_skip_world_introduction",
     "terminal_config_path",
+    "with_skipped_world_introduction",
+    "world_introduction_scope",
 ]

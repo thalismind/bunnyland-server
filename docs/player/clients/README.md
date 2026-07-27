@@ -42,12 +42,16 @@ client does not claim a character until you choose **Accept and Join**.
 The same public world resource includes the world's title and descriptive welcome or
 message-of-the-day text. Administrators store those values in the world's singleton
 `WorldInfoComponent`, along with any additional `content_flags`, so they travel with saved
-and transferred worlds.
+and transferred worlds. After the content warning, each player client shows that title and
+welcome text before joining. You can continue normally, skip that introduction on future
+loads of the same world/server pair, or skip introductions for all worlds and servers.
+These introduction preferences never suppress a content warning.
 
 Browser clients can remember the displayed flags after acceptance. That preference is
 shared by Bunnyland clients in the same browser profile. If the world's flag set changes,
 the client checks the new set before the next claim and shows any flags that are not
-ignored.
+ignored. World-introduction skip choices are stored in the same browser profile and apply
+to the Web TUI, Web REPL, Toon client, and 3D player when those clients share that profile.
 
 Terminal users can ignore known flags in
 `$XDG_CONFIG_HOME/bunnyland/terminal.yml` (normally
@@ -57,6 +61,7 @@ Terminal users can ignore known flags in
 ignored_content_flags:
   - adult:violence
   - pvp
+skip_all_world_introductions: false
 ```
 
 For a one-off launch, repeat `--ignore-content-flag` or pass a comma-separated list:

@@ -8,7 +8,8 @@ from bunnyland.chat import CharacterChatApp
 from bunnyland.repl.app import BunnylandReplApp
 from bunnyland.repl.client import BunnylandRepl, OpenChatIntent, OpenSheetIntent
 from bunnyland.server.models import CharacterSummaryView
-from bunnyland.server.v1_models import CharacterProfileResource
+from bunnyland.server.v1_models import CharacterProfileResource, PublicWorldResource
+from bunnyland.terminal_config import TerminalConfig, should_skip_world_introduction
 from bunnyland.tui.app import BunnylandTUI
 from bunnyland.tui.backend import Backend, LocalBackend, SubmitResult
 from bunnyland.tui.generator_selector import GeneratorSelection, WorldGeneratorSelector
@@ -18,6 +19,7 @@ from bunnyland.tui.screens import (
     ContentWarningScreen,
     ConversationScreen,
     TerminalSetupScreen,
+    WorldIntroductionScreen,
 )
 
 
@@ -79,6 +81,15 @@ class FlaggedBackend(EmptyBackend):
     async def fetch_content_flags(self):
         return ("adult:violence", "pvp")
 
+    async def fetch_public_world(self):
+        return PublicWorldResource(
+            world_id="world-1",
+            world_epoch=7,
+            title="Clover City",
+            description="Mind the foxes after dark.",
+            content_flags=["adult:violence", "pvp"],
+        )
+
 
 async def test_terminal_player_clients_block_loading_until_content_warning_acceptance():
     for app in (BunnylandTUI(FlaggedBackend()), BunnylandReplApp(FlaggedBackend())):
@@ -90,6 +101,21 @@ async def test_terminal_player_clients_block_loading_until_content_warning_accep
             await pilot.click("#content-warning-accept")
             await pilot.pause()
             assert not any(isinstance(screen, ContentWarningScreen) for screen in app.screen_stack)
+            introduction = next(
+                screen
+                for screen in app.screen_stack
+                if isinstance(screen, WorldIntroductionScreen)
+            )
+            assert introduction.world_title == "Clover City"
+            assert introduction.world_description == "Mind the foxes after dark."
+            await pilot.click("#world-introduction-continue")
+            await pilot.pause()
+            assert not any(
+                isinstance(screen, WorldIntroductionScreen) for screen in app.screen_stack
+            )
+            backend = app.backend if isinstance(app, BunnylandTUI) else app.repl.backend
+            app._pending_public_world = await backend.fetch_public_world()
+            assert app._show_world_introduction() is False
 
 
 async def test_terminal_player_clients_skip_configured_ignored_content_flags():
@@ -100,6 +126,136 @@ async def test_terminal_player_clients_skip_configured_ignored_content_flags():
         async with app.run_test() as pilot:
             await pilot.pause()
             assert not any(isinstance(screen, ContentWarningScreen) for screen in app.screen_stack)
+            assert any(
+                isinstance(screen, WorldIntroductionScreen) for screen in app.screen_stack
+            )
+            await pilot.click("#world-introduction-continue")
+
+
+async def test_terminal_player_clients_skip_saved_world_or_global_introductions():
+    assert BunnylandTUI(EmptyBackend())._show_world_introduction() is False
+    assert BunnylandReplApp(EmptyBackend())._show_world_introduction() is False
+    scope = "test\nworld-1"
+    configs = (
+        TerminalConfig(skipped_world_introductions=(scope,)),
+        TerminalConfig(skip_all_world_introductions=True),
+    )
+    for config in configs:
+        for app in (
+            BunnylandTUI(
+                FlaggedBackend(),
+                ignored_content_flags=("adult:violence", "pvp"),
+                terminal_config=config,
+            ),
+            BunnylandReplApp(
+                FlaggedBackend(),
+                ignored_content_flags=("adult:violence", "pvp"),
+                terminal_config=config,
+            ),
+        ):
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                assert not any(
+                    isinstance(screen, WorldIntroductionScreen) for screen in app.screen_stack
+                )
+
+
+async def test_terminal_player_clients_apply_saved_intro_skip_after_content_warning():
+    config = TerminalConfig(skipped_world_introductions=("test\nworld-1",))
+    for app in (
+        BunnylandTUI(FlaggedBackend(), terminal_config=config),
+        BunnylandReplApp(FlaggedBackend(), terminal_config=config),
+    ):
+        async with app.run_test() as pilot:
+            assert any(
+                isinstance(screen, ContentWarningScreen) for screen in app.screen_stack
+            )
+            await pilot.click("#content-warning-accept")
+            await pilot.pause()
+            assert not any(
+                isinstance(screen, WorldIntroductionScreen) for screen in app.screen_stack
+            )
+
+
+async def test_terminal_player_clients_save_world_and_global_introduction_choices(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    tui = BunnylandTUI(
+        FlaggedBackend(), ignored_content_flags=("adult:violence", "pvp")
+    )
+    tui.persist_world_introduction_preferences = True
+    async with tui.run_test() as pilot:
+        await pilot.click("#world-introduction-skip-world")
+        await pilot.click("#world-introduction-continue")
+        await pilot.pause()
+        assert should_skip_world_introduction(
+            tui.terminal_config, server="test", world_id="world-1"
+        )
+
+    repl = BunnylandReplApp(
+        FlaggedBackend(), ignored_content_flags=("adult:violence", "pvp")
+    )
+    async with repl.run_test() as pilot:
+        await pilot.click("#world-introduction-skip-all")
+        await pilot.click("#world-introduction-continue")
+        await pilot.pause()
+        assert repl.terminal_config.skip_all_world_introductions is True
+
+    tui_without_persistence = BunnylandTUI(
+        FlaggedBackend(), ignored_content_flags=("adult:violence", "pvp")
+    )
+    async with tui_without_persistence.run_test() as pilot:
+        await pilot.click("#world-introduction-skip-world")
+        await pilot.click("#world-introduction-continue")
+        await pilot.pause()
+        assert should_skip_world_introduction(
+            tui_without_persistence.terminal_config,
+            server="test",
+            world_id="world-1",
+        )
+
+
+async def test_terminal_player_clients_continue_when_intro_preference_cannot_be_saved(
+    monkeypatch,
+):
+    import bunnyland.repl.app as repl_module
+    import bunnyland.tui.app as tui_module
+    from bunnyland.terminal_config import TerminalConfigError
+
+    cases = (
+        (
+            BunnylandTUI(
+                FlaggedBackend(), ignored_content_flags=("adult:violence", "pvp")
+            ),
+            tui_module,
+        ),
+        (
+            BunnylandReplApp(
+                FlaggedBackend(), ignored_content_flags=("adult:violence", "pvp")
+            ),
+            repl_module,
+        ),
+    )
+    for app, module in cases:
+        notices = []
+
+        def fail_to_save(_config):
+            raise TerminalConfigError("preferences are read-only")
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(module, "save_terminal_config", fail_to_save)
+            scoped.setattr(
+                app,
+                "notify",
+                lambda message, notices=notices, **_kwargs: notices.append(message),
+            )
+            app.persist_world_introduction_preferences = True
+            async with app.run_test() as pilot:
+                await pilot.click("#world-introduction-skip-all")
+                await pilot.click("#world-introduction-continue")
+                await pilot.pause()
+                assert notices == ["preferences are read-only"]
 
 
 async def test_terminal_player_clients_leave_flagged_world_when_warning_is_declined(

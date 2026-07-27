@@ -55,6 +55,11 @@ async def test_local_backend_builds_typed_character_profile():
         content_flags = await backend.fetch_content_flags()
         assert content_flags == tuple(sorted(content_flags))
         assert "pvp" in content_flags
+        public_world = await backend.fetch_public_world()
+        assert public_world.world_id == backend.meta.world_id
+        assert public_world.title == backend.actor.world_info.title
+        assert public_world.description == backend.actor.world_info.description
+        assert backend.world_introduction_server == "local"
         character = (await backend.fetch_character_list())[0]
         profile = await backend.fetch_character_profile(character.character_id)
         assert profile.character_id == character.character_id
@@ -97,6 +102,8 @@ async def test_remote_backend_validates_public_content_flags():
     backend._client = Client()
 
     assert await backend.fetch_content_flags() == ("adult:violence", "pvp")
+    assert (await backend.fetch_public_world()).title == "Clover City"
+    assert backend.world_introduction_server == "https://server.example"
 
 
 async def test_remote_backend_rejects_invalid_character_profile():
