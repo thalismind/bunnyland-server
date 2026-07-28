@@ -68,15 +68,18 @@ Primary local queue, in suggested order:
 - [ ] [`hermes3:8b-llama3.1-q8_0`](https://ollama.com/library/hermes3) — 8B
   Llama 3.1 roleplaying/function-calling control.
 - [ ] [`NousResearch/Hermes-4-14B`](https://huggingface.co/NousResearch/Hermes-4-14B)
-  at Q8 — 14B roleplaying, function-calling, and structured-JSON model.
-- [ ] [`subsectmusic/qwriko3-4b-instruct-2507`](https://huggingface.co/subsectmusic/qwriko3-4b-instruct-2507)
-  at Q8 — unusual 4B Ollama-first roleplaying model with a documented tools loop.
+  at Q8 — 14B roleplaying, function-calling, and structured-JSON model; queued
+  2026-07-28.
+- [x] [`subsectmusic/qwriko3-4b-instruct-2507`](https://huggingface.co/subsectmusic/qwriko3-4b-instruct-2507)
+  at Q8 — excluded by the 2026-07-28 compatibility gate. Ollama advertised `tools`,
+  but both provider-default and thinking-disabled calls returned tool-shaped text
+  without a non-empty `message.tool_calls`.
 - [ ] [`llmfan46/Qwythos-9B-Claude-Mythos-5-1M-uncensored-heretic-GGUF`](https://huggingface.co/llmfan46/Qwythos-9B-Claude-Mythos-5-1M-uncensored-heretic-GGUF)
   at Q8 — uncensored 9B conversational model with a documented tool harness.
 - [ ] [`LESSTHANSUPER/THE_OMEGA_DIRECTIVE-Mistral_Small3.2-24b:Q6_K`](https://ollama.com/LESSTHANSUPER/THE_OMEGA_DIRECTIVE-Mistral_Small3.2-24b)
   — 24B multi-turn roleplaying model.
 - [ ] [`LESSTHANSUPER/RP-INK-Qwen2.5-32b:Q5_K_S`](https://ollama.com/LESSTHANSUPER/RP-INK-Qwen2.5-32b)
-  — 32B roleplaying and creative-writing model.
+  — 32B roleplaying and creative-writing model; queued 2026-07-28.
 - [ ] [`gemma4:26b`](https://ollama.com/library/gemma4:26b) — official Gemma 4
   function-calling control for comparison with incompatible community Gemma builds.
 
@@ -97,6 +100,30 @@ Secondary local candidates:
   roleplaying/function-calling control.
 - [ ] [`lfm2.5:8b`](https://ollama.com/library/lfm2.5) — local tool-calling
   latency and efficiency control.
+
+Official Qwen family comparison, using local Ollama Q4_K_M packages:
+
+- [ ] [`qwen2:7b-instruct-q4_K_M`](https://ollama.com/library/qwen2:7b-instruct-q4_K_M)
+  — 7.62B dense Qwen2 checkpoint.
+- [ ] [`qwen2.5:7b-instruct-q4_K_M`](https://ollama.com/library/qwen2.5:7b-instruct-q4_K_M)
+  — 7.62B dense Qwen2.5 checkpoint.
+- [ ] [`qwen3:8b-q4_K_M`](https://ollama.com/library/qwen3:8b-q4_K_M)
+  — 8.19B dense Qwen3 checkpoint.
+- [x] [`qwen3.5:9b`](https://ollama.com/library/qwen3.5:9b) — existing 9.65B
+  dense Qwen3.5 matrix.
+
+Keep that dense 7--10B lineage separate from the small-active-parameter MoE lineage:
+
+- [ ] [`qwen3:30b-a3b-instruct-2507-q4_K_M`](https://ollama.com/library/qwen3:30b-a3b-instruct-2507-q4_K_M)
+  — 30.5B total / 3.3B active.
+- [ ] [`qwen3.5:35b-a3b-q4_K_M`](https://ollama.com/library/qwen3.5:35b-a3b-q4_K_M)
+  — 35B total / 3B active.
+- [x] [`qwen3.6:35b-a3b`](https://ollama.com/library/qwen3.6:35b-a3b) —
+  existing 35B total / 3B active matrix.
+
+Qwen 1.5 has no structured-tools surface in the official Ollama package. Record it as
+not applicable rather than scoring it as a gameplay failure. Apply the same two-stage
+compatibility gate to every unchecked Qwen entry before running scored sessions.
 
 Cloud comparison candidates:
 
