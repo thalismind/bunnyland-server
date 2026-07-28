@@ -127,10 +127,18 @@ compatibility gate to every unchecked Qwen entry before running scored sessions.
 
 Cloud comparison candidates:
 
+- [x] [`qwen/qwen3.7-plus`](https://openrouter.ai/qwen/qwen3.7-plus) — inexpensive
+  hosted Qwen 3.7 agent model; full OpenRouter matrix started 2026-07-28.
+- [x] [`qwen/qwen3.7-flash`](https://openrouter.ai/qwen/qwen3.7-flash) — low-cost,
+  low-latency Qwen 3.7 control; full OpenRouter matrix started 2026-07-28.
 - [ ] [`minimax-m2.7:cloud`](https://ollama.com/library/minimax-m2.7) — tool-capable
   model emphasizing character consistency, emotional intelligence, and scene interaction.
 - [ ] [`mistral-large-3:675b-cloud`](https://ollama.com/library/mistral-large-3) —
   large function-calling and system-adherence control.
+
+Alibaba exposes Qwen 3.8 Max Preview through Model Studio, but no Qwen 3.8 fast or
+flash endpoint is currently available in the live OpenRouter catalogue. Do not substitute
+the preview into the low-cost comparison unless a fast endpoint becomes available.
 
 ## Running locally
 
