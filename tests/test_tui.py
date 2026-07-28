@@ -2610,8 +2610,13 @@ async def _select_player(app, pilot):
     from textual.widgets import Select
 
     select = await _wait_for_widget(app, pilot, "#player", Select)
+    # Finish the mount-time refresh before changing the picker. Otherwise that refresh
+    # can rebuild the choices and replace the queued selection with Select.BLANK.
+    await app.refresh_world()
     select.value = PLAYER
-    await pilot.pause()
+    # Await the state transition directly instead of relying on Textual's message queue
+    # becoming idle before the test continues. The queued duplicate is then a no-op.
+    await app._player_changed(Select.Changed(select, PLAYER))
 
 
 async def _wait_for_action_view(app, pilot, command_type: str) -> dict:
