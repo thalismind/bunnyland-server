@@ -533,6 +533,8 @@ def create_app(
         redoc_url="/v1/admin/redoc",
         openapi_url="/v1/admin/openapi.json",
         swagger_ui_oauth2_redirect_url="/v1/admin/docs/oauth2-redirect",
+        # Keep named DTO components stable across Pydantic serialization-schema changes.
+        separate_input_output_schemas=False,
     )
 
     def _problem_response(

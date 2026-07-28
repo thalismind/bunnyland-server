@@ -46,7 +46,7 @@ Repository = "https://github.com/thalismind/bunnyland-server"
 chroma = ["chromadb>=0.5"]
 discord = ["discord.py>=2.4"]
 imagegen = ["httpx>=0.27", "websockets==16.1.1", "Pillow>=10"]
-llm = ["ollama>=0.3", "openrouter>=0.9.1,<0.10"]
+llm = ["ollama>=0.3", "openrouter==1.1.9"]
 mcp = ["mcp==1.28.1"]
 otel = [
     "opentelemetry-api==1.44.0",
