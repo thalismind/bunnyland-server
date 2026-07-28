@@ -3544,6 +3544,7 @@ def _write_paper_data(
         "title": title,
         "completed_sessions": len(results),
         "authoritative_passes": sum(item.result.passed for item in results),
+        "total_tokens": sum(row.total_tokens for row in model_rows),
         "cohort_order": [
             cohort
             for cohort in dict.fromkeys(item.cohort for item in results)

@@ -403,6 +403,7 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     paper_data = json.loads((output / "paper-data.json").read_text(encoding="utf-8"))
     assert paper_data["schema_version"] == 1
     assert paper_data["completed_sessions"] == 6
+    assert paper_data["total_tokens"] == 720
     assert paper_data["latest_cohort_by_tutorial"] == {
         "apple": "Unlabeled",
         "bell": "Unlabeled",
