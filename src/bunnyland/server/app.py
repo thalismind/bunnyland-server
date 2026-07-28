@@ -2798,7 +2798,9 @@ def create_app(
         }
 
     for router in (public_v1, auth_v1, profile_v1, chat_v1, play_v1, admin_v1):
-        app.include_router(router)
+        # Bunnyland audits a flat route table; FastAPI 0.140 keeps included
+        # routers nested and lazy, while these internal routers are already prefixed.
+        app.router.routes.extend(router.routes)
 
     @app.websocket("/v1/admin/world/stream")
     async def world_updates(websocket: WebSocket) -> None:

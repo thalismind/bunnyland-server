@@ -47,13 +47,13 @@ def test_media_plugin_owns_compatible_immutable_route(tmp_path, monkeypatch):
     assert require_media_service(actor) is original_service
     assert bunnyland_plugins()[0].id == "bunnyland.media"
     name, _path = actor.media_service.put_content("models3d", b"model", "glb")
-    app = fastapi.FastAPI()
     contribution = plugins[0].runtime.http[0]
     router = fastapi.APIRouter(prefix=f"/{contribution.zone.value}")
     contribution.registrars[0](router, actor)
-    app.include_router(router)
     endpoint = next(
-        route.endpoint for route in app.routes if route.path == "/public/media/{namespace}/{name}"
+        route.endpoint
+        for route in router.routes
+        if route.path == "/public/media/{namespace}/{name}"
     )
 
     response = asyncio.run(endpoint("models3d", name))
