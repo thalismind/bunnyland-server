@@ -130,6 +130,7 @@ def test_compose_and_nginx_use_exact_proxy_trust_without_publishing_the_api() ->
     server_block = compose[compose.index("  server:") : compose.index("  frontend:")]
     assert "ports:" not in server_block
     assert 'expose:\n      - "8765"' in server_block
+    assert "ipv4_address: ${BUNNYLAND_SERVER_IP:-172.28.0.3}" in server_block
     assert "BUNNYLAND_TRUST_X_REAL_IP" not in compose
     assert "BUNNYLAND_FORWARDED_ALLOW_IPS" in compose
     assert "BUNNYLAND_COMPOSE_SUBNET" in compose
