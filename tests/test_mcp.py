@@ -2467,8 +2467,13 @@ def test_formal_admin_mcp_resources_return_operational_state(monkeypatch, scenar
 async def test_curated_mcp_player_and_admin_workflows(monkeypatch, scenario):
     from bunnyland.core.perspective import V1_PERSPECTIVE_QUERIES
 
+    # This integration test exercises workflow behavior, while the perspective
+    # suite separately enforces the production execution budget.
     for definition in V1_PERSPECTIVE_QUERIES:
-        scenario.actor.perspective_queries.register(definition, owner="bunnyland.core_verbs")
+        scenario.actor.perspective_queries.register(
+            definition.model_copy(update={"execution_budget_ms": 1_000.0}),
+            owner="bunnyland.core_verbs",
+        )
 
     class RuntimeLoop:
         running = True
