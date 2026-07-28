@@ -42,8 +42,8 @@ flowchart LR
 
 ## Which models can play?
 
-We tested 25 rated local and cloud model configurations plus four frontier models with
-two sessions per cell across more than 900 completed sessions. Models had to complete
+We tested 32 rated local and cloud model configurations plus four frontier models with
+two sessions per cell across more than 1,100 completed sessions. Models had to complete
 validated world actions; narrating success did not count.
 
 | Gameplay tier | Recommendation | Practical hardware | Representative result |
@@ -64,6 +64,18 @@ for evidence and deployment caveats.
 Qwen 3.5 9B is the default local recommendation for most players. For efficient cloud
 play, DeepSeek V4 Flash completed 14/15 sessions in the full three-tutorial cohort. Kimi
 K2.6, Kimi K2.7 Code, and DeepSeek V4 Pro each completed 15/15.
+
+Among the newer comparative runs, compact [Ornith 9B](https://ollama.com/library/ornith)
+reached Clover 3/5 locally, while
+[Kimi K3](https://openrouter.ai/moonshotai/kimi-k3) reached Clover 3/5 and passed 33/40
+sessions across `v1`--`v4`. Two Llama 3.1 8B roleplay fine-tunes completed no full
+tutorial sessions despite accepting structured tools, showing that roleplay specialization
+alone does not guarantee reliable game-agent planning.
+
+The local
+[Gemma 4 31B HauhauCS Q4](https://huggingface.co/HauhauCS/Gemma4-31B-QAT-Uncensored-HauhauCS-Balanced-MTP)
+reached Clover 5/5 on `v2` and passed 30/40 sessions overall. It is a capability result,
+not a latency recommendation: successful Clover sessions took roughly 26--30 minutes.
 
 In the main 21-configuration cohort, across the latest applicable tutorial versions, Apple
 passed 103/105 sessions (98.1%), Bell passed 102/105 (97.1%), and Clover passed 49/105

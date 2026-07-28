@@ -307,6 +307,36 @@ class ModelEfficiencyRow:
             return 0
         return self.milestone_hits * 1_000_000 / self.total_tokens
 
+
+@dataclass(frozen=True)
+class KimiFamilyRow:
+    model: str
+    display_name: str
+    provider: str
+    sessions: int
+    passes: int
+    milestone_hits: int
+    milestone_possible: int
+    median_latency_seconds: float | None
+    total_tokens: int
+
+    @property
+    def pass_rate(self) -> float:
+        return self.passes / self.sessions if self.sessions else 0
+
+    @property
+    def milestone_rate(self) -> float:
+        if not self.milestone_possible:
+            return 0
+        return self.milestone_hits / self.milestone_possible
+
+    @property
+    def token_efficiency(self) -> float:
+        if not self.total_tokens:
+            return 0
+        return self.milestone_hits * 1_000_000 / self.total_tokens
+
+
 @dataclass(frozen=True)
 class LatencySample:
     cohort: str | None
@@ -390,7 +420,16 @@ class ParameterScatterPoint:
 
 MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
     "qwen3.5:4b": ModelArchitecture("Qwen 3.5 4B", 4_000_000_000),
+    "bunnyland-rpmax-llama3.1-8b-q8-tools:latest": ModelArchitecture(
+        "Llama 3.1 8B ArliAI RPMax v1.3 Q8",
+        8_000_000_000,
+    ),
+    "bunnyland-stheno-llama3.1-8b-q8-tools:latest": ModelArchitecture(
+        "Llama 3.1 8B Stheno v3.4 Q8",
+        8_000_000_000,
+    ),
     "qwen3.5:9b": ModelArchitecture("Qwen 3.5 9B", 9_000_000_000),
+    "ornith:9b": ModelArchitecture("Ornith 1.0 9B", 9_000_000_000),
     "gpt-oss:20b-cloud": ModelArchitecture("GPT-OSS 20B", 21_000_000_000),
     "gemma4:cloud": ModelArchitecture("Gemma 4 31B", 30_700_000_000),
     "nemotron-3-nano:30b-cloud": ModelArchitecture(
@@ -398,6 +437,7 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
         31_600_000_000,
     ),
     "laguna-xs-2.1:latest": ModelArchitecture("Laguna XS 2.1", 33_000_000_000),
+    "ornith:35b": ModelArchitecture("Ornith 1.0 35B-A3B", 34_700_000_000),
     "qwen3.6:35b-a3b": ModelArchitecture(
         "Qwen 3.6 35B-A3B Q4",
         35_000_000_000,
@@ -434,6 +474,7 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
         675_000_000_000,
     ),
     "glm-5.2:cloud": ModelArchitecture("GLM-5.2", 753_000_000_000),
+    "kimi-k2.5": ModelArchitecture("Kimi K2.5", 1_042_000_000_000),
     "kimi-k2.6:cloud": ModelArchitecture("Kimi K2.6", 1_000_000_000_000),
     "kimi-k2.7-code:cloud": ModelArchitecture(
         "Kimi K2.7 Code",
@@ -443,6 +484,15 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
         "DeepSeek V4 Pro",
         1_600_000_000_000,
     ),
+    "moonshotai/kimi-k3": ModelArchitecture("Kimi K3", 2_800_000_000_000),
+}
+
+
+KIMI_FAMILY_MODELS: dict[str, tuple[int, str, str]] = {
+    "kimi-k2.5": (0, "Kimi K2.5", "Ollama Cloud"),
+    "kimi-k2.6:cloud": (1, "Kimi K2.6", "Ollama Cloud"),
+    "kimi-k2.7-code:cloud": (2, "Kimi K2.7 Code¹", "Ollama Cloud"),
+    "moonshotai/kimi-k3": (3, "Kimi K3", "OpenRouter"),
 }
 
 
@@ -1780,6 +1830,227 @@ def render_parameter_scatter_svg(
     return "\n".join(lines) + "\n"
 
 
+def _kimi_family_rows(
+    rows: Sequence[ModelRow],
+    latency: LatencyAnalysis | None,
+) -> tuple[KimiFamilyRow, ...]:
+    grouped: dict[str, list[ModelRow]] = defaultdict(list)
+    for row in rows:
+        if row.model in KIMI_FAMILY_MODELS:
+            grouped[row.model].append(row)
+    latency_by_model = (
+        {row.model: row for row in latency.aggregate_model_rows}
+        if latency is not None
+        else {}
+    )
+    family_rows = []
+    for model, model_rows in grouped.items():
+        _rank, display_name, provider = KIMI_FAMILY_MODELS[model]
+        latency_row = latency_by_model.get(model)
+        family_rows.append(
+            KimiFamilyRow(
+                model=model,
+                display_name=display_name,
+                provider=provider,
+                sessions=sum(row.sessions for row in model_rows),
+                passes=sum(row.passes for row in model_rows),
+                milestone_hits=sum(row.milestone_hits for row in model_rows),
+                milestone_possible=sum(row.milestone_possible for row in model_rows),
+                median_latency_seconds=(
+                    latency_row.median_seconds if latency_row is not None else None
+                ),
+                total_tokens=sum(row.total_tokens for row in model_rows),
+            )
+        )
+    return tuple(
+        sorted(
+            family_rows,
+            key=lambda row: KIMI_FAMILY_MODELS[row.model][0],
+        )
+    )
+
+
+def render_kimi_family_svg(rows: Sequence[KimiFamilyRow]) -> str:
+    width, height = 1380, 700
+    left, right, top, bottom = 90, 1335, 135, 510
+    lines = _svg_start(width, height, "Kimi family gameplay comparison")
+    lines.insert(
+        2,
+        ".axis{stroke:#425466;stroke-width:2}"
+        ".value{font-family:sans-serif;font-size:10px;font-weight:700;fill:#17202a}",
+    )
+    if len(rows) < 2:
+        lines.append(
+            '<text class="label" x="24" y="70">'
+            "At least two Kimi family models are required.</text>"
+        )
+        lines.append("</svg>")
+        return "\n".join(lines) + "\n"
+
+    lines.append(
+        '<text class="small" x="24" y="52">'
+        "All retained v1–v4 sessions · lower latency is better; higher capability and "
+        "token efficiency are better.</text>"
+    )
+    lines.append(
+        '<text class="small" x="24" y="72">'
+        "K3 used OpenRouter; K2.5–K2.7 used Ollama Cloud, so latency includes provider "
+        "infrastructure and is not a pure model comparison.</text>"
+    )
+    panel_gap = 30
+    panel_width = (right - left - panel_gap * 2) / 3
+    metrics: tuple[
+        tuple[str, tuple[tuple[str, str, tuple[float, ...]], ...], float, str],
+        ...,
+    ] = (
+        (
+            "Capability",
+            (
+                (
+                    "Session passes",
+                    "#1b9e77",
+                    tuple(row.pass_rate * 100 for row in rows),
+                ),
+                (
+                    "Milestones",
+                    "#7570b3",
+                    tuple(row.milestone_rate * 100 for row in rows),
+                ),
+            ),
+            100,
+            "%",
+        ),
+        (
+            "Median latency",
+            (
+                (
+                    "Seconds / decision",
+                    "#d95f02",
+                    tuple(
+                        row.median_latency_seconds or 0
+                        for row in rows
+                    ),
+                ),
+            ),
+            max((row.median_latency_seconds or 0) for row in rows) * 1.15,
+            "s",
+        ),
+        (
+            "Token efficiency",
+            (
+                (
+                    "Milestones / M tokens",
+                    "#1f78b4",
+                    tuple(row.token_efficiency for row in rows),
+                ),
+            ),
+            max(row.token_efficiency for row in rows) * 1.15,
+            "",
+        ),
+    )
+    plot_height = bottom - top
+    for panel_index, (title, series, maximum, suffix) in enumerate(metrics):
+        panel_left = left + panel_index * (panel_width + panel_gap)
+        panel_right = panel_left + panel_width
+        safe_maximum = maximum if maximum > 0 else 1
+        lines.append(
+            f'<text class="label" text-anchor="middle" '
+            f'x="{(panel_left + panel_right) / 2:.1f}" y="{top - 22}">'
+            f"{escape(title)}</text>"
+        )
+        for step in range(0, 6):
+            value = safe_maximum * step / 5
+            y = bottom - plot_height * step / 5
+            label = (
+                f"{value:.0f}{suffix}"
+                if suffix or value >= 10
+                else f"{value:.1f}"
+            )
+            lines.append(
+                f'<line class="grid" x1="{panel_left:.1f}" y1="{y:.1f}" '
+                f'x2="{panel_right:.1f}" y2="{y:.1f}"/>'
+            )
+            lines.append(
+                f'<text class="small" text-anchor="end" x="{panel_left - 8:.1f}" '
+                f'y="{y + 4:.1f}">{label}</text>'
+            )
+        lines.extend(
+            (
+                f'<line class="axis" x1="{panel_left:.1f}" y1="{top}" '
+                f'x2="{panel_left:.1f}" y2="{bottom}"/>',
+                f'<line class="axis" x1="{panel_left:.1f}" y1="{bottom}" '
+                f'x2="{panel_right:.1f}" y2="{bottom}"/>',
+            )
+        )
+        x_step = panel_width / max(1, len(rows) - 1)
+        for series_name, color, values in series:
+            points = tuple(
+                (
+                    panel_left + index * x_step,
+                    bottom - plot_height * value / safe_maximum,
+                    value,
+                )
+                for index, value in enumerate(values)
+            )
+            for previous, current in zip(points, points[1:], strict=False):
+                lines.append(
+                    f'<line x1="{previous[0]:.1f}" y1="{previous[1]:.1f}" '
+                    f'x2="{current[0]:.1f}" y2="{current[1]:.1f}" '
+                    f'stroke="{color}" stroke-width="3"/>'
+                )
+            for row, (x, y, value) in zip(rows, points, strict=True):
+                formatted = (
+                    f"{value:.1f}{suffix}"
+                    if suffix or value < 10
+                    else f"{value:.0f}"
+                )
+                lines.append(
+                    f'<g data-model="{escape(row.model)}" '
+                    f'data-series="{escape(series_name)}">'
+                )
+                lines.append(
+                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="{color}" '
+                    'stroke="white" stroke-width="2"/>'
+                )
+                lines.append(
+                    f'<text class="value" text-anchor="middle" x="{x:.1f}" '
+                    f'y="{max(top + 11, y - 10):.1f}">{formatted}</text>'
+                )
+                lines.append("</g>")
+        for index, row in enumerate(rows):
+            x = panel_left + index * x_step
+            lines.append(
+                f'<text class="small" text-anchor="middle" x="{x:.1f}" '
+                f'y="{bottom + 24}">{escape(row.display_name)}</text>'
+            )
+        legend_x = panel_left
+        for series_index, (series_name, color, _values) in enumerate(series):
+            x = legend_x + series_index * 150
+            lines.append(
+                f'<line x1="{x:.1f}" y1="{top - 52}" x2="{x + 24:.1f}" '
+                f'y2="{top - 52}" stroke="{color}" stroke-width="3"/>'
+            )
+            lines.append(
+                f'<text class="small" x="{x + 31:.1f}" y="{top - 48}">'
+                f"{escape(series_name)}</text>"
+            )
+
+    lines.append(
+        '<text class="small" x="24" y="575">'
+        "¹ Kimi K2.7 Code is a code-specialized branch, not a direct general-purpose "
+        "successor. Each point aggregates the supplied model’s retained sessions.</text>"
+    )
+    for index, row in enumerate(rows):
+        x = 24 + index * 330
+        lines.append(
+            f'<text class="small" x="{x}" y="610">{escape(row.display_name)} · '
+            f"{escape(row.provider)} · {row.passes}/{row.sessions} passes · "
+            f"{row.milestone_hits}/{row.milestone_possible} milestones</text>"
+        )
+    lines.append("</svg>")
+    return "\n".join(lines) + "\n"
+
+
 def _frontier_cost_rows(rows: Sequence[ModelRow]) -> tuple[FrontierCostRow, ...]:
     grouped: dict[str, list[ModelRow]] = defaultdict(list)
     for row in rows:
@@ -2359,8 +2630,8 @@ def _latency_section(analysis: LatencyAnalysis | None) -> str:
         "### Overall and cohort latency",
         "",
         "| Scope | Provider(s) | Decisions | Median sec | P95 sec | P99 sec | Max sec | "
-        "Token coverage | Output tokens/sec |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "Output tokens/sec |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for index, row in enumerate(overall_rows):
         scope = "Overall" if index == 0 else row.cohort or "Unlabeled"
@@ -2368,7 +2639,6 @@ def _latency_section(analysis: LatencyAnalysis | None) -> str:
             f"| `{scope}` | `{row.provider}` | {row.decisions:,} | "
             f"{row.median_seconds:.2f} | {row.p95_seconds:.2f} | "
             f"{row.p99_seconds:.2f} | {row.maximum_seconds:.2f} | "
-            f"{row.token_decisions:,}/{row.decisions:,} | "
             f"{_token_latency_cell(row.output_tokens_per_second)} |"
         )
     lines.extend(
@@ -2377,15 +2647,15 @@ def _latency_section(analysis: LatencyAnalysis | None) -> str:
             "### Per-model latency",
             "",
             "| Model | Cohort | Provider | Decisions | Median sec | P95 sec | P99 sec | "
-            "Token coverage | Output tokens/sec |",
-            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "Output tokens/sec |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
         )
     )
     for row in analysis.model_rows:
         lines.append(
             f"| `{row.model}` | `{row.cohort or 'Unlabeled'}` | `{row.provider}` | "
             f"{row.decisions:,} | {row.median_seconds:.2f} | {row.p95_seconds:.2f} | "
-            f"{row.p99_seconds:.2f} | {row.token_decisions:,}/{row.decisions:,} | "
+            f"{row.p99_seconds:.2f} | "
             f"{_token_latency_cell(row.output_tokens_per_second)} |"
         )
     return "\n".join(lines)
@@ -2952,7 +3222,6 @@ def _typst_latency_block(analysis: LatencyAnalysis | None) -> tuple[str, ...]:
         "[*P95 sec*]",
         "[*P99 sec*]",
         "[*Max sec*]",
-        "[*Token coverage*]",
         "[*Output tokens/sec*]",
     ]
     for index, row in enumerate((analysis.overall, *analysis.cohort_rows)):
@@ -2964,7 +3233,6 @@ def _typst_latency_block(analysis: LatencyAnalysis | None) -> tuple[str, ...]:
             f"{row.p95_seconds:.2f}",
             f"{row.p99_seconds:.2f}",
             f"{row.maximum_seconds:.2f}",
-            f"{row.token_decisions:,}/{row.decisions:,}",
             _token_latency_cell(row.output_tokens_per_second),
         )
         overall_cells.extend(f"[{_typst_text(value)}]" for value in values)
@@ -2976,7 +3244,6 @@ def _typst_latency_block(analysis: LatencyAnalysis | None) -> tuple[str, ...]:
         "[*Median sec*]",
         "[*P95 sec*]",
         "[*P99 sec*]",
-        "[*Token coverage*]",
         "[*Output tokens/sec*]",
     ]
     for row in analysis.model_rows:
@@ -2988,7 +3255,6 @@ def _typst_latency_block(analysis: LatencyAnalysis | None) -> tuple[str, ...]:
             f"{row.median_seconds:.2f}",
             f"{row.p95_seconds:.2f}",
             f"{row.p99_seconds:.2f}",
-            f"{row.token_decisions:,}/{row.decisions:,}",
             _token_latency_cell(row.output_tokens_per_second),
         )
         model_cells.extend(f"[{_typst_text(value)}]" for value in values)
@@ -3006,14 +3272,14 @@ def _typst_latency_block(analysis: LatencyAnalysis | None) -> tuple[str, ...]:
         ),
         "=== Overall and cohort latency",
         *_typst_table(
-            "(0.8fr, 1.2fr, 0.8fr, 0.8fr, 0.8fr, 0.8fr, 0.8fr, 0.9fr, 1fr)",
+            "(0.8fr, 1.2fr, 0.8fr, 0.8fr, 0.8fr, 0.8fr, 0.8fr, 1fr)",
             overall_cells,
             text_size="6pt",
         ),
         "#pagebreak()",
         "=== Per-model latency",
         *_typst_table(
-            "(2fr, 0.6fr, 0.9fr, 0.7fr, 0.7fr, 0.7fr, 0.7fr, 0.8fr, 0.9fr)",
+            "(2fr, 0.6fr, 0.9fr, 0.7fr, 0.7fr, 0.7fr, 0.7fr, 0.9fr)",
             model_cells,
             text_size="5.5pt",
         ),
@@ -3323,6 +3589,7 @@ def _typst_report(
     behavior_rows: Sequence[BehaviorRow],
     quantization_rows: Sequence[QuantizationRow],
     frontier_chart_path: str | None,
+    kimi_chart_path: str | None,
     diagrams: Sequence[str],
     sources: Sequence[str],
 ) -> str:
@@ -3552,6 +3819,21 @@ def _typst_report(
                 f'#image({json.dumps(path)}, width: 100%, height: 165mm, fit: "contain")',
             )
         )
+    kimi_block = (
+        (
+            "== Kimi family comparison",
+            _typst_text(
+                "This chart compares aggregate capability, decision latency, and "
+                "logical-token efficiency. Kimi K2.7 Code is a code-specialized branch. "
+                "K3 used OpenRouter while the K2 models used Ollama Cloud, so latency "
+                "includes provider infrastructure differences."
+            ),
+            f'#image({json.dumps(kimi_chart_path)}, width: 100%, height: 150mm, fit: "contain")',
+            "#pagebreak()",
+        )
+        if kimi_chart_path is not None
+        else ()
+    )
     return "\n".join(
         (
             '#set page(paper: "a4", flipped: true, margin: 12mm)',
@@ -3629,6 +3911,7 @@ def _typst_report(
             "",
             *difficulty_block,
             "",
+            *kimi_block,
             "== Cohort deltas",
             "",
             "Deltas compare consecutive cohorts in the supplied order. Missing model/cohort "
@@ -3702,6 +3985,8 @@ def build_report(
     replacements = _replacement_mapping(sources)
     difficulty_rows = _difficulty_rows(results)
     scatter_metadata = _parameter_scatter_metadata(labeled_sources)
+    rows = _model_rows(results, _model_usage(labeled_sources))
+    latency = _latency_analysis(labeled_sources)
     output.mkdir(parents=True, exist_ok=True)
     diagrams = output / "diagrams"
     diagrams.mkdir(exist_ok=True)
@@ -3728,6 +4013,12 @@ def build_report(
             encoding="utf-8",
         )
         scatter_chart_paths.append(str(scatter_path.relative_to(output)))
+    kimi_rows = _kimi_family_rows(rows, latency)
+    kimi_chart_path: str | None = None
+    if len(kimi_rows) >= 2:
+        kimi_chart = diagrams / "kimi-family-comparison-chart.svg"
+        kimi_chart.write_text(render_kimi_family_svg(kimi_rows), encoding="utf-8")
+        kimi_chart_path = str(kimi_chart.relative_to(output))
     diagram_paths: list[str] = []
     for tutorial, spec in TUTORIAL_MAPS.items():
         tabletop_path = diagrams / f"{tutorial}-tabletop.png"
@@ -3746,7 +4037,6 @@ def build_report(
                 str(heatmap_path.relative_to(output)),
             )
         )
-    rows = _model_rows(results, _model_usage(labeled_sources))
     frontier_cost_rows = _frontier_cost_rows(rows)
     frontier_chart_path: str | None = None
     if frontier_cost_rows:
@@ -3764,7 +4054,6 @@ def build_report(
     aggregate_deltas, model_deltas = _cohort_delta_rows(results, cohort_order)
     change_breadth_rows = _change_breadth_rows(model_deltas)
     coverage = _coverage_analysis(results, labeled_sources)
-    latency = _latency_analysis(labeled_sources)
     bottlenecks = _milestone_bottleneck_rows(results)
     behavior_rows = _behavior_rows(results)
     quantization_rows = _quantization_rows(results, labeled_sources)
@@ -3811,6 +4100,14 @@ def build_report(
             ),
         )
         .replace(
+            "{{KIMI_FAMILY_CHART}}",
+            (
+                f"![Kimi family comparison]({kimi_chart_path})"
+                if kimi_chart_path is not None
+                else "At least two Kimi family models are required for this comparison."
+            ),
+        )
+        .replace(
             "{{COHORT_DELTAS}}",
             _cohort_delta_table(aggregate_deltas, model_deltas),
         )
@@ -3847,6 +4144,7 @@ def build_report(
             behavior_rows,
             quantization_rows,
             frontier_chart_path,
+            kimi_chart_path,
             (*chart_paths, *scatter_chart_paths, *diagram_paths),
             tuple(
                 f"{cohort} / {source.path.name}" if cohort is not None else source.path.name

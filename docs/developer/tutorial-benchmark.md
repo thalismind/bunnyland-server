@@ -50,6 +50,61 @@ For the server-`5b33e2a69301` research round, the representatives use the Huggin
 Download counters change over time; the dated values explain selection and are not permanent
 rankings.
 
+## Candidate model backlog
+
+Do not start scored sessions from a catalogue badge alone. Before adding any model below,
+require both:
+
+1. Ollama reports `tools` in the model capabilities.
+2. A minimal `/api/chat` request with tools returns a non-empty
+   `message.tool_calls`.
+
+If either check fails, record the attempt as a serving-compatibility diagnostic and exclude
+it from gameplay rankings. This gate prevents plain-text action names from being mistaken
+for structured tool calls.
+
+Primary local queue, in suggested order:
+
+- [ ] [`hermes3:8b-llama3.1-q8_0`](https://ollama.com/library/hermes3) — 8B
+  Llama 3.1 roleplaying/function-calling control.
+- [ ] [`NousResearch/Hermes-4-14B`](https://huggingface.co/NousResearch/Hermes-4-14B)
+  at Q8 — 14B roleplaying, function-calling, and structured-JSON model.
+- [ ] [`subsectmusic/qwriko3-4b-instruct-2507`](https://huggingface.co/subsectmusic/qwriko3-4b-instruct-2507)
+  at Q8 — unusual 4B Ollama-first roleplaying model with a documented tools loop.
+- [ ] [`llmfan46/Qwythos-9B-Claude-Mythos-5-1M-uncensored-heretic-GGUF`](https://huggingface.co/llmfan46/Qwythos-9B-Claude-Mythos-5-1M-uncensored-heretic-GGUF)
+  at Q8 — uncensored 9B conversational model with a documented tool harness.
+- [ ] [`LESSTHANSUPER/THE_OMEGA_DIRECTIVE-Mistral_Small3.2-24b:Q6_K`](https://ollama.com/LESSTHANSUPER/THE_OMEGA_DIRECTIVE-Mistral_Small3.2-24b)
+  — 24B multi-turn roleplaying model.
+- [ ] [`LESSTHANSUPER/RP-INK-Qwen2.5-32b:Q5_K_S`](https://ollama.com/LESSTHANSUPER/RP-INK-Qwen2.5-32b)
+  — 32B roleplaying and creative-writing model.
+- [ ] [`gemma4:26b`](https://ollama.com/library/gemma4:26b) — official Gemma 4
+  function-calling control for comparison with incompatible community Gemma builds.
+
+Secondary local candidates:
+
+- [ ] [`R4C3R/qwen3-8b-heretic:q8_0`](https://ollama.com/R4C3R/qwen3-8b-heretic)
+  — 8B uncensored roleplaying model.
+- [ ] [`R4C3R/qwen2.5-14b-instruct-heretic:q8_0`](https://ollama.com/R4C3R/qwen2.5-14b-instruct-heretic)
+  — 14B uncensored creative-writing control.
+- [ ] [`RootMonsteR/Qwen3-14B-Abliterated-GGUF`](https://huggingface.co/RootMonsteR/Qwen3-14B-Abliterated-GGUF)
+  at Q5_K_M — 14B abliterated structured-output control.
+- [ ] [`limloop/MN-12B-Runeweaver-RP-RU-GGUF`](https://huggingface.co/limloop/MN-12B-Runeweaver-RP-RU-GGUF)
+  at Q6_K — bilingual long-form roleplaying model; tool support needs stronger
+  preflight evidence.
+- [ ] [`jatayulabs/Qwen3-32B-ToolCall-GGUF`](https://huggingface.co/jatayulabs/Qwen3-32B-ToolCall-GGUF)
+  at Q4_K_M — tool-specialist 32B control.
+- [ ] [`nemotron-mini:4b`](https://ollama.com/library/nemotron-mini) — small
+  roleplaying/function-calling control.
+- [ ] [`lfm2.5:8b`](https://ollama.com/library/lfm2.5) — local tool-calling
+  latency and efficiency control.
+
+Cloud comparison candidates:
+
+- [ ] [`minimax-m2.7:cloud`](https://ollama.com/library/minimax-m2.7) — tool-capable
+  model emphasizing character consistency, emotional intelligence, and scene interaction.
+- [ ] [`mistral-large-3:675b-cloud`](https://ollama.com/library/mistral-large-3) —
+  large function-calling and system-adherence control.
+
 ## Running locally
 
 Install the `llm` extra and make sure each requested model already exists in Ollama. A local

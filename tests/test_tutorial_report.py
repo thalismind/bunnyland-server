@@ -13,8 +13,10 @@ from benchmarks.tutorial_report import (
     MODEL_ARCHITECTURES,
     TUTORIAL_MAPS,
     CohortInput,
+    KimiFamilyRow,
     build_report,
     package_report,
+    render_kimi_family_svg,
     render_map_svg,
 )
 from benchmarks.tutorials import (
@@ -371,8 +373,12 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     )
     assert (
         "| `large` | `Unlabeled` | `ollama-local` | 3 | 4.00 | 4.00 | 4.00 | "
-        "3/3 | 5.0000 |"
+        "5.0000 |"
     ) in markdown
+    latency_section = markdown.split("## Latency distribution", maxsplit=1)[1].split(
+        "## Model comparison", maxsplit=1
+    )[0]
+    assert "Token coverage" not in latency_section
     assert "Sec/output token" not in markdown
     assert "## Additional analytical questions" in markdown
     assert "### How broadly were cohort gains shared?" in markdown
@@ -573,7 +579,7 @@ def test_parameter_scatter_uses_latest_applicable_tutorial_cohort(tmp_path):
 
 
 def test_parameter_scatter_catalogue_covers_full_study_roster():
-    assert len(MODEL_ARCHITECTURES) == 21
+    assert len(MODEL_ARCHITECTURES) == 27
     assert (
         MODEL_ARCHITECTURES["deepseek-v4-flash:cloud"].total_parameters
         == 284_000_000_000
@@ -589,6 +595,55 @@ def test_parameter_scatter_catalogue_covers_full_study_roster():
         ].total_parameters
         == 35_000_000_000
     )
+    assert MODEL_ARCHITECTURES["moonshotai/kimi-k3"].total_parameters == 2_800_000_000_000
+
+
+def test_kimi_family_chart_compares_capability_latency_and_efficiency():
+    rows = (
+        KimiFamilyRow(
+            model="kimi-k2.5",
+            display_name="Kimi K2.5",
+            provider="Ollama Cloud",
+            sessions=40,
+            passes=31,
+            milestone_hits=400,
+            milestone_possible=440,
+            median_latency_seconds=3.5,
+            total_tokens=20_000_000,
+        ),
+        KimiFamilyRow(
+            model="kimi-k2.7-code:cloud",
+            display_name="Kimi K2.7 Code¹",
+            provider="Ollama Cloud",
+            sessions=40,
+            passes=38,
+            milestone_hits=430,
+            milestone_possible=440,
+            median_latency_seconds=1.5,
+            total_tokens=15_000_000,
+        ),
+        KimiFamilyRow(
+            model="moonshotai/kimi-k3",
+            display_name="Kimi K3",
+            provider="OpenRouter",
+            sessions=40,
+            passes=33,
+            milestone_hits=420,
+            milestone_possible=440,
+            median_latency_seconds=2.5,
+            total_tokens=18_000_000,
+        ),
+    )
+
+    svg = render_kimi_family_svg(rows)
+
+    assert "Capability" in svg
+    assert "Median latency" in svg
+    assert "Token efficiency" in svg
+    assert "code-specialized branch" in svg
+    assert "K3 used OpenRouter" in svg
+    for row in rows:
+        assert f'data-model="{row.model}"' in svg
 
 
 def test_cohort_report_distinguishes_gaps_from_not_applicable_cells(tmp_path):

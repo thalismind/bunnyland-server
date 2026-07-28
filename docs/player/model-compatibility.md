@@ -26,6 +26,7 @@ tutorial columns.
 | --- | ---: | --- | --- | ---: |
 | DeepSeek V4 Pro | 1.6T | Cloud | Complex worlds | 5/5 |
 | Gemma 4 | 31B | Cloud | Complex worlds | 5/5 |
+| Gemma 4 31B HauhauCS Q4 | 31B | Local | Complex worlds | 5/5 |
 | Kimi K2.6 | 1T | Cloud | Complex worlds | 5/5 |
 | Kimi K2.7 Code | 1T | Cloud | Complex worlds | 5/5 |
 | DeepSeek V4 Flash | 284B | Cloud | Complex worlds | 4/5 |
@@ -33,15 +34,19 @@ tutorial columns.
 | Qwen 3.5 | 397B-A17B | Cloud | Complex worlds | 4/5 |
 | Qwen 3.6 Genesis Hermes V5 Q8 | 35B-A3B | Local | Complex worlds | 4/5 |
 | Qwen 3.6 Q4 | 35B-A3B | Local | Complex worlds | 4/5 |
+| Kimi K3 | 2.8T-A104B | Cloud | Complex worlds | 3/5 |
 | MiniMax M2.7 | 230B | Cloud | Complex worlds | 3/5 |
+| Ornith 1.0 9B | 9B | Local | Complex worlds | 3/5 |
 | Qwen 3.6 Q6 | 35B-A3B | Local | Complex worlds | 3/5 |
 | Qwen 3.6 Q8 | 35B-A3B | Local | Complex worlds | 3/5 |
 | GPT-OSS 120B | 117B | Cloud | Town and NPCs | 5/5 |
 | GPT-OSS 20B | 21B | Cloud | Town and NPCs | 5/5 |
+| Kimi K2.5 | 1.04T | Cloud | Town and NPCs | 5/5 |
 | Laguna XS 2.1 | 33B | Local | Town and NPCs | 5/5 |
 | MiniMax M3 | 428B | Cloud | Town and NPCs | 5/5 |
 | Nemotron 3 Nano | 31.6B-A3B | Cloud | Town and NPCs | 5/5 |
 | Nemotron 3 Ultra | 550B-A55B | Cloud | Town and NPCs | 5/5 |
+| Ornith 1.0 35B | 34.7B-A3B | Local | Town and NPCs | 5/5 |
 | Qwen 3.5 4B HauhauCS | 4B | Local | Town and NPCs | 5/5 |
 | Qwen 3.5 9B | 9B | Local | Town and NPCs | 5/5 |
 | Qwen 3.5 9B Defiant Fable | 9B | Local | Town and NPCs | 5/5 |
@@ -49,6 +54,8 @@ tutorial columns.
 | Mistral Large 3 | 675B | Cloud | Town and NPCs | 4/5 |
 | Nemotron 3 Super | 120B-A12B | Cloud | Town and NPCs | 4/5 |
 | Qwen 3.5 4B | 4B | Local | Town and NPCs | 4/5 |
+| Llama 3.1 8B ArliAI RPMax v1.3 Q8 | 8B | Local | Not demonstrated | 0/5 |
+| Llama 3.1 8B Stheno v3.4 Q8 | 8B | Local | Not demonstrated | 0/5 |
 
 ## Recommended top five
 
@@ -79,6 +86,27 @@ benchmark's 262K context; the Q4 base model is the more practical 24 GB-class op
 For cloud complex-world play, DeepSeek V4 Flash is the efficiency-oriented
 recommendation. Kimi K2.6, Kimi K2.7 Code, and DeepSeek V4 Pro were the most consistent,
 but are much larger models.
+
+## Additional roleplay and agentic models
+
+The latest comparative round tested seven configurations through all applicable `v1`--`v4`
+cells. The table below shows `v2`, the latest version containing all three tutorials;
+the overall column includes the later Bell-only `v3` and `v4` cells.
+
+| Model | Provider | Apple | Bell | Clover | Overall | Player guidance |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| [Gemma 4 31B HauhauCS Q4](https://huggingface.co/HauhauCS/Gemma4-31B-QAT-Uncensored-HauhauCS-Balanced-MTP) | Local Ollama | 3/5 | 5/5 | 5/5 | 30/40 | Consistent complex-world play, but exceptionally slow at roughly 26–30 minutes per successful Clover session |
+| [Kimi K3](https://openrouter.ai/moonshotai/kimi-k3) | OpenRouter | 5/5 | 5/5 | 3/5 | 33/40 | Strong complex-world cloud option; OpenRouter was used because Ollama Cloud could not serve it |
+| [Ornith 1.0 9B](https://ollama.com/library/ornith) | Local Ollama | 3/5 | 5/5 | 3/5 | 27/40 | Smallest tested local model to demonstrate likely Clover completion |
+| [Kimi K2.5](https://ollama.com/library/kimi-k2.5) | Ollama Cloud | 5/5 | 5/5 | 1/5 | 31/40 | Reliable onboarding and town play; complex-world success remained possible rather than likely |
+| [Ornith 1.0 35B](https://ollama.com/library/ornith) | Local Ollama | 5/5 | 5/5 | 1/5 | 31/40 | Consistent Apple and Bell, but no Clover gain over the much smaller Ornith 9B |
+| [ArliAI RPMax v1.3 Q8](https://huggingface.co/bartowski/Llama-3.1-8B-ArliAI-RPMax-v1.3-GGUF) | Local Ollama | 0/5 | 0/5 | 0/5 | 0/40 | Structured tools worked, but no tutorial completion was demonstrated |
+| [Stheno v3.4 Q8](https://huggingface.co/bartowski/Llama-3.1-8B-Stheno-v3.4-GGUF) | Local Ollama | 0/5 | 0/5 | 0/5 | 0/40 | Roleplay fluency did not translate into reliable tool planning |
+
+These results make Ornith 9B an interesting compact local alternative, not a replacement
+for Qwen 3.6 35B Q4 when consistent Clover performance matters. They also show why model
+compatibility must be measured with authoritative state: plausible roleplay text can coexist
+with poor multi-step action completion.
 
 ## Frontier API preview
 
@@ -115,17 +143,33 @@ Admins can use these exact tested identifiers:
 | Qwen 3.5 4B HauhauCS | `hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M` |
 | Qwen 3.5 9B | `qwen3.5:9b` |
 | Qwen 3.5 9B Defiant Fable | `hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF:Q4_K_M` |
+| Ornith 1.0 9B | `ornith:9b` |
 | Laguna XS 2.1 | `laguna-xs-2.1:latest` |
+| Ornith 1.0 35B | `ornith:35b` |
 | Qwen 3.6 Q4 | `qwen3.6:35b-a3b` |
 | Qwen 3.6 Q6 | `hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q6_K` |
 | Qwen 3.6 Q8 | `hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:Q8_0` |
 | Qwen 3.6 Bahushruth v4 Q4 | `hf.co/Bahushruth/Qwen3.6-35B-A3B-abliterated-v4-GGUF:Q4_K_M` |
 | Qwen 3.6 Genesis Hermes V5 Q8 | `hf.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V5-GGUF:Q8_0` |
+| Gemma 4 31B HauhauCS Q4 | `hf.co/HauhauCS/Gemma4-31B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M` |
+| Llama 3.1 8B ArliAI RPMax v1.3 Q8 | `bunnyland-rpmax-llama3.1-8b-q8-tools:latest` |
+| Llama 3.1 8B Stheno v3.4 Q8 | `bunnyland-stheno-llama3.1-8b-q8-tools:latest` |
 
-The local Gemma 4 31B HauhauCS Q4 variant is not rated. It does not expose the benchmark's
-high-thinking option, and a provider-default diagnostic was stopped after 14 Apple turns:
-it still carried the apple, had completed 6/13 milestones, and was taking 35--90 seconds
-per decision. The separate `gemma4:cloud` result above completed its full rated cells.
+The two Llama aliases retain the linked fine-tune weights and Q8 quantization but use
+Ollama's standard Llama 3.1 tool template; the raw GGUF registrations did not advertise
+tool support.
+
+The local Gemma 4 31B HauhauCS Q4 matrix completed after a warm preload. It reached Apple
+2/5, Bell 5/5, and Clover 0/5 on `v1`; Apple 3/5, Bell 5/5, and Clover 5/5 on `v2`;
+and Bell 5/5 on both `v3` and `v4`. That is strong capability evidence but a poor latency
+tradeoff: successful Clover sessions took roughly 26--30 minutes, while successful Bell
+sessions commonly took 9--18 minutes. The separate `gemma4:cloud` result remains the
+practical Gemma deployment for most admins.
+
+`OBLITERATUS/gemma-4-E4B-it-OBLITERATED` is also excluded from comparative rankings. Its
+Ollama registration advertised completion and vision but not tools, and diagnostics emitted
+action names as ordinary text instead of structured tool calls. That is a serving-compatibility
+failure, not evidence about tutorial difficulty.
 
 Uncensored and abliterated derivatives remove or weaken model safeguards. Their gameplay
 results are not a recommendation to expose them directly to untrusted public prompts;

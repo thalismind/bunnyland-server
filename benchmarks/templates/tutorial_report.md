@@ -74,6 +74,16 @@ an inferred size.
 
 {{PARAMETER_SCATTER_PLOTS}}
 
+## Kimi family comparison
+
+This chart compares aggregate capability, decision latency, and logical-token efficiency
+across the tested Kimi family. Kimi K2.7 Code is a code-specialized branch rather than a
+direct general-purpose successor. K3 used OpenRouter while the K2 models used Ollama Cloud,
+so the latency panel includes provider infrastructure differences; capability and token
+efficiency are the more portable comparisons.
+
+{{KIMI_FAMILY_CHART}}
+
 ## Cohort deltas
 
 Deltas compare consecutive cohorts in the supplied order. Missing model/cohort cells are
