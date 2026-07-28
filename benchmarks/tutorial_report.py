@@ -289,6 +289,7 @@ class LatencyRow:
 @dataclass(frozen=True)
 class LatencyAnalysis:
     overall: LatencyRow
+    provider_rows: tuple[LatencyRow, ...]
     cohort_rows: tuple[LatencyRow, ...]
     model_rows: tuple[LatencyRow, ...]
     aggregate_model_rows: tuple[LatencyRow, ...]
@@ -1088,10 +1089,14 @@ def _latency_analysis(
     if not samples:
         return None
     samples_by_cohort: dict[str | None, list[LatencySample]] = defaultdict(list)
+    samples_by_provider: dict[str, list[LatencySample]] = defaultdict(list)
     samples_by_model: dict[tuple[str | None, str], list[LatencySample]] = defaultdict(list)
     samples_by_exact_model: dict[str, list[LatencySample]] = defaultdict(list)
     for sample in samples:
         samples_by_cohort[sample.cohort].append(sample)
+        samples_by_provider[
+            "Local" if sample.provider == "ollama-local" else "Cloud"
+        ].append(sample)
         samples_by_model[(sample.cohort, sample.model)].append(sample)
         samples_by_exact_model[sample.model].append(sample)
     cohort_rank = {cohort: index for index, cohort in enumerate(cohort_order)}
@@ -1099,6 +1104,11 @@ def _latency_analysis(
         _latency_row(samples_by_cohort[cohort], cohort=cohort, model="All models")
         for cohort in cohort_order
         if samples_by_cohort[cohort]
+    )
+    provider_rows = tuple(
+        _latency_row(samples_by_provider[provider], cohort=None, model=provider)
+        for provider in ("Local", "Cloud")
+        if samples_by_provider[provider]
     )
     model_rows = tuple(
         _latency_row(grouped, cohort=cohort, model=model)
@@ -1120,6 +1130,7 @@ def _latency_analysis(
     )
     return LatencyAnalysis(
         overall=_latency_row(samples, cohort=None, model="All models"),
+        provider_rows=provider_rows,
         cohort_rows=cohort_rows,
         model_rows=model_rows,
         aggregate_model_rows=aggregate_model_rows,
@@ -2897,6 +2908,131 @@ def render_frontier_cost_svg(rows: Sequence[FrontierCostRow]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_latency_provider_svg(rows: Sequence[LatencyRow]) -> str:
+    width, height = 1100, 410
+    left, right, top, bottom = 190, 1040, 95, 270
+    selected = tuple(row for row in rows if row.decisions and row.p99_seconds > 0)
+    lines = _svg_start(width, height, "Decision latency by execution location")
+    lines.insert(
+        2,
+        ".axis{stroke:#425466;stroke-width:2}"
+        ".value{font-family:sans-serif;font-size:11px;font-weight:700;fill:#17202a}",
+    )
+    lines.append(
+        '<text class="small" x="24" y="52">All retained v1–v4 decisions · '
+        "percentiles computed across decisions, not per-model medians</text>"
+    )
+    if not selected:
+        lines.append(
+            '<text class="label" x="24" y="88">'
+            "No decision-latency evidence was available.</text>"
+        )
+        lines.append("</svg>")
+        return "\n".join(lines) + "\n"
+
+    minimum = max(
+        0.1,
+        min(row.median_seconds for row in selected) / 2,
+    )
+    maximum = max(row.p99_seconds for row in selected) * 1.35
+    log_min = math.log10(minimum)
+    log_max = math.log10(maximum)
+
+    def x_position(seconds: float) -> float:
+        fraction = (math.log10(seconds) - log_min) / (log_max - log_min)
+        return left + (right - left) * fraction
+
+    ticks = (0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200)
+    for seconds in ticks:
+        if not minimum <= seconds <= maximum:
+            continue
+        x = x_position(seconds)
+        lines.append(
+            f'<line class="grid" x1="{x:.1f}" y1="{top}" '
+            f'x2="{x:.1f}" y2="{bottom}"/>'
+        )
+        lines.append(
+            f'<text class="small" text-anchor="middle" x="{x:.1f}" '
+            f'y="{bottom + 24}">{seconds:g}s</text>'
+        )
+    lines.append(
+        f'<line class="axis" x1="{left}" y1="{bottom}" '
+        f'x2="{right}" y2="{bottom}"/>'
+    )
+    lines.append(
+        f'<text class="label" text-anchor="middle" '
+        f'x="{(left + right) / 2:.1f}" y="{bottom + 54}">'
+        "End-to-end decision latency (seconds, log scale)</text>"
+    )
+
+    row_gap = 82
+    for index, row in enumerate(selected):
+        y = 125 + index * row_gap
+        median_x = x_position(row.median_seconds)
+        p95_x = x_position(row.p95_seconds)
+        p99_x = x_position(row.p99_seconds)
+        lines.append(
+            f'<text class="label" text-anchor="end" x="{left - 18}" y="{y - 4}">'
+            f"{escape(row.model)}</text>"
+        )
+        lines.append(
+            f'<text class="small" text-anchor="end" x="{left - 18}" y="{y + 14}">'
+            f"{row.decisions:,} decisions</text>"
+        )
+        lines.append(
+            f'<line x1="{median_x:.1f}" y1="{y}" x2="{p99_x:.1f}" y2="{y}" '
+            'stroke="#667788" stroke-width="5" stroke-linecap="round"/>'
+        )
+        lines.append(
+            f'<circle cx="{median_x:.1f}" cy="{y}" r="9" '
+            'fill="#1b9e77" stroke="white" stroke-width="2">'
+            f"<title>{escape(row.model)} median: {row.median_seconds:.2f}s</title>"
+            "</circle>"
+        )
+        lines.append(
+            f'<rect x="{p95_x - 8:.1f}" y="{y - 8}" width="16" height="16" '
+            'fill="#d95f02" stroke="white" stroke-width="2">'
+            f"<title>{escape(row.model)} p95: {row.p95_seconds:.2f}s</title>"
+            "</rect>"
+        )
+        lines.append(
+            f'<path d="M {p99_x:.1f} {y - 10} L {p99_x + 10:.1f} {y} '
+            f'L {p99_x:.1f} {y + 10} L {p99_x - 10:.1f} {y} Z" '
+            'fill="#7570b3" stroke="white" stroke-width="2">'
+            f"<title>{escape(row.model)} p99: {row.p99_seconds:.2f}s</title>"
+            "</path>"
+        )
+        lines.append(
+            f'<text class="value" x="{left}" y="{y + 31}">'
+            f"median {row.median_seconds:.2f}s · p95 {row.p95_seconds:.2f}s · "
+            f"p99 {row.p99_seconds:.2f}s</text>"
+        )
+
+    legend = (
+        ("Median", "#1b9e77", "circle"),
+        ("p95", "#d95f02", "square"),
+        ("p99", "#7570b3", "diamond"),
+    )
+    for index, (label, color, shape) in enumerate(legend):
+        x = 720 + index * 110
+        y = 365
+        if shape == "circle":
+            lines.append(f'<circle cx="{x}" cy="{y}" r="7" fill="{color}"/>')
+        elif shape == "square":
+            lines.append(
+                f'<rect x="{x - 7}" y="{y - 7}" width="14" height="14" '
+                f'fill="{color}"/>'
+            )
+        else:
+            lines.append(
+                f'<path d="M {x} {y - 8} L {x + 8} {y} '
+                f'L {x} {y + 8} L {x - 8} {y} Z" fill="{color}"/>'
+            )
+        lines.append(f'<text class="small" x="{x + 12}" y="{y + 4}">{label}</text>')
+    lines.append("</svg>")
+    return "\n".join(lines) + "\n"
+
+
 def _comparison_table(rows: Sequence[ModelRow]) -> str:
     cohort_mode = any(row.cohort is not None for row in rows)
     lines = (
@@ -3390,6 +3526,7 @@ def _write_paper_data(
     title: str,
     results: Sequence[LabeledResult],
     sources: Sequence[tuple[str | None, LoadedSource]],
+    model_rows: Sequence[ModelRow],
     difficulty_rows: Sequence[DifficultyRow],
     parameter_associations: Sequence[ParameterAssociation],
     family_rows: Sequence[StudyFamilyRow],
@@ -3490,10 +3627,34 @@ def _write_paper_data(
                 "p95_seconds": latency.overall.p95_seconds,
                 "p99_seconds": latency.overall.p99_seconds,
                 "maximum_seconds": latency.overall.maximum_seconds,
+                "provider_rows": [
+                    {
+                        "provider": row.model,
+                        "decisions": row.decisions,
+                        "median_seconds": row.median_seconds,
+                        "p95_seconds": row.p95_seconds,
+                        "p99_seconds": row.p99_seconds,
+                        "maximum_seconds": row.maximum_seconds,
+                    }
+                    for row in latency.provider_rows
+                ],
             }
             if latency is not None
             else {}
         ),
+        "frontier_cost": [
+            {
+                "model": row.model,
+                "display_name": row.display_name,
+                "sessions": row.sessions,
+                "passes": row.passes,
+                "milestone_hits": row.milestone_hits,
+                "milestone_possible": row.milestone_possible,
+                "estimated_cost_usd": row.estimated_cost_usd,
+                "passes_per_dollar": row.passes_per_dollar,
+            }
+            for row in _frontier_cost_rows(model_rows)
+        ],
         "figures": list(figure_paths),
         "appendices": [
             "comparison-table.md",
@@ -3512,7 +3673,10 @@ def _token_latency_cell(value: float | None) -> str:
     return "—" if value is None else f"{value:.4f}"
 
 
-def _latency_section(analysis: LatencyAnalysis | None) -> str:
+def _latency_section(
+    analysis: LatencyAnalysis | None,
+    chart_path: str | None = None,
+) -> str:
     if analysis is None:
         return "No retained turn-latency evidence was available."
     overall_rows = (analysis.overall, *analysis.cohort_rows)
@@ -3527,12 +3691,34 @@ def _latency_section(analysis: LatencyAnalysis | None) -> str:
         "prompt evaluation, provider overhead, retries, and generation—by output tokens. "
         "They are not pure decoder throughput.",
         "",
-        "### Overall and cohort latency",
+        "### Local versus cloud latency",
         "",
-        "| Scope | Provider(s) | Decisions | Median sec | P95 sec | P99 sec | Max sec | "
-        "Output tokens/sec |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Execution | Decisions | Median sec | P95 sec | P99 sec | Max sec |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
     ]
+    for row in analysis.provider_rows:
+        lines.append(
+            f"| {row.model} | {row.decisions:,} | {row.median_seconds:.2f} | "
+            f"{row.p95_seconds:.2f} | {row.p99_seconds:.2f} | "
+            f"{row.maximum_seconds:.2f} |"
+        )
+    if chart_path is not None:
+        lines.extend(
+            (
+                "",
+                f"![Local and cloud decision-latency percentiles]({chart_path})",
+            )
+        )
+    lines.extend(
+        (
+            "",
+            "### Overall and cohort latency",
+            "",
+            "| Scope | Provider(s) | Decisions | Median sec | P95 sec | P99 sec | Max sec | "
+            "Output tokens/sec |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        )
+    )
     for index, row in enumerate(overall_rows):
         scope = "Overall" if index == 0 else row.cohort or "Unlabeled"
         lines.append(
@@ -4899,6 +5085,14 @@ def build_report(
         str(success_chart_path.relative_to(output)),
         str(threshold_chart_path.relative_to(output)),
     )
+    latency_chart_path: str | None = None
+    if latency is not None and latency.provider_rows:
+        latency_chart = diagrams / "latency-provider-percentiles-chart.svg"
+        latency_chart.write_text(
+            render_latency_provider_svg(latency.provider_rows),
+            encoding="utf-8",
+        )
+        latency_chart_path = str(latency_chart.relative_to(output))
     scatter_chart_paths: list[str] = []
     for tutorial in TUTORIAL_MAPS:
         scatter_path = diagrams / f"{tutorial}-parameter-milestone-scatter-chart.svg"
@@ -4985,7 +5179,10 @@ def build_report(
             "{{PERFORMANCE_LEADERBOARDS}}",
             _performance_leaderboards(rows, latency),
         )
-        .replace("{{LATENCY_SECTION}}", _latency_section(latency))
+        .replace(
+            "{{LATENCY_SECTION}}",
+            _latency_section(latency, latency_chart_path),
+        )
         .replace("{{COMPARISON_TABLE}}", _comparison_table(rows))
         .replace(
             "{{FRONTIER_COST_SECTION}}",
@@ -5049,7 +5246,12 @@ def build_report(
             quantization_rows,
             frontier_chart_path,
             kimi_chart_path,
-            (*chart_paths, *scatter_chart_paths, *diagram_paths),
+            (
+                *chart_paths,
+                *scatter_chart_paths,
+                *((latency_chart_path,) if latency_chart_path is not None else ()),
+                *diagram_paths,
+            ),
         ),
         encoding="utf-8",
     )
@@ -5077,6 +5279,7 @@ def build_report(
         title=title,
         results=results,
         sources=labeled_sources,
+        model_rows=rows,
         difficulty_rows=difficulty_rows,
         parameter_associations=parameter_associations,
         family_rows=family_rows,
@@ -5087,6 +5290,7 @@ def build_report(
             *diagram_paths,
             *chart_paths,
             *scatter_chart_paths,
+            *((latency_chart_path,) if latency_chart_path is not None else ()),
             *((kimi_chart_path,) if kimi_chart_path is not None else ()),
             *family_chart_paths,
             fine_tune_chart_path,

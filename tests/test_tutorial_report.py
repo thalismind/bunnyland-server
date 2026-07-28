@@ -17,6 +17,7 @@ from benchmarks.tutorial_report import (
     FineTuneComparisonRow,
     KimiFamilyRow,
     LabeledResult,
+    LatencyRow,
     ParameterScatterMetadata,
     StudyFamilyRow,
     _fine_tune_comparison_rows,
@@ -26,6 +27,7 @@ from benchmarks.tutorial_report import (
     render_family_progression_svg,
     render_fine_tune_comparison_svg,
     render_kimi_family_svg,
+    render_latency_provider_svg,
     render_map_svg,
     render_parameter_scatter_svg,
 )
@@ -353,7 +355,7 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
         "report.typ",
         "token-stats.md",
     }
-    assert len(tuple((output / "diagrams").glob("*.svg"))) == 12
+    assert len(tuple((output / "diagrams").glob("*.svg"))) == 13
     assert len(tuple((output / "diagrams").glob("*-tabletop.png"))) == 3
     markdown = (output / "report.md").read_text(encoding="utf-8")
     assert "# Test ladder" in markdown
@@ -386,6 +388,9 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
         "Across **6 scored decisions**, median end-to-end decision latency was **3.00s**"
         in markdown
     )
+    assert "### Local versus cloud latency" in markdown
+    assert "| Local | 6 | 3.00 | 4.00 | 4.00 | 4.00 |" in markdown
+    assert "diagrams/latency-provider-percentiles-chart.svg" in markdown
     assert (
         "| `large` | `Unlabeled` | `ollama-local` | 3 | 4.00 | 4.00 | 4.00 | "
         "5.0000 |"
@@ -403,6 +408,7 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
         "bell": "Unlabeled",
         "clover": "Unlabeled",
     }
+    assert paper_data["latency"]["provider_rows"][0]["provider"] == "Local"
     assert "## Additional analytical questions" in markdown
     assert "### How broadly were cohort gains shared?" in markdown
     assert "### Where does tutorial progress break?" in markdown
@@ -426,6 +432,7 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     assert '#image("diagrams/tutorial-success-trend-chart.svg"' in typst
     assert '#image("diagrams/threshold-attainment-chart.svg"' in typst
     assert '#image("diagrams/apple-parameter-milestone-scatter-chart.svg"' in typst
+    assert '#image("diagrams/latency-provider-percentiles-chart.svg"' in typst
     assert '#text("large")' in typst
     assert 'set table(inset: 4pt, stroke: 0.5pt + rgb("ccd3dc"))' in typst
     assert "== Latency distribution" in typst
@@ -435,6 +442,47 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     assert "== Additional analytical questions" in typst
     assert "=== How broadly were cohort gains shared?" in typst
     assert str(source.resolve()) not in typst
+
+
+def test_latency_provider_chart_splits_local_and_cloud():
+    rows = (
+        LatencyRow(
+            cohort=None,
+            model="Local",
+            provider="ollama-local",
+            decisions=100,
+            median_seconds=4,
+            p95_seconds=20,
+            p99_seconds=50,
+            maximum_seconds=80,
+            token_decisions=0,
+            output_tokens=0,
+            token_seconds=0,
+        ),
+        LatencyRow(
+            cohort=None,
+            model="Cloud",
+            provider="ollama-cloud, openrouter",
+            decisions=200,
+            median_seconds=2,
+            p95_seconds=10,
+            p99_seconds=30,
+            maximum_seconds=60,
+            token_decisions=0,
+            output_tokens=0,
+            token_seconds=0,
+        ),
+    )
+
+    svg = render_latency_provider_svg(rows)
+
+    assert "Decision latency by execution location" in svg
+    assert "Local" in svg
+    assert "100 decisions" in svg
+    assert "median 4.00s · p95 20.00s · p99 50.00s" in svg
+    assert "Cloud" in svg
+    assert "200 decisions" in svg
+    assert "seconds, log scale" in svg
 
 
 def test_build_report_accepts_derived_comparison_artifact(tmp_path):

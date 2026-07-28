@@ -402,9 +402,9 @@ The generated directory contains:
 - `report.typ`, the deterministic print layout.
 - `paper-data.json`, a portable, self-describing export of recommendations, threshold
   counts, matched quantization cells, family progression, parameter associations,
-  role-playing comparisons, latency, source commits, and publication figure paths. The
-  separate `bunnyland-whitepaper` repository consumes this file without importing or
-  launching the adjacent server checkout.
+  role-playing comparisons, overall and local/cloud latency, frontier cost, source commits,
+  and publication figure paths. The separate `bunnyland-whitepaper` repository consumes
+  this file without importing or launching the adjacent server checkout.
 - `diagrams/tutorial-success-trend-chart.svg`, authoritative session success by cohort and
   tutorial.
 - `diagrams/threshold-attainment-chart.svg`, the share of complete model/tutorial cells
@@ -417,6 +417,8 @@ The generated directory contains:
   names plotted across the latest applicable tutorial cohorts.
 - `diagrams/roleplay-finetune-comparison-chart.svg`, complete matched base/fine-tune cells;
   the chart says when no defensible matched cell is available.
+- `diagrams/latency-provider-percentiles-chart.svg`, median, p95, and p99 end-to-end
+  decision latency split between local and cloud execution.
 - `diagrams/*-tabletop.png`, illustrated top-down world maps in Bunnyland's visual style.
 - `diagrams/*-map.svg`, exact tutorial topology with milestone locations and persistent clue
   notes.
