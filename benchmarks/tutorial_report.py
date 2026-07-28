@@ -393,6 +393,8 @@ class QuantizationRow:
 class ModelArchitecture:
     display_name: str
     total_parameters: int
+    active_parameters: int | None = None
+    architecture: str = "dense"
 
 
 @dataclass(frozen=True)
@@ -400,6 +402,7 @@ class ParameterScatterMetadata:
     display_name: str
     parameter_count: int
     provider: str
+    architecture: str = "unspecified"
 
 
 @dataclass(frozen=True)
@@ -410,6 +413,7 @@ class ParameterScatterPoint:
     provider: str
     milestone_hits: int
     milestone_possible: int
+    architecture: str = "unspecified"
 
     @property
     def milestone_rate(self) -> float:
@@ -418,8 +422,68 @@ class ParameterScatterPoint:
         return self.milestone_hits / self.milestone_possible
 
 
+@dataclass(frozen=True)
+class ParameterAssociation:
+    tutorial: str
+    cohort: str | None
+    models: int
+    spearman_rho: float | None
+
+
+@dataclass(frozen=True)
+class StudyFamilyModel:
+    model: str
+    display_name: str
+    order: int
+
+
+@dataclass(frozen=True)
+class StudyFamilyRow:
+    family: str
+    model: str
+    display_name: str
+    order: int
+    tutorial: str
+    cohort: str | None
+    sessions: int
+    passes: int
+    milestone_hits: int
+    milestone_possible: int
+
+
+@dataclass(frozen=True)
+class FineTunePair:
+    label: str
+    base_model: str
+    tuned_model: str
+    caveat: str = ""
+
+
+@dataclass(frozen=True)
+class FineTuneComparisonRow:
+    label: str
+    cohort: str | None
+    tutorial: str
+    base_model: str
+    tuned_model: str
+    base_sessions: int
+    tuned_sessions: int
+    base_passes: int
+    tuned_passes: int
+    base_milestone_rate: float
+    tuned_milestone_rate: float
+    base_validity: float
+    tuned_validity: float
+    base_milestones_per_turn: float
+    tuned_milestones_per_turn: float
+    caveat: str
+
+
 MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
     "qwen3.5:4b": ModelArchitecture("Qwen 3.5 4B", 4_000_000_000),
+    "hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M": (
+        ModelArchitecture("Qwen 3.5 4B HauhauCS Q4", 4_000_000_000)
+    ),
     "bunnyland-rpmax-llama3.1-8b-q8-tools:latest": ModelArchitecture(
         "Llama 3.1 8B ArliAI RPMax v1.3 Q8",
         8_000_000_000,
@@ -429,6 +493,10 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
         8_000_000_000,
     ),
     "qwen3.5:9b": ModelArchitecture("Qwen 3.5 9B", 9_000_000_000),
+    (
+        "hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-"
+        "IMATRIX-MAX-MTP-GGUF:Q4_K_M"
+    ): ModelArchitecture("Qwen 3.5 9B Defiant Fable Q4", 9_000_000_000),
     "ornith:9b": ModelArchitecture("Ornith 1.0 9B", 9_000_000_000),
     "gpt-oss:20b-cloud": ModelArchitecture("GPT-OSS 20B", 21_000_000_000),
     "gemma4:cloud": ModelArchitecture("Gemma 4 31B", 30_700_000_000),
@@ -438,25 +506,52 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
     "nemotron-3-nano:30b-cloud": ModelArchitecture(
         "Nemotron 3 Nano 30B-A3B",
         31_600_000_000,
+        active_parameters=3_000_000_000,
+        architecture="moe",
     ),
     "laguna-xs-2.1:latest": ModelArchitecture("Laguna XS 2.1", 33_000_000_000),
     "ornith:35b": ModelArchitecture("Ornith 1.0 35B-A3B", 34_700_000_000),
     "qwen3.6:35b-a3b": ModelArchitecture(
         "Qwen 3.6 35B-A3B Q4",
         35_000_000_000,
+        active_parameters=3_000_000_000,
+        architecture="moe",
+    ),
+    "hf.co/Bahushruth/Qwen3.6-35B-A3B-abliterated-v4-GGUF:Q4_K_M": (
+        ModelArchitecture(
+            "Qwen 3.6 35B-A3B Bahushruth Q4",
+            35_000_000_000,
+            active_parameters=3_000_000_000,
+            architecture="moe",
+        )
     ),
     "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q6_K": ModelArchitecture(
         "Qwen 3.6 35B-A3B Q6",
         35_000_000_000,
+        active_parameters=3_000_000_000,
+        architecture="moe",
     ),
     "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:Q8_0": ModelArchitecture(
         "Qwen 3.6 35B-A3B Q8",
         35_000_000_000,
+        active_parameters=3_000_000_000,
+        architecture="moe",
+    ),
+    (
+        "hf.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-"
+        "V5-GGUF:Q8_0"
+    ): ModelArchitecture(
+        "Qwen 3.6 35B-A3B Genesis Hermes Q8",
+        35_000_000_000,
+        active_parameters=3_000_000_000,
+        architecture="moe",
     ),
     "gpt-oss:120b-cloud": ModelArchitecture("GPT-OSS 120B", 117_000_000_000),
     "nemotron-3-super:cloud": ModelArchitecture(
         "Nemotron 3 Super 120B-A12B",
         120_000_000_000,
+        active_parameters=12_000_000_000,
+        architecture="moe",
     ),
     "minimax-m2.7:cloud": ModelArchitecture("MiniMax M2.7", 230_000_000_000),
     "deepseek-v4-flash:cloud": ModelArchitecture(
@@ -466,11 +561,15 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
     "qwen3.5:397b-cloud": ModelArchitecture(
         "Qwen 3.5 397B-A17B",
         397_000_000_000,
+        active_parameters=17_000_000_000,
+        architecture="moe",
     ),
     "minimax-m3:cloud": ModelArchitecture("MiniMax M3", 428_000_000_000),
     "nemotron-3-ultra:cloud": ModelArchitecture(
         "Nemotron 3 Ultra 550B-A55B",
         550_000_000_000,
+        active_parameters=55_000_000_000,
+        architecture="moe",
     ),
     "mistral-large-3:675b-cloud": ModelArchitecture(
         "Mistral Large 3",
@@ -488,6 +587,82 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
         1_600_000_000_000,
     ),
     "moonshotai/kimi-k3": ModelArchitecture("Kimi K3", 2_800_000_000_000),
+}
+
+
+STUDY_FAMILIES: dict[str, tuple[StudyFamilyModel, ...]] = {
+    "Qwen": (
+        StudyFamilyModel("qwen3.5:4b", "Qwen 3.5 4B", 0),
+        StudyFamilyModel("qwen3.5:9b", "Qwen 3.5 9B", 1),
+        StudyFamilyModel("qwen3.6:35b-a3b", "Qwen 3.6 35B-A3B", 2),
+        StudyFamilyModel("qwen3.5:397b-cloud", "Qwen 3.5 397B-A17B", 3),
+        StudyFamilyModel("qwen/qwen3.7-flash", "Qwen 3.7 Flash", 4),
+        StudyFamilyModel("qwen/qwen3.7-plus", "Qwen 3.7 Plus", 5),
+    ),
+    "Kimi": (
+        StudyFamilyModel("kimi-k2.5", "Kimi K2.5", 0),
+        StudyFamilyModel("kimi-k2.6:cloud", "Kimi K2.6", 1),
+        StudyFamilyModel("kimi-k2.7-code:cloud", "Kimi K2.7 Code", 2),
+        StudyFamilyModel("moonshotai/kimi-k3", "Kimi K3", 3),
+    ),
+}
+
+
+FINE_TUNE_PAIRS = (
+    FineTunePair(
+        "Qwen 3.5 4B HauhauCS",
+        "qwen3.5:4b",
+        "hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M",
+    ),
+    FineTunePair(
+        "Qwen 3.5 9B Defiant Fable",
+        "qwen3.5:9b",
+        (
+            "hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-"
+            "IMATRIX-MAX-MTP-GGUF:Q4_K_M"
+        ),
+    ),
+    FineTunePair(
+        "Qwen 3.6 Bahushruth",
+        "qwen3.6:35b-a3b",
+        "hf.co/Bahushruth/Qwen3.6-35B-A3B-abliterated-v4-GGUF:Q4_K_M",
+    ),
+    FineTunePair(
+        "Qwen 3.6 Genesis Hermes",
+        "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:Q8_0",
+        (
+            "hf.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-"
+            "V5-GGUF:Q8_0"
+        ),
+    ),
+)
+
+
+ROLEPLAY_MODEL_NAMES: dict[str, str] = {
+    "bunnyland-rpmax-llama3.1-8b-q8-tools:latest": (
+        "Llama 3.1 8B ArliAI RPMax Q8"
+    ),
+    "bunnyland-stheno-llama3.1-8b-q8-tools:latest": (
+        "Llama 3.1 8B Stheno Q8"
+    ),
+    "hf.co/HauhauCS/Gemma4-31B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M": (
+        "Gemma 4 31B HauhauCS Q4"
+    ),
+    "hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M": (
+        "Qwen 3.5 4B HauhauCS Q4"
+    ),
+    (
+        "hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-"
+        "IMATRIX-MAX-MTP-GGUF:Q4_K_M"
+    ): "Qwen 3.5 9B Defiant Fable Q4",
+    "hf.co/Bahushruth/Qwen3.6-35B-A3B-abliterated-v4-GGUF:Q4_K_M": (
+        "Qwen 3.6 35B-A3B Bahushruth Q4"
+    ),
+    (
+        "hf.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-"
+        "V5-GGUF:Q8_0"
+    ): "Qwen 3.6 35B-A3B Genesis Hermes Q8",
+    "LESSTHANSUPER/RP-INK-Qwen2.5-32b:Q5_K_S": "Qwen 2.5 32B RP-INK Q5",
 }
 
 
@@ -1113,10 +1288,11 @@ def _milestone_matrix(
     milestones = tuple(milestone_order)
     models: dict[str, dict[str, list[bool]]] = defaultdict(lambda: defaultdict(list))
     for item in selected:
+        display_model = _paper_display_name(item.result.model)
         row_name = (
-            f"{item.result.model} / {item.cohort}"
+            f"{display_model} / {item.cohort}"
             if item.cohort is not None
-            else item.result.model
+            else display_model
         )
         for name, complete in item.result.milestone_results:
             models[row_name][name].append(complete)
@@ -1526,6 +1702,11 @@ def _parameter_scatter_metadata(
                 ),
                 parameter_count=parameter_count,
                 provider=_scatter_provider(source.manifest.provider),
+                architecture=(
+                    architecture.architecture
+                    if architecture is not None
+                    else "unspecified"
+                ),
             )
             key = (cohort, item.model)
             previous = metadata.get(key)
@@ -1556,20 +1737,20 @@ def _parameter_scatter_points(
     results: Sequence[LabeledResult],
     tutorial: str,
     metadata: dict[tuple[str | None, str], ParameterScatterMetadata],
-) -> tuple[str | None, tuple[ParameterScatterPoint, ...], int]:
+) -> tuple[str | None, tuple[ParameterScatterPoint, ...], tuple[str, ...]]:
     found, cohort = _latest_tutorial_cohort(results, tutorial)
     if not found:
-        return None, (), 0
+        return None, (), ()
     grouped: dict[str, list[SessionResult]] = defaultdict(list)
     for item in results:
         if item.cohort == cohort and item.result.tutorial == tutorial:
             grouped[item.result.model].append(item.result)
     points = []
-    missing_parameters = 0
+    missing_parameters = []
     for model, sessions in grouped.items():
         item_metadata = metadata.get((cohort, model))
         if item_metadata is None:
-            missing_parameters += 1
+            missing_parameters.append(model)
             continue
         points.append(
             ParameterScatterPoint(
@@ -1585,6 +1766,7 @@ def _parameter_scatter_points(
                 milestone_possible=sum(
                     len(session.milestone_results) for session in sessions
                 ),
+                architecture=item_metadata.architecture,
             )
         )
     return (
@@ -1599,7 +1781,209 @@ def _parameter_scatter_points(
                 ),
             )
         ),
-        missing_parameters,
+        tuple(sorted(missing_parameters, key=str.casefold)),
+    )
+
+
+def _rank_values(values: Sequence[float]) -> tuple[float, ...]:
+    ordered = sorted(enumerate(values), key=lambda item: item[1])
+    ranks = [0.0] * len(values)
+    index = 0
+    while index < len(ordered):
+        end = index + 1
+        while end < len(ordered) and ordered[end][1] == ordered[index][1]:
+            end += 1
+        average_rank = (index + end - 1) / 2
+        for original_index, _value in ordered[index:end]:
+            ranks[original_index] = average_rank
+        index = end
+    return tuple(ranks)
+
+
+def _spearman_rho(xs: Sequence[float], ys: Sequence[float]) -> float | None:
+    if len(xs) != len(ys):
+        raise ValueError("Spearman inputs must have equal lengths")
+    if len(xs) < 3 or len(set(xs)) < 2 or len(set(ys)) < 2:
+        return None
+    ranked_x = _rank_values(xs)
+    ranked_y = _rank_values(ys)
+    mean_x = statistics.mean(ranked_x)
+    mean_y = statistics.mean(ranked_y)
+    numerator = sum(
+        (x - mean_x) * (y - mean_y)
+        for x, y in zip(ranked_x, ranked_y, strict=True)
+    )
+    denominator = math.sqrt(
+        sum((x - mean_x) ** 2 for x in ranked_x)
+        * sum((y - mean_y) ** 2 for y in ranked_y)
+    )
+    return numerator / denominator if denominator else None
+
+
+def _parameter_associations(
+    results: Sequence[LabeledResult],
+    metadata: dict[tuple[str | None, str], ParameterScatterMetadata],
+) -> tuple[ParameterAssociation, ...]:
+    rows = []
+    for tutorial in TUTORIAL_MAPS:
+        cohort, points, _missing = _parameter_scatter_points(
+            results,
+            tutorial,
+            metadata,
+        )
+        rows.append(
+            ParameterAssociation(
+                tutorial=tutorial,
+                cohort=cohort,
+                models=len(points),
+                spearman_rho=_spearman_rho(
+                    tuple(math.log10(point.parameter_count) for point in points),
+                    tuple(point.milestone_rate for point in points),
+                ),
+            )
+        )
+    return tuple(rows)
+
+
+def _study_family_rows(
+    results: Sequence[LabeledResult],
+) -> tuple[StudyFamilyRow, ...]:
+    configured = {
+        model.model: (family, model)
+        for family, models in STUDY_FAMILIES.items()
+        for model in models
+    }
+    latest = {
+        tutorial: _latest_tutorial_cohort(results, tutorial)[1]
+        for tutorial in TUTORIAL_MAPS
+    }
+    grouped: dict[tuple[str, str, str | None], list[SessionResult]] = defaultdict(list)
+    for item in results:
+        if item.result.model not in configured:
+            continue
+        if item.cohort != latest.get(item.result.tutorial):
+            continue
+        grouped[
+            (item.result.model, item.result.tutorial, item.cohort)
+        ].append(item.result)
+    rows = []
+    for (model, tutorial, cohort), sessions in grouped.items():
+        family, config = configured[model]
+        rows.append(
+            StudyFamilyRow(
+                family=family,
+                model=model,
+                display_name=config.display_name,
+                order=config.order,
+                tutorial=tutorial,
+                cohort=cohort,
+                sessions=len(sessions),
+                passes=sum(session.passed for session in sessions),
+                milestone_hits=sum(
+                    complete
+                    for session in sessions
+                    for _milestone, complete in session.milestone_results
+                ),
+                milestone_possible=sum(
+                    len(session.milestone_results) for session in sessions
+                ),
+            )
+        )
+    tutorial_rank = {tutorial: index for index, tutorial in enumerate(TUTORIAL_MAPS)}
+    return tuple(
+        sorted(
+            rows,
+            key=lambda row: (
+                row.family,
+                tutorial_rank[row.tutorial],
+                row.order,
+                row.display_name,
+            ),
+        )
+    )
+
+
+def _session_metrics(
+    sessions: Sequence[SessionResult],
+) -> tuple[int, float, float, float]:
+    passes = sum(session.passed for session in sessions)
+    milestone_hits = sum(
+        complete
+        for session in sessions
+        for _milestone, complete in session.milestone_results
+    )
+    milestone_possible = sum(
+        len(session.milestone_results) for session in sessions
+    )
+    valid_actions = sum(session.valid_actions for session in sessions)
+    rejected_actions = sum(session.rejected_actions for session in sessions)
+    turns = sum(session.turns for session in sessions)
+    return (
+        passes,
+        milestone_hits / milestone_possible if milestone_possible else 0,
+        (
+            valid_actions / (valid_actions + rejected_actions)
+            if valid_actions + rejected_actions
+            else 1
+        ),
+        milestone_hits / turns if turns else 0,
+    )
+
+
+def _fine_tune_comparison_rows(
+    results: Sequence[LabeledResult],
+) -> tuple[FineTuneComparisonRow, ...]:
+    grouped: dict[tuple[str | None, str, str], list[SessionResult]] = defaultdict(list)
+    cohort_rank = {
+        cohort: index
+        for index, cohort in enumerate(
+            dict.fromkeys(item.cohort for item in results)
+        )
+    }
+    for item in results:
+        grouped[
+            (item.cohort, item.result.tutorial, item.result.model)
+        ].append(item.result)
+    rows = []
+    for pair in FINE_TUNE_PAIRS:
+        for cohort in cohort_rank:
+            for tutorial in TUTORIAL_MAPS:
+                base = grouped.get((cohort, tutorial, pair.base_model), ())
+                tuned = grouped.get((cohort, tutorial, pair.tuned_model), ())
+                if not base or not tuned:
+                    continue
+                base_metrics = _session_metrics(base)
+                tuned_metrics = _session_metrics(tuned)
+                rows.append(
+                    FineTuneComparisonRow(
+                        label=pair.label,
+                        cohort=cohort,
+                        tutorial=tutorial,
+                        base_model=pair.base_model,
+                        tuned_model=pair.tuned_model,
+                        base_sessions=len(base),
+                        tuned_sessions=len(tuned),
+                        base_passes=base_metrics[0],
+                        tuned_passes=tuned_metrics[0],
+                        base_milestone_rate=base_metrics[1],
+                        tuned_milestone_rate=tuned_metrics[1],
+                        base_validity=base_metrics[2],
+                        tuned_validity=tuned_metrics[2],
+                        base_milestones_per_turn=base_metrics[3],
+                        tuned_milestones_per_turn=tuned_metrics[3],
+                        caveat=pair.caveat,
+                    )
+                )
+    tutorial_rank = {tutorial: index for index, tutorial in enumerate(TUTORIAL_MAPS)}
+    return tuple(
+        sorted(
+            rows,
+            key=lambda row: (
+                row.label,
+                tutorial_rank[row.tutorial],
+                cohort_rank[row.cohort],
+            ),
+        )
     )
 
 
@@ -1630,16 +2014,19 @@ def _scatter_marker(
     provider: str,
     color: str,
     size: float,
+    architecture: str = "unspecified",
 ) -> str:
+    stroke = "#17202a" if architecture == "moe" else "white"
+    stroke_width = 3 if architecture == "moe" else 2
     if provider == "Local":
         return (
             f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{size:.1f}" '
-            f'fill="{color}" stroke="white" stroke-width="2"/>'
+            f'fill="{color}" stroke="{stroke}" stroke-width="{stroke_width}"/>'
         )
     return (
         f'<path d="M {x:.1f} {y - size:.1f} L {x + size:.1f} {y:.1f} '
         f'L {x:.1f} {y + size:.1f} L {x - size:.1f} {y:.1f} Z" '
-        f'fill="{color}" stroke="white" stroke-width="2"/>'
+        f'fill="{color}" stroke="{stroke}" stroke-width="{stroke_width}"/>'
     )
 
 
@@ -1650,7 +2037,7 @@ def render_parameter_scatter_svg(
 ) -> str:
     width, height = 1400, 790
     left, right, top, bottom = 100, 1340, 95, 500
-    cohort, points, missing_parameters = _parameter_scatter_points(
+    cohort, points, missing_parameter_models = _parameter_scatter_points(
         results,
         tutorial,
         metadata,
@@ -1666,7 +2053,8 @@ def render_parameter_scatter_svg(
     )
     lines.append(
         f'<text class="small" x="24" y="52">Latest applicable cohort: '
-        f"{escape(cohort_label)} · completed milestone checks / possible milestone checks"
+        f"{escape(cohort_label)} · Y axis is −log10(milestone shortfall); "
+        "perfect scores use a half-milestone correction"
         "</text>"
     )
     if not points:
@@ -1690,11 +2078,32 @@ def render_parameter_scatter_svg(
         fraction = (math.log10(parameter_count) - log_min) / (log_max - log_min)
         return left + (right - left) * fraction
 
-    def y_position(rate: float) -> float:
-        return bottom - (bottom - top) * rate
+    def completion_score(rate: float, possible: int) -> float:
+        shortfall = max(0.5 / max(1, possible), 1 - rate)
+        return -math.log10(shortfall)
 
-    for percentage in range(0, 101, 20):
-        y = y_position(percentage / 100)
+    maximum_completion_score = max(
+        completion_score(point.milestone_rate, point.milestone_possible)
+        for point in points
+    )
+    maximum_completion_score = max(maximum_completion_score, 1)
+
+    def y_position(score: float) -> float:
+        return bottom - (bottom - top) * score / maximum_completion_score
+
+    completion_ticks = (
+        (0, 0.0),
+        (50, -math.log10(0.5)),
+        (75, -math.log10(0.25)),
+        (90, 1.0),
+        (95, -math.log10(0.05)),
+        (99, 2.0),
+        (100, maximum_completion_score),
+    )
+    for percentage, score in completion_ticks:
+        if score > maximum_completion_score:
+            continue
+        y = y_position(score)
         lines.append(
             f'<line class="grid" x1="{left}" y1="{y:.1f}" '
             f'x2="{right}" y2="{y:.1f}"/>'
@@ -1738,7 +2147,7 @@ def render_parameter_scatter_svg(
             (
                 f'<text class="label" text-anchor="middle" '
                 f'transform="translate(24 {(top + bottom) / 2:.1f}) rotate(-90)">'
-                "Milestone completion rate</text>"
+                "Milestone completion (log shortfall scale)</text>"
             ),
         )
     )
@@ -1765,14 +2174,17 @@ def render_parameter_scatter_svg(
     for index, point in enumerate(points, start=1):
         offset_x, offset_y = point_offsets[index - 1]
         x = x_position(point.parameter_count) + offset_x
-        y = y_position(point.milestone_rate) + offset_y
+        y = y_position(
+            completion_score(point.milestone_rate, point.milestone_possible)
+        ) + offset_y
         color = SCATTER_PROVIDER_COLORS[point.provider]
         lines.append(
             f'<g data-model="{escape(point.model)}" '
             f'data-parameters="{point.parameter_count}" '
             f'data-milestone-rate="{point.milestone_rate:.6f}" '
             f'data-cohort="{escape(cohort_label)}" '
-            f'data-provider="{escape(point.provider)}">'
+            f'data-provider="{escape(point.provider)}" '
+            f'data-architecture="{escape(point.architecture)}">'
         )
         lines.append(
             f"<title>{escape(point.display_name)}: "
@@ -1787,6 +2199,7 @@ def render_parameter_scatter_svg(
                 provider=point.provider,
                 color=color,
                 size=9,
+                architecture=point.architecture,
             )
         )
         lines.append(
@@ -1812,6 +2225,7 @@ def render_parameter_scatter_svg(
                 provider=point.provider,
                 color=color,
                 size=6,
+                architecture=point.architecture,
             )
         )
         lines.append(
@@ -1834,11 +2248,15 @@ def render_parameter_scatter_svg(
             )
         )
         lines.append(f'<text class="small" x="{x + 12}" y="58">{provider}</text>')
-    if missing_parameters:
+    lines.append(
+        '<text class="small" x="24" y="76">'
+        "Dark marker outline: known mixture-of-experts architecture.</text>"
+    )
+    if missing_parameter_models:
         lines.append(
             f'<text class="small" x="24" y="{height - 12}">'
-            f"{missing_parameters} model(s) omitted because no positive parameter count "
-            "was available.</text>"
+            f"No published architecture total was available for "
+            f"{len(missing_parameter_models)} model(s); sizes were not inferred.</text>"
         )
     lines.append("</svg>")
     return "\n".join(lines) + "\n"
@@ -2061,6 +2479,176 @@ def render_kimi_family_svg(rows: Sequence[KimiFamilyRow]) -> str:
             f"{escape(row.provider)} · {row.passes}/{row.sessions} passes · "
             f"{row.milestone_hits}/{row.milestone_possible} milestones</text>"
         )
+    lines.append("</svg>")
+    return "\n".join(lines) + "\n"
+
+
+def render_family_progression_svg(
+    family: str,
+    rows: Sequence[StudyFamilyRow],
+) -> str:
+    width, height = 1400, 650
+    left, right, top, bottom = 90, 1360, 120, 500
+    lines = _svg_start(width, height, f"{family} family gameplay progression")
+    lines.insert(
+        2,
+        ".axis{stroke:#425466;stroke-width:2}"
+        ".value{font-family:sans-serif;font-size:10px;font-weight:700;fill:#17202a}",
+    )
+    family_rows = tuple(row for row in rows if row.family == family)
+    if len({row.model for row in family_rows}) < 2:
+        lines.append(
+            f'<text class="label" x="24" y="70">At least two {escape(family)} '
+            "family models are required.</text>"
+        )
+        lines.append("</svg>")
+        return "\n".join(lines) + "\n"
+    lines.append(
+        '<text class="small" x="24" y="52">'
+        "Latest applicable cohort per tutorial · milestone completion; labels show "
+        "authoritative session passes.</text>"
+    )
+    panel_gap = 35
+    panel_width = (right - left - panel_gap * 2) / 3
+    for panel_index, tutorial in enumerate(TUTORIAL_MAPS):
+        selected = tuple(
+            sorted(
+                (row for row in family_rows if row.tutorial == tutorial),
+                key=lambda row: row.order,
+            )
+        )
+        panel_left = left + panel_index * (panel_width + panel_gap)
+        panel_right = panel_left + panel_width
+        lines.append(
+            f'<text class="label" text-anchor="middle" '
+            f'x="{(panel_left + panel_right) / 2:.1f}" y="{top - 24}">'
+            f"{escape(tutorial.title())}</text>"
+        )
+        for percentage in range(0, 101, 25):
+            y = bottom - (bottom - top) * percentage / 100
+            lines.append(
+                f'<line class="grid" x1="{panel_left:.1f}" y1="{y:.1f}" '
+                f'x2="{panel_right:.1f}" y2="{y:.1f}"/>'
+            )
+            lines.append(
+                f'<text class="small" text-anchor="end" x="{panel_left - 7:.1f}" '
+                f'y="{y + 4:.1f}">{percentage}%</text>'
+            )
+        lines.extend(
+            (
+                f'<line class="axis" x1="{panel_left:.1f}" y1="{top}" '
+                f'x2="{panel_left:.1f}" y2="{bottom}"/>',
+                f'<line class="axis" x1="{panel_left:.1f}" y1="{bottom}" '
+                f'x2="{panel_right:.1f}" y2="{bottom}"/>',
+            )
+        )
+        if not selected:
+            continue
+        step = panel_width / max(1, len(selected) - 1)
+        points = tuple(
+            (
+                panel_left + index * step,
+                bottom
+                - (bottom - top)
+                * row.milestone_hits
+                / max(1, row.milestone_possible),
+            )
+            for index, row in enumerate(selected)
+        )
+        for previous, current in zip(points, points[1:], strict=False):
+            lines.append(
+                f'<line x1="{previous[0]:.1f}" y1="{previous[1]:.1f}" '
+                f'x2="{current[0]:.1f}" y2="{current[1]:.1f}" '
+                'stroke="#1b9e77" stroke-width="3"/>'
+            )
+        for row, (x, y) in zip(selected, points, strict=True):
+            lines.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="7" fill="#1b9e77" '
+                'stroke="white" stroke-width="2"/>'
+            )
+            lines.append(
+                f'<text class="value" text-anchor="middle" x="{x:.1f}" '
+                f'y="{max(top + 10, y - 11):.1f}">'
+                f"{row.passes}/{row.sessions}</text>"
+            )
+            lines.append(
+                f'<text class="small" text-anchor="middle" x="{x:.1f}" '
+                f'y="{bottom + 24:.1f}">'
+                f"{escape(_scatter_key_name(row.display_name, 20))}</text>"
+            )
+        cohort = selected[0].cohort
+        lines.append(
+            f'<text class="small" text-anchor="middle" '
+            f'x="{(panel_left + panel_right) / 2:.1f}" y="{bottom + 52}">'
+            f"{escape(_cohort_label(cohort))}</text>"
+        )
+    lines.append(
+        '<text class="small" x="24" y="600">'
+        "Lines organize tested releases within a named family; they do not imply equal "
+        "parameter count, training data, serving stack, or per-token compute.</text>"
+    )
+    lines.append("</svg>")
+    return "\n".join(lines) + "\n"
+
+
+def render_fine_tune_comparison_svg(
+    rows: Sequence[FineTuneComparisonRow],
+) -> str:
+    width = 1400
+    selected = tuple(
+        row
+        for row in rows
+        if row.base_sessions >= 5 and row.tuned_sessions >= 5
+    )
+    height = max(320, 130 + 44 * len(selected))
+    lines = _svg_start(width, height, "Role-playing fine-tunes under tool calling")
+    lines.insert(
+        2,
+        ".axis{stroke:#425466;stroke-width:2}"
+        ".value{font-family:sans-serif;font-size:10px;font-weight:700;fill:#17202a}",
+    )
+    lines.append(
+        '<text class="small" x="24" y="52">'
+        "Matched complete cells · milestone-completion change from base model to "
+        "role-playing fine-tune.</text>"
+    )
+    if not selected:
+        lines.append(
+            '<text class="label" x="24" y="88">'
+            "No matched complete five-session cells are available yet.</text>"
+        )
+        lines.append("</svg>")
+        return "\n".join(lines) + "\n"
+    center = 1020
+    scale = 3.1
+    lines.append(
+        f'<line class="axis" x1="{center}" y1="82" x2="{center}" '
+        f'y2="{height - 42}"/>'
+    )
+    for index, row in enumerate(selected):
+        y = 112 + index * 44
+        delta = 100 * (row.tuned_milestone_rate - row.base_milestone_rate)
+        end = center + delta * scale
+        color = "#1b9e77" if delta >= 0 else "#d95f02"
+        lines.append(
+            f'<text class="small" x="24" y="{y + 4}">'
+            f"{escape(row.label)} · {escape(row.tutorial.title())} · "
+            f"{escape(_cohort_label(row.cohort))}</text>"
+        )
+        lines.append(
+            f'<line x1="{center}" y1="{y}" x2="{end:.1f}" y2="{y}" '
+            f'stroke="{color}" stroke-width="10"/>'
+        )
+        anchor = "start" if delta >= 0 else "end"
+        offset = 8 if delta >= 0 else -8
+        lines.append(
+            f'<text class="value" text-anchor="{anchor}" x="{end + offset:.1f}" '
+            f'y="{y + 4}">{delta:+.1f} pp</text>'
+        )
+    lines.append(
+        f'<text class="small" text-anchor="middle" x="{center}" '
+        f'y="{height - 16}">0 pp</text>'
+    )
     lines.append("</svg>")
     return "\n".join(lines) + "\n"
 
@@ -2620,6 +3208,304 @@ def _quantization_table(rows: Sequence[QuantizationRow]) -> str:
             f"`{row.model}` | {row.passes}/{row.sessions} |"
         )
     return "\n".join(lines)
+
+
+def _paper_display_name(model: str) -> str:
+    architecture = MODEL_ARCHITECTURES.get(model)
+    if architecture is not None:
+        return architecture.display_name
+    for models in STUDY_FAMILIES.values():
+        for item in models:
+            if item.model == model:
+                return item.display_name
+    pricing = FRONTIER_PRICING.get(model)
+    if pricing is not None:
+        return pricing.display_name
+    if model.startswith("qwen/"):
+        return model.removeprefix("qwen/").replace("-", " ").title()
+    return _scatter_key_name(model, 48)
+
+
+def _paper_recommendations(
+    results: Sequence[LabeledResult],
+) -> tuple[dict[str, JsonValue], ...]:
+    cohort_order = tuple(
+        dict.fromkeys(item.cohort for item in results if item.cohort is not None)
+    )
+    reference_cohort: str | None = None
+    for cohort in cohort_order:
+        present = {
+            item.result.tutorial
+            for item in results
+            if item.cohort == cohort
+        }
+        if set(TUTORIAL_MAPS).issubset(present):
+            reference_cohort = cohort
+    grouped: dict[tuple[str, str], list[SessionResult]] = defaultdict(list)
+    for item in results:
+        if item.cohort == reference_cohort:
+            grouped[(item.result.model, item.result.tutorial)].append(item.result)
+    candidates = []
+    for model in sorted({model for model, _tutorial in grouped}):
+        tutorial_sessions = {
+            tutorial: grouped.get((model, tutorial), ())
+            for tutorial in TUTORIAL_MAPS
+        }
+        if any(len(sessions) < 5 for sessions in tutorial_sessions.values()):
+            continue
+        all_sessions = tuple(
+            session
+            for tutorial in TUTORIAL_MAPS
+            for session in tutorial_sessions[tutorial]
+        )
+        milestone_hits = sum(
+            complete
+            for session in all_sessions
+            for _milestone, complete in session.milestone_results
+        )
+        milestone_possible = sum(
+            len(session.milestone_results) for session in all_sessions
+        )
+        tutorial_passes = {
+            tutorial: sum(session.passed for session in sessions)
+            for tutorial, sessions in tutorial_sessions.items()
+        }
+        candidates.append(
+            (
+                tutorial_passes["clover"],
+                sum(tutorial_passes.values()),
+                milestone_hits / milestone_possible,
+                model,
+                tutorial_passes,
+                milestone_hits,
+                milestone_possible,
+            )
+        )
+    ranked = sorted(
+        candidates,
+        key=lambda item: (-item[0], -item[1], -item[2], item[3].casefold()),
+    )[:5]
+    return tuple(
+        {
+            "rank": rank,
+            "model": item[3],
+            "display_name": _paper_display_name(item[3]),
+            "cohort": reference_cohort or "",
+            "best_level": (
+                "Complex worlds"
+                if item[4]["clover"] >= 4
+                else "Town and NPCs"
+                if item[4]["bell"] >= 4
+                else "Basic gameplay"
+            ),
+            "passes": sum(item[4].values()),
+            "sessions": 15,
+            "milestone_hits": item[5],
+            "milestone_possible": item[6],
+            "apple_passes": item[4]["apple"],
+            "bell_passes": item[4]["bell"],
+            "clover_passes": item[4]["clover"],
+        }
+        for rank, item in enumerate(ranked, start=1)
+    )
+
+
+def _source_commits(
+    sources: Sequence[tuple[str | None, LoadedSource]],
+) -> tuple[dict[str, JsonValue], ...]:
+    adapter = TypeAdapter(dict[str, JsonValue])
+    rows = []
+    for cohort, source in sources:
+        manifest = adapter.validate_json(
+            (source.path / "manifest.json").read_text(encoding="utf-8")
+        )
+        commit = manifest.get("commit")
+        rows.append(
+            {
+                "cohort": cohort or "",
+                "source": source.path.name,
+                "commit": commit if isinstance(commit, str) else "",
+                "sessions": len(source.results),
+            }
+        )
+    return tuple(rows)
+
+
+def _roleplay_model_rows(
+    results: Sequence[LabeledResult],
+) -> tuple[dict[str, JsonValue], ...]:
+    cohort_order = tuple(
+        dict.fromkeys(item.cohort for item in results if item.cohort is not None)
+    )
+    reference_cohort: str | None = None
+    for cohort in cohort_order:
+        present = {
+            item.result.tutorial
+            for item in results
+            if item.cohort == cohort
+        }
+        if set(TUTORIAL_MAPS).issubset(present):
+            reference_cohort = cohort
+    grouped: dict[str, list[SessionResult]] = defaultdict(list)
+    for item in results:
+        if (
+            item.cohort == reference_cohort
+            and item.result.model in ROLEPLAY_MODEL_NAMES
+        ):
+            grouped[item.result.model].append(item.result)
+    rows = []
+    for model, sessions in grouped.items():
+        tutorials = {session.tutorial for session in sessions}
+        if len(sessions) < 15 or not set(TUTORIAL_MAPS).issubset(tutorials):
+            continue
+        passes, milestone_rate, validity, milestones_per_turn = _session_metrics(
+            sessions
+        )
+        rows.append(
+            {
+                "model": model,
+                "display_name": ROLEPLAY_MODEL_NAMES[model],
+                "cohort": reference_cohort or "",
+                "sessions": len(sessions),
+                "passes": passes,
+                "milestone_rate": milestone_rate,
+                "validity": validity,
+                "milestones_per_turn": milestones_per_turn,
+            }
+        )
+    return tuple(
+        sorted(
+            rows,
+            key=lambda row: (
+                -float(row["milestone_rate"]),
+                str(row["display_name"]).casefold(),
+            ),
+        )
+    )
+
+
+def _write_paper_data(
+    output: Path,
+    *,
+    title: str,
+    results: Sequence[LabeledResult],
+    sources: Sequence[tuple[str | None, LoadedSource]],
+    difficulty_rows: Sequence[DifficultyRow],
+    parameter_associations: Sequence[ParameterAssociation],
+    family_rows: Sequence[StudyFamilyRow],
+    fine_tune_rows: Sequence[FineTuneComparisonRow],
+    quantization_rows: Sequence[QuantizationRow],
+    latency: LatencyAnalysis | None,
+    figure_paths: Sequence[str],
+) -> None:
+    latest_cohorts = {
+        tutorial: _cohort_label(_latest_tutorial_cohort(results, tutorial)[1])
+        for tutorial in TUTORIAL_MAPS
+    }
+    payload: dict[str, JsonValue] = {
+        "schema_version": 1,
+        "title": title,
+        "completed_sessions": len(results),
+        "authoritative_passes": sum(item.result.passed for item in results),
+        "cohort_order": [
+            cohort
+            for cohort in dict.fromkeys(item.cohort for item in results)
+            if cohort is not None
+        ],
+        "latest_cohort_by_tutorial": latest_cohorts,
+        "recommendations": list(_paper_recommendations(results)),
+        "difficulty": [
+            {
+                "cohort": row.cohort or "",
+                "tutorial": row.tutorial,
+                "complete_cells": row.complete_cells,
+                "possible": row.possible_passes,
+                "likely": row.likely_passes,
+                "consistent": row.consistent_passes,
+            }
+            for row in difficulty_rows
+        ],
+        "parameter_associations": [
+            {
+                "tutorial": row.tutorial,
+                "cohort": row.cohort or "",
+                "models": row.models,
+                "spearman_rho": row.spearman_rho,
+            }
+            for row in parameter_associations
+        ],
+        "families": [
+            {
+                "family": row.family,
+                "model": row.model,
+                "display_name": row.display_name,
+                "order": row.order,
+                "tutorial": row.tutorial,
+                "cohort": row.cohort or "",
+                "sessions": row.sessions,
+                "passes": row.passes,
+                "milestone_hits": row.milestone_hits,
+                "milestone_possible": row.milestone_possible,
+            }
+            for row in family_rows
+        ],
+        "fine_tune_comparisons": [
+            {
+                "label": row.label,
+                "cohort": row.cohort or "",
+                "tutorial": row.tutorial,
+                "base_model": row.base_model,
+                "tuned_model": row.tuned_model,
+                "base_sessions": row.base_sessions,
+                "tuned_sessions": row.tuned_sessions,
+                "base_passes": row.base_passes,
+                "tuned_passes": row.tuned_passes,
+                "base_milestone_rate": row.base_milestone_rate,
+                "tuned_milestone_rate": row.tuned_milestone_rate,
+                "base_validity": row.base_validity,
+                "tuned_validity": row.tuned_validity,
+                "base_milestones_per_turn": row.base_milestones_per_turn,
+                "tuned_milestones_per_turn": row.tuned_milestones_per_turn,
+                "caveat": row.caveat,
+            }
+            for row in fine_tune_rows
+        ],
+        "roleplay_models": list(_roleplay_model_rows(results)),
+        "quantization": [
+            {
+                "cohort": row.cohort or "",
+                "tutorial": row.tutorial,
+                "model": row.model,
+                "display_name": _paper_display_name(row.model),
+                "quantization": row.quantization,
+                "passes": row.passes,
+                "sessions": row.sessions,
+            }
+            for row in quantization_rows
+        ],
+        "latency": (
+            {
+                "decisions": latency.overall.decisions,
+                "median_seconds": latency.overall.median_seconds,
+                "p95_seconds": latency.overall.p95_seconds,
+                "p99_seconds": latency.overall.p99_seconds,
+                "maximum_seconds": latency.overall.maximum_seconds,
+            }
+            if latency is not None
+            else {}
+        ),
+        "figures": list(figure_paths),
+        "appendices": [
+            "comparison-table.md",
+            "token-stats.md",
+            "evidence-sources.md",
+        ],
+        "sources": list(_source_commits(sources)),
+    }
+    (output / "paper-data.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _token_latency_cell(value: float | None) -> str:
@@ -3994,6 +4880,9 @@ def build_report(
     replacements = _replacement_mapping(sources)
     difficulty_rows = _difficulty_rows(results)
     scatter_metadata = _parameter_scatter_metadata(labeled_sources)
+    parameter_associations = _parameter_associations(results, scatter_metadata)
+    family_rows = _study_family_rows(results)
+    fine_tune_rows = _fine_tune_comparison_rows(results)
     rows = _model_rows(results, _model_usage(labeled_sources))
     latency = _latency_analysis(labeled_sources)
     output.mkdir(parents=True, exist_ok=True)
@@ -4028,6 +4917,22 @@ def build_report(
         kimi_chart = diagrams / "kimi-family-comparison-chart.svg"
         kimi_chart.write_text(render_kimi_family_svg(kimi_rows), encoding="utf-8")
         kimi_chart_path = str(kimi_chart.relative_to(output))
+    family_chart_paths: list[str] = []
+    for family in STUDY_FAMILIES:
+        if len({row.model for row in family_rows if row.family == family}) < 2:
+            continue
+        family_chart = diagrams / f"{family.casefold()}-family-progression-chart.svg"
+        family_chart.write_text(
+            render_family_progression_svg(family, family_rows),
+            encoding="utf-8",
+        )
+        family_chart_paths.append(str(family_chart.relative_to(output)))
+    fine_tune_chart = diagrams / "roleplay-finetune-comparison-chart.svg"
+    fine_tune_chart.write_text(
+        render_fine_tune_comparison_svg(fine_tune_rows),
+        encoding="utf-8",
+    )
+    fine_tune_chart_path = str(fine_tune_chart.relative_to(output))
     diagram_paths: list[str] = []
     for tutorial, spec in TUTORIAL_MAPS.items():
         tabletop_path = diagrams / f"{tutorial}-tabletop.png"
@@ -4167,6 +5072,27 @@ def build_report(
     (output / "evidence-sources.md").write_text(evidence_sources, encoding="utf-8")
     (output / "comparison-table.md").write_text(_comparison_table(rows) + "\n", encoding="utf-8")
     (output / "token-stats.md").write_text(_token_table(rows) + "\n", encoding="utf-8")
+    _write_paper_data(
+        output,
+        title=title,
+        results=results,
+        sources=labeled_sources,
+        difficulty_rows=difficulty_rows,
+        parameter_associations=parameter_associations,
+        family_rows=family_rows,
+        fine_tune_rows=fine_tune_rows,
+        quantization_rows=quantization_rows,
+        latency=latency,
+        figure_paths=(
+            *diagram_paths,
+            *chart_paths,
+            *scatter_chart_paths,
+            *((kimi_chart_path,) if kimi_chart_path is not None else ()),
+            *family_chart_paths,
+            fine_tune_chart_path,
+            *((frontier_chart_path,) if frontier_chart_path is not None else ()),
+        ),
+    )
 
 
 def package_report(report: Path, archive: Path) -> None:
@@ -4177,6 +5103,7 @@ def package_report(report: Path, archive: Path) -> None:
         "token-stats.md",
         "findings.md",
         "evidence-sources.md",
+        "paper-data.json",
     )
     diagrams = tuple(
         sorted(

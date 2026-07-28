@@ -400,13 +400,23 @@ The generated directory contains:
   median seconds per turn, and completed milestones per million total tokens for every
   model.
 - `report.typ`, the deterministic print layout.
+- `paper-data.json`, a portable, self-describing export of recommendations, threshold
+  counts, matched quantization cells, family progression, parameter associations,
+  role-playing comparisons, latency, source commits, and publication figure paths. The
+  separate `bunnyland-whitepaper` repository consumes this file without importing or
+  launching the adjacent server checkout.
 - `diagrams/tutorial-success-trend-chart.svg`, authoritative session success by cohort and
   tutorial.
 - `diagrams/threshold-attainment-chart.svg`, the share of complete model/tutorial cells
   reaching possible, likely, and consistent pass.
 - `diagrams/*-parameter-milestone-scatter-chart.svg`, one plot per tutorial comparing total
-  upstream architecture parameters on a logarithmic scale with milestone completion in the
-  latest supplied cohort containing that tutorial.
+  upstream architecture parameters on a logarithmic X axis with negative-log milestone
+  shortfall on the Y axis. Percentage ticks preserve interpretation while spreading out
+  the crowded 90--100% completion range.
+- `diagrams/*-family-progression-chart.svg`, canonical human-facing Qwen and Kimi family
+  names plotted across the latest applicable tutorial cohorts.
+- `diagrams/roleplay-finetune-comparison-chart.svg`, complete matched base/fine-tune cells;
+  the chart says when no defensible matched cell is available.
 - `diagrams/*-tabletop.png`, illustrated top-down world maps in Bunnyland's visual style.
 - `diagrams/*-map.svg`, exact tutorial topology with milestone locations and persistent clue
   notes.
@@ -433,10 +443,11 @@ scripts/package-tutorial-report \
   artifacts/benchmarks/tutorials/bunnyland-tutorial-report.zip
 ```
 
-The ZIP uses a report-only allowlist: Markdown, PDF, copy-ready tables, findings when
-present, and diagrams. It deliberately excludes raw prompts, provider responses, thinking,
-traces, manifests, logs, and the Typst source. Generated reports identify evidence sources
-by artifact directory name instead of recording local absolute paths.
+The ZIP uses a report-only allowlist: Markdown, PDF, `paper-data.json`, copy-ready tables,
+findings when present, and diagrams. It deliberately excludes raw prompts, provider
+responses, thinking, traces, manifests, logs, and the Typst source. Generated reports
+identify evidence sources by artifact directory name instead of recording local absolute
+paths.
 
 This is a character-tool reasoning benchmark. It does not test whether a human can discover
 controls, read browser layout, interpret rendering, claim a character, or keep state aligned

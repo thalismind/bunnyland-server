@@ -14,11 +14,17 @@ from benchmarks.tutorial_report import (
     MODEL_ARCHITECTURES,
     TUTORIAL_MAPS,
     CohortInput,
+    FineTuneComparisonRow,
     KimiFamilyRow,
     LabeledResult,
     ParameterScatterMetadata,
+    StudyFamilyRow,
+    _fine_tune_comparison_rows,
+    _spearman_rho,
     build_report,
     package_report,
+    render_family_progression_svg,
+    render_fine_tune_comparison_svg,
     render_kimi_family_svg,
     render_map_svg,
     render_parameter_scatter_svg,
@@ -342,11 +348,12 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
         "comparison-table.md",
         "diagrams",
         "evidence-sources.md",
+        "paper-data.json",
         "report.md",
         "report.typ",
         "token-stats.md",
     }
-    assert len(tuple((output / "diagrams").glob("*.svg"))) == 11
+    assert len(tuple((output / "diagrams").glob("*.svg"))) == 12
     assert len(tuple((output / "diagrams").glob("*-tabletop.png"))) == 3
     markdown = (output / "report.md").read_text(encoding="utf-8")
     assert "# Test ladder" in markdown
@@ -388,6 +395,14 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     )[0]
     assert "Token coverage" not in latency_section
     assert "Sec/output token" not in markdown
+    paper_data = json.loads((output / "paper-data.json").read_text(encoding="utf-8"))
+    assert paper_data["schema_version"] == 1
+    assert paper_data["completed_sessions"] == 6
+    assert paper_data["latest_cohort_by_tutorial"] == {
+        "apple": "Unlabeled",
+        "bell": "Unlabeled",
+        "clover": "Unlabeled",
+    }
     assert "## Additional analytical questions" in markdown
     assert "### How broadly were cohort gains shared?" in markdown
     assert "### Where does tutorial progress break?" in markdown
@@ -584,12 +599,32 @@ def test_parameter_scatter_uses_latest_applicable_tutorial_cohort(tmp_path):
     assert 'data-parameters="4000000000"' in apple
     assert 'data-milestone-rate="0.500000"' in apple
     assert "Total architecture parameters (log scale)" in apple
-    assert "Milestone completion rate" in apple
+    assert "Milestone completion (log shortfall scale)" in apple
+    assert "−log10(milestone shortfall)" in apple
     assert "Qwen" not in apple
 
 
+def test_parameter_scatter_explains_unpublished_sizes():
+    results = (
+        LabeledResult("v1", _result("small", "apple", passed=True)),
+        LabeledResult("v1", _result("undisclosed", "apple", passed=True)),
+    )
+    metadata = {
+        ("v1", "small"): ParameterScatterMetadata(
+            display_name="Small",
+            parameter_count=4_000_000_000,
+            provider="Local",
+        ),
+    }
+
+    svg = render_parameter_scatter_svg(results, "apple", metadata)
+
+    assert "No published architecture total was available for 1 model(s)" in svg
+    assert "sizes were not inferred" in svg
+
+
 def test_parameter_scatter_catalogue_covers_full_study_roster():
-    assert len(MODEL_ARCHITECTURES) == 28
+    assert len(MODEL_ARCHITECTURES) == 32
     assert (
         MODEL_ARCHITECTURES["deepseek-v4-flash:cloud"].total_parameters
         == 284_000_000_000
@@ -696,6 +731,95 @@ def test_kimi_family_chart_compares_capability_latency_and_efficiency():
     assert "K3 used OpenRouter" in svg
     for row in rows:
         assert f'data-model="{row.model}"' in svg
+
+
+def test_family_progression_uses_canonical_display_names():
+    rows = tuple(
+        StudyFamilyRow(
+            family="Qwen",
+            model=model,
+            display_name=display_name,
+            order=order,
+            tutorial=tutorial,
+            cohort="v2",
+            sessions=5,
+            passes=passes,
+            milestone_hits=40 + passes,
+            milestone_possible=50,
+        )
+        for tutorial in ("apple", "bell", "clover")
+        for model, display_name, order, passes in (
+            ("qwen3.5:9b", "Qwen 3.5 9B", 0, 3),
+            ("qwen/qwen3.7-plus", "Qwen 3.7 Plus", 1, 5),
+        )
+    )
+
+    svg = render_family_progression_svg("Qwen", rows)
+
+    assert "Qwen 3.5 9B" in svg
+    assert "Qwen 3.7 Plus" in svg
+    assert "qwen/qwen3.7-plus" not in svg
+    assert "Lines organize tested releases" in svg
+
+
+def test_fine_tune_comparison_requires_matched_complete_cells():
+    base_model = "qwen3.5:4b"
+    tuned_model = (
+        "hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M"
+    )
+    results = tuple(
+        LabeledResult(
+            "v2",
+            _result(
+                model,
+                "apple",
+                passed=run <= passes,
+                run=run,
+            ),
+        )
+        for model, passes in ((base_model, 3), (tuned_model, 4))
+        for run in range(1, 6)
+    )
+
+    rows = _fine_tune_comparison_rows(results)
+
+    assert len(rows) == 1
+    assert rows[0].label == "Qwen 3.5 4B HauhauCS"
+    assert rows[0].base_passes == 3
+    assert rows[0].tuned_passes == 4
+    assert "Qwen 3.5 4B HauhauCS" in render_fine_tune_comparison_svg(rows)
+
+
+def test_fine_tune_chart_excludes_partial_cells():
+    row = FineTuneComparisonRow(
+        label="Qwen 3.5 4B HauhauCS",
+        cohort="v2",
+        tutorial="apple",
+        base_model="base",
+        tuned_model="tuned",
+        base_sessions=5,
+        tuned_sessions=4,
+        base_passes=3,
+        tuned_passes=4,
+        base_milestone_rate=0.7,
+        tuned_milestone_rate=0.8,
+        base_validity=0.9,
+        tuned_validity=0.9,
+        base_milestones_per_turn=0.2,
+        tuned_milestones_per_turn=0.2,
+        caveat="",
+    )
+
+    svg = render_fine_tune_comparison_svg((row,))
+
+    assert "No matched complete five-session cells" in svg
+
+
+def test_spearman_handles_ties_and_undefined_inputs():
+    assert _spearman_rho((1, 2, 3, 4), (10, 20, 30, 40)) == pytest.approx(1)
+    assert _spearman_rho((1, 2, 3, 4), (40, 30, 20, 10)) == pytest.approx(-1)
+    assert _spearman_rho((1, 2), (3, 4)) is None
+    assert _spearman_rho((1, 1, 1), (1, 2, 3)) is None
 
 
 def test_cohort_report_distinguishes_gaps_from_not_applicable_cells(tmp_path):
@@ -890,6 +1014,7 @@ def test_package_report_includes_only_shareable_report_files(tmp_path):
     assert "tutorial-report/report.pdf" in names
     assert "tutorial-report/token-stats.md" in names
     assert "tutorial-report/evidence-sources.md" in names
+    assert "tutorial-report/paper-data.json" in names
     assert "tutorial-report/private-traces.jsonl" not in names
     assert "tutorial-report/report.typ" not in names
     assert "tutorial-report/diagrams/stale-map.png" not in names
