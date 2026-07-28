@@ -61,15 +61,18 @@ require both:
 
 If either check fails, record the attempt as a serving-compatibility diagnostic and exclude
 it from gameplay rankings. This gate prevents plain-text action names from being mistaken
-for structured tool calls.
+for structured tool calls. Allow at least 8,192 generated tokens for this diagnostic:
+thinking models may need hundreds or thousands of tokens before emitting the call, so a
+short output cap can create a false incompatibility result.
 
 Primary local queue, in suggested order:
 
 - [ ] [`hermes3:8b-llama3.1-q8_0`](https://ollama.com/library/hermes3) — 8B
   Llama 3.1 roleplaying/function-calling control.
 - [ ] [`NousResearch/Hermes-4-14B`](https://huggingface.co/NousResearch/Hermes-4-14B)
-  at Q8 — 14B roleplaying, function-calling, and structured-JSON model; queued
-  2026-07-28.
+  at Q8 — 14B roleplaying, function-calling, and structured-JSON model. Its initial
+  128-token diagnostic ended during thinking and is inconclusive; an 8,192-token
+  preflight and full matrix are queued after RP-INK.
 - [x] [`subsectmusic/qwriko3-4b-instruct-2507`](https://huggingface.co/subsectmusic/qwriko3-4b-instruct-2507)
   at Q8 — excluded by the 2026-07-28 compatibility gate. Ollama advertised `tools`,
   but both provider-default and thinking-disabled calls returned tool-shaped text
