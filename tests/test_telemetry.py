@@ -1324,9 +1324,19 @@ def test_build_otlp_providers_wires_real_otlp_exporters(monkeypatch):
     nothing is ever exported. This covers the real exporter wiring that production uses.
     """
     from opentelemetry.sdk.metrics import MeterProvider
-    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.metrics.export import MetricReader, PeriodicExportingMetricReader
+    from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
 
+    captured_readers: list[MetricReader] = []
+
+    def recording_meter_provider(
+        *, resource: Resource, metric_readers: list[MetricReader]
+    ) -> MeterProvider:
+        captured_readers.extend(metric_readers)
+        return MeterProvider(resource=resource, metric_readers=metric_readers)
+
+    monkeypatch.setattr("opentelemetry.sdk.metrics.MeterProvider", recording_meter_provider)
     monkeypatch.delenv("BUNNYLAND_OTEL_TRACE_FILE", raising=False)
     monkeypatch.delenv("OTEL_METRICS_EXPORTER", raising=False)
     monkeypatch.setenv("OTEL_SERVICE_NAME", "bunnyland-otlp-test")
@@ -1341,9 +1351,10 @@ def test_build_otlp_providers_wires_real_otlp_exporters(monkeypatch):
         # A BatchSpanProcessor over the OTLP span exporter is attached (no JSONL file path).
         assert tracer_provider._active_span_processor is not None
         # A periodic OTLP metric reader is attached when metrics are not disabled.
-        readers = list(meter_provider._sdk_config.metric_readers)
-        assert readers
-        assert all(isinstance(reader, PeriodicExportingMetricReader) for reader in readers)
+        assert captured_readers
+        assert all(
+            isinstance(reader, PeriodicExportingMetricReader) for reader in captured_readers
+        )
     finally:
         tracer_provider.shutdown()
         meter_provider.shutdown()
@@ -1352,13 +1363,26 @@ def test_build_otlp_providers_wires_real_otlp_exporters(monkeypatch):
 @pytestmark_otel
 def test_build_otlp_providers_drops_metrics_when_exporter_is_none(monkeypatch):
     """``OTEL_METRICS_EXPORTER=none`` builds a meter provider with no readers (traces only)."""
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import MetricReader
+    from opentelemetry.sdk.resources import Resource
+
+    captured_readers: list[MetricReader] = []
+
+    def recording_meter_provider(
+        *, resource: Resource, metric_readers: list[MetricReader]
+    ) -> MeterProvider:
+        captured_readers.extend(metric_readers)
+        return MeterProvider(resource=resource, metric_readers=metric_readers)
+
+    monkeypatch.setattr("opentelemetry.sdk.metrics.MeterProvider", recording_meter_provider)
     monkeypatch.delenv("BUNNYLAND_OTEL_TRACE_FILE", raising=False)
     monkeypatch.setenv("OTEL_METRICS_EXPORTER", "none")
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "1")
 
     tracer_provider, meter_provider = telemetry._build_otlp_providers()
     try:
-        assert list(meter_provider._sdk_config.metric_readers) == []
+        assert captured_readers == []
     finally:
         tracer_provider.shutdown()
         meter_provider.shutdown()
