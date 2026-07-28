@@ -4,10 +4,6 @@ Completed sessions: **{{COMPLETED}}**
 
 Authoritative passes: **{{PASSES}}**
 
-## Evidence sources
-
-{{SOURCES}}
-
 {{COVERAGE_GAPS}}
 
 ## Runtime and token use

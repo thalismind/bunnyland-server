@@ -432,6 +432,9 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
     "ornith:9b": ModelArchitecture("Ornith 1.0 9B", 9_000_000_000),
     "gpt-oss:20b-cloud": ModelArchitecture("GPT-OSS 20B", 21_000_000_000),
     "gemma4:cloud": ModelArchitecture("Gemma 4 31B", 30_700_000_000),
+    "hf.co/HauhauCS/Gemma4-31B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M": (
+        ModelArchitecture("Gemma 4 31B HauhauCS Q4", 30_700_000_000)
+    ),
     "nemotron-3-nano:30b-cloud": ModelArchitecture(
         "Nemotron 3 Nano 30B-A3B",
         31_600_000_000,
@@ -1611,6 +1614,15 @@ def _format_parameter_count(parameter_count: int) -> str:
     return f"{formatted}{suffix}"
 
 
+def _scatter_key_name(display_name: str, maximum_length: int = 38) -> str:
+    if len(display_name) <= maximum_length:
+        return display_name
+    available = maximum_length - 1
+    prefix_length = available * 3 // 5
+    suffix_length = available - prefix_length
+    return f"{display_name[:prefix_length]}…{display_name[-suffix_length:]}"
+
+
 def _scatter_marker(
     *,
     x: float,
@@ -1785,10 +1797,12 @@ def render_parameter_scatter_svg(
 
     lines.append('<text class="label" x="24" y="574">Model key</text>')
     rows_per_column = 7
+    column_count = math.ceil(len(points) / rows_per_column)
+    column_width = (width - 48) / column_count
     for index, point in enumerate(points, start=1):
         column = (index - 1) // rows_per_column
         row = (index - 1) % rows_per_column
-        x = 32 + column * 455
+        x = 24 + column * column_width
         y = 604 + row * 24
         color = SCATTER_PROVIDER_COLORS[point.provider]
         lines.append(
@@ -1802,7 +1816,7 @@ def render_parameter_scatter_svg(
         )
         lines.append(
             f'<text class="key" x="{x + 20}" y="{y}">{index}. '
-            f"{escape(point.display_name)} · "
+            f"{escape(_scatter_key_name(point.display_name))} · "
             f"{_format_parameter_count(point.parameter_count)} · "
             f"{point.milestone_rate:.1%}</text>"
         )
@@ -3591,7 +3605,6 @@ def _typst_report(
     frontier_chart_path: str | None,
     kimi_chart_path: str | None,
     diagrams: Sequence[str],
-    sources: Sequence[str],
 ) -> str:
     cohort_mode = any(row.cohort is not None for row in rows)
     cells = [
@@ -3844,10 +3857,6 @@ def _typst_report(
             "",
             "Generated from authoritative benchmark artifacts.",
             "",
-            "== Evidence sources",
-            "",
-            *(_typst_text(path) for path in sources),
-            "",
             *coverage_block,
             "",
             "== Runtime and token use",
@@ -4064,16 +4073,6 @@ def build_report(
         template.replace("{{TITLE}}", title)
         .replace("{{COMPLETED}}", str(len(results)))
         .replace("{{PASSES}}", str(sum(item.result.passed for item in results)))
-        .replace(
-            "{{SOURCES}}",
-            "\n".join(
-                "- "
-                + (f"`{cohort}` / " if cohort is not None else "")
-                + f"`{source.path.name}` — "
-                f"{len(source.results)} completed sessions"
-                for cohort, source in labeled_sources
-            ),
-        )
         .replace("{{COVERAGE_GAPS}}", _coverage_gap_section(coverage))
         .replace("{{RUNTIME_SUMMARY}}", _runtime_summary(rows))
         .replace("{{TOKEN_TABLE}}", _token_table(rows))
@@ -4146,13 +4145,26 @@ def build_report(
             frontier_chart_path,
             kimi_chart_path,
             (*chart_paths, *scatter_chart_paths, *diagram_paths),
-            tuple(
-                f"{cohort} / {source.path.name}" if cohort is not None else source.path.name
-                for cohort, source in labeled_sources
-            ),
         ),
         encoding="utf-8",
     )
+    evidence_sources = "\n".join(
+        (
+            "# Evidence sources",
+            "",
+            "Authoritative benchmark artifact cohorts used to generate the report:",
+            "",
+            *(
+                "- "
+                + (f"`{cohort}` / " if cohort is not None else "")
+                + f"`{source.path.name}` — "
+                f"{len(source.results)} completed sessions"
+                for cohort, source in labeled_sources
+            ),
+            "",
+        )
+    )
+    (output / "evidence-sources.md").write_text(evidence_sources, encoding="utf-8")
     (output / "comparison-table.md").write_text(_comparison_table(rows) + "\n", encoding="utf-8")
     (output / "token-stats.md").write_text(_token_table(rows) + "\n", encoding="utf-8")
 
@@ -4164,6 +4176,7 @@ def package_report(report: Path, archive: Path) -> None:
         "comparison-table.md",
         "token-stats.md",
         "findings.md",
+        "evidence-sources.md",
     )
     diagrams = tuple(
         sorted(

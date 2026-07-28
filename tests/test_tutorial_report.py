@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import zipfile
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 
@@ -14,10 +15,13 @@ from benchmarks.tutorial_report import (
     TUTORIAL_MAPS,
     CohortInput,
     KimiFamilyRow,
+    LabeledResult,
+    ParameterScatterMetadata,
     build_report,
     package_report,
     render_kimi_family_svg,
     render_map_svg,
+    render_parameter_scatter_svg,
 )
 from benchmarks.tutorials import (
     MILESTONE_REPLACEMENTS,
@@ -337,6 +341,7 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     assert {path.name for path in output.iterdir()} == {
         "comparison-table.md",
         "diagrams",
+        "evidence-sources.md",
         "report.md",
         "report.typ",
         "token-stats.md",
@@ -345,8 +350,11 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     assert len(tuple((output / "diagrams").glob("*-tabletop.png"))) == 3
     markdown = (output / "report.md").read_text(encoding="utf-8")
     assert "# Test ladder" in markdown
-    assert "`source` — 6 completed sessions" in markdown
+    assert "## Evidence sources" not in markdown
     assert str(source.resolve()) not in markdown
+    evidence_sources = (output / "evidence-sources.md").read_text(encoding="utf-8")
+    assert "`source` — 6 completed sessions" in evidence_sources
+    assert str(source.resolve()) not in evidence_sources
     assert "720 tokens" in markdown
     assert "| `large` | 300 | 60 | 360 | 2.50 | 16,666.67 |" in markdown
     runtime_table = markdown.split("## Runtime and token use", maxsplit=1)[1].split(
@@ -397,6 +405,7 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     assert "Models reaching milestone" in heatmap
     assert "2/2" in heatmap
     typst = (output / "report.typ").read_text(encoding="utf-8")
+    assert "== Evidence sources" not in typst
     assert '#image("diagrams/apple-tabletop.png"' in typst
     assert '#image("diagrams/apple-map.svg"' in typst
     assert '#image("diagrams/tutorial-success-trend-chart.svg"' in typst
@@ -423,8 +432,9 @@ def test_build_report_accepts_derived_comparison_artifact(tmp_path):
     build_report((comparison,), output, title="Combined ladder")
 
     markdown = (output / "report.md").read_text(encoding="utf-8")
+    evidence_sources = (output / "evidence-sources.md").read_text(encoding="utf-8")
     assert "# Combined ladder" in markdown
-    assert "6 completed sessions" in markdown
+    assert "6 completed sessions" in evidence_sources
     assert "| `large` | 3/3 |" in markdown
 
 
@@ -579,7 +589,7 @@ def test_parameter_scatter_uses_latest_applicable_tutorial_cohort(tmp_path):
 
 
 def test_parameter_scatter_catalogue_covers_full_study_roster():
-    assert len(MODEL_ARCHITECTURES) == 27
+    assert len(MODEL_ARCHITECTURES) == 28
     assert (
         MODEL_ARCHITECTURES["deepseek-v4-flash:cloud"].total_parameters
         == 284_000_000_000
@@ -596,6 +606,48 @@ def test_parameter_scatter_catalogue_covers_full_study_roster():
         == 35_000_000_000
     )
     assert MODEL_ARCHITECTURES["moonshotai/kimi-k3"].total_parameters == 2_800_000_000_000
+    assert (
+        MODEL_ARCHITECTURES[
+            "hf.co/HauhauCS/Gemma4-31B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M"
+        ].display_name
+        == "Gemma 4 31B HauhauCS Q4"
+    )
+
+
+def test_parameter_scatter_key_fits_all_entries_and_truncates_long_names():
+    models = tuple(f"model-{index:02}" for index in range(1, 29))
+    long_name = (
+        "hf.co/Example/An-Extremely-Long-Roleplaying-Model-Name-With-Quant:Q8_0"
+    )
+    results = tuple(
+        LabeledResult("v2", _result(model, "apple", passed=True))
+        for model in models
+    )
+    metadata = {
+        ("v2", model): ParameterScatterMetadata(
+            display_name=long_name if index == len(models) else f"Model {index}",
+            parameter_count=(index + 3) * 1_000_000_000,
+            provider="Local" if index % 2 else "Cloud",
+        )
+        for index, model in enumerate(models, start=1)
+    }
+
+    svg = render_parameter_scatter_svg(results, "apple", metadata)
+    root = ElementTree.fromstring(svg)
+    key_entries = tuple(
+        element
+        for element in root.iter()
+        if element.attrib.get("class") == "key"
+    )
+
+    assert len(key_entries) == 28
+    assert max(float(element.attrib["x"]) for element in key_entries) < float(
+        root.attrib["width"]
+    )
+    assert any((element.text or "").startswith("28. ") for element in key_entries)
+    assert all(long_name not in (element.text or "") for element in key_entries)
+    assert any("…" in (element.text or "") for element in key_entries)
+    assert long_name in svg
 
 
 def test_kimi_family_chart_compares_capability_latency_and_efficiency():
@@ -727,11 +779,12 @@ def test_cohort_report_separates_versions_and_styles_replacement_columns(tmp_pat
     )
 
     markdown = (output / "report.md").read_text(encoding="utf-8")
+    evidence_sources = (output / "evidence-sources.md").read_text(encoding="utf-8")
     assert "| Cohort | Model | Passes |" in markdown
     assert "| `v1` | `large` |" in markdown
     assert "| `v2` | `large` |" in markdown
-    assert "`v2` / `post-one`" in markdown
-    assert "`v2` / `post-two`" in markdown
+    assert "`v2` / `post-one`" in evidence_sources
+    assert "`v2` / `post-two`" in evidence_sources
     assert "## Cohort deltas" in markdown
     assert "| Tutorial | Transition | Shared models | Improved | Tied | Regressed |" in markdown
     assert "| `v1 → v2` | `apple` | 1/2 (50.0%) | 2/4 (50.0%) | +0.0 pp |" in markdown
@@ -836,6 +889,7 @@ def test_package_report_includes_only_shareable_report_files(tmp_path):
     assert "tutorial-report/report.md" in names
     assert "tutorial-report/report.pdf" in names
     assert "tutorial-report/token-stats.md" in names
+    assert "tutorial-report/evidence-sources.md" in names
     assert "tutorial-report/private-traces.jsonl" not in names
     assert "tutorial-report/report.typ" not in names
     assert "tutorial-report/diagrams/stale-map.png" not in names
