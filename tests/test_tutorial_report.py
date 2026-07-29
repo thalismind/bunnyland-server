@@ -281,6 +281,31 @@ def _complete_bell_source(path: Path) -> None:
     )
 
 
+def _complete_derivative_source(path: Path) -> None:
+    model = "derivative"
+    tutorials = ("apple", "bell", "clover")
+    results = tuple(
+        _result(model, tutorial, passed=True, run=run)
+        for tutorial in tutorials
+        for run in range(1, 6)
+    )
+    metadata = (ModelMetadata(model, parameter_count=9_000_000_000),)
+    config = BenchmarkConfig(
+        models=(model,),
+        tutorials=tutorials,
+        sessions=5,
+        output=path,
+    )
+    write_artifacts(
+        config,
+        summarize(results, metadata, tutorials),
+        results,
+        (),
+        (),
+        metadata,
+    )
+
+
 def _make_v1_coverage_gaps(path: Path) -> None:
     sessions_path = path / "sessions.jsonl"
     retained = []
@@ -651,6 +676,83 @@ def test_parameter_scatter_uses_latest_applicable_tutorial_cohort(tmp_path):
     assert "Milestone completion (log shortfall scale)" in apple
     assert "−log10(milestone shortfall)" in apple
     assert "Qwen" not in apple
+
+
+def test_mixed_version_source_extends_each_tutorials_applicable_cohort(tmp_path):
+    base = tmp_path / "base"
+    latest_bell = tmp_path / "latest-bell"
+    derivative = tmp_path / "derivative"
+    output = tmp_path / "report"
+    _complete_source(base)
+    _complete_bell_source(latest_bell)
+    _complete_derivative_source(derivative)
+
+    build_report(
+        (),
+        output,
+        title="Mixed semantic cohorts",
+        cohorts=(
+            CohortInput("v2", base),
+            CohortInput("v4", latest_bell),
+            CohortInput("v2", derivative, ("apple", "clover")),
+            CohortInput("v4", derivative, ("bell",)),
+        ),
+    )
+
+    paper_data = json.loads((output / "paper-data.json").read_text(encoding="utf-8"))
+    assert paper_data["completed_sessions"] == 55
+    assert paper_data["latest_cohort_by_tutorial"] == {
+        "apple": "v2",
+        "bell": "v4",
+        "clover": "v2",
+    }
+    difficulty = {
+        (row["tutorial"], row["cohort"]): row["complete_cells"]
+        for row in paper_data["difficulty"]
+    }
+    assert difficulty[("apple", "v2")] == 3
+    assert difficulty[("bell", "v4")] == 3
+    assert difficulty[("clover", "v2")] == 3
+    derivative_sources = [
+        row for row in paper_data["sources"] if row["source"] == "derivative"
+    ]
+    assert [
+        (row["cohort"], row["sessions"], row["tutorials"])
+        for row in derivative_sources
+    ] == [
+        ("v2", 10, ["apple", "clover"]),
+        ("v4", 5, ["bell"]),
+    ]
+    assert all(row["commit"] for row in derivative_sources)
+    evidence = (output / "evidence-sources.md").read_text(encoding="utf-8")
+    assert "`v2` / `derivative` — 10 completed sessions (apple, clover)" in evidence
+    assert "`v4` / `derivative` — 5 completed sessions (bell)" in evidence
+    apple = (
+        output / "diagrams" / "apple-parameter-milestone-scatter-chart.svg"
+    ).read_text(encoding="utf-8")
+    bell = (
+        output / "diagrams" / "bell-parameter-milestone-scatter-chart.svg"
+    ).read_text(encoding="utf-8")
+    clover = (
+        output / "diagrams" / "clover-parameter-milestone-scatter-chart.svg"
+    ).read_text(encoding="utf-8")
+    assert "Latest applicable cohort: v2" in apple
+    assert "Latest applicable cohort: v4" in bell
+    assert "Latest applicable cohort: v2" in clover
+    assert 'data-model="derivative"' in apple
+    assert 'data-model="derivative"' in bell
+    assert 'data-model="derivative"' in clover
+
+    with pytest.raises(ValueError, match="selects tutorial\\(s\\) more than once: apple"):
+        build_report(
+            (),
+            tmp_path / "overlap",
+            title="Overlapping slices",
+            cohorts=(
+                CohortInput("v2", derivative, ("apple", "clover")),
+                CohortInput("v4", derivative, ("apple", "bell")),
+            ),
+        )
 
 
 def test_parameter_scatter_explains_unpublished_sizes():

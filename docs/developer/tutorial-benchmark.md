@@ -395,10 +395,24 @@ and replacement milestone columns separate, show unavailable cohort cells as em 
 the replaced column, outline the replacement, and print the exact identifier mapping.
 
 Cohort labels identify significant gameplay, tutorial, or evaluator semantics rather than
-individual server commits. Keep later results in the current cohort when intervening commits
-only change documentation, reporting, or other benchmark-neutral code; retain the exact server
-commit in each source manifest as provenance. Start a new cohort only when a change can
-materially affect playability or scoring.
+individual server commits. Keep later results in the current cohort for each tutorial when
+intervening commits only change documentation, reporting, or other benchmark-neutral code;
+retain the exact server commit in each source manifest as provenance. Start a new tutorial
+cohort only when a change can materially affect its playability or scoring.
+
+When one run spans tutorials whose latest semantic cohorts differ, select its tutorials
+explicitly and reuse the source path. For example, a run made after Bell `v4` can extend the
+unchanged Apple and Clover `v2` populations while extending Bell `v4`:
+
+```bash
+scripts/build-tutorial-report \
+  --cohort v2:apple,clover=artifacts/benchmarks/tutorials/later-full-run \
+  --cohort v4:bell=artifacts/benchmarks/tutorials/later-full-run \
+  --output artifacts/benchmarks/tutorials/full-report
+```
+
+The derived report assigns each completed session once. The raw source remains immutable and
+its exact commit remains visible in report provenance.
 
 The generated directory contains:
 

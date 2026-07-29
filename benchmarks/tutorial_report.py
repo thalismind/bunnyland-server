@@ -10,7 +10,7 @@ import statistics
 import zipfile
 from collections import Counter, defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html import escape
 from pathlib import Path
 
@@ -226,6 +226,7 @@ class EvidenceSlice:
 class CohortInput:
     label: str
     path: Path
+    tutorials: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -3473,6 +3474,9 @@ def _source_commits(
                 "source": source.path.name,
                 "commit": commit if isinstance(commit, str) else "",
                 "sessions": len(source.results),
+                "tutorials": sorted(
+                    {result.tutorial for result in source.results}
+                ),
             }
         )
     return tuple(rows)
@@ -3992,7 +3996,8 @@ def _coverage_analysis(
             tutorial
             for tutorial in tutorial_order
             if any(
-                source_cohort == cohort and tutorial in source.manifest.tutorials
+                source_cohort == cohort
+                and any(result.tutorial == tutorial for result in source.results)
                 for source_cohort, source in sources
             )
         )
@@ -5050,10 +5055,41 @@ def build_report(
     if cohorts:
         if any(not cohort.label.strip() for cohort in cohorts):
             raise ValueError("cohort labels must not be empty")
-        labeled_sources = tuple(
-            (cohort.label, load_source(SourceSelection(cohort.path.resolve())))
-            for cohort in cohorts
-        )
+        loaded_cohorts = []
+        loaded_by_path: dict[Path, LoadedSource] = {}
+        selected_tutorials_by_path: dict[Path, set[str]] = defaultdict(set)
+        for cohort in cohorts:
+            resolved_path = cohort.path.resolve()
+            source = loaded_by_path.get(resolved_path)
+            if source is None:
+                source = load_source(SourceSelection(resolved_path))
+                loaded_by_path[resolved_path] = source
+            if cohort.tutorials:
+                results = tuple(
+                    result
+                    for result in source.results
+                    if result.tutorial in cohort.tutorials
+                )
+                present = {result.tutorial for result in results}
+                missing = sorted(set(cohort.tutorials) - present)
+                if missing:
+                    raise ValueError(
+                        f"{source.path} has no completed sessions for requested "
+                        f"tutorial(s): {', '.join(missing)}"
+                    )
+                source = replace(source, results=results)
+            selected_tutorials = {result.tutorial for result in source.results}
+            overlap = sorted(
+                selected_tutorials_by_path[resolved_path] & selected_tutorials
+            )
+            if overlap:
+                raise ValueError(
+                    f"{source.path} selects tutorial(s) more than once: "
+                    f"{', '.join(overlap)}"
+                )
+            selected_tutorials_by_path[resolved_path].update(selected_tutorials)
+            loaded_cohorts.append((cohort.label, source))
+        labeled_sources = tuple(loaded_cohorts)
     else:
         labeled_sources = tuple(
             (None, load_source(SourceSelection(path.resolve()))) for path in inputs
@@ -5277,7 +5313,8 @@ def build_report(
                 "- "
                 + (f"`{cohort}` / " if cohort is not None else "")
                 + f"`{source.path.name}` — "
-                f"{len(source.results)} completed sessions"
+                f"{len(source.results)} completed sessions "
+                f"({', '.join(sorted({result.tutorial for result in source.results}))})"
                 for cohort, source in labeled_sources
             ),
             "",
@@ -5348,8 +5385,11 @@ def _parser() -> argparse.ArgumentParser:
         "--cohort",
         action="append",
         default=[],
-        metavar="LABEL=PATH",
-        help="label a report input cohort; repeat and reuse labels for multiple paths",
+        metavar="LABEL[:TUTORIAL,...]=PATH",
+        help=(
+            "label a report input cohort; optionally select tutorials from a mixed-version "
+            "source; repeat and reuse labels for multiple paths"
+        ),
     )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--title", default="Bunnyland tutorial-ladder benchmark")
@@ -5362,10 +5402,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     for value in args.cohort:
         if "=" not in value:
             raise SystemExit("--cohort must use LABEL=PATH")
-        label, path = value.split("=", 1)
+        selector, path = value.split("=", 1)
+        label, separator, tutorial_list = selector.partition(":")
         if not label or not path:
             raise SystemExit("--cohort must use LABEL=PATH")
-        cohorts.append(CohortInput(label, Path(path)))
+        tutorials = tuple(tutorial_list.split(",")) if separator else ()
+        if separator and (
+            not tutorial_list
+            or any(not tutorial for tutorial in tutorials)
+            or len(set(tutorials)) != len(tutorials)
+        ):
+            raise SystemExit(
+                "--cohort tutorial selection must use LABEL:TUTORIAL[,TUTORIAL]=PATH"
+            )
+        unknown = sorted(set(tutorials) - set(TUTORIAL_MAPS))
+        if unknown:
+            raise SystemExit(
+                f"--cohort contains unknown tutorial(s): {', '.join(unknown)}"
+            )
+        cohorts.append(CohortInput(label, Path(path), tutorials))
     build_report(args.input, args.output, title=args.title, cohorts=cohorts)
     return 0
 
