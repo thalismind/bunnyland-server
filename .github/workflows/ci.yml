@@ -373,8 +373,6 @@ jobs:
           push: false
           tags: bunnyland-server:security-${{ github.sha }}
           build-args: BUNNYLAND_GIT_HASH=${{ github.sha }}
-          provenance: mode=max
-          sbom: true
 
       - name: Generate image CycloneDX SBOM
         uses: anchore/sbom-action@v0.24.0
