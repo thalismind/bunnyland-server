@@ -8,7 +8,14 @@ from ...core.actions import (
 
 ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     define_action(
-        "resolve-incident", ("incident_id",), tool_name="resolve_incident", cost=EPIC_ACTION_COST
+        "resolve-incident",
+        ("incident_id",),
+        tool_name="resolve_incident",
+        description=(
+            "Resolve an active world incident, bringing a major unfolding "
+            "event to its conclusion. This is an epic effort that dominates your turn."
+        ),
+        cost=EPIC_ACTION_COST,
     ),
 )
 

@@ -12,7 +12,10 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "take-note",
         ("text", "tags", "scope", "collection"),
         tool_name="take_note",
-        description="Record important information in the character's private or shared notes.",
+        description=(
+            "Record important information in your notes so you can recall it "
+            "later. Take a note whenever you learn something worth keeping."
+        ),
         lane=Lane.FOCUS,
         cost=FOCUS_COST,
         patterns=("take note {text}", "note {text}"),
@@ -23,7 +26,10 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "remember",
         ("query", "mode", "limit", "scope", "collection"),
         tool_name="remember",
-        description="Search the character's memories and notes for relevant information.",
+        description=(
+            "Search your own memories and notes for information relevant to "
+            "a query. Remember before acting when you might already know something useful."
+        ),
         lane=Lane.FOCUS,
         cost=FOCUS_COST,
         patterns=("remember {query}",),
@@ -34,7 +40,10 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "forget",
         ("note_id", "scope", "collection"),
         tool_name="forget",
-        description="Remove a specific note by its note id.",
+        description=(
+            "Remove a specific note by its note id when it is outdated, "
+            "wrong, or no longer useful."
+        ),
         lane=Lane.FOCUS,
         cost=FOCUS_COST,
         patterns=("forget {note_id}",),
@@ -45,7 +54,10 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "reflect",
         ("text", "query", "mode", "limit"),
         tool_name="reflect",
-        description="Reflect on recent notes or a topic and record a synthesized memory.",
+        description=(
+            "Reflect on recent notes or a topic and record a synthesized "
+            "memory, turning scattered details into a lasting insight."
+        ),
         lane=Lane.FOCUS,
         cost=FOCUS_COST,
         patterns=("reflect {text}",),

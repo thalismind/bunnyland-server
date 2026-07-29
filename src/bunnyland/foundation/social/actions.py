@@ -10,6 +10,10 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "resolve-obligation",
         ("obligation_id", "status", "note"),
         tool_name="resolve_obligation",
+        description=(
+            "Settle an obligation you owe or are owed by marking it "
+            "fulfilled, failed, or cancelled, and optionally leave a note about the outcome."
+        ),
         patterns=(
             "fulfill {obligation_id}",
             "fail {obligation_id}",

@@ -1495,7 +1495,7 @@ def test_help_command_stubs_action_help(scenario):
 
     assert "Help for `take`" in text
     assert "item_id" in text
-    assert "Character action: take" in text
+    assert "Pick up an item" in text
 
 
 def test_help_command_uses_plugin_action_definition_metadata(scenario):
