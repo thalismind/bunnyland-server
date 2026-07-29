@@ -196,9 +196,10 @@ server operators remain responsible for appropriate policy controls.
 The established models use the latest applicable complete cells: Apple and Clover from
 `v2` (`3a662413`) and Bell from `v4` (`0abb32b`). RP-INK, Hermes 4, and both Qwen 3.7
 variants completed all four applicable cohorts. The four rated derivatives ran against
-`c3f2729`, whose gameplay code retains the same latest tutorial semantics. Runs used five
-fresh worlds per model/tutorial pair, provider-default temperature, and high thinking where
-the model supported it.
+the documentation-only commit `c3f2729` and are therefore labeled `v4`, the same gameplay
+cohort as `0abb32b`; the exact commit remains recorded as provenance. Runs used five fresh
+worlds per model/tutorial pair, provider-default temperature, and high thinking where the
+model supported it.
 
 See the [tutorial benchmark methodology](../developer/tutorial-benchmark.md) for scoring,
 artifacts, latency, milestone completion, and turn-efficiency analysis.

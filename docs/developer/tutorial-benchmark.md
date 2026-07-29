@@ -394,6 +394,12 @@ rows by model then cohort so the same model's commit history stays adjacent. The
 and replacement milestone columns separate, show unavailable cohort cells as em dashes, fade
 the replaced column, outline the replacement, and print the exact identifier mapping.
 
+Cohort labels identify significant gameplay, tutorial, or evaluator semantics rather than
+individual server commits. Keep later results in the current cohort when intervening commits
+only change documentation, reporting, or other benchmark-neutral code; retain the exact server
+commit in each source manifest as provenance. Start a new cohort only when a change can
+materially affect playability or scoring.
+
 The generated directory contains:
 
 - `report.md`, the source-linked narrative and embedded SVG diagrams.
