@@ -382,22 +382,28 @@ jobs:
           output-file: bunnyland-server.cdx.json
           upload-artifact: false
 
-      - name: Fail on fixable high or critical image findings
+      - name: Scan exact image with Grype
         uses: anchore/scan-action@v7.4.0
         with:
           image: bunnyland-server:security-${{ github.sha }}
-          output-format: table
-          fail-build: true
-          only-fixed: true
+          output-format: json
+          output-file: bunnyland-server.grype.json
+          fail-build: false
+          only-fixed: false
           severity-cutoff: high
           by-cve: true
           config: .grype.yaml
 
-      - name: Upload image SBOM
+      - name: Fail on actionable high or critical image findings
+        run: scripts/check-grype-findings bunnyland-server.grype.json
+
+      - name: Upload image security evidence
         uses: actions/upload-artifact@v7
         with:
-          name: bunnyland-server-image-sbom-${{ github.sha }}
-          path: bunnyland-server.cdx.json
+          name: bunnyland-server-image-security-${{ github.sha }}
+          path: |
+            bunnyland-server.cdx.json
+            bunnyland-server.grype.json
           if-no-files-found: error
 
   vps-setup:

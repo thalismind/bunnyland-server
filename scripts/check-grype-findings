@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Fail when Grype reports a high-severity finding with an actionable fix."""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+from pathlib import Path
+
+HIGH_SEVERITIES = {"high", "critical"}
+
+
+def _object(value: object, field: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} must be an object")
+    if not all(isinstance(key, str) for key in value):
+        raise ValueError(f"{field} keys must be strings")
+    return value
+
+
+def _list(value: object, field: str) -> list[object]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be an array")
+    return value
+
+
+def _string(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
+    return value
+
+
+def _python_release_line(version: str) -> tuple[int, int] | None:
+    match = re.match(r"^(\d+)\.(\d+)(?:\.|$)", version)
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _has_actionable_fix(
+    artifact_name: str,
+    installed_version: str,
+    fix_state: str,
+    fixed_versions: list[str],
+) -> bool:
+    if fix_state != "fixed":
+        return False
+    if artifact_name != "python":
+        return True
+
+    installed_line = _python_release_line(installed_version)
+    if installed_line is None:
+        return True
+    return any(
+        fixed_line is None or fixed_line == installed_line
+        for fixed_line in map(_python_release_line, fixed_versions)
+    )
+
+
+def check_report(report: dict[str, object]) -> list[str]:
+    failures: list[str] = []
+    matches = _list(report.get("matches"), "matches")
+    for index, raw_match in enumerate(matches):
+        match = _object(raw_match, f"matches[{index}]")
+        vulnerability = _object(
+            match.get("vulnerability"), f"matches[{index}].vulnerability"
+        )
+        artifact = _object(match.get("artifact"), f"matches[{index}].artifact")
+        severity = _string(
+            vulnerability.get("severity"), f"matches[{index}].vulnerability.severity"
+        ).lower()
+        if severity not in HIGH_SEVERITIES:
+            continue
+
+        advisory = _string(
+            vulnerability.get("id"), f"matches[{index}].vulnerability.id"
+        )
+        fix = _object(
+            vulnerability.get("fix"), f"matches[{index}].vulnerability.fix"
+        )
+        fix_state = _string(
+            fix.get("state"), f"matches[{index}].vulnerability.fix.state"
+        )
+        raw_versions = _list(
+            fix.get("versions"), f"matches[{index}].vulnerability.fix.versions"
+        )
+        fixed_versions = [
+            _string(version, f"matches[{index}].vulnerability.fix.versions")
+            for version in raw_versions
+        ]
+        package = _string(
+            artifact.get("name"), f"matches[{index}].artifact.name"
+        ).lower()
+        installed = _string(
+            artifact.get("version"), f"matches[{index}].artifact.version"
+        )
+
+        if _has_actionable_fix(package, installed, fix_state, fixed_versions):
+            fixes = ", ".join(fixed_versions) or "unspecified"
+            failures.append(
+                f"{advisory}: {package} {installed} has an actionable "
+                f"{severity} fix ({fixes})"
+            )
+        else:
+            print(
+                f"::notice::{advisory}: {package} {installed} remains {severity}; "
+                "no fix is available in its supported release line"
+            )
+    return failures
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: check-grype-findings REPORT.json")
+    report_path = Path(sys.argv[1])
+    try:
+        raw_report: object = json.loads(report_path.read_text(encoding="utf-8"))
+        report = _object(raw_report, "report")
+        failures = check_report(report)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"{report_path}: invalid Grype report: {exc}") from exc
+
+    if failures:
+        for failure in failures:
+            print(f"::error::{failure}")
+        raise SystemExit(
+            f"{len(failures)} actionable high or critical image finding(s)"
+        )
+
+
+if __name__ == "__main__":
+    main()

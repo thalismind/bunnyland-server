@@ -48,6 +48,8 @@ def test_only_documented_chroma_advisory_is_ignored() -> None:
     assert "--ignore-vuln PYSEC-2026-311" in workflow
     assert "anchore/scan-action@v7.4.0" in workflow
     assert "anchore/sbom-action@v0.24.0" in workflow
+    assert "scripts/check-grype-findings bunnyland-server.grype.json" in workflow
+    assert "only-fixed: false" in workflow
     assert "vulnerability: CVE-2026-45829" in grype
     assert "scanner: grype" in scanner_exceptions
     assert "`CVE-2026-45829` (`PYSEC-2026-311` in pip-audit)" in exceptions
