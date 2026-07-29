@@ -31,6 +31,7 @@ def test_chroma_collection_selection_is_profile_scoped() -> None:
 
 def test_container_bases_are_immutable_debian_images() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text().lower()
+    tempo_compose = (ROOT / "compose.tempo.yml").read_text().lower()
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     container_smoke = (ROOT / "scripts/container-auth-smoke").read_text()
 
@@ -38,6 +39,13 @@ def test_container_bases_are_immutable_debian_images() -> None:
     assert "apt-get upgrade -y" in dockerfile
     assert "alpine" not in dockerfile
     assert "musl" not in dockerfile
+    assert (
+        "grafana/tempo:3.0.2"
+        "@sha256:cda87c212d8c584dc0b89e337e7ed648a5100feb657e5d528480ee4fa03dbbe3"
+        in tempo_compose
+    )
+    assert "alpine" not in tempo_compose
+    assert "musl" not in tempo_compose
     assert "chown 10001:10001" in container_smoke
     assert "bunnyland-server@${{ needs.container.outputs.digest }}" in workflow
 
