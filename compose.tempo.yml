@@ -5,11 +5,8 @@
 #
 # It runs a single monolithic Grafana Tempo container, wires the server to export traces to
 # it over OTLP (metrics stay off -- Tempo is traces-only), and persists blocks to the small
-# `tempo-data` volume. Tempo publishes no host ports; it is reachable only on the compose
-# network. Its query API is exposed for a remote Grafana through the frontend nginx. This
-# fragment mounts deploy/nginx/tempo-location.inc, which adds a /tempo/ route behind a
-# dedicated Tempo-only Basic-auth realm. Those credentials are unrelated to Bunnyland users
-# and bearer tokens. Restart the frontend after recreating Tempo so nginx picks up its new IP.
+# `tempo-data` volume. Tempo is private by default. Production may publish its query API on
+# localhost only for an SSH local forward; it is never proxied by the public frontend.
 services:
   server:
     environment:
@@ -22,14 +19,8 @@ services:
     depends_on:
       - tempo
 
-  frontend:
-    depends_on:
-      - tempo
-    volumes:
-      - ./deploy/nginx/tempo-location.inc:/etc/nginx/templates/tempo-location.inc.template:ro
-
   tempo:
-    image: grafana/tempo:${BUNNYLAND_TEMPO_TAG:-2.7.1}
+    image: grafana/tempo:2.7.1@sha256:4443be217c396b065ee34845534199c36fdba4dc619cb96550e228d73fba6e69
     command: ["-config.file=/etc/tempo/tempo.yaml"]
     volumes:
       - ./deploy/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro

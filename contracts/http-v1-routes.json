@@ -39,7 +39,8 @@
         "/v1/play/claims/{claim_id}/chat-jobs/{job_id}",
         "/v1/play/claims/{claim_id}/commands",
         "/v1/play/claims/{claim_id}/jobs",
-        "/v1/play/claims/{claim_id}/queries"
+        "/v1/play/claims/{claim_id}/queries",
+        "/v1/play/claims/{claim_id}/recover"
       ],
       "PUT": ["/v1/play/claims/{claim_id}"],
       "PATCH": ["/v1/play/claims/{claim_id}"],

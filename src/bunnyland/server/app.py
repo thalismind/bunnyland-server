@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -22,6 +23,7 @@ from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 from .. import __version__, telemetry
 from ..claims import (
     CLIENT_KIND_WEB,
+    ClaimOwner,
     ClaimSecretRegistry,
     add_claim,
     claim_client_matches,
@@ -247,6 +249,8 @@ logger = logging.getLogger("bunnyland.server")
 RATE_LIMIT_REQUESTS_ENV = "BUNNYLAND_HTTP_RATE_LIMIT_REQUESTS"
 RATE_LIMIT_WINDOW_ENV = "BUNNYLAND_HTTP_RATE_LIMIT_WINDOW_SECONDS"
 CORS_ORIGINS_ENV = "BUNNYLAND_CORS_ORIGINS"
+CLAIM_COOKIE_NAME = "bunnyland_claim"
+CLAIM_COOKIE_PATH = "/api/v1/play"
 LOGIN_RATE_LIMIT_REQUESTS = 5
 LOGIN_USERNAME_RATE_LIMIT_REQUESTS = 20
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = 60
@@ -719,9 +723,9 @@ def create_app(
         websocket: WebSocket,
         data: dict,
         surface: AuthorizationSurface,
-    ) -> str | None:
+    ) -> tuple[str | None, TokenPrincipal | None]:
         if authenticator is None:
-            return None
+            return None, None
         active_authenticator = cast(RequestAuthenticator, authenticator)
         frame_token = data.get("token")
         if frame_token is not None and not isinstance(frame_token, str):
@@ -733,7 +737,7 @@ def create_app(
                 if not separator or scheme.lower() != "bearer" or value.strip() != frame_token:
                     raise HTTPException(status_code=401, detail="conflicting bearer credentials")
             header_auth = f"Bearer {frame_token}"
-        active_authenticator.authenticate_values(
+        principal = active_authenticator.authenticate_values(
             authorization=header_auth,
             cookie_token=websocket.cookies.get(AUTH_COOKIE_NAME),
             required_scopes=(cast(str, SURFACE_SCOPES[surface]),),
@@ -743,10 +747,10 @@ def create_app(
                 data.get("client_id") or websocket.headers.get(CLIENT_ID_HEADER)
             )
         if frame_token:
-            return frame_token
+            return frame_token, principal
         if websocket.cookies.get(AUTH_COOKIE_NAME):
-            return websocket.cookies[AUTH_COOKIE_NAME]
-        return header_auth.partition(" ")[2].strip() if header_auth else None
+            return websocket.cookies[AUTH_COOKIE_NAME], principal
+        return (header_auth.partition(" ")[2].strip() if header_auth else None), principal
 
     def _auth_response(principal: TokenPrincipal, token: str | None = None) -> TokenResponse:
         return TokenResponse(
@@ -1044,11 +1048,60 @@ def create_app(
         request._claim_secret = claim_secret
         return request
 
-    def _client_id_header_value(client_id: str | None) -> str | None:
+    def _client_id_header_value(client_id: object) -> str | None:
         if not isinstance(client_id, str):
             return None
         normalized = client_id.strip()
         return normalized or None
+
+    def _required_client_id(client_id: object) -> str:
+        normalized = _client_id_header_value(client_id)
+        if normalized is None:
+            raise HTTPException(status_code=403, detail=f"{CLIENT_ID_HEADER} header is required")
+        return normalized
+
+    def _claim_owner_for_request(request: Request, client_id: str) -> ClaimOwner:
+        principal = getattr(request.state, "auth_principal", None)
+        subject = (
+            principal.subject
+            if isinstance(principal, TokenPrincipal)
+            else f"embedded:{client_id}"
+        )
+        return ClaimOwner("rest", subject)
+
+    def _http_origin_is_trusted(request: Request) -> bool:
+        origin = request.headers.get("Origin")
+        if not origin or origin in {"null", "*"}:
+            return False
+        return origin == f"{request.url.scheme}://{request.url.netloc}"
+
+    def _request_claim_secret(
+        request: Request,
+        header_secret: str | None,
+        *,
+        require_origin: bool = True,
+    ) -> str | None:
+        cookie_secret = request.cookies.get(CLAIM_COOKIE_NAME)
+        if (
+            header_secret
+            and cookie_secret
+            and not secrets.compare_digest(header_secret, cookie_secret)
+        ):
+            raise HTTPException(status_code=401, detail="conflicting claim credentials")
+        if cookie_secret and require_origin and request.method not in {"GET", "HEAD", "OPTIONS"}:
+            if not _http_origin_is_trusted(request):
+                raise HTTPException(status_code=403, detail="same-origin request required")
+        return header_secret or cookie_secret
+
+    def _set_claim_cookie(response: Response, claim_secret: str) -> None:
+        response.set_cookie(
+            CLAIM_COOKIE_NAME,
+            claim_secret,
+            secure=True,
+            httponly=True,
+            samesite="strict",
+            path=CLAIM_COOKIE_PATH,
+        )
 
     def _existing_controller(controller_id: str):
         parsed = parse_entity_id(controller_id)
@@ -1291,6 +1344,7 @@ def create_app(
 
     async def _claim_web_controller_request(
         request: WebControllerClaimRequest,
+        owner: ClaimOwner,
     ) -> WebControllerClaimResponse:
         character_id = parse_entity_id(request.character_id)
         if character_id is None or not actor.world.has_entity(character_id):
@@ -1331,6 +1385,7 @@ def create_app(
                         ensure_claim_secret(
                             claim_secrets,
                             active_claim,
+                            owner=owner,
                             claim_id=request.claim_id,
                             claim_secret=_claim_secret(request),
                         )
@@ -1338,7 +1393,6 @@ def create_app(
                         raise HTTPException(status_code=403, detail=str(exc)) from exc
                     validated_claim_secret = True
                     claim_id = active_claim.claim_id
-                    claim_secret = claim_secrets.secret(active_claim.claim_id)
 
                 controller = _web_controller_for_client(client_id)
                 if controller is not None:
@@ -1369,7 +1423,7 @@ def create_app(
                     or claim_secret is None
                     or not claim_secrets.has_secret(claim.claim_id)
                 ):
-                    claim_secret = claim_secrets.issue(claim.claim_id)
+                    claim_secret = claim_secrets.issue(claim.claim_id, owner)
                 apply_claim_timeout_settings(
                     controller,
                     now_unix=int(time.time()),
@@ -1480,7 +1534,7 @@ def create_app(
                     controller=controller,
                     claim=claim,
                     generation=edge.generation,
-                    claim_secret=claim_secrets.secret(claim.claim_id) or "",
+                    claim_secret=_claim_secret(request) or "",
                 )
 
     async def _release_web_controller_to_fallback_request(
@@ -1525,7 +1579,7 @@ def create_app(
             controller_id=str(new_controller.id),
             controller_generation=generation,
             claim_id=claim.claim_id,
-            claim_secret=claim_secrets.secret(claim.claim_id) or "",
+            claim_secret=_claim_secret(request) or "",
             fallback_controller=kind,
             timeout_seconds=timeout.timeout_seconds,
         )
@@ -1873,22 +1927,21 @@ def create_app(
     def _claim_context_v1(
         claim_id: str,
         claim_secret: str | None,
-        client_id: str | None,
+        client_id: str,
+        owner: ClaimOwner,
     ):
-        normalized_client_id = _client_id_header_value(client_id)
-        if normalized_client_id is None:
-            raise HTTPException(status_code=403, detail=f"{CLIENT_ID_HEADER} header is required")
-        _require_allowed_player_client_id(normalized_client_id)
+        _require_allowed_player_client_id(client_id)
         for controller in actor.world.query().with_all([ClaimedComponent]).execute_entities():
             claim = controller.get_component(ClaimedComponent)
             if claim.claim_id != claim_id:
                 continue
-            if not claim_client_matches(claim, normalized_client_id):
+            if not claim_client_matches(claim, client_id):
                 raise HTTPException(status_code=403, detail="claim belongs to another client")
             try:
                 ensure_claim_secret(
                     claim_secrets,
                     claim,
+                    owner=owner,
                     claim_id=claim_id,
                     claim_secret=claim_secret,
                 )
@@ -2111,7 +2164,7 @@ def create_app(
         character_id: str,
         body: ChatJobRequest,
         response: Response,
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> JobResource:
         parsed = parse_entity_id(character_id)
         if parsed is None or not actor.world.has_entity(parsed):
@@ -2119,9 +2172,7 @@ def create_app(
         character = actor.world.get_entity(parsed)
         if not character.has_component(CharacterComponent):
             raise HTTPException(status_code=400, detail="entity is not a character")
-        normalized_client_id = _client_id_header_value(client_id)
-        if normalized_client_id is None:
-            raise HTTPException(status_code=403, detail=f"{CLIENT_ID_HEADER} header is required")
+        normalized_client_id = _required_client_id(client_id)
         active = current_controller(actor, character)
         if active is None:
             raise HTTPException(status_code=409, detail="character has no controller")
@@ -2182,11 +2233,9 @@ def create_app(
     async def v1_character_chat_job(
         character_id: str,
         job_id: str,
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> JobResource:
-        normalized_client_id = _client_id_header_value(client_id)
-        if normalized_client_id is None:
-            raise HTTPException(status_code=403, detail=f"{CLIENT_ID_HEADER} header is required")
+        normalized_client_id = _required_client_id(client_id)
         return _chat_job_for_client(job_id, character_id, normalized_client_id)
 
     @play_v1.get("/catalog", response_model=CatalogResource)
@@ -2204,13 +2253,19 @@ def create_app(
     @play_v1.post("/claims", response_model=ClaimResource, status_code=201)
     async def v1_create_claim(
         body: ClaimCreateRequest,
+        request: Request,
         response: Response,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> ClaimResource:
+        normalized_client_id = _required_client_id(client_id)
+        if body.delivery == "cookie" and not _http_origin_is_trusted(request):
+            raise HTTPException(status_code=403, detail="same-origin request required")
+        owner = _claim_owner_for_request(request, normalized_client_id)
+        claim_secret = _request_claim_secret(request, claim_secret)
         request = WebControllerClaimRequest(
             character_id=body.character_id,
-            client_id=client_id or "",
+            client_id=normalized_client_id,
             claim_id=None,
             label=body.label,
             fallback_controller=body.fallback_controller,
@@ -2221,11 +2276,14 @@ def create_app(
             timeout_seconds=body.timeout_seconds,
         )
         _with_claim_secret(request, claim_secret)
-        claimed = await _claim_web_controller_request(request)
+        claimed = await _claim_web_controller_request(request, owner)
         response.headers["Location"] = f"/v1/play/claims/{claimed.claim_id}"
-        response.headers["X-Bunnyland-Claim-Secret"] = claimed.claim_secret
+        if body.delivery == "cookie":
+            _set_claim_cookie(response, claimed.claim_secret)
+        else:
+            response.headers["X-Bunnyland-Claim-Secret"] = claimed.claim_secret
         character, controller, edge, claim = _claim_context_v1(
-            claimed.claim_id, claimed.claim_secret, client_id
+            claimed.claim_id, claimed.claim_secret, normalized_client_id, owner
         )
         onboarding.claimed(claimed.claim_id, str(character.id))
         return _claim_resource_v1(character, controller, edge, claim)
@@ -2233,11 +2291,20 @@ def create_app(
     @play_v1.put("/claims/{claim_id}", response_model=ClaimResource)
     async def v1_reclaim_claim(
         claim_id: str,
+        request: Request,
         response: Response,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> ClaimResource:
-        character, controller, _edge, claim = _claim_context_v1(claim_id, claim_secret, client_id)
+        normalized_client_id = _required_client_id(client_id)
+        owner = _claim_owner_for_request(request, normalized_client_id)
+        claim_secret = _request_claim_secret(request, claim_secret)
+        character, controller, _edge, claim = _claim_context_v1(
+            claim_id,
+            claim_secret,
+            normalized_client_id,
+            owner,
+        )
         timeout = (
             controller.get_component(ClaimTimeoutComponent)
             if controller.has_component(ClaimTimeoutComponent)
@@ -2256,27 +2323,68 @@ def create_app(
             timeout_seconds=timeout.timeout_seconds or None,
         )
         _with_claim_secret(request, claim_secret)
-        claimed = await _claim_web_controller_request(request)
-        response.headers["X-Bunnyland-Claim-Secret"] = claimed.claim_secret
-        context = _claim_context_v1(claim_id, claimed.claim_secret, client_id)
+        await _claim_web_controller_request(request, owner)
+        replacement_secret = claim_secrets.rotate(claim_id, owner)
+        response.headers["X-Bunnyland-Claim-Secret"] = replacement_secret
+        context = _claim_context_v1(
+            claim_id,
+            replacement_secret,
+            normalized_client_id,
+            owner,
+        )
         return _claim_resource_v1(*context)
+
+    @play_v1.post("/claims/{claim_id}/recover", response_model=ClaimResource)
+    async def v1_recover_claim(
+        claim_id: str,
+        request: Request,
+        response: Response,
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
+    ) -> ClaimResource:
+        if not _http_origin_is_trusted(request):
+            raise HTTPException(status_code=403, detail="same-origin request required")
+        normalized_client_id = _required_client_id(client_id)
+        owner = _claim_owner_for_request(request, normalized_client_id)
+        async with actor._lock:
+            for controller in actor.world.query().with_all([ClaimedComponent]).execute_entities():
+                claim = controller.get_component(ClaimedComponent)
+                if claim.claim_id != claim_id:
+                    continue
+                if not claim_client_matches(claim, normalized_client_id):
+                    raise HTTPException(status_code=403, detail="claim belongs to another client")
+                if not claim_secrets.validate_owner(claim_id, owner):
+                    raise HTTPException(status_code=403, detail="claim belongs to another owner")
+                character = _character_entity(claim.character_id)
+                active = current_controller(actor, character)
+                if active is None or active[0].id != controller.id:
+                    raise HTTPException(status_code=409, detail="claim controller is not active")
+                replacement_secret = claim_secrets.rotate(claim_id, owner)
+                _set_claim_cookie(response, replacement_secret)
+                return _claim_resource_v1(character, controller, active[1], claim)
+        raise HTTPException(status_code=404, detail="claim does not exist")
 
     @play_v1.patch("/claims/{claim_id}", response_model=ClaimResource)
     async def v1_patch_claim(
         claim_id: str,
         body: ClaimUpdateRequest,
+        http_request: Request,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> ClaimResource:
-        character, controller, _edge, claim = _claim_context_v1(claim_id, claim_secret, client_id)
-        request = WebControllerFallbackRequest(
+        normalized_client_id = _required_client_id(client_id)
+        owner = _claim_owner_for_request(http_request, normalized_client_id)
+        claim_secret = _request_claim_secret(http_request, claim_secret)
+        character, controller, _edge, claim = _claim_context_v1(
+            claim_id, claim_secret, normalized_client_id, owner
+        )
+        control_request = WebControllerFallbackRequest(
             character_id=str(character.id),
             client_id=claim.client_id,
             claim_id=claim_id,
         )
-        _with_claim_secret(request, claim_secret)
+        _with_claim_secret(control_request, claim_secret)
         if body.kind == "fallback":
-            request = WebControllerFallbackRequest(
+            control_request = WebControllerFallbackRequest(
                 character_id=str(character.id),
                 client_id=claim.client_id,
                 claim_id=claim_id,
@@ -2287,11 +2395,13 @@ def create_app(
                 llm_provider=body.llm_provider,
                 timeout_seconds=body.timeout_seconds,
             )
-            _with_claim_secret(request, claim_secret)
-            await _web_controller_fallback_request(request, (character, controller, _edge, claim))
+            _with_claim_secret(control_request, claim_secret)
+            await _web_controller_fallback_request(
+                control_request, (character, controller, _edge, claim)
+            )
         elif body.desired == "fallback":
             await _release_web_controller_to_fallback_request(
-                request, (character, controller, _edge, claim)
+                control_request, (character, controller, _edge, claim)
             )
         elif not controller.has_component(WebControllerComponent):
             reclaim = WebControllerClaimRequest(
@@ -2301,22 +2411,40 @@ def create_app(
                 label=claim.label or "web",
             )
             _with_claim_secret(reclaim, claim_secret)
-            await _claim_web_controller_request(reclaim)
-        return _claim_resource_v1(*_claim_context_v1(claim_id, claim_secret, client_id))
+            await _claim_web_controller_request(reclaim, owner)
+        return _claim_resource_v1(
+            *_claim_context_v1(claim_id, claim_secret, normalized_client_id, owner)
+        )
 
     @play_v1.delete("/claims/{claim_id}", status_code=204, response_class=Response)
     async def v1_delete_claim(
         claim_id: str,
+        http_request: Request,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> Response:
-        character, _controller, _edge, claim = _claim_context_v1(claim_id, claim_secret, client_id)
-        request = WebControllerFallbackRequest(
+        normalized_client_id = _required_client_id(client_id)
+        owner = _claim_owner_for_request(http_request, normalized_client_id)
+        claim_secret = _request_claim_secret(http_request, claim_secret)
+        character, _controller, _edge, claim = _claim_context_v1(
+            claim_id, claim_secret, normalized_client_id, owner
+        )
+        control_request = WebControllerFallbackRequest(
             character_id=str(character.id), client_id=claim.client_id, claim_id=claim_id
         )
-        _with_claim_secret(request, claim_secret)
-        await _release_web_claim_request(request, (character, _controller, _edge, claim))
-        return Response(status_code=204)
+        _with_claim_secret(control_request, claim_secret)
+        await _release_web_claim_request(
+            control_request, (character, _controller, _edge, claim)
+        )
+        response = Response(status_code=204)
+        response.delete_cookie(
+            CLAIM_COOKIE_NAME,
+            secure=True,
+            httponly=True,
+            samesite="strict",
+            path=CLAIM_COOKIE_PATH,
+        )
+        return response
 
     @play_v1.post(
         "/claims/{claim_id}/chat-jobs/{job_id}",
@@ -2326,11 +2454,15 @@ def create_app(
         claim_id: str,
         job_id: str,
         body: CharacterChatReplyRequest,
+        request: Request,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> JobResource:
+        normalized_client_id = _required_client_id(client_id)
+        owner = _claim_owner_for_request(request, normalized_client_id)
+        claim_secret = _request_claim_secret(request, claim_secret)
         character, _controller, _edge, _claim = _claim_context_v1(
-            claim_id, claim_secret, client_id
+            claim_id, claim_secret, normalized_client_id, owner
         )
         job = character_chat_jobs.get(job_id)
         if job is None or character_chat_job_characters.get(job_id) != str(character.id):
@@ -2354,10 +2486,16 @@ def create_app(
     @play_v1.get("/claims/{claim_id}/projection", response_model=ClaimProjectionResource)
     async def v1_claim_projection(
         claim_id: str,
+        request: Request,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> ClaimProjectionResource:
-        character, controller, edge, claim = _claim_context_v1(claim_id, claim_secret, client_id)
+        normalized_client_id = _required_client_id(client_id)
+        owner = _claim_owner_for_request(request, normalized_client_id)
+        claim_secret = _request_claim_secret(request, claim_secret)
+        character, controller, edge, claim = _claim_context_v1(
+            claim_id, claim_secret, normalized_client_id, owner
+        )
         projection = serialize_character_projection(actor, str(character.id))
         room_id = projection.room.id
         room_projection = serialize_room_projection(actor, room_id) if room_id else None
@@ -2394,11 +2532,17 @@ def create_app(
     async def v1_submit_command(
         claim_id: str,
         body: ClaimCommandRequest,
+        request: Request,
         response: Response,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> CommandResource:
-        character, controller, edge, _claim = _claim_context_v1(claim_id, claim_secret, client_id)
+        normalized_client_id = _required_client_id(client_id)
+        owner = _claim_owner_for_request(request, normalized_client_id)
+        claim_secret = _request_claim_secret(request, claim_secret)
+        character, controller, edge, _claim = _claim_context_v1(
+            claim_id, claim_secret, normalized_client_id, owner
+        )
         request = CommandRequest(
             character_id=str(character.id),
             controller_id=str(controller.id),
@@ -2431,10 +2575,16 @@ def create_app(
     async def v1_cancel_command(
         claim_id: str,
         command_id: str,
+        request: Request,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> CommandResource:
-        character, controller, edge, _claim = _claim_context_v1(claim_id, claim_secret, client_id)
+        normalized_client_id = _required_client_id(client_id)
+        owner = _claim_owner_for_request(request, normalized_client_id)
+        claim_secret = _request_claim_secret(request, claim_secret)
+        character, controller, edge, _claim = _claim_context_v1(
+            claim_id, claim_secret, normalized_client_id, owner
+        )
         result = await _cancel_command_request(
             str(character.id),
             command_id,
@@ -2450,10 +2600,16 @@ def create_app(
     async def v1_query_claim(
         claim_id: str,
         body: ClaimQueryRequest,
+        request: Request,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> PerspectiveQueryResult:
-        character, _controller, _edge, _claim = _claim_context_v1(claim_id, claim_secret, client_id)
+        normalized_client_id = _required_client_id(client_id)
+        owner = _claim_owner_for_request(request, normalized_client_id)
+        claim_secret = _request_claim_secret(request, claim_secret)
+        character, _controller, _edge, _claim = _claim_context_v1(
+            claim_id, claim_secret, normalized_client_id, owner
+        )
         try:
             return actor.perspective_queries.execute(
                 actor,
@@ -2472,11 +2628,17 @@ def create_app(
     @play_v1.get("/claims/{claim_id}/events", response_model=EventCollection)
     async def v1_claim_events(
         claim_id: str,
+        request: Request,
         since: int | None = None,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> EventCollection:
-        character, _controller, _edge, _claim = _claim_context_v1(claim_id, claim_secret, client_id)
+        normalized_client_id = _required_client_id(client_id)
+        owner = _claim_owner_for_request(request, normalized_client_id)
+        claim_secret = _request_claim_secret(request, claim_secret)
+        character, _controller, _edge, _claim = _claim_context_v1(
+            claim_id, claim_secret, normalized_client_id, owner
+        )
         if since is None:
             return EventCollection(
                 **_world_fields(),
@@ -2494,12 +2656,16 @@ def create_app(
     async def v1_submit_player_job(
         claim_id: str,
         body: SceneImageJobRequest,
+        request: Request,
         response: Response,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> JobResource:
+        normalized_client_id = _required_client_id(client_id)
+        owner = _claim_owner_for_request(request, normalized_client_id)
+        claim_secret = _request_claim_secret(request, claim_secret)
         character, _controller, _edge, _claim = _claim_context_v1(
-            claim_id, claim_secret, client_id
+            claim_id, claim_secret, normalized_client_id, owner
         )
         created = datetime.now(UTC)
         image = await _scene_image_request(str(character.id))
@@ -2522,10 +2688,14 @@ def create_app(
     @play_v1.get("/claims/{claim_id}/jobs", response_model=list[JobResource])
     async def v1_list_player_jobs(
         claim_id: str,
+        request: Request,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> list[JobResource]:
-        _claim_context_v1(claim_id, claim_secret, client_id)
+        normalized_client_id = _required_client_id(client_id)
+        owner = _claim_owner_for_request(request, normalized_client_id)
+        claim_secret = _request_claim_secret(request, claim_secret)
+        _claim_context_v1(claim_id, claim_secret, normalized_client_id, owner)
         for job_id, job in list(player_jobs.items()):
             if player_job_claims.get(job_id) != claim_id:
                 continue
@@ -2538,10 +2708,14 @@ def create_app(
     async def v1_get_player_job(
         claim_id: str,
         job_id: str,
+        request: Request,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
-        client_id: str | None = Header(default=None, alias=CLIENT_ID_HEADER),
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> JobResource:
-        _claim_context_v1(claim_id, claim_secret, client_id)
+        normalized_client_id = _required_client_id(client_id)
+        owner = _claim_owner_for_request(request, normalized_client_id)
+        claim_secret = _request_claim_secret(request, claim_secret)
+        _claim_context_v1(claim_id, claim_secret, normalized_client_id, owner)
         job = player_jobs.get(job_id)
         if job is None or player_job_claims.get(job_id) != claim_id:
             raise HTTPException(status_code=404, detail="job does not exist")
@@ -2832,7 +3006,7 @@ def create_app(
             _require_allowed_admin_client_id(client_id)
             access_token = None
             if authenticator is not None:
-                access_token = _authenticate_websocket_frame(
+                access_token, _principal = _authenticate_websocket_frame(
                     websocket, data, AuthorizationSurface.ADMIN
                 )
         except (HTTPException, TimeoutError, ValueError, TypeError, WebSocketDisconnect):
@@ -2856,16 +3030,15 @@ def create_app(
                     await websocket.close(code=1008)
                     return
                 await websocket.send_json(subscription.frame(actor, message))
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, asyncio.CancelledError):
             pass
         finally:
             subscription.close()
 
     @app.websocket("/v1/play/claims/{claim_id}/stream")
     async def world_character_updates(websocket: WebSocket, claim_id: str) -> None:
-        # Claim secrets deliberately travel only in the first WebSocket frame.  Accepting
-        # first avoids putting player state in handshake failures and keeps credentials out
-        # of URLs, proxy logs, and telemetry attributes.
+        # Explicit-header clients authenticate in the first frame; browsers use the
+        # HttpOnly claim cookie. Neither path puts credentials in URLs or telemetry.
         if not websocket_origin_is_trusted(websocket):
             await websocket.close(code=1008)
             return
@@ -2886,12 +3059,20 @@ def create_app(
             not isinstance(auth, dict)
             or auth.get("type") != "authenticate"
             or not isinstance(data, dict)
-            or "claim_secret" not in data
             or not isinstance(data.get("claim_secret"), (str, type(None)))
         ):
             await websocket.close(code=1008)
             return
-        claim_secret = data["claim_secret"]
+        frame_claim_secret = data.get("claim_secret")
+        cookie_claim_secret = getattr(websocket, "cookies", {}).get(CLAIM_COOKIE_NAME)
+        if (
+            frame_claim_secret
+            and cookie_claim_secret
+            and not secrets.compare_digest(frame_claim_secret, cookie_claim_secret)
+        ):
+            await websocket.close(code=1008)
+            return
+        claim_secret = frame_claim_secret or cookie_claim_secret
         client_id = _client_id_header_value(
             data.get("client_id") or websocket.headers.get(CLIENT_ID_HEADER)
         )
@@ -2899,8 +3080,14 @@ def create_app(
         try:
             if client_id is None:
                 raise HTTPException(status_code=403, detail="client identity is required")
-            access_token = _authenticate_websocket_frame(websocket, data, AuthorizationSurface.PLAY)
-            claim_context = _claim_context_v1(claim_id, claim_secret, client_id)
+            access_token, principal = _authenticate_websocket_frame(
+                websocket, data, AuthorizationSurface.PLAY
+            )
+            owner = ClaimOwner(
+                "rest",
+                principal.subject if principal is not None else f"embedded:{client_id}",
+            )
+            claim_context = _claim_context_v1(claim_id, claim_secret, client_id, owner)
         except HTTPException:
             await websocket.close(code=1008)
             return
@@ -2912,7 +3099,7 @@ def create_app(
             try:
                 if access_token is not None and authenticator.verify_token(access_token) is None:
                     raise HTTPException(status_code=401, detail="invalid bearer token")
-                _claim_context_v1(claim_id, claim_secret, client_id)
+                _claim_context_v1(claim_id, claim_secret, client_id, owner)
             except HTTPException:
                 await websocket.close(code=1008)
                 return False
@@ -2932,10 +3119,26 @@ def create_app(
                 ):
                     return
                 while True:
-                    frame = await next_player_update(actor, subscription, character_id)
+                    update_task = asyncio.create_task(
+                        next_player_update(actor, subscription, character_id)
+                    )
+                    receive_task = asyncio.create_task(websocket.receive())
+                    done, pending = await asyncio.wait(
+                        {update_task, receive_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    if receive_task in done:
+                        message = receive_task.result()
+                        if message["type"] == "websocket.disconnect":
+                            return
+                        continue
+                    frame = update_task.result()
                     if not await send_frame(frame):
                         return
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, asyncio.CancelledError):
             pass
         finally:
             subscription.close()

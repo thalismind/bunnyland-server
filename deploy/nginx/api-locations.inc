@@ -11,16 +11,12 @@ location @bunnyland_rate_limited {
     return 429;
 }
 
-# Optional Tempo query API. Its included location retains a dedicated, unrelated Basic
-# credential file and is never part of Bunnyland application authentication.
-include /etc/nginx/conf.d/tempo-location.inc*;
-
 location = /api/public/health {
     proxy_pass ${BUNNYLAND_API_UPSTREAM}/public/health;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $remote_addr;
-    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Proto $bunnyland_forwarded_proto;
 }
 
 location /api/ {
@@ -32,7 +28,7 @@ location /api/ {
     proxy_buffering off;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $remote_addr;
-    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Proto $bunnyland_forwarded_proto;
     proxy_set_header Authorization $http_authorization;
     proxy_set_header Cookie $http_cookie;
     proxy_set_header X-Bunnyland-Client-Id $http_x_bunnyland_client_id;

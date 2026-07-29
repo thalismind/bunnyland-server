@@ -7,10 +7,10 @@ import inspect
 import json
 import os
 from collections import deque
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import quote, unquote, urlsplit
 
 from pydantic import AnyUrl
@@ -19,6 +19,7 @@ from relics import EntityId
 from .. import telemetry
 from ..claims import (
     CLIENT_KIND_MCP,
+    ClaimOwner,
     ClaimSecretRegistry,
     add_claim,
     claim_client_matches,
@@ -98,6 +99,11 @@ if TYPE_CHECKING:
         WorldRoomGenerationResponse,
     )
     from ..worldgen import GenOptions
+
+
+class _McpRequest(Protocol):
+    headers: Mapping[str, str]
+    state: object
 
 
 def _now_unix() -> int:
@@ -396,6 +402,7 @@ def assign_mcp_controller(
     client_id: str,
     claim_id: str | None = None,
     claim_secret: str | None = None,
+    owner: ClaimOwner | None = None,
     character_name: str | None = None,
     character_id: str | None = None,
     label: str = "",
@@ -407,6 +414,7 @@ def assign_mcp_controller(
     client_id = client_id.strip()
     if not client_id:
         raise RuntimeError("client_id is required")
+    owner = owner or ClaimOwner(CLIENT_KIND_MCP, client_id)
     character = _match_character(
         actor,
         character_name,
@@ -432,6 +440,7 @@ def assign_mcp_controller(
             ensure_claim_secret(
                 claim_secrets,
                 active_claim,
+                owner=owner,
                 claim_id=claim_id,
                 claim_secret=claim_secret,
             )
@@ -439,7 +448,6 @@ def assign_mcp_controller(
             raise RuntimeError(str(exc)) from exc
         validated_claim_secret = True
         issued_claim_id = active_claim.claim_id
-        claim_secret = claim_secrets.secret(active_claim.claim_id)
 
     controller = _mcp_controller_for(actor, client_id)
     if controller is not None:
@@ -467,7 +475,7 @@ def assign_mcp_controller(
         or claim_secret is None
         or not claim_secrets.has_secret(claim.claim_id)
     ):
-        claim_secret = claim_secrets.issue(claim.claim_id)
+        claim_secret = claim_secrets.issue(claim.claim_id, owner)
 
     generation = actor.assign_controller(character.id, controller.id)
     if character.has_component(SuspendedComponent):
@@ -492,6 +500,7 @@ def release_mcp_controller(
     client_id: str,
     claim_id: str | None = None,
     claim_secret: str | None = None,
+    owner: ClaimOwner | None = None,
     fallback_controller: str = "suspend",
     reason: str = "released by MCP client",
     model: str | None = None,
@@ -500,6 +509,7 @@ def release_mcp_controller(
     """Release active control to another controller while retaining the claim."""
 
     claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
+    owner = owner or ClaimOwner(CLIENT_KIND_MCP, client_id.strip())
     found = mcp_controlled_character(actor, client_id)
     if found is None:
         raise RuntimeError("client is not controlling a character yet")
@@ -514,6 +524,7 @@ def release_mcp_controller(
         ensure_claim_secret(
             claim_secrets,
             claim,
+            owner=owner,
             claim_id=claim_id,
             claim_secret=claim_secret,
         )
@@ -569,7 +580,7 @@ def release_mcp_controller(
         "controller_generation": generation,
         "controller_kind": controller_kind,
         "claim_id": claim.claim_id,
-        "claim_secret": claim_secrets.secret(claim.claim_id) or "",
+        "claim_secret": claim_secret or "",
     }
 
 
@@ -580,8 +591,10 @@ def release_mcp_claim(
     client_id: str,
     claim_id: str | None = None,
     claim_secret: str | None = None,
+    owner: ClaimOwner | None = None,
 ) -> dict[str, Any]:
     claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
+    owner = owner or ClaimOwner(CLIENT_KIND_MCP, client_id.strip())
     found = claimed_character_for(
         actor,
         client_id=client_id,
@@ -593,6 +606,7 @@ def release_mcp_claim(
         ensure_claim_secret(
             claim_secrets,
             claim,
+            owner=owner,
             claim_id=claim_id,
             claim_secret=claim_secret,
         )
@@ -615,6 +629,7 @@ async def render_mcp_client_prompt(
     client_id: str,
     claim_id: str | None = None,
     claim_secret: str | None = None,
+    owner: ClaimOwner | None = None,
     fragment_providers: Sequence[Any] = (),
     persona_providers: Sequence[Any] = (),
     prompt_filter_runtime=None,
@@ -627,6 +642,7 @@ async def render_mcp_client_prompt(
         None,
         claim_id=claim_id,
         claim_secret=claim_secret,
+        owner=owner,
     )
     builder = PromptBuilder(
         actor.world,
@@ -665,8 +681,10 @@ def _controlled_or_requested_character(
     *,
     claim_id: str | None = None,
     claim_secret: str | None = None,
+    owner: ClaimOwner | None = None,
 ) -> tuple[EntityId, EntityId, int]:
     claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
+    owner = owner or ClaimOwner(CLIENT_KIND_MCP, client_id.strip())
     found = claimed_character_for(
         actor,
         client_id=client_id,
@@ -678,6 +696,7 @@ def _controlled_or_requested_character(
         ensure_claim_secret(
             claim_secrets,
             claim,
+            owner=owner,
             claim_id=claim_id,
             claim_secret=claim_secret,
         )
@@ -818,13 +837,13 @@ def create_bunnyland_mcp_app(
         context = mcp.get_context()
         event_bridge.unsubscribe(str(uri), context.session)
 
-    def _request():
+    def _request() -> _McpRequest | None:
         try:
             return mcp.get_context().request_context.request
         except (LookupError, AttributeError, ValueError):
             return None
 
-    def _request_auth() -> tuple[TokenPrincipal | None, Any | None]:
+    def _request_auth() -> tuple[TokenPrincipal | None, _McpRequest | None]:
         request = _request()
         if request is None:
             return None, None
@@ -835,10 +854,14 @@ def create_bunnyland_mcp_app(
         headers = getattr(_request(), "headers", {}) or {}
         return headers.get(name)
 
-    def _require_request_scopes(required_scopes: tuple[str, ...]) -> None:
+    def _authenticated_request() -> tuple[TokenPrincipal, _McpRequest]:
         principal, request = _request_auth()
         if request is None or principal is None:
             raise ToolError("authenticated MCP request context required")
+        return principal, request
+
+    def _require_request_scopes(required_scopes: tuple[str, ...]) -> None:
+        principal, request = _authenticated_request()
         missing = [scope for scope in required_scopes if scope not in principal.scopes]
         if missing:
             raise ToolError(f"{', '.join(missing)} scope required")
@@ -970,6 +993,10 @@ def create_bunnyland_mcp_app(
             return provided
         return header_secret
 
+    def request_claim_owner() -> ClaimOwner:
+        principal, _request_context = _authenticated_request()
+        return ClaimOwner(CLIENT_KIND_MCP, principal.subject)
+
     def controlled_or_requested_player(
         client_id: str,
         character_id: str | None,
@@ -986,6 +1013,7 @@ def create_bunnyland_mcp_app(
             character_id,
             claim_id=claim_id,
             claim_secret=claim_secret,
+            owner=request_claim_owner(),
         )
 
     @play_resource(
@@ -1530,6 +1558,7 @@ def create_bunnyland_mcp_app(
                     client_id=client_id,
                     claim_id=claim_id,
                     claim_secret=claim_secret,
+                    owner=request_claim_owner(),
                     character_name=character_name,
                     character_id=character_id,
                     label=label,
@@ -1568,6 +1597,7 @@ def create_bunnyland_mcp_app(
                 ensure_claim_secret(
                     claim_secrets,
                     claim,
+                    owner=request_claim_owner(),
                     claim_id=claim_id,
                     claim_secret=claim_secret,
                 )
@@ -1577,6 +1607,7 @@ def create_bunnyland_mcp_app(
                     client_id=client_id,
                     claim_id=claim_id,
                     claim_secret=claim_secret,
+                    owner=request_claim_owner(),
                     character_id=claim.character_id,
                     label=claim.label,
                 )
@@ -1605,6 +1636,7 @@ def create_bunnyland_mcp_app(
                     client_id=client_id,
                     claim_id=claim_id,
                     claim_secret=claim_secret,
+                    owner=request_claim_owner(),
                     fallback_controller=fallback_controller,
                     reason=reason,
                     model=model,
@@ -1631,6 +1663,7 @@ def create_bunnyland_mcp_app(
                     client_id=client_id,
                     claim_id=claim_id,
                     claim_secret=claim_secret,
+                    owner=request_claim_owner(),
                 )
         except RuntimeError as exc:
             raise ToolError(str(exc)) from exc

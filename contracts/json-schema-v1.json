@@ -657,6 +657,15 @@
           "title": "Character Id",
           "type": "string"
         },
+        "delivery": {
+          "default": "header",
+          "enum": [
+            "header",
+            "cookie"
+          ],
+          "title": "Delivery",
+          "type": "string"
+        },
         "fallback_controller": {
           "anyOf": [
             {

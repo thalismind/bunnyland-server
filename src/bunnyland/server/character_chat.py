@@ -88,16 +88,16 @@ class CharacterChatService:
         return sorted(definition.name for definition in self._allowed_definitions())
 
     async def chat(self, character_id: str, request: CharacterChatRequest) -> CharacterChatResponse:
-        telemetry.set_span_attributes(
-            {
-                "character.id": character_id,
-                "chat.client_id": request.client_id,
-                "chat.input": _trace_text(request.message),
-                "chat.input_chars": len(request.message),
-                "chat.history.count": len(request.history),
-                "chat.history_summary_chars": len(request.history_summary),
-            }
-        )
+        chat_attributes = {
+            "character.id": character_id,
+            "chat.client_id": request.client_id,
+            "chat.input_chars": len(request.message),
+            "chat.history.count": len(request.history),
+            "chat.history_summary_chars": len(request.history_summary),
+        }
+        if telemetry.content_capture_enabled():
+            chat_attributes["chat.input"] = _trace_text(request.message)
+        telemetry.set_span_attributes(chat_attributes)
         with _chat_span("character.chat.validate", {"character.id": character_id}) as span:
             parsed = parse_entity_id(character_id)
             if parsed is None or not self.actor.world.has_entity(parsed):
@@ -126,8 +126,9 @@ class CharacterChatService:
                 epoch=self.actor.epoch,
             )
             messages = self._messages(prompt, request)
-            span.set_attribute("chat.prompt", _trace_text(prompt))
             span.set_attribute("chat.prompt_chars", len(prompt))
+            if telemetry.content_capture_enabled():
+                span.set_attribute("chat.prompt", _trace_text(prompt))
             span.set_attribute("chat.messages.count", len(messages))
 
         reply = await self._call_agent(
@@ -140,14 +141,14 @@ class CharacterChatService:
         )
         _trace_reply(reply, phase="initial")
         if reply.tool_call is None:
-            telemetry.set_span_attributes(
-                {
-                    "chat.final_reply": _trace_text(reply.content or "..."),
-                    "chat.action.status": "none",
-                    "chat.action.tool": "",
-                    "command.id": "",
-                }
-            )
+            final_attributes = {
+                "chat.action.status": "none",
+                "chat.action.tool": "",
+                "command.id": "",
+            }
+            if telemetry.content_capture_enabled():
+                final_attributes["chat.final_reply"] = _trace_text(reply.content or "...")
+            telemetry.set_span_attributes(final_attributes)
             return CharacterChatResponse(
                 world_epoch=self.actor.epoch,
                 character_id=character_id,
@@ -187,14 +188,14 @@ class CharacterChatService:
                     action=action,
                 )
             )
-        telemetry.set_span_attributes(
-            {
-                "chat.final_reply": _trace_text(final),
-                "chat.action.status": action.status,
-                "chat.action.tool": action.tool or "",
-                "command.id": action.command_id or "",
-            }
-        )
+        final_attributes = {
+            "chat.action.status": action.status,
+            "chat.action.tool": action.tool or "",
+            "command.id": action.command_id or "",
+        }
+        if telemetry.content_capture_enabled():
+            final_attributes["chat.final_reply"] = _trace_text(final)
+        telemetry.set_span_attributes(final_attributes)
         return CharacterChatResponse(
             world_epoch=self.actor.epoch,
             character_id=character_id,
@@ -241,13 +242,13 @@ class CharacterChatService:
             reply=pending.reply,
             action=pending.action,
         )
-        telemetry.set_span_attributes(
-            {
-                "chat.pending.complete": response.complete,
-                "chat.reply": _trace_text(response.reply),
-                "chat.action.status": response.action.status,
-            }
-        )
+        pending_attributes = {
+            "chat.pending.complete": response.complete,
+            "chat.action.status": response.action.status,
+        }
+        if telemetry.content_capture_enabled():
+            pending_attributes["chat.reply"] = _trace_text(response.reply)
+        telemetry.set_span_attributes(pending_attributes)
         return response
 
     def _complete_pending(self, event: CommandExecutedEvent | CommandRejectedEvent) -> None:
@@ -361,8 +362,9 @@ class CharacterChatService:
             },
         ) as span:
             llm_input = str(messages[-1].get("content", "")) if messages else ""
-            span.set_attribute("llm.input", _trace_text(llm_input))
             span.set_attribute("llm.input_chars", len(llm_input))
+            if telemetry.content_capture_enabled():
+                span.set_attribute("llm.input", _trace_text(llm_input))
             chat = getattr(self.agent, "chat", None)
             if chat is None:
                 raise RuntimeError("configured LLM agent does not support character chat")
@@ -373,12 +375,16 @@ class CharacterChatService:
                 provider=provider,
                 tools=tools,
             )
-            span.set_attribute("chat.reply", _trace_text(reply.content or ""))
             span.set_attribute("chat.reply_chars", len(reply.content or ""))
             span.set_attribute("chat.tool.called", reply.tool_call is not None)
+            if telemetry.content_capture_enabled():
+                span.set_attribute("chat.reply", _trace_text(reply.content or ""))
             if reply.tool_call is not None:
                 span.set_attribute("chat.tool.name", reply.tool_call.name)
-                span.set_attribute("chat.tool.arguments", _trace_json(reply.tool_call.arguments))
+                if telemetry.content_capture_enabled():
+                    span.set_attribute(
+                        "chat.tool.arguments", _trace_json(reply.tool_call.arguments)
+                    )
             return reply
 
     async def _submit_tool(
@@ -388,21 +394,23 @@ class CharacterChatService:
         generation: int,
         call: ToolCall,
     ) -> CharacterChatActionResult:
-        with _chat_span(
-            "character.chat.tool",
-            {
-                "character.id": str(character_id),
-                "controller.id": controller_id,
-                "controller.generation": generation,
-                "chat.tool.name": call.name,
-                "chat.tool.arguments": _trace_json(call.arguments),
-            },
-        ) as span:
+        tool_attributes = {
+            "character.id": str(character_id),
+            "controller.id": controller_id,
+            "controller.generation": generation,
+            "chat.tool.name": call.name,
+        }
+        if telemetry.content_capture_enabled():
+            tool_attributes["chat.tool.arguments"] = _trace_json(call.arguments)
+        with _chat_span("character.chat.tool", tool_attributes) as span:
             action = await self._submit_tool_inner(character_id, controller_id, generation, call)
             span.set_attribute("chat.action.status", action.status)
             span.set_attribute("command.id", action.command_id or "")
-            span.set_attribute("chat.action.reason", _trace_text(action.reason))
-            span.set_attribute("chat.action.result_events", _trace_json(action.result_events))
+            if telemetry.content_capture_enabled():
+                span.set_attribute("chat.action.reason", _trace_text(action.reason))
+                span.set_attribute(
+                    "chat.action.result_events", _trace_json(action.result_events)
+                )
             return action
 
     async def _submit_tool_inner(
@@ -522,13 +530,17 @@ def _trace_json(value: Any) -> str:
 
 def _trace_reply(reply: ChatAgentReply, *, phase: str) -> None:
     attributes = {
-        f"chat.{phase}.reply": _trace_text(reply.content or ""),
         f"chat.{phase}.reply_chars": len(reply.content or ""),
         f"chat.{phase}.tool_called": reply.tool_call is not None,
     }
+    if telemetry.content_capture_enabled():
+        attributes[f"chat.{phase}.reply"] = _trace_text(reply.content or "")
     if reply.tool_call is not None:
         attributes[f"chat.{phase}.tool_name"] = reply.tool_call.name
-        attributes[f"chat.{phase}.tool_arguments"] = _trace_json(reply.tool_call.arguments)
+        if telemetry.content_capture_enabled():
+            attributes[f"chat.{phase}.tool_arguments"] = _trace_json(
+                reply.tool_call.arguments
+            )
     telemetry.set_span_attributes(attributes)
 
 

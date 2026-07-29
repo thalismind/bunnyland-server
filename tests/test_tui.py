@@ -1187,6 +1187,50 @@ def test_persistent_client_id_reuses_config_file(tmp_path):
 
     assert first == second
     assert path.read_text(encoding="utf-8").strip() == first
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_persistent_client_id_rejects_symlink(tmp_path):
+    target = tmp_path / "target"
+    target.write_text("00000000-0000-0000-0000-000000000000\n")
+    path = tmp_path / "client-id"
+    path.symlink_to(target)
+
+    with pytest.raises(PermissionError, match="non-symlink"):
+        persistent_client_id(path)
+
+
+def test_persistent_client_id_propagates_secure_write_rejection(monkeypatch, tmp_path):
+    def reject_write(_path, _contents):
+        raise PermissionError("unsafe destination")
+
+    monkeypatch.setattr(tui_backend, "secure_write_text", reject_write)
+    with pytest.raises(PermissionError, match="unsafe destination"):
+        persistent_client_id(tmp_path / "client-id")
+
+
+def test_claim_files_are_atomic_private_and_reject_symlinks(monkeypatch, tmp_path):
+    import bunnyland.tui.backend as backend_module
+
+    monkeypatch.setattr(backend_module, "CONFIG_DIR", tmp_path / "bunnyland")
+    control = ControlClaim("controller:1", 4, "claim:1", "secret:1")
+    backend_module.save_claim_control("client:1", "character:1", control)
+    path = backend_module._claim_path("client:1", "character:1")
+
+    assert backend_module.load_claim_control("client:1", "character:1") == control
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+    assert not list(path.parent.glob(f".{path.name}.*.tmp"))
+
+    path.unlink()
+    target = tmp_path / "unsafe-target"
+    target.write_text("{}\n")
+    path.symlink_to(target)
+    with pytest.raises(PermissionError, match="non-symlink"):
+        backend_module.load_claim_control("client:1", "character:1")
+    with pytest.raises(PermissionError, match="non-symlink"):
+        backend_module.save_claim_control("client:1", "character:1", control)
 
 
 def test_terminal_backends_share_default_persistent_client_id(monkeypatch, tmp_path):
@@ -2008,8 +2052,13 @@ def test_remote_backend_rejects_insecure_servers_and_token_files(tmp_path) -> No
     token_file = tmp_path / "token"
     token_file.write_text("secret\n")
     token_file.chmod(0o640)
-    with pytest.raises(PermissionError, match="group/world"):
-        RemoteBackend("https://server.example", token_file=token_file)
+    RemoteBackend("https://server.example", token_file=token_file)
+    assert token_file.stat().st_mode & 0o777 == 0o600
+
+    symlink = tmp_path / "token-link"
+    symlink.symlink_to(token_file)
+    with pytest.raises(PermissionError, match="non-symlink"):
+        RemoteBackend("https://server.example", token_file=symlink)
 
 
 async def test_remote_backend_rotation_loop_recovers_from_failure(monkeypatch, caplog):

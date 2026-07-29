@@ -91,7 +91,7 @@ services:
       BUNNYLAND_EDGE_API_BURST: ${BUNNYLAND_EDGE_API_BURST:-60}
       BUNNYLAND_EDGE_RETRY_AFTER: ${BUNNYLAND_EDGE_RETRY_AFTER:-1}
     expose:
-      - "80"
+      - "8080"
     networks:
       private:
         ipv4_address: ${BUNNYLAND_FRONTEND_IP:-172.28.0.2}

@@ -195,6 +195,12 @@ def enabled() -> bool:
     return _ENABLED
 
 
+def content_capture_enabled() -> bool:
+    """Return whether operators explicitly opted into content-derived trace attributes."""
+    value = (os.environ.get("BUNNYLAND_OTEL_CAPTURE_CONTENT") or "").strip().lower()
+    return _ENABLED and value in {"1", "true", "yes", "on"}
+
+
 def _enabled_from_env() -> bool:
     value = (os.environ.get("BUNNYLAND_OTEL_ENABLED") or "").strip().lower()
     return value in {"1", "true", "yes", "on"}

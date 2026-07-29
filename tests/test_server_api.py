@@ -135,6 +135,7 @@ from bunnyland.server.admin import (
     start_world_generation,
 )
 from bunnyland.server.app import (
+    CLAIM_COOKIE_NAME,
     AuthorizationSurface,
     classify_authorization_surface,
     next_player_update,
@@ -399,6 +400,264 @@ def _create_claim(
     )
     assert response.status_code == 201, response.text
     return response.json(), response.headers["X-Bunnyland-Claim-Secret"]
+
+
+def test_claim_cookie_delivery_recovery_origin_and_owner_binding(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    store = TokenStore(":memory:")
+    owner_token, _owner = store.issue(
+        "player-one",
+        (WORLD_PLAY_SCOPE,),
+        automatic_rotation=False,
+    )
+    other_token, _other = store.issue(
+        "player-two",
+        (WORLD_PLAY_SCOPE,),
+        automatic_rotation=False,
+    )
+    registry = ClaimSecretRegistry()
+    app = _create_app(
+        scenario.actor,
+        token_store=store,
+        claim_secrets=registry,
+    )
+    client = testclient.TestClient(app)
+    owner_headers = {
+        "Authorization": f"Bearer {owner_token}",
+        CLIENT_ID_HEADER: "browser-a",
+        "Origin": "http://testserver",
+    }
+    recover_without_origin = client.post(
+        "/v1/play/claims/missing/recover",
+        headers={
+            "Authorization": f"Bearer {owner_token}",
+            CLIENT_ID_HEADER: "browser-a",
+        },
+    )
+    assert recover_without_origin.status_code == 403
+    assert recover_without_origin.json()["detail"] == "same-origin request required"
+
+    recover_without_client = client.post(
+        "/v1/play/claims/missing/recover",
+        headers={
+            "Authorization": f"Bearer {owner_token}",
+            "Origin": "http://testserver",
+        },
+    )
+    assert recover_without_client.status_code == 403
+    assert recover_without_client.json()["detail"] == f"{CLIENT_ID_HEADER} header is required"
+
+    missing_create_origin = client.post(
+        "/v1/play/claims",
+        headers={
+            "Authorization": f"Bearer {owner_token}",
+            CLIENT_ID_HEADER: "browser-a",
+        },
+        json={
+            "character_id": str(scenario.character),
+            "delivery": "cookie",
+        },
+    )
+    assert missing_create_origin.status_code == 403
+    assert missing_create_origin.json()["detail"] == "same-origin request required"
+
+    created = client.post(
+        "/v1/play/claims",
+        headers=owner_headers,
+        json={
+            "character_id": str(scenario.character),
+            "delivery": "cookie",
+        },
+    )
+
+    assert created.status_code == 201
+    assert "claim_secret" not in created.text
+    assert "X-Bunnyland-Claim-Secret" not in created.headers
+    set_cookie = created.headers["set-cookie"]
+    assert "bunnyland_claim=" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Secure" in set_cookie
+    assert "SameSite=strict" in set_cookie
+    assert "Path=/api/v1/play" in set_cookie
+    assert "Max-Age" not in set_cookie
+    claim_id = created.json()["id"]
+    old_secret = created.cookies[CLAIM_COOKIE_NAME]
+
+    missing_claim = client.post(
+        "/v1/play/claims/missing/recover",
+        headers=owner_headers,
+    )
+    assert missing_claim.status_code == 404
+    assert missing_claim.json()["detail"] == "claim does not exist"
+
+    wrong_client = client.post(
+        f"/v1/play/claims/{claim_id}/recover",
+        headers={
+            "Authorization": f"Bearer {owner_token}",
+            CLIENT_ID_HEADER: "browser-b",
+            "Origin": "http://testserver",
+        },
+    )
+    assert wrong_client.status_code == 403
+    assert wrong_client.json()["detail"] == "claim belongs to another client"
+
+    wrong_owner = client.post(
+        f"/v1/play/claims/{claim_id}/recover",
+        headers={
+            "Authorization": f"Bearer {other_token}",
+            CLIENT_ID_HEADER: "browser-a",
+            "Origin": "http://testserver",
+        },
+    )
+    assert wrong_owner.status_code == 403
+    assert wrong_owner.json()["detail"] == "claim belongs to another owner"
+
+    missing_origin = client.patch(
+        f"/v1/play/claims/{claim_id}",
+        headers={
+            "Authorization": f"Bearer {owner_token}",
+            CLIENT_ID_HEADER: "browser-a",
+            "Cookie": f"{CLAIM_COOKIE_NAME}={old_secret}",
+        },
+        json={"kind": "control", "desired": "active"},
+    )
+    assert missing_origin.status_code == 403
+    assert missing_origin.json()["detail"] == "same-origin request required"
+
+    trusted_cookie_update = client.patch(
+        f"/v1/play/claims/{claim_id}",
+        headers={
+            "Authorization": f"Bearer {owner_token}",
+            CLIENT_ID_HEADER: "browser-a",
+            "Cookie": f"{CLAIM_COOKIE_NAME}={old_secret}",
+            "Origin": "http://testserver",
+        },
+        json={"kind": "control", "desired": "active"},
+    )
+    assert trusted_cookie_update.status_code == 200
+
+    conflict = client.get(
+        f"/v1/play/claims/{claim_id}/projection",
+        headers={
+            "Authorization": f"Bearer {owner_token}",
+            CLIENT_ID_HEADER: "browser-a",
+            "Cookie": f"{CLAIM_COOKIE_NAME}={old_secret}",
+            "X-Bunnyland-Claim-Secret": "different",
+        },
+    )
+    assert conflict.status_code == 401
+    assert conflict.json()["detail"] == "conflicting claim credentials"
+
+    recovered = client.post(
+        f"/v1/play/claims/{claim_id}/recover",
+        headers=owner_headers,
+    )
+    assert recovered.status_code == 200
+    assert "claim_secret" not in recovered.text
+    assert "X-Bunnyland-Claim-Secret" not in recovered.headers
+    replacement_secret = recovered.cookies[CLAIM_COOKIE_NAME]
+    assert replacement_secret != old_secret
+
+    common = {CLIENT_ID_HEADER: "browser-a"}
+    assert (
+        client.get(
+            f"/v1/play/claims/{claim_id}/projection",
+            headers={
+                **common,
+                "Authorization": f"Bearer {owner_token}",
+                "X-Bunnyland-Claim-Secret": old_secret,
+            },
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            f"/v1/play/claims/{claim_id}/projection",
+            headers={
+                **common,
+                "Authorization": f"Bearer {other_token}",
+                "X-Bunnyland-Claim-Secret": replacement_secret,
+            },
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            f"/v1/play/claims/{claim_id}/projection",
+            headers={
+                **common,
+                "Authorization": f"Bearer {owner_token}",
+                "Cookie": f"{CLAIM_COOKIE_NAME}={replacement_secret}",
+            },
+        ).status_code
+        == 200
+    )
+
+    inactive_controller = spawn_entity(
+        scenario.actor.world,
+        [SuspendedControllerComponent(reason="inactive recovery test")],
+    )
+    scenario.actor.assign_controller(scenario.character, inactive_controller.id)
+    inactive = client.post(
+        f"/v1/play/claims/{claim_id}/recover",
+        headers=owner_headers,
+    )
+    assert inactive.status_code == 409
+    assert inactive.json()["detail"] == "claim controller is not active"
+
+
+def test_claim_routes_reject_missing_client_identity_before_claim_lookup(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    store = TokenStore(":memory:")
+    token, _principal = store.issue(
+        "player",
+        (WORLD_PLAY_SCOPE,),
+        automatic_rotation=False,
+    )
+    client = testclient.TestClient(_create_app(scenario.actor, token_store=store))
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Origin": "http://testserver",
+    }
+    requests = (
+        ("POST", "/v1/play/claims", {"character_id": str(scenario.character)}),
+        ("PUT", "/v1/play/claims/missing", None),
+        (
+            "PATCH",
+            "/v1/play/claims/missing",
+            {"kind": "control", "desired": "active"},
+        ),
+        ("DELETE", "/v1/play/claims/missing", None),
+        (
+            "POST",
+            "/v1/play/claims/missing/chat-jobs/job",
+            {"reply": "ready"},
+        ),
+        (
+            "POST",
+            "/v1/play/claims/missing/commands",
+            {"command_type": "wait"},
+        ),
+        ("DELETE", "/v1/play/claims/missing/commands/command", None),
+        (
+            "POST",
+            "/v1/play/claims/missing/queries",
+            {"query": "look", "arguments": {}},
+        ),
+        ("GET", "/v1/play/claims/missing/events", None),
+        (
+            "POST",
+            "/v1/play/claims/missing/jobs",
+            {"kind": "scene_image"},
+        ),
+        ("GET", "/v1/play/claims/missing/jobs", None),
+        ("GET", "/v1/play/claims/missing/jobs/job", None),
+    )
+
+    for method, path, body in requests:
+        response = client.request(method, path, headers=headers, json=body)
+        assert response.status_code == 403, (method, path, response.text)
+        assert response.json()["detail"] == f"{CLIENT_ID_HEADER} header is required"
 
 
 def test_world_snapshot_serializes_entities_relationships_and_metadata(scenario):
@@ -6185,6 +6444,71 @@ async def test_character_updates_websocket_authenticates_before_ready(scenario):
     assert ready["event_id"] is None
 
 
+async def test_character_updates_websocket_accepts_cookie_with_secretless_first_frame(
+    scenario,
+):
+    registry = ClaimSecretRegistry()
+    claim = add_claim(
+        scenario.actor.world.get_entity(scenario.controller),
+        client_kind="web",
+        client_id="browser-a",
+        character_id=str(scenario.character),
+    )
+    secret = registry.issue(claim.claim_id)
+    app = create_app(scenario.actor, claim_secrets=registry)
+
+    outputs = await _websocket_outputs(
+        app,
+        f"/v1/play/claims/{claim.claim_id}/stream",
+        headers={"Cookie": f"{CLAIM_COOKIE_NAME}={secret}"},
+        messages=[
+            {
+                "type": "authenticate",
+                "data": {"client_id": "browser-a"},
+            }
+        ],
+    )
+
+    assert outputs[0]["type"] == "websocket.accept"
+    ready = json.loads(outputs[1]["text"])
+    assert ready["type"] == "ready"
+    assert ready["data"] == {
+        "character_id": str(scenario.character),
+        "world_epoch": scenario.actor.epoch,
+    }
+
+
+async def test_character_updates_websocket_rejects_conflicting_cookie_and_frame_secrets(
+    scenario,
+):
+    registry = ClaimSecretRegistry()
+    claim = add_claim(
+        scenario.actor.world.get_entity(scenario.controller),
+        client_kind="web",
+        client_id="client-a",
+        character_id=str(scenario.character),
+    )
+    secret = registry.issue(claim.claim_id)
+    app = create_app(scenario.actor, claim_secrets=registry)
+
+    outputs = await _websocket_outputs(
+        app,
+        f"/v1/play/claims/{claim.claim_id}/stream",
+        headers={"Cookie": f"{CLAIM_COOKIE_NAME}={secret}"},
+        messages=[
+            {
+                "type": "authenticate",
+                "data": {
+                    "client_id": "client-a",
+                    "claim_secret": "different",
+                },
+            }
+        ],
+    )
+
+    assert outputs[-1] == {"type": "websocket.close", "code": 1008, "reason": ""}
+
+
 @pytest.mark.parametrize(
     "auth",
     [
@@ -6306,6 +6630,9 @@ async def test_character_updates_websocket_revalidates_revoked_claim(scenario, m
             sent.append(payload)
             remove_claim(controller, registry)
 
+        async def receive(self):
+            await asyncio.Future()
+
         async def close(self, code=1000):
             closed.append(code)
 
@@ -6361,10 +6688,10 @@ async def test_character_updates_websocket_handles_revocation_before_ready_and_d
     original_validate = registry.validate
     validation_calls = 0
 
-    def revoke_after_auth(claim_id, supplied):
+    def revoke_after_auth(claim_id, supplied, owner=None):
         nonlocal validation_calls
         validation_calls += 1
-        return validation_calls == 1 and original_validate(claim_id, supplied)
+        return validation_calls == 1 and original_validate(claim_id, supplied, owner)
 
     registry.validate = revoke_after_auth
 
@@ -6391,6 +6718,7 @@ async def test_character_updates_websocket_handles_revocation_before_ready_and_d
 
     class DisconnectOnReady:
         sent = 0
+        received = 0
 
         async def accept(self):
             return None
@@ -6408,6 +6736,12 @@ async def test_character_updates_websocket_handles_revocation_before_ready_and_d
             self.sent += 1
             if self.sent >= 3:
                 raise WebSocketDisconnect(code=1006)
+
+        async def receive(self):
+            self.received += 1
+            if self.received == 1:
+                return {"type": "websocket.receive", "text": "ignored after authentication"}
+            await asyncio.Future()
 
     await route.endpoint(DisconnectOnReady(), replacement.claim_id)
 

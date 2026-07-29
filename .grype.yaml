@@ -1,0 +1,4 @@
+ignore:
+  - vulnerability: CVE-2026-45829
+    package:
+      name: chromadb

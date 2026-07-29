@@ -6,6 +6,7 @@ import time
 
 from ..claims import (
     CLIENT_KIND_DISCORD,
+    ClaimOwner,
     ClaimSecretRegistry,
     add_claim,
     claim_client_matches,
@@ -137,6 +138,7 @@ def assign_discord_controller(
 
     claim_secrets = claim_secrets or _DEFAULT_CLAIM_SECRETS
     client_id = _discord_client_id(discord_user_id)
+    owner = ClaimOwner(CLIENT_KIND_DISCORD, client_id)
     characters = list(
         actor.world.query().with_all([CharacterComponent, IdentityComponent]).execute_entities()
     )
@@ -173,13 +175,17 @@ def assign_discord_controller(
                 ensure_claim_secret(
                     claim_secrets,
                     active_claim,
+                    owner=owner,
                     claim_id=claim_id,
                     claim_secret=claim_secret,
                 )
             except PermissionError as exc:
                 raise RuntimeError(str(exc)) from exc
+        elif not claim_secrets.has_secret(active_claim.claim_id):
+            claim_secrets.issue(active_claim.claim_id, owner)
+        elif not claim_secrets.validate_owner(active_claim.claim_id, owner):
+            raise RuntimeError("claim belongs to another owner")
         issued_claim_id = active_claim.claim_id
-        claim_secret = claim_secrets.secret(active_claim.claim_id)
 
     controller = _discord_controller_for(actor, discord_user_id, default_channel_id)
     if controller is not None:
@@ -216,9 +222,7 @@ def assign_discord_controller(
                         character_id=str(character.id),
                         claim_id=issued_claim_id,
                     )
-                    claim_secrets.issue(claim.claim_id)
-                elif not claim_secrets.has_secret(controller_claim(controller).claim_id):
-                    claim_secrets.issue(controller_claim(controller).claim_id)
+                    claim_secrets.issue(claim.claim_id, owner)
                 return character.get_component(IdentityComponent).name
     if active_claim is not None and active_controller is not None:
         transfer_claim(active_controller, controller)
@@ -230,8 +234,8 @@ def assign_discord_controller(
         claim_id=issued_claim_id,
         now_unix=active_claim.claimed_at_unix if active_claim is not None else None,
     )
-    if claim_secret is None or not claim_secrets.has_secret(claim.claim_id):
-        claim_secret = claim_secrets.issue(claim.claim_id)
+    if not claim_secrets.has_secret(claim.claim_id):
+        claim_secrets.issue(claim.claim_id, owner)
     apply_claim_timeout_settings(
         controller,
         now_unix=int(time.time()),

@@ -658,6 +658,15 @@
             "title": "Character Id",
             "type": "string"
           },
+          "delivery": {
+            "default": "header",
+            "enum": [
+              "header",
+              "cookie"
+            ],
+            "title": "Delivery",
+            "type": "string"
+          },
           "fallback_controller": {
             "anyOf": [
               {
@@ -4532,17 +4541,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -4609,17 +4611,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -4716,17 +4711,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -4800,17 +4788,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -4865,17 +4846,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -4962,17 +4936,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -5045,17 +5012,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -5129,17 +5089,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -5222,17 +5175,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -5312,17 +5258,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -5386,17 +5325,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -5462,17 +5394,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -5555,17 +5480,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -5629,17 +5547,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -5703,17 +5614,10 @@
           {
             "in": "header",
             "name": "X-Bunnyland-Client-Id",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Bunnyland-Client-Id"
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
             }
           }
         ],
@@ -5750,6 +5654,57 @@
           }
         },
         "summary": "V1 Query Claim",
+        "tags": [
+          "play"
+        ]
+      }
+    },
+    "/v1/play/claims/{claim_id}/recover": {
+      "post": {
+        "operationId": "v1_recover_claim_v1_play_claims__claim_id__recover_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "title": "Claim Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Bunnyland-Client-Id",
+            "required": true,
+            "schema": {
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimResource"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "V1 Recover Claim",
         "tags": [
           "play"
         ]

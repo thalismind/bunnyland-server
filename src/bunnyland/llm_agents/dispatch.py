@@ -803,8 +803,9 @@ class ControllerDispatch:
         if isinstance(projection.agent, BehaviorTreeAgent):
             span_attrs["behavior_tree.name"] = projection.agent.tree.name
         if projection.prompted and telemetry.enabled():
-            span_attrs["decision.prompt"] = telemetry.attr_text(prompt)
             span_attrs["decision.prompt_chars"] = len(prompt)
+            if telemetry.content_capture_enabled():
+                span_attrs["decision.prompt"] = telemetry.attr_text(prompt)
 
         feedback = self._feedback.get(cid)
         if feedback is not None and feedback in context.warnings:
@@ -867,8 +868,9 @@ class ControllerDispatch:
                         epoch=input_epoch,
                     )
                 if telemetry.enabled():
-                    dspan.set_attribute("decision.prompt", telemetry.attr_text(prompt))
                     dspan.set_attribute("decision.prompt_chars", len(prompt))
+                    if telemetry.content_capture_enabled():
+                        dspan.set_attribute("decision.prompt", telemetry.attr_text(prompt))
                 call = await agent.decide(
                     prompt,
                     context,
@@ -927,7 +929,7 @@ class ControllerDispatch:
     def _annotate_decision_span(dspan, call: AgentDecision) -> None:
         if isinstance(call, ToolCall):
             dspan.set_attribute("decision.tool", call.name)
-            if telemetry.enabled():
+            if telemetry.content_capture_enabled():
                 encoded = json.dumps(call.arguments, sort_keys=True, default=str)
                 dspan.set_attribute("decision.arguments", telemetry.attr_text(encoded))
         elif isinstance(call, InvalidAgentResponse):

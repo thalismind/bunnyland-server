@@ -105,6 +105,7 @@ class CatalogResource(WorldResource):
 
 class ClaimCreateRequest(V1Request):
     character_id: str
+    delivery: Literal["header", "cookie"] = "header"
     label: str = Field(default="web", max_length=128)
     fallback_controller: str | None = None
     fallback_reason: str | None = None

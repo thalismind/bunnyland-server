@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import random
-import stat
 import time
 import urllib.parse
 import webbrowser
@@ -26,6 +25,7 @@ from pydantic import BaseModel, Field, JsonValue
 
 from ..claims import (
     CLIENT_KIND_WEB,
+    ClaimOwner,
     ClaimSecretRegistry,
     add_claim,
     remove_claim,
@@ -46,6 +46,7 @@ from ..core import (
 )
 from ..core.claim_timeout import apply_claim_timeout_settings
 from ..core.ecs import parse_entity_id
+from ..secure_files import secure_read_text, secure_write_text
 from ..server.auth import WORLD_ADMIN_SCOPE, AuthMeResponse, TokenResponse
 from ..server.models import (
     CharacterChatActionResult,
@@ -105,10 +106,9 @@ def _validate_remote_server_url(value: str) -> str:
 
 
 def _validate_token_file_mode(path: Path) -> None:
-    if os.name != "posix" or not path.exists():
+    if not path.exists() and not path.is_symlink():
         return
-    if stat.S_IMODE(path.stat().st_mode) & 0o077:
-        raise PermissionError(f"token file must not be group/world accessible: {path}")
+    secure_read_text(path)
 
 
 async def _call_update_callback(callback: Callable, value) -> None:
@@ -155,11 +155,13 @@ def persistent_client_id(path: Path | None = None) -> str:
     path = path or _client_id_path()
     if path.exists():
         try:
-            value = path.read_text(encoding="utf-8").strip()
+            value = secure_read_text(path).strip()
             return str(UUID(value))
         except ValueError:
             logger.warning("Ignoring invalid TUI client id in %s", path, exc_info=True)
-        except OSError:
+        except PermissionError:
+            raise
+        except (AttributeError, OSError):
             logger.warning("Could not read TUI client id from %s", path, exc_info=True)
 
     client_id = ""
@@ -168,15 +170,16 @@ def persistent_client_id(path: Path | None = None) -> str:
     legacy_path = path.parent / "chat-client-id"
     if path == _client_id_path() and legacy_path.exists():
         try:
-            client_id = str(UUID(legacy_path.read_text(encoding="utf-8").strip()))
+            client_id = str(UUID(secure_read_text(legacy_path).strip()))
         except (OSError, ValueError):
             client_id = ""
     if not client_id:
         client_id = str(uuid4())
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"{client_id}\n", encoding="utf-8")
-    except OSError:
+        secure_write_text(path, f"{client_id}\n")
+    except PermissionError:
+        raise
+    except (AttributeError, OSError):
         logger.warning("Could not persist TUI client id to %s", path, exc_info=True)
     return client_id
 
@@ -189,8 +192,10 @@ def _claim_path(client_id: str, character_id: str) -> Path:
 
 def load_claim_control(client_id: str, character_id: str) -> ControlClaim | None:
     try:
-        data = json.loads(_claim_path(client_id, character_id).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(secure_read_text(_claim_path(client_id, character_id)))
+    except PermissionError:
+        raise
+    except (AttributeError, OSError, json.JSONDecodeError):
         return None
     if not data.get("claim_id") or not data.get("claim_secret"):
         return None
@@ -208,8 +213,8 @@ def save_claim_control(client_id: str, character_id: str, control: ControlClaim)
         return
     path = _claim_path(client_id, character_id)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        secure_write_text(
+            path,
             json.dumps(
                 {
                     "controller_id": control.controller_id,
@@ -221,9 +226,10 @@ def save_claim_control(client_id: str, character_id: str, control: ControlClaim)
                 sort_keys=True,
             )
             + "\n",
-            encoding="utf-8",
         )
-    except OSError:
+    except PermissionError:
+        raise
+    except (AttributeError, OSError):
         logger.warning("Could not persist TUI claim data to %s", path, exc_info=True)
 
 
@@ -850,9 +856,15 @@ class LocalBackend(Backend):
         so the offline dispatch stops driving it."""
         async with self.actor._lock:
             stored = load_claim_control(self.client_id, player_id)
+            owner = ClaimOwner(CLIENT_KIND_WEB, f"local:{self.client_id}")
             stored_valid = (
                 stored
-                if stored and self._claim_secrets.validate(stored.claim_id, stored.claim_secret)
+                if stored
+                and self._claim_secrets.validate(
+                    stored.claim_id,
+                    stored.claim_secret,
+                    owner,
+                )
                 else None
             )
             if self._controller is None:
@@ -872,7 +884,7 @@ class LocalBackend(Backend):
             claim_secret = (
                 stored_valid.claim_secret
                 if stored_valid is not None
-                else self._claim_secrets.issue(claim.claim_id)
+                else self._claim_secrets.issue(claim.claim_id, owner)
             )
             apply_claim_timeout_settings(
                 self._controller,
@@ -1069,7 +1081,7 @@ class RemoteBackend(Backend):
         self._client = httpx.AsyncClient(timeout=10.0)
         self._client.headers["X-Bunnyland-Client-Id"] = self.client_id
         if self.token_file is not None and self.token_file.exists():
-            self._access_token = self.token_file.read_text(encoding="utf-8").strip()
+            self._access_token = secure_read_text(self.token_file).strip()
             self._set_access_token(self._access_token)
             await self._refresh_auth_metadata()
         elif self.username and self._password:
@@ -1101,15 +1113,7 @@ class RemoteBackend(Backend):
     def _persist_access_token(self) -> None:
         if self.token_file is None:
             return
-        self.token_file.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(
-            self.token_file,
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-            0o600,
-        )
-        with os.fdopen(descriptor, "w", encoding="utf-8") as target:
-            target.write(f"{self._access_token}\n")
-        self.token_file.chmod(0o600)
+        secure_write_text(self.token_file, f"{self._access_token}\n")
 
     def _start_rotation_loop(self) -> None:
         if self._rotation_task is None or self._rotation_task.done():

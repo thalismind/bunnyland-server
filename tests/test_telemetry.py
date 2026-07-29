@@ -47,8 +47,8 @@ from bunnyland.llm_agents.agent import (
 from bunnyland.prompts import PromptFilterDefinition, PromptFilterRuntime
 from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server.auth import WORLD_ADMIN_SCOPE, TokenPrincipal
-from bunnyland.server.character_chat import CharacterChatService, _trace_json
-from bunnyland.server.models import CharacterChatRequest
+from bunnyland.server.character_chat import CharacterChatService, PendingChatAction, _trace_json
+from bunnyland.server.models import CharacterChatActionResult, CharacterChatRequest
 
 
 def _command(scenario, command_type="move", **kwargs):
@@ -542,10 +542,11 @@ async def test_dispatch_emits_agent_spans_and_decision_metric(otel_capture):
     assert decide.attributes["agent.kind"] == "ScriptedAgent"
     assert decide.attributes["decision.tool"] == "move"
     assert decide.attributes["character.id"] == str(scenario.character)
-    # The scenario character is LLM-controlled, so the rendered prompt is captured.
+    # Content is omitted by default while useful state and character counts remain.
     assert decide.attributes["decision.prompted"] is True
-    assert decide.attributes["decision.prompt"].startswith("[REDACTED sha256:")
-    assert decide.attributes["decision.arguments"].startswith("[REDACTED sha256:")
+    assert decide.attributes["decision.prompt_chars"] > 0
+    assert "decision.prompt" not in decide.attributes
+    assert "decision.arguments" not in decide.attributes
 
     run_once = spans["controller.run_once"]
     assert run_once.attributes["dispatch.actable_count"] == 1
@@ -560,6 +561,27 @@ async def test_dispatch_emits_agent_spans_and_decision_metric(otel_capture):
 
     points = _metric_points(reader)
     assert "bunnyland.llm.decision.duration" in points
+
+
+@pytestmark_otel
+async def test_dispatch_content_capture_requires_explicit_opt_in(
+    otel_capture, monkeypatch
+):
+    span_exporter, _reader = otel_capture
+    monkeypatch.setenv("BUNNYLAND_OTEL_CAPTURE_CONTENT", "true")
+    scenario = build_scenario()
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        ScriptedAgent([ToolCall("move", {"direction": "north"})]),
+    )
+
+    assert await dispatch.run_once() == []
+    assert [decision.tool for decision in await dispatch.await_pending()] == ["move"]
+
+    decide = _spans_by_name(span_exporter)["agent.decide"]
+    assert decide.attributes["decision.prompt"].startswith("[REDACTED sha256:")
+    assert decide.attributes["decision.arguments"].startswith("[REDACTED sha256:")
 
 
 @pytestmark_otel
@@ -1200,23 +1222,81 @@ async def test_character_chat_traces_input_reply_and_status(otel_capture):
 
     chat = spans["character.chat"]
     assert chat.attributes["chat.client_id"] == "trace-client"
-    assert chat.attributes["chat.input"].startswith("[REDACTED sha256:")
     assert chat.attributes["chat.input_chars"] == len("what do you hear?")
-    assert chat.attributes["chat.final_reply"].startswith("[REDACTED sha256:")
     assert chat.attributes["chat.action.status"] == "none"
+    assert "chat.input" not in chat.attributes
+    assert "chat.final_reply" not in chat.attributes
     prompt = spans["character.chat.prompt"]
-    assert prompt.attributes["chat.prompt"].startswith("[REDACTED sha256:")
     assert prompt.attributes["chat.prompt_chars"] > 0
+    assert "chat.prompt" not in prompt.attributes
     llm = spans["character.chat.llm"]
     assert llm.attributes["chat.phase"] == "initial"
-    assert llm.attributes["llm.input"].startswith("[REDACTED sha256:")
-    assert llm.attributes["chat.reply"].startswith("[REDACTED sha256:")
+    assert llm.attributes["llm.input_chars"] > 0
+    assert llm.attributes["chat.reply_chars"] > 0
+    assert "llm.input" not in llm.attributes
+    assert "chat.reply" not in llm.attributes
     assert llm.attributes["chat.tool.called"] is False
 
 
 @pytestmark_otel
-async def test_character_chat_traces_tool_usage_and_command_submit_status(otel_capture):
+async def test_character_chat_content_capture_opt_in_covers_final_and_pending_replies(
+    otel_capture, monkeypatch
+):
     span_exporter, _reader = otel_capture
+    monkeypatch.setenv("BUNNYLAND_OTEL_CAPTURE_CONTENT", "true")
+    scenario = build_scenario()
+    service = _chat_service(
+        scenario,
+        _FakeTelemetryChatAgent([ChatAgentReply(content="The tunnel is quiet.")]),
+    )
+
+    with telemetry.span("character.chat", {"character.id": str(scenario.character)}) as span:
+        response = await service.chat(
+            str(scenario.character),
+            CharacterChatRequest(client_id="trace-client", message="listen"),
+        )
+        telemetry.mark_span_ok(span)
+    assert response.reply == "The tunnel is quiet."
+    assert _spans_by_name(span_exporter)["character.chat"].attributes[
+        "chat.final_reply"
+    ].startswith("[REDACTED sha256:")
+
+    service._register_pending(
+        PendingChatAction(
+            client_id="trace-client",
+            character_id=str(scenario.character),
+            command_id="command-1",
+            messages=[],
+            user_message="wait",
+            model=None,
+            provider=None,
+            action=CharacterChatActionResult(
+                tool="wait",
+                command_id="command-1",
+                status="queued",
+            ),
+            reply="Still waiting.",
+        )
+    )
+    with telemetry.span("character.chat.pending") as pending_span:
+        pending = await service.pending_result(
+            str(scenario.character),
+            "trace-client",
+            "command-1",
+        )
+        telemetry.mark_span_ok(pending_span)
+    assert pending.reply == "Still waiting."
+    assert _spans_by_name(span_exporter)["character.chat.pending"].attributes[
+        "chat.reply"
+    ].startswith("[REDACTED sha256:")
+
+
+@pytestmark_otel
+async def test_character_chat_traces_tool_usage_and_command_submit_status(
+    otel_capture, monkeypatch
+):
+    span_exporter, _reader = otel_capture
+    monkeypatch.setenv("BUNNYLAND_OTEL_CAPTURE_CONTENT", "true")
     scenario = build_scenario()
     scenario.actor.register_action_definition(ActionDefinition("wait", tool_name="wait"))
     agent = _FakeTelemetryChatAgent(

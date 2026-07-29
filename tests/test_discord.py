@@ -16,10 +16,10 @@ import pytest
 import bunnyland.discord.bot as discord_bot
 import bunnyland.discord.view as discord_view
 from bunnyland.claims import (
+    ClaimOwner,
     ClaimSecretRegistry,
     add_claim,
     controller_claim,
-    ensure_claim_secret,
     transfer_claim,
 )
 from bunnyland.core import (
@@ -637,6 +637,27 @@ def test_assign_discord_controller_rejects_bad_secret_for_existing_claim(scenari
         )
 
 
+def test_assign_discord_controller_rejects_existing_claim_owned_by_another_subject(scenario):
+    claim_secrets = ClaimSecretRegistry()
+    controller = scenario.actor.world.get_entity(scenario.controller)
+    claim = add_claim(
+        controller,
+        client_kind="discord",
+        client_id="123",
+        character_id=str(scenario.character),
+        claim_id="claim-discord",
+    )
+    claim_secrets.issue(claim.claim_id, ClaimOwner("discord", "456"))
+
+    with pytest.raises(RuntimeError, match="claim belongs to another owner"):
+        assign_discord_controller(
+            scenario.actor,
+            claim_secrets=claim_secrets,
+            discord_user_id=123,
+            character_name="Juniper",
+        )
+
+
 def test_assign_discord_controller_adds_missing_claim_to_existing_controller(scenario):
     claim_secrets = ClaimSecretRegistry()
     character = scenario.actor.world.get_entity(scenario.character)
@@ -659,7 +680,7 @@ def test_assign_discord_controller_adds_missing_claim_to_existing_controller(sce
     assert claim is not None
     assert claim.client_kind == "discord"
     assert claim.client_id == "123"
-    assert claim_secrets.secret(claim.claim_id) is not None
+    assert claim_secrets.has_secret(claim.claim_id)
 
 
 def test_assign_discord_controller_reissues_missing_secret_for_existing_claim(scenario):
@@ -687,7 +708,7 @@ def test_assign_discord_controller_reissues_missing_secret_for_existing_claim(sc
     )
 
     assert name == "Juniper"
-    assert claim_secrets.secret(claim.claim_id) is not None
+    assert claim_secrets.has_secret(claim.claim_id)
 
 
 def test_resume_discord_claim_returns_active_discord_controller(scenario):
@@ -1093,8 +1114,6 @@ def test_release_discord_claim_removes_claim_without_changing_controller(scenari
     controller = scenario.actor.world.get_entity(controller_id)
     claim = controller_claim(controller)
     assert claim is not None
-    claim_secret = claim_secrets.secret(claim.claim_id)
-
     released = release_discord_claim(
         scenario.actor,
         claim_secrets=claim_secrets,
@@ -1106,7 +1125,7 @@ def test_release_discord_claim_removes_claim_without_changing_controller(scenari
     assert current_controller_id == controller_id
     assert current_edge.generation == edge.generation
     assert controller_claim(controller) is None
-    assert not claim_secrets.validate(claim.claim_id, claim_secret)
+    assert not claim_secrets.has_secret(claim.claim_id)
     assert discord_controlled_character(scenario.actor, 123) is None
 
 
@@ -1124,8 +1143,6 @@ def test_suspend_discord_character_keeps_claim_and_resume_restores_discord_contr
     old_controller = scenario.actor.world.get_entity(old_controller_id)
     claim = controller_claim(old_controller)
     assert claim is not None
-    claim_secret = claim_secrets.secret(claim.claim_id)
-
     suspended = suspend_discord_character(
         scenario.actor,
         discord_user_id=123,
@@ -1139,7 +1156,7 @@ def test_suspend_discord_character_keeps_claim_and_resume_restores_discord_contr
     assert suspended_edge.generation == 2
     assert suspended_claim is not None
     assert suspended_claim.claim_id == claim.claim_id
-    ensure_claim_secret(claim_secrets, suspended_claim, claim_secret=claim_secret)
+    assert claim_secrets.has_secret(suspended_claim.claim_id)
     assert discord_controlled_character(scenario.actor, 123) is None
     assert character.has_component(SuspendedComponent)
 
@@ -1158,7 +1175,7 @@ def test_suspend_discord_character_keeps_claim_and_resume_restores_discord_contr
     assert resumed_controller.has_component(DiscordControllerComponent)
     assert resumed_claim is not None
     assert resumed_claim.claim_id == claim.claim_id
-    ensure_claim_secret(claim_secrets, resumed_claim, claim_secret=claim_secret)
+    assert claim_secrets.has_secret(resumed_claim.claim_id)
     assert not character.has_component(SuspendedComponent)
     assert discord_controlled_character(scenario.actor, 123) == (
         character.id,

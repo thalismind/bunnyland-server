@@ -1964,6 +1964,11 @@ async def test_mcp_admin_fails_closed_when_request_is_absent(monkeypatch, scenar
 
     with pytest.raises(RuntimeError, match="authenticated MCP request context required"):
         await registered_tools["admin_patch_world"](operations=[])
+    with pytest.raises(RuntimeError, match="authenticated MCP request context required"):
+        await registered_tools["play_claim_character"](
+            client_id="client-a",
+            character_name="Juniper",
+        )
 
 
 async def test_mcp_admin_fails_closed_when_request_context_is_absent(monkeypatch, scenario):

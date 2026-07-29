@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .cli_defaults import OLLAMA_CLOUD_HOST
 from .content_warnings import normalize_content_flags
+from .credentials import read_credential
 from .llm_agents import DEFAULT_MODEL
 from .plugins.policy import BoundaryScope
 
@@ -142,10 +143,13 @@ def resolve_terminal_chat_config(
     )
     enabled = False if no_chat else (saved.chat_enabled if saved else True)
     api_key = ""
-    if provider == "ollama-cloud":
-        api_key = values.get("OLLAMA_CLOUD_API_KEY", "")
-    elif provider == "openrouter":
-        api_key = values.get("OPENROUTER_API_KEY", "")
+    try:
+        if provider == "ollama-cloud":
+            api_key = read_credential("OLLAMA_CLOUD_API_KEY", environ=values)
+        elif provider == "openrouter":
+            api_key = read_credential("OPENROUTER_API_KEY", environ=values)
+    except ValueError as exc:
+        raise TerminalConfigError(str(exc)) from exc
     return ResolvedTerminalChatConfig(
         enabled=enabled,
         provider=provider,

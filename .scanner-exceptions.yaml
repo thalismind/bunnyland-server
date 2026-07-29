@@ -1,0 +1,10 @@
+vulnerabilities:
+  - id: CVE-2026-45829
+    scanner: grype
+    statement: >-
+      SEC-2026-001 permits embedded ChromaDB only. Bunnyland uses no Chroma HTTP server,
+      remote embedding code, or caller-created collection configuration.
+    expired_at: 2026-08-28
+    last_reviewed_at: 2026-07-29
+    review_interval_days: 7
+    tracking_issue: docs/admin/security-exceptions.md#sec-2026-001

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from hashlib import sha256
 from time import time
-from typing import Any
 from uuid import uuid4
 
 from relics import Component
@@ -27,40 +28,100 @@ CLIENT_KIND_MCP = "mcp"
 CLIENT_KIND_WEB = "web"
 
 
+@dataclass(frozen=True)
+class ClaimOwner:
+    """Private immutable identity that owns a claim credential."""
+
+    principal_kind: str
+    subject: str
+
+    def __post_init__(self) -> None:
+        if not self.principal_kind.strip() or not self.subject.strip():
+            raise ValueError("claim owner kind and subject must not be empty")
+
+
+@dataclass(frozen=True)
+class ClaimCredential:
+    owner: ClaimOwner
+    secret_digest: bytes
+
+
 class ClaimSecretRegistry:
-    """In-memory bearer-secret store for controller claims.
+    """In-memory digest store for owner-bound controller claim credentials.
 
     Claim ids are public ECS metadata. Secrets are process-local and are never
-    persisted into the world or exposed through admin snapshots.
+    retained in plaintext, persisted into the world, or exposed through admin
+    snapshots.
     """
 
     def __init__(self) -> None:
-        self._secrets: dict[str, str] = {}
+        self._credentials: dict[str, ClaimCredential] = {}
 
-    def issue(self, claim_id: str) -> str:
-        if claim_id in self._secrets:
+    @staticmethod
+    def _legacy_owner(claim_id: str) -> ClaimOwner:
+        return ClaimOwner("internal", claim_id)
+
+    def issue(self, claim_id: str, owner: ClaimOwner | None = None) -> str:
+        if claim_id in self._credentials:
             raise ValueError("claim secret already exists")
+        owner = owner or self._legacy_owner(claim_id)
         secret = secrets.token_urlsafe(32)
-        self._secrets[claim_id] = secret
+        self._credentials[claim_id] = ClaimCredential(
+            owner=owner,
+            secret_digest=sha256(secret.encode("utf-8")).digest(),
+        )
         return secret
 
     def has_secret(self, claim_id: str) -> bool:
-        return claim_id in self._secrets
+        return claim_id in self._credentials
 
-    def secret(self, claim_id: str) -> str | None:
-        return self._secrets.get(claim_id)
+    def owner(self, claim_id: str) -> ClaimOwner | None:
+        credential = self._credentials.get(claim_id)
+        return credential.owner if credential is not None else None
 
-    def validate(self, claim_id: str, secret: str | None) -> bool:
-        expected = self._secrets.get(claim_id)
-        if expected is None or secret is None:
+    def validate(
+        self,
+        claim_id: str,
+        secret: str | None,
+        owner: ClaimOwner | None = None,
+    ) -> bool:
+        owner = owner or self._legacy_owner(claim_id)
+        credential = self._credentials.get(claim_id)
+        if credential is None or secret is None:
             return False
-        return secrets.compare_digest(expected, secret)
+        digest = sha256(secret.encode("utf-8")).digest()
+        matches = secrets.compare_digest(credential.secret_digest, digest)
+        if not matches:
+            return False
+        if credential.owner == owner:
+            return True
+        if credential.owner == self._legacy_owner(claim_id):
+            self._credentials[claim_id] = ClaimCredential(
+                owner=owner,
+                secret_digest=credential.secret_digest,
+            )
+            return True
+        return False
+
+    def validate_owner(self, claim_id: str, owner: ClaimOwner) -> bool:
+        credential = self._credentials.get(claim_id)
+        return credential is not None and credential.owner == owner
+
+    def rotate(self, claim_id: str, owner: ClaimOwner) -> str:
+        if not self.validate_owner(claim_id, owner):
+            raise PermissionError("claim belongs to another owner")
+        secret = secrets.token_urlsafe(32)
+        self._credentials[claim_id] = ClaimCredential(
+            owner=owner,
+            secret_digest=sha256(secret.encode("utf-8")).digest(),
+        )
+        return secret
 
     def revoke(self, claim_id: str) -> None:
-        self._secrets.pop(claim_id, None)
+        self._credentials.pop(claim_id, None)
 
     def clear(self) -> None:
-        self._secrets.clear()
+        self._credentials.clear()
 
 
 def is_child_character(character: EntityLike) -> bool:
@@ -147,12 +208,13 @@ def ensure_claim_secret(
     registry: ClaimSecretRegistry,
     claim: ClaimedComponent,
     *,
+    owner: ClaimOwner | None = None,
     claim_id: str | None = None,
     claim_secret: str | None = None,
 ) -> None:
     if claim_id is not None and claim_id.strip() and claim_id.strip() != claim.claim_id:
         raise PermissionError("invalid claim id")
-    if not registry.validate(claim.claim_id, claim_secret):
+    if not registry.validate(claim.claim_id, claim_secret, owner):
         raise PermissionError("invalid claim secret")
 
 
@@ -225,7 +287,7 @@ def claimed_character_for(
     actor: ActorContext,
     *,
     client_id: str,
-) -> tuple[Any, Any, ControlledBy, ClaimedComponent] | None:
+) -> tuple[EntityLike, EntityLike, ControlledBy, ClaimedComponent] | None:
     parsed_client = client_id.strip()
     characters = actor.world.query().with_all([CharacterComponent]).execute_entities()
     for character in characters:
@@ -288,6 +350,8 @@ __all__ = [
     "CLIENT_KIND_DISCORD",
     "CLIENT_KIND_MCP",
     "CLIENT_KIND_WEB",
+    "ClaimCredential",
+    "ClaimOwner",
     "ClaimSecretRegistry",
     "add_claim",
     "claim_client_matches",

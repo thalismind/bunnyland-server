@@ -205,6 +205,22 @@ def test_disabled_terminal_chat_does_not_require_credentials():
     assert build_terminal_chat_agent(settings) is None
 
 
+def test_terminal_chat_config_rejects_conflicting_raw_and_file_credentials(tmp_path):
+    secret = tmp_path / "openrouter-token"
+    secret.write_text("file-token\n", encoding="utf-8")
+    secret.chmod(0o600)
+
+    with pytest.raises(TerminalConfigError, match="OPENROUTER_API_KEY and OPENROUTER_API_KEY_FILE"):
+        resolve_terminal_chat_config(
+            None,
+            chat_provider="openrouter",
+            environ={
+                "OPENROUTER_API_KEY": "raw-token",
+                "OPENROUTER_API_KEY_FILE": str(secret),
+            },
+        )
+
+
 @pytest.mark.asyncio
 async def test_terminal_agent_forces_selected_model_and_provider(monkeypatch):
     calls = {}

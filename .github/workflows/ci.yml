@@ -44,7 +44,12 @@ jobs:
 
       - name: Audit installed dependencies
         if: matrix.python-version == '3.12'
-        run: uv run --with pip-audit pip-audit --local
+        run: |
+          uv export --frozen --all-extras --no-dev --no-emit-project \
+            --format requirements-txt --output-file "${RUNNER_TEMP}/requirements.locked.txt"
+          uv run --with pip-audit pip-audit \
+            --ignore-vuln PYSEC-2026-311 \
+            --requirement "${RUNNER_TEMP}/requirements.locked.txt"
 
       - name: Lint
         if: matrix.python-version == '3.12'
@@ -288,6 +293,7 @@ jobs:
       - test
       - package
       - artifact-compatibility
+      - security
 
     steps:
       - name: Check out repository
@@ -323,6 +329,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.server-meta.outputs.tags }}
           labels: ${{ steps.server-meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
           cache-from: |
             type=gha,scope=bunnyland-server
             type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-server:buildcache
@@ -331,6 +339,68 @@ jobs:
           cache-to: |
             type=gha,scope=bunnyland-server,mode=max
             type=registry,ref=ghcr.io/${{ github.repository_owner }}/bunnyland-server:buildcache,mode=max,ignore-error=true
+
+  security:
+    name: Image and repository security
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out full repository history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Reject expired or overdue scanner exceptions
+        run: scripts/check-security-exceptions
+
+      - name: Scan full history for exposed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build exact image under test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          push: false
+          tags: bunnyland-server:security-${{ github.sha }}
+          build-args: BUNNYLAND_GIT_HASH=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Generate image CycloneDX SBOM
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          image: bunnyland-server:security-${{ github.sha }}
+          format: cyclonedx-json
+          output-file: bunnyland-server.cdx.json
+          upload-artifact: false
+
+      - name: Fail on fixable high or critical image findings
+        uses: anchore/scan-action@v7.4.0
+        with:
+          image: bunnyland-server:security-${{ github.sha }}
+          output-format: table
+          fail-build: true
+          only-fixed: true
+          severity-cutoff: high
+          by-cve: true
+          config: .grype.yaml
+
+      - name: Upload image SBOM
+        uses: actions/upload-artifact@v7
+        with:
+          name: bunnyland-server-image-sbom-${{ github.sha }}
+          path: bunnyland-server.cdx.json
+          if-no-files-found: error
 
   vps-setup:
     name: VPS Docker setup smoke test

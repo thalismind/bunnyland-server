@@ -27,6 +27,7 @@ from .claims import ClaimSecretRegistry
 from .core.claim_timeout import CLAIM_TIMEOUT_DEFAULT_SECONDS, normalize_claim_timeout
 from .core.systems import ClaimTimeoutSystem
 from .core.world_actor import WorldActor
+from .credentials import read_credential
 from .discord.claim import assign_discord_controller
 from .engine import GameLoop
 from .llm_agents import DEFAULT_MODEL, ControllerDispatch, ScriptedAgent
@@ -319,37 +320,52 @@ def _serve_credentials(args) -> ServeCredentials:
     host = api_key = worldgen_api_key = None
     openrouter_api_key = openrouter_server_url = None
 
-    if args.llm or getattr(args, "character_chat", False):
-        openrouter_api_key = getattr(args, "openrouter_api_key", None) or os.environ.get(
-            "OPENROUTER_API_KEY"
+    try:
+        openrouter_api_key = read_credential(
+            "OPENROUTER_API_KEY",
+            explicit_value=getattr(args, "openrouter_api_key", None),
         )
+        api_key = read_credential(
+            "OLLAMA_CLOUD_API_KEY",
+            explicit_value=getattr(args, "ollama_api_key", None),
+        )
+        discord_token = read_credential(
+            "DISCORD_TOKEN",
+            explicit_value=getattr(args, "discord_token", None),
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    if args.llm or getattr(args, "character_chat", False):
         openrouter_server_url = getattr(args, "openrouter_server_url", None) or os.environ.get(
             "OPENROUTER_SERVER_URL"
         )
         host = getattr(args, "ollama_host", None) or os.environ.get(
             "OLLAMA_HOST", OLLAMA_CLOUD_HOST
         )
-        api_key = getattr(args, "ollama_api_key", None) or os.environ.get("OLLAMA_CLOUD_API_KEY")
         if args.llm_provider == "openrouter" and not openrouter_api_key:
-            raise SystemExit("--llm-provider openrouter needs OPENROUTER_API_KEY")
+            raise SystemExit(
+                "--llm-provider openrouter needs OPENROUTER_API_KEY or OPENROUTER_API_KEY_FILE"
+            )
         if args.llm_provider == "ollama" and not api_key:
             raise SystemExit(
                 "--llm-provider ollama needs OLLAMA_CLOUD_API_KEY "
-                "(set it in .env or the environment)"
+                "or OLLAMA_CLOUD_API_KEY_FILE"
             )
         if args.llm and worldgen_provider == "openrouter" and not openrouter_api_key:
-            raise SystemExit("--worldgen-provider openrouter needs OPENROUTER_API_KEY")
+            raise SystemExit(
+                "--worldgen-provider openrouter needs OPENROUTER_API_KEY "
+                "or OPENROUTER_API_KEY_FILE"
+            )
         if args.llm and worldgen_provider == "ollama" and (not args.load) and not api_key:
             raise SystemExit(
                 "--worldgen-provider ollama needs OLLAMA_CLOUD_API_KEY "
-                "(set it in .env or the environment)"
+                "or OLLAMA_CLOUD_API_KEY_FILE"
             )
         worldgen_api_key = openrouter_api_key if worldgen_provider == "openrouter" else api_key
 
-    if args.discord:
-        discord_token = getattr(args, "discord_token", None) or os.environ.get("DISCORD_TOKEN")
-        if not discord_token:
-            raise SystemExit("--discord needs DISCORD_TOKEN (set it in .env or the environment)")
+    if args.discord and not discord_token:
+        raise SystemExit("--discord needs DISCORD_TOKEN or DISCORD_TOKEN_FILE")
 
     return ServeCredentials(
         worldgen_provider=worldgen_provider,
@@ -746,7 +762,7 @@ def _build_imagegen_service(actor, plugins, config_block=None, plugin_config=Non
             generator=config_block.generator,
             generators=dict(config_block.generators),
             openrouter_image_model=config_block.openrouter_image_model,
-            openrouter_api_key=os.environ.get("OPENROUTER_API_KEY", "").strip(),
+            openrouter_api_key=read_credential("OPENROUTER_API_KEY"),
             openrouter_server_url=os.environ.get("OPENROUTER_SERVER_URL", "").strip(),
             use_websocket=config_block.use_websocket,
             poll_interval_seconds=config_block.poll_interval_seconds,

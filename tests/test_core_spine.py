@@ -8,6 +8,7 @@ import pytest
 from conftest import build_scenario
 
 from bunnyland.claims import (
+    ClaimOwner,
     ClaimSecretRegistry,
     add_claim,
     character_has_claim,
@@ -659,7 +660,6 @@ def test_claim_secret_registry_and_claim_helpers_cover_security_paths():
     secret = registry.issue(claim.claim_id)
 
     assert registry.has_secret(claim.claim_id)
-    assert registry.secret(claim.claim_id) == secret
     assert registry.validate(claim.claim_id, secret)
     assert not registry.validate(claim.claim_id, None)
     assert not registry.validate("missing", secret)
@@ -695,7 +695,7 @@ def test_claim_secret_registry_and_claim_helpers_cover_security_paths():
     replacement = registry.issue(claim.claim_id)
     with pytest.raises(ValueError, match="claim secret already exists"):
         registry.issue(claim.claim_id)
-    assert registry.secret(claim.claim_id) == replacement
+    assert registry.validate(claim.claim_id, replacement)
     registry.clear()
     kept = add_claim(
         spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="kept")]),
@@ -726,6 +726,31 @@ def test_claim_secret_registry_and_claim_helpers_cover_security_paths():
     assert controller_claim(discord) == discord_claim
 
     assert controller_claim(spawn_entity(scenario.actor.world)) is None
+
+
+def test_claim_secret_registry_binds_owner_and_rotates_atomically():
+    with pytest.raises(ValueError, match="kind and subject"):
+        ClaimOwner("", "player")
+    with pytest.raises(ValueError, match="kind and subject"):
+        ClaimOwner("rest", " ")
+
+    registry = ClaimSecretRegistry()
+    original = registry.issue("claim")
+    owner = ClaimOwner("rest", "player")
+    other = ClaimOwner("rest", "other")
+
+    assert registry.owner("missing") is None
+    assert registry.owner("claim") == ClaimOwner("internal", "claim")
+    assert registry.validate("claim", original, owner)
+    assert registry.owner("claim") == owner
+    assert not registry.validate("claim", original, other)
+    with pytest.raises(PermissionError, match="another owner"):
+        registry.rotate("claim", other)
+
+    replacement = registry.rotate("claim", owner)
+    assert replacement != original
+    assert not registry.validate("claim", original, owner)
+    assert registry.validate("claim", replacement, owner)
 
 
 def test_claim_helpers_skip_dangling_controller_edges(monkeypatch):

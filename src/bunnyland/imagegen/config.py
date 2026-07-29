@@ -11,6 +11,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from ..credentials import read_credential
 from ..llm_agents.agent import DEFAULT_MODEL
 
 
@@ -82,7 +83,7 @@ class ImageGenConfig:
             openrouter_image_model=environ.get(
                 "BUNNYLAND_IMAGE_OPENROUTER_MODEL", ""
             ).strip(),
-            openrouter_api_key=environ.get("OPENROUTER_API_KEY", "").strip(),
+            openrouter_api_key=read_credential("OPENROUTER_API_KEY", environ=environ),
             openrouter_server_url=environ.get("OPENROUTER_SERVER_URL", "").strip(),
             use_websocket=_env_bool(environ, "COMFYUI_USE_WEBSOCKET", True),
             poll_interval_seconds=_env_float(environ, "COMFYUI_POLL_INTERVAL_SECONDS", 1.0),
@@ -96,7 +97,7 @@ class ImageGenConfig:
             enhancer=environ.get("BUNNYLAND_IMAGE_ENHANCER", "").strip(),
             model=environ.get("BUNNYLAND_IMAGE_MODEL", DEFAULT_MODEL).strip(),
             host=environ.get("OLLAMA_HOST", "").strip(),
-            api_key=environ.get("OLLAMA_CLOUD_API_KEY", "").strip(),
+            api_key=read_credential("OLLAMA_CLOUD_API_KEY", environ=environ),
         )
 
     def generator_for(self, purpose: str) -> str:

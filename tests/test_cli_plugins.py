@@ -1114,6 +1114,19 @@ def test_cli_serve_credentials_reads_discord_token(monkeypatch):
     assert credentials.discord_token == "discord-token"
 
 
+def test_cli_serve_credentials_rejects_conflicting_raw_and_file_values(
+    monkeypatch, tmp_path
+):
+    secret = tmp_path / "discord-token"
+    secret.write_text("file-token\n", encoding="utf-8")
+    secret.chmod(0o600)
+    monkeypatch.setenv("DISCORD_TOKEN", "raw-token")
+    monkeypatch.setenv("DISCORD_TOKEN_FILE", str(secret))
+
+    with pytest.raises(SystemExit, match="DISCORD_TOKEN and DISCORD_TOKEN_FILE"):
+        cli._serve_credentials(_serve_args(discord=True))
+
+
 def test_cli_character_chat_requires_api_port():
     with pytest.raises(SystemExit, match="--character-chat mounts on the HTTP API"):
         cli._validate_serve_args(_serve_args(character_chat=True, api_port=None))
