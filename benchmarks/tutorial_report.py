@@ -499,6 +499,10 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
         "IMATRIX-MAX-MTP-GGUF:Q4_K_M"
     ): ModelArchitecture("Qwen 3.5 9B Defiant Fable Q4", 9_000_000_000),
     "ornith:9b": ModelArchitecture("Ornith 1.0 9B", 9_000_000_000),
+    "hf.co/bartowski/NousResearch_Hermes-4-14B-GGUF:Q8_0": ModelArchitecture(
+        "Hermes 4 14B Q8",
+        14_800_000_000,
+    ),
     "gpt-oss:20b-cloud": ModelArchitecture("GPT-OSS 20B", 21_000_000_000),
     "gemma4:cloud": ModelArchitecture("Gemma 4 31B", 30_700_000_000),
     "hf.co/HauhauCS/Gemma4-31B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M": (
@@ -509,6 +513,10 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
         31_600_000_000,
         active_parameters=3_000_000_000,
         architecture="moe",
+    ),
+    "LESSTHANSUPER/RP-INK-Qwen2.5-32b:Q5_K_S": ModelArchitecture(
+        "Qwen 2.5 32B RP-INK Q5",
+        32_800_000_000,
     ),
     "laguna-xs-2.1:latest": ModelArchitecture("Laguna XS 2.1", 33_000_000_000),
     "ornith:35b": ModelArchitecture("Ornith 1.0 35B-A3B", 34_700_000_000),
@@ -663,6 +671,9 @@ ROLEPLAY_MODEL_NAMES: dict[str, str] = {
         "hf.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-"
         "V5-GGUF:Q8_0"
     ): "Qwen 3.6 35B-A3B Genesis Hermes Q8",
+    "hf.co/bartowski/NousResearch_Hermes-4-14B-GGUF:Q8_0": (
+        "Hermes 4 14B Q8"
+    ),
     "LESSTHANSUPER/RP-INK-Qwen2.5-32b:Q5_K_S": "Qwen 2.5 32B RP-INK Q5",
 }
 

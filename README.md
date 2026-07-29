@@ -42,8 +42,9 @@ flowchart LR
 
 ## Which models can play?
 
-We tested 32 rated local and cloud model configurations plus four frontier models with
-two sessions per cell across more than 1,100 completed sessions. Models had to complete
+The compatibility guide covers 36 rated local and cloud model configurations plus four
+frontier previews. The strict `v1`--`v4` comparison now contains 1,359 completed sessions,
+876 authoritative passes, and 1.329 billion recorded tokens. Models had to complete
 validated world actions; narrating success did not count.
 
 | Gameplay tier | Recommendation | Practical hardware | Representative result |
@@ -68,9 +69,18 @@ K2.6, Kimi K2.7 Code, and DeepSeek V4 Pro each completed 15/15.
 Among the newer comparative runs, compact [Ornith 9B](https://ollama.com/library/ornith)
 reached Clover 3/5 locally, while
 [Kimi K3](https://openrouter.ai/moonshotai/kimi-k3) reached Clover 3/5 and passed 33/40
-sessions across `v1`--`v4`. Two Llama 3.1 8B roleplay fine-tunes completed no full
-tutorial sessions despite accepting structured tools, showing that roleplay specialization
-alone does not guarantee reliable game-agent planning.
+sessions across `v1`--`v4`. [Qwen 3.7 Plus](https://openrouter.ai/qwen/qwen3.7-plus)
+reached Clover 4/5 and passed 34/40 overall, while the faster
+[Qwen 3.7 Flash](https://openrouter.ai/qwen/qwen3.7-flash) passed 32/40 but only 2/5
+on Clover.
+
+For local roleplay models,
+[Hermes 4 14B Q8](https://huggingface.co/bartowski/NousResearch_Hermes-4-14B-GGUF)
+passed 31/40, including every Apple and Bell session, but only 1/5 revised Clover runs.
+[RP-INK Qwen 2.5 32B Q5](https://ollama.com/LESSTHANSUPER/RP-INK-Qwen2.5-32b)
+passed Apple 5/5 but only 2/5 on Bell and Clover. Two Llama 3.1 8B roleplay fine-tunes
+completed no full tutorial sessions despite accepting structured tools, showing that
+roleplay specialization alone does not guarantee reliable game-agent planning.
 
 The local
 [Gemma 4 31B HauhauCS Q4](https://huggingface.co/HauhauCS/Gemma4-31B-QAT-Uncensored-HauhauCS-Balanced-MTP)

@@ -34,6 +34,7 @@ tutorial columns.
 | Qwen 3.5 | 397B-A17B | Cloud | Complex worlds | 4/5 |
 | Qwen 3.6 Genesis Hermes V5 Q8 | 35B-A3B | Local | Complex worlds | 4/5 |
 | Qwen 3.6 Q4 | 35B-A3B | Local | Complex worlds | 4/5 |
+| Qwen 3.7 Plus | Unpublished | Cloud | Complex worlds | 4/5 |
 | Kimi K3 | 2.8T-A104B | Cloud | Complex worlds | 3/5 |
 | MiniMax M2.7 | 230B | Cloud | Complex worlds | 3/5 |
 | Ornith 1.0 9B | 9B | Local | Complex worlds | 3/5 |
@@ -41,6 +42,7 @@ tutorial columns.
 | Qwen 3.6 Q8 | 35B-A3B | Local | Complex worlds | 3/5 |
 | GPT-OSS 120B | 117B | Cloud | Town and NPCs | 5/5 |
 | GPT-OSS 20B | 21B | Cloud | Town and NPCs | 5/5 |
+| Hermes 4 14B Q8 | 14.8B | Local | Town and NPCs | 5/5 |
 | Kimi K2.5 | 1.04T | Cloud | Town and NPCs | 5/5 |
 | Laguna XS 2.1 | 33B | Local | Town and NPCs | 5/5 |
 | MiniMax M3 | 428B | Cloud | Town and NPCs | 5/5 |
@@ -51,11 +53,17 @@ tutorial columns.
 | Qwen 3.5 9B | 9B | Local | Town and NPCs | 5/5 |
 | Qwen 3.5 9B Defiant Fable | 9B | Local | Town and NPCs | 5/5 |
 | Qwen 3.6 Bahushruth v4 Q4 | 35B-A3B | Local | Town and NPCs | 5/5 |
+| Qwen 3.7 Flash | Unpublished | Cloud | Town and NPCs | 5/5 |
 | Mistral Large 3 | 675B | Cloud | Town and NPCs | 4/5 |
 | Nemotron 3 Super | 120B-A12B | Cloud | Town and NPCs | 4/5 |
 | Qwen 3.5 4B | 4B | Local | Town and NPCs | 4/5 |
+| Qwen 2.5 32B RP-INK Q5 | 32.8B | Local | Basic gameplay | 5/5 |
 | Llama 3.1 8B ArliAI RPMax v1.3 Q8 | 8B | Local | Not demonstrated | 0/5 |
 | Llama 3.1 8B Stheno v3.4 Q8 | 8B | Local | Not demonstrated | 0/5 |
+
+Qwen 3.7 Plus and Flash are hosted API aliases whose official provider pages do not
+publish architecture totals. Their sizes are left unpublished rather than inferred from
+another Qwen release.
 
 ## Recommended top five
 
@@ -75,8 +83,9 @@ For a cloud-only list, replace Genesis Hermes with
 [DeepSeek V4 Pro](https://ollama.com/library/deepseek-v4-pro%3Acloud), which reached
 Clover 5/5 and a 1.99-second median decision latency but uses a much larger architecture.
 
-No rated model stopped at basic gameplay: every model reached at least a likely pass on
-Bell Green.
+RP-INK was the only rated model that stopped at basic gameplay. It completed Apple 5/5,
+but reached only 2/5 on both Bell and Clover in `v2`; a larger parameter count did not
+compensate for inconsistent structured-tool behavior.
 
 For local town and NPC play, Qwen 3.5 4B is the smallest recommendation, while Qwen 3.5
 9B provides more headroom. For local complex worlds, Qwen 3.6 Genesis Hermes V5 Q8 had
@@ -89,24 +98,29 @@ but are much larger models.
 
 ## Additional roleplay and agentic models
 
-The latest comparative round tested seven configurations through all applicable `v1`--`v4`
+The latest comparative round tested eleven configurations through all applicable `v1`--`v4`
 cells. The table below shows `v2`, the latest version containing all three tutorials;
 the overall column includes the later Bell-only `v3` and `v4` cells.
 
 | Model | Provider | Apple | Bell | Clover | Overall | Player guidance |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
 | [Gemma 4 31B HauhauCS Q4](https://huggingface.co/HauhauCS/Gemma4-31B-QAT-Uncensored-HauhauCS-Balanced-MTP) | Local Ollama | 3/5 | 5/5 | 5/5 | 30/40 | Consistent complex-world play, but exceptionally slow at roughly 26–30 minutes per successful Clover session |
+| [Qwen 3.7 Plus](https://openrouter.ai/qwen/qwen3.7-plus) | OpenRouter | 5/5 | 5/5 | 4/5 | 34/40 | Strong hosted agent model with consistent complex-world play |
 | [Kimi K3](https://openrouter.ai/moonshotai/kimi-k3) | OpenRouter | 5/5 | 5/5 | 3/5 | 33/40 | Strong complex-world cloud option; OpenRouter was used because Ollama Cloud could not serve it |
 | [Ornith 1.0 9B](https://ollama.com/library/ornith) | Local Ollama | 3/5 | 5/5 | 3/5 | 27/40 | Smallest tested local model to demonstrate likely Clover completion |
+| [Hermes 4 14B Q8](https://huggingface.co/bartowski/NousResearch_Hermes-4-14B-GGUF) | Local Ollama | 5/5 | 5/5 | 1/5 | 31/40 | Excellent Apple and Bell reliability; Clover success was possible but not likely |
 | [Kimi K2.5](https://ollama.com/library/kimi-k2.5) | Ollama Cloud | 5/5 | 5/5 | 1/5 | 31/40 | Reliable onboarding and town play; complex-world success remained possible rather than likely |
 | [Ornith 1.0 35B](https://ollama.com/library/ornith) | Local Ollama | 5/5 | 5/5 | 1/5 | 31/40 | Consistent Apple and Bell, but no Clover gain over the much smaller Ornith 9B |
+| [Qwen 3.7 Flash](https://openrouter.ai/qwen/qwen3.7-flash) | OpenRouter | 5/5 | 5/5 | 2/5 | 32/40 | Fast, inexpensive town play; Clover remained possible rather than likely |
+| [Qwen 2.5 32B RP-INK Q5](https://ollama.com/LESSTHANSUPER/RP-INK-Qwen2.5-32b) | Local Ollama | 5/5 | 2/5 | 2/5 | 18/40 | Reliable basic quests, but structured-tool instability prevents a town-play recommendation |
 | [ArliAI RPMax v1.3 Q8](https://huggingface.co/bartowski/Llama-3.1-8B-ArliAI-RPMax-v1.3-GGUF) | Local Ollama | 0/5 | 0/5 | 0/5 | 0/40 | Structured tools worked, but no tutorial completion was demonstrated |
 | [Stheno v3.4 Q8](https://huggingface.co/bartowski/Llama-3.1-8B-Stheno-v3.4-GGUF) | Local Ollama | 0/5 | 0/5 | 0/5 | 0/40 | Roleplay fluency did not translate into reliable tool planning |
 
-These results make Ornith 9B an interesting compact local alternative, not a replacement
-for Qwen 3.6 35B Q4 when consistent Clover performance matters. They also show why model
-compatibility must be measured with authoritative state: plausible roleplay text can coexist
-with poor multi-step action completion.
+These results make Hermes 4 14B a strong local town-play option and Ornith 9B an
+interesting compact complex-world alternative, not replacements for Qwen 3.6 35B Q4 when
+consistent Clover performance matters. They also show why model compatibility must be
+measured with authoritative state: plausible roleplay text can coexist with poor multi-step
+action completion.
 
 ## Frontier API preview
 
@@ -143,6 +157,8 @@ Admins can use these exact tested identifiers:
 | Qwen 3.5 4B HauhauCS | `hf.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive:Q4_K_M` |
 | Qwen 3.5 9B | `qwen3.5:9b` |
 | Qwen 3.5 9B Defiant Fable | `hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF:Q4_K_M` |
+| Hermes 4 14B Q8 | `hf.co/bartowski/NousResearch_Hermes-4-14B-GGUF:Q8_0` |
+| Qwen 2.5 32B RP-INK Q5 | `LESSTHANSUPER/RP-INK-Qwen2.5-32b:Q5_K_S` |
 | Ornith 1.0 9B | `ornith:9b` |
 | Laguna XS 2.1 | `laguna-xs-2.1:latest` |
 | Ornith 1.0 35B | `ornith:35b` |
@@ -178,7 +194,8 @@ server operators remain responsible for appropriate policy controls.
 ## Test conditions and detailed results
 
 The established models use the latest applicable complete cells: Apple and Clover from
-`v2` (`3a662413`) and Bell from `v4` (`0abb32b`). The four rated derivatives ran against
+`v2` (`3a662413`) and Bell from `v4` (`0abb32b`). RP-INK, Hermes 4, and both Qwen 3.7
+variants completed all four applicable cohorts. The four rated derivatives ran against
 `c3f2729`, whose gameplay code retains the same latest tutorial semantics. Runs used five
 fresh worlds per model/tutorial pair, provider-default temperature, and high thinking where
 the model supported it.

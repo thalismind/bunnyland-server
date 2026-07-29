@@ -673,7 +673,13 @@ def test_parameter_scatter_explains_unpublished_sizes():
 
 
 def test_parameter_scatter_catalogue_covers_full_study_roster():
-    assert len(MODEL_ARCHITECTURES) == 32
+    assert len(MODEL_ARCHITECTURES) == 34
+    assert (
+        MODEL_ARCHITECTURES[
+            "hf.co/bartowski/NousResearch_Hermes-4-14B-GGUF:Q8_0"
+        ].total_parameters
+        == 14_800_000_000
+    )
     assert (
         MODEL_ARCHITECTURES["deepseek-v4-flash:cloud"].total_parameters
         == 284_000_000_000
@@ -695,6 +701,12 @@ def test_parameter_scatter_catalogue_covers_full_study_roster():
             "hf.co/HauhauCS/Gemma4-31B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M"
         ].display_name
         == "Gemma 4 31B HauhauCS Q4"
+    )
+    assert (
+        MODEL_ARCHITECTURES[
+            "LESSTHANSUPER/RP-INK-Qwen2.5-32b:Q5_K_S"
+        ].display_name
+        == "Qwen 2.5 32B RP-INK Q5"
     )
 
 

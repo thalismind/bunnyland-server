@@ -69,10 +69,10 @@ Primary local queue, in suggested order:
 
 - [ ] [`hermes3:8b-llama3.1-q8_0`](https://ollama.com/library/hermes3) — 8B
   Llama 3.1 roleplaying/function-calling control.
-- [ ] [`NousResearch/Hermes-4-14B`](https://huggingface.co/NousResearch/Hermes-4-14B)
-  at Q8 — 14B roleplaying, function-calling, and structured-JSON model. Its initial
-  128-token diagnostic ended during thinking and is inconclusive; an 8,192-token
-  preflight and full matrix are queued after RP-INK.
+- [x] [`NousResearch/Hermes-4-14B`](https://huggingface.co/NousResearch/Hermes-4-14B)
+  at Q8 — completed the full `v1`--`v4` matrix after an 8,192-token preflight:
+  31/40 overall, Apple 5/5 and Bell 5/5 in `v2`, Clover 1/5, and Bell 5/5 in both
+  `v3` and `v4`.
 - [x] [`subsectmusic/qwriko3-4b-instruct-2507`](https://huggingface.co/subsectmusic/qwriko3-4b-instruct-2507)
   at Q8 — excluded by the 2026-07-28 compatibility gate. Ollama advertised `tools`,
   but both provider-default and thinking-disabled calls returned tool-shaped text
@@ -81,8 +81,9 @@ Primary local queue, in suggested order:
   at Q8 — uncensored 9B conversational model with a documented tool harness.
 - [ ] [`LESSTHANSUPER/THE_OMEGA_DIRECTIVE-Mistral_Small3.2-24b:Q6_K`](https://ollama.com/LESSTHANSUPER/THE_OMEGA_DIRECTIVE-Mistral_Small3.2-24b)
   — 24B multi-turn roleplaying model.
-- [ ] [`LESSTHANSUPER/RP-INK-Qwen2.5-32b:Q5_K_S`](https://ollama.com/LESSTHANSUPER/RP-INK-Qwen2.5-32b)
-  — 32B roleplaying and creative-writing model; queued 2026-07-28.
+- [x] [`LESSTHANSUPER/RP-INK-Qwen2.5-32b:Q5_K_S`](https://ollama.com/LESSTHANSUPER/RP-INK-Qwen2.5-32b)
+  — completed the full `v1`--`v4` matrix: 18/40 overall, with reliable Apple
+  completion but only 2/5 on `v2` Bell and Clover.
 - [ ] [`gemma4:26b`](https://ollama.com/library/gemma4:26b) — official Gemma 4
   function-calling control for comparison with incompatible community Gemma builds.
 
@@ -131,9 +132,11 @@ compatibility gate to every unchecked Qwen entry before running scored sessions.
 Cloud comparison candidates:
 
 - [x] [`qwen/qwen3.7-plus`](https://openrouter.ai/qwen/qwen3.7-plus) — inexpensive
-  hosted Qwen 3.7 agent model; full OpenRouter matrix started 2026-07-28.
+  hosted Qwen 3.7 agent model; completed 34/40 overall with `v2` Apple 5/5,
+  Bell 5/5, and Clover 4/5.
 - [x] [`qwen/qwen3.7-flash`](https://openrouter.ai/qwen/qwen3.7-flash) — low-cost,
-  low-latency Qwen 3.7 control; full OpenRouter matrix started 2026-07-28.
+  low-latency Qwen 3.7 control; completed 32/40 overall with `v2` Apple 5/5,
+  Bell 5/5, and Clover 2/5.
 - [ ] [`minimax-m2.7:cloud`](https://ollama.com/library/minimax-m2.7) — tool-capable
   model emphasizing character consistency, emotional intelligence, and scene interaction.
 - [ ] [`mistral-large-3:675b-cloud`](https://ollama.com/library/mistral-large-3) —
