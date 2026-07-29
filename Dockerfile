@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm@sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248 AS runtime
+FROM ghcr.io/astral-sh/uv:0.12.0-python3.12-trixie-slim@sha256:837853d0f4703dbada56fd0807ea1db01eccca02db0af3b1f0cee5e902077107 AS runtime
 
 WORKDIR /app
 
@@ -9,6 +9,7 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     UV_LINK_MODE=copy
 
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates git \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 bunnyland \
