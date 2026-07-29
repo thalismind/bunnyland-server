@@ -40,6 +40,7 @@ async def run_loop_with_api(
     forwarded_allow_ips: str = "127.0.0.1",
     imagegen: ImageGenService | None = None,
     character_chat: CharacterChatService | None = None,
+    open_character_chat: bool = True,
     claim_secrets: ClaimSecretRegistry | None = None,
     max_ticks: int | None = None,
 ) -> int:
@@ -70,6 +71,7 @@ async def run_loop_with_api(
         cors_origins=cors_origins,
         imagegen=imagegen,
         character_chat=character_chat,
+        open_character_chat=open_character_chat,
         claim_secrets=claim_secrets,
     )
     telemetry.instrument_fastapi(app)

@@ -17,6 +17,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         cost=FOCUS_COST,
         patterns=("take note {text}", "note {text}"),
         examples=("take note the north tunnel is flooded",),
+        chat_safe=True,
     ),
     define_action(
         "remember",
@@ -27,6 +28,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         cost=FOCUS_COST,
         patterns=("remember {query}",),
         examples=("remember the north tunnel",),
+        chat_safe=True,
     ),
     define_action(
         "forget",
@@ -37,6 +39,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         cost=FOCUS_COST,
         patterns=("forget {note_id}",),
         examples=("forget note-123",),
+        chat_safe=True,
     ),
     define_action(
         "reflect",
@@ -47,6 +50,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         cost=FOCUS_COST,
         patterns=("reflect {text}",),
         examples=("reflect on the north tunnel",),
+        chat_safe=True,
     ),
 )
 

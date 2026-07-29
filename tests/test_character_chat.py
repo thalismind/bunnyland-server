@@ -459,7 +459,9 @@ async def test_character_chat_submit_reports_immediate_rejection_and_unknown_def
 ):
     scenario = build_scenario()
     service = chat_service(scenario, FakeChatAgent([]))
-    scenario.actor.register_action_definition(ActionDefinition("wait", tool_name="wait"))
+    scenario.actor.register_action_definition(
+        ActionDefinition("wait", tool_name="wait", chat_safe=True)
+    )
 
     rejected = await service._submit_tool(
         scenario.character,
@@ -484,6 +486,25 @@ async def test_character_chat_submit_reports_immediate_rejection_and_unknown_def
     )
     assert missing_definition.status == "rejected"
     assert missing_definition.reason == "unknown tool 'look'"
+
+
+@pytest.mark.asyncio
+async def test_character_chat_rejects_verb_that_is_not_chat_safe():
+    # Fail-safe default: a real, handled verb that does not declare chat_safe must not be
+    # reachable through character chat, even though it is a valid in-world action.
+    scenario = build_scenario()
+    service = chat_service(scenario, FakeChatAgent([]))
+
+    assert "move" not in service.allowed_tools
+    rejected = await service._submit_tool(
+        scenario.character,
+        str(scenario.controller),
+        scenario.generation,
+        ToolCall("move", {"direction": "north"}),
+    )
+
+    assert rejected.status == "rejected"
+    assert rejected.reason == "tool 'move' is not available in character chat"
 
 
 @pytest.mark.asyncio

@@ -69,11 +69,11 @@ from bunnyland.simpacks.lifesim.mechanics import LifeStageComponent
 _AUTHENTICATED_REQUEST = object()
 
 
-def _authenticated_mcp_context():
+def _authenticated_mcp_context(scopes=frozenset({WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE})):
     principal = TokenPrincipal(
         token_id="test-token",
         subject="test-admin",
-        scopes=frozenset({WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE}),
+        scopes=frozenset(scopes),
         created_at=1,
         rotate_after=None,
         expires_at=2**31,
@@ -800,6 +800,7 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     registered_resources = {}
     registered_prompts = {}
     registered_low_server = {}
+    context_holder = {"ctx": _authenticated_mcp_context()}
 
     class FakeLowServer:
         def __init__(self):
@@ -849,7 +850,7 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
             return decorate
 
         def get_context(self):
-            return _authenticated_mcp_context()
+            return context_holder["ctx"]
 
         def streamable_http_app(self):
             async def asgi_app(scope, receive, send):
@@ -918,6 +919,16 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     asyncio.run(registered_low_server["subscribe_resource"](AnyUrl(EVENTS_RESOURCE_URI)))
     assert registered_low_server["unsubscribe_resource"].__name__ == "unsubscribe_resource"
     asyncio.run(registered_low_server["unsubscribe_resource"](AnyUrl(EVENTS_RESOURCE_URI)))
+    # A registered play resource can be subscribed with play scope.
+    asyncio.run(registered_low_server["subscribe_resource"](AnyUrl("bunnyland://v1/features")))
+    # Resource subscriptions honor the declared scope: a play-only session cannot subscribe
+    # to an admin resource URI and receive its change-timing notifications.
+    context_holder["ctx"] = _authenticated_mcp_context(scopes=frozenset({WORLD_PLAY_SCOPE}))
+    with pytest.raises(RuntimeError, match="scope required"):
+        asyncio.run(
+            registered_low_server["subscribe_resource"](AnyUrl("bunnyland://v1/admin/world"))
+        )
+    context_holder["ctx"] = _authenticated_mcp_context()
 
     with pytest.raises(RuntimeError, match="client is not controlling"):
         registered_tools["play_get_projection"](client_id="missing")

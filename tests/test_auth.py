@@ -684,6 +684,61 @@ async def test_admin_websocket_rechecks_reloaded_user_before_sending_update(
     tokens.close()
 
 
+async def test_admin_websocket_closes_when_operator_scope_downgraded_mid_stream(
+    tmp_path, monkeypatch
+) -> None:
+    credentials = _credentials(tmp_path)
+    tokens = TokenStore(tmp_path / "tokens.sqlite3")
+    token, _ = tokens.issue("admin", [WORLD_ADMIN_SCOPE], automatic_rotation=True)
+    app = create_app(
+        build_scenario().actor,
+        token_store=tokens,
+        user_credentials=credentials,
+    )
+    route = next(route for route in app.routes if route.path == "/v1/admin/world/stream")
+    clock = {"now": 100.0}
+    monkeypatch.setattr("bunnyland.server.auth.time.monotonic", lambda: clock["now"])
+    sent = []
+    closed = []
+
+    async def downgrade_admin(*_args):
+        # Operator remains enabled but is downgraded world:admin -> world:play in the file.
+        inventory = yaml.safe_load(credentials.path.read_text())
+        next(user for user in inventory["users"] if user["username"] == "admin")["scopes"] = [
+            WORLD_PLAY_SCOPE
+        ]
+        credentials.path.write_text(yaml.safe_dump(inventory))
+        clock["now"] += 1.0
+        return {"type": "event", "data": {"world_epoch": 1}}
+
+    monkeypatch.setattr(server_app, "next_websocket_update", downgrade_admin)
+
+    class FakeWebSocket:
+        headers = {}
+        cookies = {}
+
+        async def accept(self):
+            return None
+
+        async def receive_json(self):
+            return {
+                "type": "authenticate",
+                "data": {"token": token, "client_id": "admin-client"},
+            }
+
+        async def send_json(self, payload):
+            sent.append(payload)
+
+        async def close(self, code=1000):
+            closed.append(code)
+
+    await route.endpoint(FakeWebSocket())
+
+    assert [message["type"] for message in sent] == ["snapshot"]
+    assert closed == [1008]
+    tokens.close()
+
+
 def _request(headers: list[tuple[bytes, bytes]] = ()) -> Request:
     return Request({"type": "http", "headers": headers, "method": "GET", "path": "/"})
 

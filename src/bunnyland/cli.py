@@ -739,6 +739,7 @@ async def _run_api_runtime(
                 forwarded_allow_ips=getattr(args, "forwarded_allow_ips", "127.0.0.1"),
                 imagegen=imagegen,
                 character_chat=character_chat,
+                open_character_chat=getattr(args, "open_character_chat", True),
                 claim_secrets=claim_secrets,
                 max_ticks=max_ticks,
             ),
@@ -1232,6 +1233,16 @@ def main(argv: list[str] | None = None) -> int:
         "--character-chat",
         action="store_true",
         help="enable opt-in character chat routes on the HTTP API (needs llm and server extras)",
+    )
+    serve.add_argument(
+        "--open-character-chat",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("BUNNYLAND_OPEN_CHARACTER_CHAT") is not False,
+        help=(
+            "let any authenticated player chat with llm-controlled characters (default: "
+            "enabled); --no-open-character-chat routes chat only to human controllers "
+            "(env: BUNNYLAND_OPEN_CHARACTER_CHAT)"
+        ),
     )
     serve.add_argument(
         "--auth-users-file",

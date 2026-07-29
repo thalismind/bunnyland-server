@@ -121,6 +121,7 @@ class ServerConfig:
     player_client_ids: tuple[str, ...] = ()
     admin_client_ids: tuple[str, ...] = ()
     character_chat: bool = False
+    open_character_chat: bool = True
     http_rate_limit_requests: int = 0
     http_rate_limit_window_seconds: float = 1.0
     cors_origins: tuple[str, ...] = ()
@@ -307,6 +308,7 @@ class BunnylandConfig:
             "discord_allowed_bot_user_id": list(discord.allowed_bot_user_ids) or None,
             "mcp": self.mcp.enabled,
             "character_chat": server.character_chat,
+            "open_character_chat": server.open_character_chat,
             "auth_users_file": server.auth_users_file,
             "token_db": server.token_db,
             "player_client_id": list(server.player_client_ids) or None,
@@ -371,6 +373,7 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_ENABLE_DISCORD", discord.enabled)
         _set_if(env, "BUNNYLAND_ENABLE_MCP", self.mcp.enabled)
         _set_if(env, "BUNNYLAND_ENABLE_CHARACTER_CHAT", server.character_chat)
+        _set_if(env, "BUNNYLAND_OPEN_CHARACTER_CHAT", server.open_character_chat)
         _set_if(env, "BUNNYLAND_AUTH_USERS_FILE", server.auth_users_file)
         _set_if(env, "BUNNYLAND_TOKEN_DB", server.token_db)
         _set_if(env, "BUNNYLAND_PLAYER_CLIENT_IDS", _csv(server.player_client_ids))

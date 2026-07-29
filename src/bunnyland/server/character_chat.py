@@ -29,6 +29,9 @@ from .models import (
     CharacterChatResponse,
 )
 
+# Canonical set of core verbs that ship as chat-safe. Chat exposure is now declared per
+# verb via ActionDefinition.chat_safe (so plugins can opt in); this constant documents the
+# built-in core set and anchors the parity test. Runtime filtering uses chat_safe, not this.
 ALLOWED_CHAT_TOOLS = frozenset(
     {"look", "inspect", "remember", "take_note", "reflect", "forget", "say", "tell", "wait"}
 )
@@ -287,11 +290,17 @@ class CharacterChatService:
         )
 
     def _allowed_definitions(self):
+        # Chat-safety is declared per verb via ActionDefinition.chat_safe so plugins can
+        # opt their own verbs into character chat. The default is False, so a new or
+        # plugin-contributed verb is never chat-exposed unless it explicitly declares it.
         return tuple(
             definition
             for definition in action_definitions(self.actor.action_definitions())
-            if definition.name in ALLOWED_CHAT_TOOLS
+            if definition.chat_safe
         )
+
+    def _chat_safe_tool_names(self) -> frozenset[str]:
+        return frozenset(definition.name for definition in self._allowed_definitions())
 
     def _allowed_tool_schemas(self) -> list[dict[str, Any]]:
         return [definition.tool_schema() for definition in self._allowed_definitions()]
@@ -420,7 +429,7 @@ class CharacterChatService:
         generation: int,
         call: ToolCall,
     ) -> CharacterChatActionResult:
-        if call.name not in ALLOWED_CHAT_TOOLS:
+        if call.name not in self._chat_safe_tool_names():
             return CharacterChatActionResult(
                 tool=call.name,
                 status="rejected",

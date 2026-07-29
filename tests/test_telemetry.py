@@ -1298,7 +1298,9 @@ async def test_character_chat_traces_tool_usage_and_command_submit_status(
     span_exporter, _reader = otel_capture
     monkeypatch.setenv("BUNNYLAND_OTEL_CAPTURE_CONTENT", "true")
     scenario = build_scenario()
-    scenario.actor.register_action_definition(ActionDefinition("wait", tool_name="wait"))
+    scenario.actor.register_action_definition(
+        ActionDefinition("wait", tool_name="wait", chat_safe=True)
+    )
     agent = _FakeTelemetryChatAgent(
         [
             ChatAgentReply(content="", tool_call=ToolCall("wait", {})),

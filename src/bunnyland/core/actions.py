@@ -119,6 +119,9 @@ class ActionDefinition:
     examples: tuple[ActionExample, ...] = ()
     natural_patterns: tuple[ActionPattern, ...] = ()
     requirement: ActionRequirement = field(default_factory=ActionRequirement)
+    # Opt-in flag for the claim-free character-chat surface. Defaults to False so new and
+    # plugin-contributed verbs are never chat-exposed unless they explicitly declare it.
+    chat_safe: bool = False
 
     def __post_init__(self) -> None:
         allowed = {int(effort) for effort in ActionEffort}
@@ -608,6 +611,7 @@ def _definition(
     examples: tuple[str, ...] = (),
     requirement: ActionRequirement = _NO_REQUIREMENT,
     icon: str | None = None,
+    chat_safe: bool = False,
 ) -> ActionDefinition:
     title = command_type.replace("-", " ").title()
     return ActionDefinition(
@@ -625,6 +629,7 @@ def _definition(
         ),
         examples=tuple(ActionExample(example, natural=True) for example in examples),
         requirement=requirement,
+        chat_safe=chat_safe,
     )
 
 

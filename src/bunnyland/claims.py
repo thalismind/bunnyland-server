@@ -95,6 +95,9 @@ class ClaimSecretRegistry:
             return False
         if credential.owner == owner:
             return True
+        # A legacy (owner-less) claim is adopted by the first caller that presents its
+        # correct secret. Holding the secret IS the authorization factor, so this is how a
+        # portable claim (issued before an owner was known) moves between client kinds.
         if credential.owner == self._legacy_owner(claim_id):
             self._credentials[claim_id] = ClaimCredential(
                 owner=owner,

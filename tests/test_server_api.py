@@ -4889,6 +4889,128 @@ def test_v1_chat_job_keeps_existing_llm_controller(scenario):
     )
 
 
+def test_v1_chat_job_rate_limited_per_caller(scenario, monkeypatch):
+    monkeypatch.setenv("BUNNYLAND_CHAT_JOB_RATE_LIMIT_REQUESTS", "2")
+    monkeypatch.setenv("BUNNYLAND_CHAT_JOB_RATE_LIMIT_WINDOW_SECONDS", "60")
+
+    class FakeChat:
+        allowed_tools: tuple[str, ...] = ()
+
+        async def chat(self, character_id: str, request) -> CharacterChatResponse:
+            return CharacterChatResponse(
+                world_epoch=scenario.actor.epoch,
+                character_id=character_id,
+                reply=request.message,
+            )
+
+    app = create_app(scenario.actor, character_chat=FakeChat())
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    llm = spawn_entity(
+        scenario.actor.world,
+        [LLMControllerComponent(profile_name="idle", model="claim-model")],
+    )
+    scenario.actor.assign_controller(scenario.character, llm.id)
+
+    url = f"/v1/chat/characters/{scenario.character}/jobs"
+    headers = {CLIENT_ID_HEADER: "client-a"}
+    body = ChatJobRequest(kind="chat", message="hello").model_dump(mode="json")
+    statuses = [client.post(url, headers=headers, json=body).status_code for _ in range(3)]
+
+    assert statuses == [202, 202, 429]
+    throttled = client.post(url, headers=headers, json=body)
+    assert throttled.status_code == 429
+    assert int(throttled.headers["Retry-After"]) >= 1
+    # A different caller has an independent budget.
+    fresh = client.post(url, headers={CLIENT_ID_HEADER: "client-b"}, json=body)
+    assert fresh.status_code == 202
+
+
+def test_v1_chat_job_rejects_llm_when_open_chat_disabled(scenario):
+    class FakeChat:
+        allowed_tools: tuple[str, ...] = ()
+
+        async def chat(self, character_id, request):
+            raise AssertionError("chat must not run when open character chat is disabled")
+
+    app = create_app(scenario.actor, character_chat=FakeChat(), open_character_chat=False)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    llm = spawn_entity(
+        scenario.actor.world,
+        [LLMControllerComponent(profile_name="idle", model="claim-model")],
+    )
+    scenario.actor.assign_controller(scenario.character, llm.id)
+
+    response = client.post(
+        f"/v1/chat/characters/{scenario.character}/jobs",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json=ChatJobRequest(kind="chat", message="hello").model_dump(mode="json"),
+    )
+    result = client.get(response.headers["Location"], headers={CLIENT_ID_HEADER: "client-a"})
+
+    assert response.status_code == 202
+    assert result.json()["status"] == "failed"
+    assert result.json()["failure"]["detail"] == "open character chat is disabled"
+
+
+def test_v1_chat_job_read_is_bound_to_token_subject(scenario):
+    store = TokenStore(":memory:")
+    owner_token, _owner = store.issue(
+        "player-one", (WORLD_PLAY_SCOPE,), automatic_rotation=False
+    )
+    other_token, _other = store.issue(
+        "player-two", (WORLD_PLAY_SCOPE,), automatic_rotation=False
+    )
+
+    class FakeChat:
+        allowed_tools: tuple[str, ...] = ()
+
+        async def chat(self, character_id, request) -> CharacterChatResponse:
+            return CharacterChatResponse(
+                world_epoch=scenario.actor.epoch,
+                character_id=character_id,
+                reply=request.message,
+            )
+
+    app = _create_app(scenario.actor, token_store=store, character_chat=FakeChat())
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+
+    shared = {CLIENT_ID_HEADER: "shared-client"}
+    created = client.post(
+        f"/v1/chat/characters/{scenario.character}/jobs",
+        headers={"Authorization": f"Bearer {owner_token}", **shared},
+        json=ChatJobRequest(kind="chat", message="hi").model_dump(mode="json"),
+    )
+    assert created.status_code == 202
+    location = created.headers["Location"]
+
+    # Same client-id but a different authenticated subject cannot read the job.
+    stolen = client.get(location, headers={"Authorization": f"Bearer {other_token}", **shared})
+    assert stolen.status_code == 404
+    # The creating subject still reads its own job.
+    owned = client.get(location, headers={"Authorization": f"Bearer {owner_token}", **shared})
+    assert owned.status_code == 200
+
+
+def test_request_body_over_limit_is_rejected_with_413(scenario, monkeypatch):
+    monkeypatch.setenv("BUNNYLAND_MAX_REQUEST_BODY_BYTES", "200")
+    app = create_app(scenario.actor)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+
+    response = client.post(
+        f"/v1/chat/characters/{scenario.character}/jobs",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"kind": "chat", "message": "x" * 1000},
+    )
+    assert response.status_code == 413
+    # A small body still passes the guard (reaches normal handling).
+    small = client.post(
+        f"/v1/chat/characters/{scenario.character}/jobs",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"kind": "chat", "message": "hi"},
+    )
+    assert small.status_code != 413
+
+
 def test_v1_generation_jobs_normalize_status_and_refresh_absent_jobs(scenario):
     class FakeImageService:
         def __init__(self, status: str, *, retain: bool = True) -> None:

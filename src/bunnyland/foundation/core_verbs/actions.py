@@ -18,6 +18,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         cost=FREE_COST,
         patterns=(ActionPattern("look", {}), ActionPattern("look around", {})),
         examples=("look",),
+        chat_safe=True,
     ),
     define_action(
         "inspect",
@@ -26,6 +27,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         cost=FREE_COST,
         patterns=("inspect {target_id}", "look at {target_id}", "examine {target_id}"),
         examples=("inspect woven basket",),
+        chat_safe=True,
     ),
     define_action(
         "move",
@@ -189,6 +191,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         cost=FREE_COST,
         patterns=(ActionPattern("wait", {}), ActionPattern("yield", {})),
         examples=("wait",),
+        chat_safe=True,
     ),
     define_action(
         "say",
@@ -197,6 +200,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         cost=SPEECH_COST,
         required=("text",),
         patterns=("say {text}",),
+        chat_safe=True,
     ),
     define_action(
         "tell",
@@ -205,6 +209,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         cost=SPEECH_COST,
         required=("target_id", "text"),
         patterns=("tell {target_id:word} {text}",),
+        chat_safe=True,
     ),
     define_action(
         "start-conversation",

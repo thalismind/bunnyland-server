@@ -65,3 +65,9 @@ def test_media_plugin_owns_compatible_immutable_route(tmp_path, monkeypatch):
     with pytest.raises(fastapi.HTTPException) as exc:
         asyncio.run(endpoint("models3d", "missing.glb"))
     assert exc.value.status_code == 404
+    # The public serving route refuses path-traversal / invalid segments with a 404 rather
+    # than reading outside the namespaced media root.
+    for bad_namespace, bad_name in (("..", name), ("models3d", "../secret.glb")):
+        with pytest.raises(fastapi.HTTPException) as traversal:
+            asyncio.run(endpoint(bad_namespace, bad_name))
+        assert traversal.value.status_code == 404

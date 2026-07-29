@@ -827,8 +827,15 @@ def create_bunnyland_mcp_app(
 
     low_server.get_capabilities = get_capabilities
 
+    # Declared required scopes per resource URI, so resource subscriptions are guarded with
+    # the same policy as resource reads. Without this a play session could subscribe to an
+    # admin resource URI and receive its change-timing notifications.
+    resource_subscription_scopes: dict[str, tuple[str, ...]] = {}
+
     @low_server.subscribe_resource()
     async def subscribe_resource(uri: AnyUrl) -> None:
+        required = resource_subscription_scopes.get(str(uri), (WORLD_PLAY_SCOPE,))
+        _require_request_scopes(required)
         context = mcp.get_context()
         event_bridge.subscribe(str(uri), context.session)
 
@@ -902,6 +909,10 @@ def create_bunnyland_mcp_app(
         return register
 
     def _resource(*args, required_scopes: tuple[str, ...], **kwargs):
+        # Every resource is registered with its URI as the first positional argument (the
+        # same value passed to mcp.resource below), so record its scope for subscriptions.
+        resource_subscription_scopes[str(args[0])] = required_scopes
+
         def register(fn):
             return mcp.resource(*args, **kwargs)(_authorized_capability(required_scopes, fn))
 

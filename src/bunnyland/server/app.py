@@ -97,6 +97,7 @@ from .auth import (
     TokenResponse,
     TokenStore,
     UserCredentialStore,
+    scope_granted,
 )
 from .character_chat import CharacterChatService
 from .client_ids import (
@@ -256,6 +257,19 @@ LOGIN_USERNAME_RATE_LIMIT_REQUESTS = 20
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = 60
 TOKEN_FAILURE_RATE_LIMIT_REQUESTS = 20
 TOKEN_FAILURE_RATE_LIMIT_WINDOW_SECONDS = 60
+# Per-principal cap on character-chat job submissions (both LLM-bound jobs and jobs routed
+# to a human controller). Chat is the most abuse-prone mutation, so a single authenticated
+# caller cannot spam it. The live server tightens this to ~2/60s via the env var below.
+CHAT_JOB_RATE_LIMIT_REQUESTS_ENV = "BUNNYLAND_CHAT_JOB_RATE_LIMIT_REQUESTS"
+CHAT_JOB_RATE_LIMIT_WINDOW_ENV = "BUNNYLAND_CHAT_JOB_RATE_LIMIT_WINDOW_SECONDS"
+CHAT_JOB_RATE_LIMIT_REQUESTS = 10
+CHAT_JOB_RATE_LIMIT_WINDOW_SECONDS = 60
+# In-app request body cap as a backstop to the edge nginx `client_max_body_size`, so the
+# limit does not vanish if the app is ever exposed without that reverse proxy in front. It
+# sits above the largest legitimate body (a max-size image upload plus multipart framing),
+# so per-endpoint limits like the image-upload check remain the specific authority.
+MAX_REQUEST_BODY_BYTES_ENV = "BUNNYLAND_MAX_REQUEST_BODY_BYTES"
+MAX_REQUEST_BODY_BYTES = MAX_UPLOAD_IMAGE_BYTES + 2 * 1024 * 1024
 HSTS_VALUE = "max-age=31536000"
 
 
@@ -466,6 +480,7 @@ def create_app(
     admin_client_ids: str | list[str] | None = None,
     imagegen: ImageGenService | None = None,
     character_chat: CharacterChatService | None = None,
+    open_character_chat: bool = True,
     claim_secrets: ClaimSecretRegistry | None = None,
     memory_store=None,
     rate_limit_requests: int | None = None,
@@ -637,6 +652,13 @@ def create_app(
     token_failure_rate_limiter = FixedWindowRateLimiter(
         TOKEN_FAILURE_RATE_LIMIT_REQUESTS, TOKEN_FAILURE_RATE_LIMIT_WINDOW_SECONDS
     )
+    chat_job_rate_limiter = FixedWindowRateLimiter(
+        int(os.environ.get(CHAT_JOB_RATE_LIMIT_REQUESTS_ENV, CHAT_JOB_RATE_LIMIT_REQUESTS)),
+        float(os.environ.get(CHAT_JOB_RATE_LIMIT_WINDOW_ENV, CHAT_JOB_RATE_LIMIT_WINDOW_SECONDS)),
+    )
+    max_request_body_bytes = int(
+        os.environ.get(MAX_REQUEST_BODY_BYTES_ENV, MAX_REQUEST_BODY_BYTES)
+    )
     authenticator = (
         RequestAuthenticator(token_store, user_credentials) if token_store is not None else None
     )
@@ -660,6 +682,9 @@ def create_app(
     character_chat_jobs: dict[str, JobResource] = {}
     character_chat_job_clients: dict[str, str] = {}
     character_chat_job_characters: dict[str, str] = {}
+    # Authenticated subject that created each chat job, so a reader cannot fetch another
+    # account's job by guessing its id and spoofing the client-id header.
+    character_chat_job_subjects: dict[str, str] = {}
     generation_jobs: dict[str, JobResource] = {}
     memory_store = memory_store or getattr(actor, "memory_store", None)
     media_store = (
@@ -717,6 +742,11 @@ def create_app(
         )
 
     def _client_host(request: Request) -> str:
+        # Per-IP limiting is only as accurate as request.client.host. Behind the tunnel that
+        # resolves to the real client IP only because the edge nginx translates Cloudflare's
+        # CF-Connecting-IP into X-Forwarded-For and uvicorn trusts it (proxy_headers +
+        # forwarded_allow_ips). If that reverse proxy is ever removed, every caller collapses
+        # into one bucket; the app does not itself parse CF-Connecting-IP.
         return getattr(getattr(request, "client", None), "host", "") or "unknown"
 
     def _authenticate_websocket_frame(
@@ -859,6 +889,13 @@ def create_app(
             character_sheets=True,
             image_generation=imagegen is not None,
         )
+
+    @app.middleware("http")
+    async def _enforce_request_body_size(request: Request, call_next):
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > max_request_body_bytes:
+            return _problem_response(request, 413, "request body too large")
+        return await call_next(request)
 
     @app.middleware("http")
     async def _enforce_request_rate_limit(request: Request, call_next):
@@ -2061,12 +2098,19 @@ def create_app(
             sheet=projection.sheet,
         )
 
-    def _chat_job_for_client(job_id: str, character_id: str, client_id: str) -> JobResource:
+    def _request_subject(request: Request) -> str | None:
+        principal = getattr(request.state, "auth_principal", None)
+        return principal.subject if isinstance(principal, TokenPrincipal) else None
+
+    def _chat_job_for_client(
+        job_id: str, character_id: str, client_id: str, subject: str | None
+    ) -> JobResource:
         job = character_chat_jobs.get(job_id)
         if (
             job is None
             or character_chat_job_characters.get(job_id) != character_id
             or character_chat_job_clients.get(job_id) != client_id
+            or character_chat_job_subjects.get(job_id) != subject
         ):
             raise HTTPException(status_code=404, detail="chat job does not exist")
         return job
@@ -2164,6 +2208,7 @@ def create_app(
         character_id: str,
         body: ChatJobRequest,
         response: Response,
+        request: Request,
         client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> JobResource:
         parsed = parse_entity_id(character_id)
@@ -2173,6 +2218,18 @@ def create_app(
         if not character.has_component(CharacterComponent):
             raise HTTPException(status_code=400, detail="entity is not a character")
         normalized_client_id = _required_client_id(client_id)
+        # Cap chat submissions per authenticated caller (falling back to client id when the
+        # server runs unauthenticated). Chat is the most abuse-prone mutation because it
+        # drives model inference or pages a human controller.
+        subject = _request_subject(request)
+        rate_key = subject if subject is not None else normalized_client_id
+        allowed, retry_after = chat_job_rate_limiter.check(rate_key)
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="character chat rate limit exceeded",
+                headers={"Retry-After": str(retry_after)},
+            )
         active = current_controller(actor, character)
         if active is None:
             raise HTTPException(status_code=409, detail="character has no controller")
@@ -2190,10 +2247,13 @@ def create_app(
         character_chat_jobs[job.id] = job
         character_chat_job_clients[job.id] = normalized_client_id
         character_chat_job_characters[job.id] = character_id
+        character_chat_job_subjects[job.id] = subject
         response.headers["Location"] = f"/v1/chat/characters/{character_id}/jobs/{job.id}"
         if controller_kind == "llm":
             if character_chat is None:
                 _chat_job_failure(character_id, job.id, "character chat is not enabled")
+            elif not open_character_chat:
+                _chat_job_failure(character_id, job.id, "open character chat is disabled")
             else:
                 task = asyncio.create_task(
                     _run_character_chat_job(
@@ -2233,10 +2293,13 @@ def create_app(
     async def v1_character_chat_job(
         character_id: str,
         job_id: str,
+        request: Request,
         client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> JobResource:
         normalized_client_id = _required_client_id(client_id)
-        return _chat_job_for_client(job_id, character_id, normalized_client_id)
+        return _chat_job_for_client(
+            job_id, character_id, normalized_client_id, _request_subject(request)
+        )
 
     @play_v1.get("/catalog", response_model=CatalogResource)
     async def v1_catalog() -> CatalogResource:
@@ -3012,6 +3075,18 @@ def create_app(
         except (HTTPException, TimeoutError, ValueError, TypeError, WebSocketDisconnect):
             await websocket.close(code=1008)
             return
+        def _admin_still_authorized() -> bool:
+            # Re-check on every frame so a mid-stream downgrade (world:admin -> world:play),
+            # revocation, or expiry tears the socket down instead of continuing to stream
+            # full-world admin snapshots. verify_token refreshes scopes from the credential
+            # file, so a downgraded operator must lose the admin stream, not just a revoked
+            # one. (The admin client-id allowlist is static startup config and cannot change
+            # mid-stream, so it is not re-evaluated here.)
+            if access_token is None:
+                return True
+            principal = authenticator.verify_token(access_token)
+            return principal is not None and scope_granted(principal.scopes, WORLD_ADMIN_SCOPE)
+
         subscription = stream.subscribe()
         try:
             projection_started = time.perf_counter()
@@ -3022,11 +3097,11 @@ def create_app(
                 subscription.frame(actor, {"type": "snapshot", "data": snapshot})
             )
             while True:
-                if access_token is not None and authenticator.verify_token(access_token) is None:
+                if not _admin_still_authorized():
                     await websocket.close(code=1008)
                     return
                 message = await next_websocket_update(actor, subscription)
-                if access_token is not None and authenticator.verify_token(access_token) is None:
+                if not _admin_still_authorized():
                     await websocket.close(code=1008)
                     return
                 await websocket.send_json(subscription.frame(actor, message))
