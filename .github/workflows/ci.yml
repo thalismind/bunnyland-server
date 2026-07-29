@@ -289,6 +289,8 @@ jobs:
   container:
     name: Build container
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.server-build.outputs.digest }}
     needs:
       - test
       - package
@@ -321,6 +323,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and publish Bunnyland container
+        id: server-build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -433,5 +436,7 @@ jobs:
       - name: Run exact-container auth smoke
         env:
           BUNNYLAND_CONTAINER_RUNTIME: docker
-          BUNNYLAND_SERVER_IMAGE: ghcr.io/${{ github.repository_owner }}/bunnyland-server:main
-        run: scripts/container-auth-smoke
+          BUNNYLAND_SERVER_IMAGE: ghcr.io/${{ github.repository_owner }}/bunnyland-server@${{ needs.container.outputs.digest }}
+        run: |
+          sudo --preserve-env=BUNNYLAND_CONTAINER_RUNTIME,BUNNYLAND_SERVER_IMAGE \
+            scripts/container-auth-smoke

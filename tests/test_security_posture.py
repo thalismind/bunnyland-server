@@ -31,11 +31,15 @@ def test_chroma_collection_selection_is_profile_scoped() -> None:
 
 def test_container_bases_are_immutable_debian_images() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text().lower()
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    container_smoke = (ROOT / "scripts/container-auth-smoke").read_text()
 
     assert "0.12.0-python3.14-trixie-slim@sha256:" in dockerfile
     assert "apt-get upgrade -y" in dockerfile
     assert "alpine" not in dockerfile
     assert "musl" not in dockerfile
+    assert "chown 10001:10001" in container_smoke
+    assert "bunnyland-server@${{ needs.container.outputs.digest }}" in workflow
 
 
 def test_only_documented_chroma_advisory_is_ignored() -> None:
