@@ -63,6 +63,7 @@ from ..core.events import (
 )
 from ..core.perspective import PerspectiveQueryResult
 from ..core.world_actor import CONTROL_COMMANDS, CommandExpectationError, WorldActor
+from ..foundation.media.service import sniff_image_extension
 from ..imagegen.components import PortraitImageComponent
 from ..imagegen.media import (
     SEGMENT_PORTRAITS,
@@ -266,6 +267,19 @@ except ImportError:
 logger = logging.getLogger("bunnyland.server")
 RATE_LIMIT_REQUESTS_ENV = "BUNNYLAND_HTTP_RATE_LIMIT_REQUESTS"
 RATE_LIMIT_WINDOW_ENV = "BUNNYLAND_HTTP_RATE_LIMIT_WINDOW_SECONDS"
+# The general request limiter used to default to 0, which FixedWindowRateLimiter reads as
+# "disabled". The hosted deployment sets these through Ansible, so only deployments that did
+# not -- self-hosters, and any compose run without a rendered compose.user.yml -- silently ran
+# with no app-level limit at all. Defaulting on matches the hosted values; set the env var to
+# 0 to deliberately turn it off.
+RATE_LIMIT_REQUESTS = 120
+RATE_LIMIT_WINDOW_SECONDS = 1.0
+# Scene images run a GPU generation per request, so they get their own cap rather than only
+# the general one. Character chat already had an equivalent.
+SCENE_IMAGE_RATE_LIMIT_REQUESTS_ENV = "BUNNYLAND_SCENE_IMAGE_RATE_LIMIT_REQUESTS"
+SCENE_IMAGE_RATE_LIMIT_WINDOW_ENV = "BUNNYLAND_SCENE_IMAGE_RATE_LIMIT_WINDOW_SECONDS"
+SCENE_IMAGE_RATE_LIMIT_REQUESTS = 4
+SCENE_IMAGE_RATE_LIMIT_WINDOW_SECONDS = 60
 CORS_ORIGINS_ENV = "BUNNYLAND_CORS_ORIGINS"
 CLAIM_COOKIE_NAME = "bunnyland_claim"
 CLAIM_COOKIE_PATH = "/api/v1/play"
@@ -658,12 +672,12 @@ def create_app(
         ],
     )
     request_limit = (
-        int(os.environ.get(RATE_LIMIT_REQUESTS_ENV, "0"))
+        int(os.environ.get(RATE_LIMIT_REQUESTS_ENV, RATE_LIMIT_REQUESTS))
         if rate_limit_requests is None
         else rate_limit_requests
     )
     request_window = (
-        float(os.environ.get(RATE_LIMIT_WINDOW_ENV, "1"))
+        float(os.environ.get(RATE_LIMIT_WINDOW_ENV, RATE_LIMIT_WINDOW_SECONDS))
         if rate_limit_window_seconds is None
         else rate_limit_window_seconds
     )
@@ -680,6 +694,16 @@ def create_app(
     chat_job_rate_limiter = FixedWindowRateLimiter(
         int(os.environ.get(CHAT_JOB_RATE_LIMIT_REQUESTS_ENV, CHAT_JOB_RATE_LIMIT_REQUESTS)),
         float(os.environ.get(CHAT_JOB_RATE_LIMIT_WINDOW_ENV, CHAT_JOB_RATE_LIMIT_WINDOW_SECONDS)),
+    )
+    scene_image_rate_limiter = FixedWindowRateLimiter(
+        int(
+            os.environ.get(SCENE_IMAGE_RATE_LIMIT_REQUESTS_ENV, SCENE_IMAGE_RATE_LIMIT_REQUESTS)
+        ),
+        float(
+            os.environ.get(
+                SCENE_IMAGE_RATE_LIMIT_WINDOW_ENV, SCENE_IMAGE_RATE_LIMIT_WINDOW_SECONDS
+            )
+        ),
     )
     max_request_body_bytes = int(
         os.environ.get(MAX_REQUEST_BODY_BYTES_ENV, MAX_REQUEST_BODY_BYTES)
@@ -1793,6 +1817,17 @@ def create_app(
             return idle_generation_status(actor)
         return generation_job.status_response(actor)
 
+    def _internal_error(operation: str, exc: Exception) -> HTTPException:
+        """Log the cause and return a generic 500.
+
+        These paths used to put ``str(exc)`` straight into the response, which leaks file
+        paths and upstream provider messages to the caller. Admin-scoped, but the detail
+        belongs in the log.
+        """
+
+        logger.exception("%s failed", operation)
+        return HTTPException(status_code=500, detail=f"{operation} failed")
+
     async def _generate_world_request(request: WorldGenerateRequest) -> WorldGenerateResponse:
         nonlocal generation_job
         if not request.confirm_reset:
@@ -1836,7 +1871,7 @@ def create_app(
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise _internal_error("world generation", exc) from exc
 
         stream.broadcast({"type": "snapshot", "data": serialize_world(actor, meta)})
         return generation_job.response(actor)
@@ -1849,7 +1884,7 @@ def create_app(
         except WorldPatchError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise _internal_error("room generation", exc) from exc
 
     async def _generate_character_request(
         request: WorldCharacterGenerationRequest,
@@ -1859,7 +1894,7 @@ def create_app(
         except WorldPatchError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise _internal_error("character generation", exc) from exc
 
     async def _generate_item_request(
         request: WorldItemGenerationRequest,
@@ -1869,7 +1904,7 @@ def create_app(
         except WorldPatchError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise _internal_error("item generation", exc) from exc
 
     async def _generate_event_request(
         request: WorldEventGenerationRequest,
@@ -1879,7 +1914,7 @@ def create_app(
         except WorldPatchError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise _internal_error("event generation", exc) from exc
 
     async def _generate_image_request(
         request: WorldImageGenerationRequest,
@@ -1915,7 +1950,7 @@ def create_app(
             async with actor._lock:
                 return save_configured_world(actor, save_path, meta=meta)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise _internal_error("world save", exc) from exc
 
     # Formal v1 routers -----------------------------------------------------
     #
@@ -2821,6 +2856,18 @@ def create_app(
         character, _controller, _edge, _claim = _claim_context_v1(
             claim_id, claim_secret, normalized_client_id, owner
         )
+        # Each of these starts a GPU image generation, so cap them per caller the way chat
+        # jobs are. The general request limiter is far too loose for work this expensive.
+        subject = _request_subject(request)
+        allowed, retry_after = scene_image_rate_limiter.check(
+            subject if subject is not None else normalized_client_id
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="scene image rate limit exceeded",
+                headers={"Retry-After": str(retry_after)},
+            )
         created = datetime.now(UTC)
         image = await _scene_image_request(str(character.id))
         if image is None:
@@ -3099,6 +3146,15 @@ def create_app(
             raise HTTPException(status_code=400, detail="upload body is empty")
         if len(data) > MAX_UPLOAD_IMAGE_BYTES:
             raise HTTPException(status_code=413, detail="upload image is too large")
+        # The multipart content type is caller-supplied and previously decided the stored
+        # extension on its own, so arbitrary bytes could be stored as .png and served from
+        # the public media route. Trust the bytes instead.
+        sniffed = sniff_image_extension(data)
+        if sniffed is None or sniffed != extension:
+            raise HTTPException(
+                status_code=400,
+                detail="upload content does not match its declared image type",
+            )
         async with actor._lock:
             character = _character_entity(target_id)
             segment = SEGMENT_PORTRAITS if purpose == "portrait" else SEGMENT_SPRITES

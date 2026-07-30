@@ -96,6 +96,27 @@ class MediaService:
 MediaStore = MediaService
 
 
+#: Leading bytes that identify each image container we accept for upload. The declared
+#: multipart content type is attacker-chosen, so it decides only what the caller *claims*;
+#: these decide what the bytes actually are.
+_IMAGE_SIGNATURES: tuple[tuple[str, bytes], ...] = (
+    ("png", b"\x89PNG\r\n\x1a\n"),
+    ("jpg", b"\xff\xd8\xff"),
+)
+
+
+def sniff_image_extension(data: bytes) -> str | None:
+    """Return the image extension the bytes actually are, or ``None`` if unrecognised."""
+
+    for extension, signature in _IMAGE_SIGNATURES:
+        if data.startswith(signature):
+            return extension
+    # WebP is a RIFF container: "RIFF" <4-byte size> "WEBP".
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
 def extension_for(name: str) -> str:
     return _check_name(name)[1]
 
@@ -119,4 +140,5 @@ __all__ = [
     "content_type_for",
     "extension_for",
     "require_media_service",
+    "sniff_image_extension",
 ]

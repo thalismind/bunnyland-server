@@ -34,7 +34,14 @@ def _install_routes(router, actor, **_context) -> None:
         return Response(
             content=data,
             media_type=content_type,
-            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",
+                # Set here rather than relying on the edge: this route is public and its
+                # bytes are uploaded, and only one of the shipped nginx shapes used to send
+                # any security headers at all.
+                "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": "inline",
+            },
         )
 
 

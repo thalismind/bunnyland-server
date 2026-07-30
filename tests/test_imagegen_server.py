@@ -31,9 +31,15 @@ from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 ADMIN = {CLIENT_ID_HEADER: "admin-client"}
 
 
+#: Real container signatures. The upload route validates the bytes rather than trusting the
+#: caller-declared multipart content type, so placeholder strings no longer pass.
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"payload"
+WEBP_BYTES = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"payload"
+
+
 class _FakeClient:
     async def generate(self, graph, *, output_node_id=""):
-        return b"PNG"
+        return PNG_BYTES
 
 
 def _service(actor, tmp_path):
@@ -200,14 +206,14 @@ async def test_admin_upload_character_images_without_imagegen(tmp_path, monkeypa
     async with _client(app, headers={"Authorization": f"Bearer {operator}"}) as client:
         denied = await client.put(
             f"/v1/admin/media/character/{scenario.character}/portrait",
-            files={"file": ("portrait.png", b"PNG", "image/png")},
+            files={"file": ("portrait.png", PNG_BYTES, "image/png")},
             headers={"Authorization": f"Bearer {player}"},
         )
         assert denied.status_code == 403
 
         portrait = await client.put(
             f"/v1/admin/media/character/{scenario.character}/portrait",
-            files={"file": ("portrait.png", b"PNG", "image/png")},
+            files={"file": ("portrait.png", PNG_BYTES, "image/png")},
             headers=ADMIN,
         )
         assert portrait.status_code == 200
@@ -220,11 +226,11 @@ async def test_admin_upload_character_images_without_imagegen(tmp_path, monkeypa
         assert component.url == portrait_payload["url"]
         media = await client.get(component.url)
         assert media.status_code == 200
-        assert media.content == b"PNG"
+        assert media.content == PNG_BYTES
 
         sprite = await client.put(
             f"/v1/admin/media/character/{scenario.character}/sprite",
-            files={"file": ("sprite.webp", b"WEBP", "image/webp")},
+            files={"file": ("sprite.webp", WEBP_BYTES, "image/webp")},
             headers=ADMIN,
         )
         assert sprite.status_code == 200
@@ -249,7 +255,7 @@ async def test_admin_upload_character_image_rejects_bad_inputs(tmp_path, monkeyp
 
         bad_purpose = await client.put(
             f"/v1/admin/media/character/{scenario.character}/avatar",
-            files={"file": ("avatar.png", b"PNG", "image/png")},
+            files={"file": ("avatar.png", PNG_BYTES, "image/png")},
             headers=ADMIN,
         )
         assert bad_purpose.status_code == 400
@@ -273,7 +279,7 @@ async def test_admin_upload_character_image_rejects_bad_inputs(tmp_path, monkeyp
             files={
                 "file": (
                     "portrait.png",
-                    b"P" * (MAX_UPLOAD_IMAGE_BYTES + 1),
+                    PNG_BYTES + b"P" * MAX_UPLOAD_IMAGE_BYTES,
                     "image/png",
                 )
             },
@@ -281,9 +287,27 @@ async def test_admin_upload_character_image_rejects_bad_inputs(tmp_path, monkeyp
         )
         assert too_large.status_code == 413
 
+        # The declared multipart content type is caller-chosen. Storing bytes on that word
+        # alone let arbitrary content be written as .png and served from the public media
+        # route, so the container signature has to agree.
+        mislabelled = await client.put(
+            f"/v1/admin/media/character/{scenario.character}/portrait",
+            files={"file": ("portrait.png", b"<html>not an image</html>", "image/png")},
+            headers=ADMIN,
+        )
+        assert mislabelled.status_code == 400
+        assert "declared image type" in mislabelled.json()["detail"]
+
+        mismatched = await client.put(
+            f"/v1/admin/media/character/{scenario.character}/portrait",
+            files={"file": ("portrait.png", WEBP_BYTES, "image/png")},
+            headers=ADMIN,
+        )
+        assert mismatched.status_code == 400
+
         missing_character = await client.put(
             "/v1/admin/media/character/entity_999/portrait",
-            files={"file": ("portrait.png", b"PNG", "image/png")},
+            files={"file": ("portrait.png", PNG_BYTES, "image/png")},
             headers=ADMIN,
         )
         assert missing_character.status_code == 404
@@ -294,7 +318,7 @@ async def test_admin_upload_character_image_rejects_bad_inputs(tmp_path, monkeyp
         )
         wrong_kind = await client.put(
             f"/v1/admin/media/character/{non_character.id}/portrait",
-            files={"file": ("portrait.png", b"PNG", "image/png")},
+            files={"file": ("portrait.png", PNG_BYTES, "image/png")},
             headers=ADMIN,
         )
         assert wrong_kind.status_code == 400

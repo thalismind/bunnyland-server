@@ -3252,7 +3252,9 @@ def test_fastapi_world_generate_translates_start_errors(monkeypatch, scenario):
     )
 
     assert failed.status_code == 500
-    assert failed.json()["detail"] == "generator failed"
+    # The cause is logged, not returned.
+    assert failed.json()["detail"] == "world generation failed"
+    assert "generator failed" not in failed.text
 
 
 @pytest.mark.parametrize(
@@ -3299,7 +3301,8 @@ def test_fastapi_entity_generation_translates_unexpected_errors(
     response = client.post(path, json=payload)
 
     assert response.status_code == 500
-    assert response.json()["detail"] == "dm unavailable"
+    assert response.json()["detail"].endswith("generation failed")
+    assert "dm unavailable" not in response.text
 
 
 def test_fastapi_save_endpoint_translates_save_errors(monkeypatch, scenario, tmp_path):
@@ -3315,7 +3318,10 @@ def test_fastapi_save_endpoint_translates_save_errors(monkeypatch, scenario, tmp
     response = client.post("/v1/admin/world/checkpoints")
 
     assert response.status_code == 500
-    assert response.json()["detail"] == "disk full"
+    # The cause is logged, not returned: str(exc) here would leak file paths and upstream
+    # provider messages to the caller.
+    assert response.json()["detail"] == "world save failed"
+    assert "disk full" not in response.text
 
 
 async def test_run_loop_with_api_stops_server_when_game_loop_finishes(
