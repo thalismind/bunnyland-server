@@ -469,8 +469,8 @@ Then allow SSH, HTTP, and HTTPS before enabling UFW:
 
 ```bash
 sudo ufw allow 22/tcp
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
+sudo ufw deny 80/tcp
+sudo ufw deny 443/tcp
 sudo ufw deny 8765/tcp
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
@@ -483,17 +483,17 @@ Expected policy:
 ```text
 Default: deny (incoming), allow (outgoing)
 22/tcp ALLOW IN
-80/tcp ALLOW IN
-443/tcp ALLOW IN
+80/tcp DENY IN
+443/tcp DENY IN
 8765/tcp DENY IN
 ```
 
 Verify that nginx still reaches the app locally, but the app port is not public:
 
 ```bash
-curl -fsS http://127.0.0.1:8765/public/health
-curl -fsS https://sandbox.example.com/api/public/health
-curl --connect-timeout 5 http://YOUR_VPS_PUBLIC_IP:8765/public/health || true
+curl -fsS http://127.0.0.1:8765/v1/public/health
+curl -fsS https://sandbox.example.com/api/v1/public/health
+curl --connect-timeout 5 http://YOUR_VPS_PUBLIC_IP:8765/v1/public/health || true
 ```
 
 The last command should time out or fail. The public API should be available only through

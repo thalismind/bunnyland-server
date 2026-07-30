@@ -84,7 +84,7 @@ def test_api_nginx_template_forwards_bearer_and_cookie_without_basic_auth() -> N
     repo_root = Path(__file__).resolve().parents[1]
     text = (repo_root / "deploy" / "nginx" / "api-locations.inc").read_text()
 
-    health_location = text.index("location = /api/public/health")
+    health_location = text.index("location = /api/v1/public/health")
     player_location = text.index("location /api/ {")
 
     assert health_location < player_location
@@ -112,9 +112,12 @@ def test_nginx_api_limits_return_retry_after_without_limiting_health() -> None:
     locations = (repo_root / "deploy" / "nginx" / "api-locations.inc").read_text()
     frontend = (repo_root / "deploy" / "nginx" / "frontend-tls.conf").read_text()
     health = locations[
-        locations.index("location = /api/public/health") : locations.index("location /api/ {")
+        locations.index("location = /api/v1/public/health") : locations.index(
+            "location /api/ {"
+        )
     ]
 
+    assert "proxy_pass ${BUNNYLAND_API_UPSTREAM}/v1/public/health;" in health
     assert "limit_req_zone $binary_remote_addr zone=bunnyland_api:10m" in frontend
     assert "limit_req_status 429;" in locations
     assert 'add_header Retry-After "${BUNNYLAND_EDGE_RETRY_AFTER}" always;' in locations

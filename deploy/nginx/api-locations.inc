@@ -11,8 +11,8 @@ location @bunnyland_rate_limited {
     return 429;
 }
 
-location = /api/public/health {
-    proxy_pass ${BUNNYLAND_API_UPSTREAM}/public/health;
+location = /api/v1/public/health {
+    proxy_pass ${BUNNYLAND_API_UPSTREAM}/v1/public/health;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $remote_addr;
