@@ -80,6 +80,14 @@ def test_home_nginx_template_denies_hidden_paths() -> None:
     assert "return 404;" in text
 
 
+def test_tunnel_nginx_template_rejects_public_tempo_paths() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    text = (repo_root / "deploy" / "nginx" / "frontend-tunnel.conf").read_text()
+
+    assert text.count("location = /tempo {") == 2
+    assert text.count("location ^~ /tempo/ {") == 2
+
+
 def test_api_nginx_template_forwards_bearer_and_cookie_without_basic_auth() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     text = (repo_root / "deploy" / "nginx" / "api-locations.inc").read_text()
