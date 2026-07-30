@@ -154,9 +154,10 @@ Use `-it` for the terminal clients. The web repo publishes
 Bunnyland can export **OpenTelemetry traces and metrics** so you can watch a live world in
 Grafana/Tempo, Jaeger, or any OTLP backend. Distributed traces span the game tick → command
 dispatch → handler → LLM decision (plus auto-instrumented HTTP requests), alongside world
-metrics: entity/character/room counts, tick cadence, command accept/reject rates, handler and
-LLM-decision latency, LLM input/output token usage, and provider-reported LLM cost when the
-SDK/API exposes it. It is **off by default** — install the `otel` extra and set
+metrics: entity/character/room and active-controller counts, tick cadence, command queues
+and outcomes, prompt/turn/provider latency, WebSocket health, LLM input/output token usage,
+and provider-reported LLM cost when the SDK/API exposes it. It is **off by default** —
+install the `otel` extra and set
 `BUNNYLAND_OTEL_ENABLED`:
 
 ```bash

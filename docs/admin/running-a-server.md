@@ -282,7 +282,22 @@ is safe to leave the instrumentation in place in production and flip the gate on
 | `bunnyland.llm.tokens.prompt` / `.completion` / `.total` | counter | `provider`, `model` |
 | `bunnyland.llm.cost` | counter (USD) | `provider`, `model` |
 | `bunnyland.world.entities` / `.characters` / `.rooms` | observable gauge | — |
+| `bunnyland.world.characters.active` | observable gauge | `controller_kind` |
+| `bunnyland.command.queue.depth` | observable gauge | `stage` |
+| `bunnyland.loop.iteration.duration` | histogram (s) | `paused` |
+| `bunnyland.controller.turn.duration` | histogram (s) | `controller_kind`, `outcome` |
+| `bunnyland.controller.decisions.inflight` | observable gauge | `controller_kind` |
+| `bunnyland.prompt.build.duration` / `.filter.duration` | histogram (s) | `controller_kind` |
+| `bunnyland.prompt.characters` | histogram (characters) | `controller_kind`, `provider`, `model` |
+| `bunnyland.llm.requests` / `.request.duration` | counter / histogram (s) | `provider`, `model`, `outcome` |
+| `bunnyland.websocket.*` | counters, gauges, histogram | — |
 | `bunnyland.worldgen.duration` | histogram (s) | `generator`, `llm` |
+
+Set `OTEL_METRICS_EXPORTER=prometheus` to expose these OTel instruments for a
+private Prometheus scrape. `OTEL_EXPORTER_PROMETHEUS_HOST` defaults to
+`127.0.0.1` and `OTEL_EXPORTER_PROMETHEUS_PORT` defaults to `9464`. Do not put
+this listener behind the public application proxy; publish or forward it on
+localhost only.
 
 **Spans emitted** — a server loop iteration is the trace root, with the world tick and the
 controller turn hanging off it:

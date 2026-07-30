@@ -125,6 +125,8 @@ def test_span_and_record_helpers_are_no_ops_when_disabled(monkeypatch):
         span.set_attribute("b", 2)
         span.record_exception(ValueError("x"))
         span.set_status("ok")
+        span.add_event("tick.note", {"count": 1})
+        assert span.get_span_context() is None
     telemetry.set_span_attributes({"k": "v"})  # no current span; still a no-op
     assert telemetry.attr_text("short") == "short"
     long = "x" * (telemetry.MAX_ATTRIBUTE_CHARS + 10)
@@ -155,7 +157,15 @@ def test_span_and_record_helpers_are_no_ops_when_disabled(monkeypatch):
     telemetry.record_worldgen(0.3, {"generator": "empty"})
     telemetry.record_worldgen_request(0.1, {"provider": "ollama", "model": "m"})
     telemetry.record_persist(0.4, {"operation": "save", "format": "json"})
-    telemetry.register_world_gauges(build_scenario().actor)  # no-op when disabled
+    scenario = build_scenario()
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        ScriptedAgent([]),
+    )
+    loop = GameLoop(scenario.actor, dispatch)
+    telemetry.register_world_gauges(scenario.actor)  # no-op when disabled
+    telemetry.register_runtime_gauges(scenario.actor, dispatch, loop)
     telemetry.instrument_fastapi(object())  # no-op when disabled
 
 
@@ -310,7 +320,7 @@ def test_trace_file_exporter_writes_jsonl(monkeypatch, tmp_path):
     trace_path = tmp_path / "release.trace.jsonl"
     monkeypatch.setenv("BUNNYLAND_OTEL_ENABLED", "1")
     monkeypatch.setenv("BUNNYLAND_OTEL_TRACE_FILE", str(trace_path))
-    monkeypatch.setenv("OTEL_METRICS_EXPORTER", "none")
+    monkeypatch.delenv("OTEL_METRICS_EXPORTER", raising=False)
     monkeypatch.setenv("OTEL_SERVICE_NAME", "bunnyland-release-test")
 
     telemetry.reset_for_tests()
@@ -347,8 +357,15 @@ def test_jsonl_exporter_shutdown_and_force_flush(tmp_path):
 
 def test_observe_yields_nothing_without_registered_actor():
     telemetry.reset_for_tests()
-    # No actor registered: _observe short-circuits and yields no observations.
+    # No runtime object registered: every observable short-circuits without exporting.
     assert list(telemetry._observe(lambda world: 0)) == []
+    assert list(telemetry._observe_active_characters(None)) == []
+    assert list(telemetry._observe_command_queue_depth(None)) == []
+    assert list(telemetry._observe_inflight_decisions(None)) == []
+    assert list(telemetry._observe_loop_running(None)) == []
+    assert list(telemetry._observe_loop_paused(None)) == []
+    assert list(telemetry._observe_websocket_connections(None)) == []
+    assert list(telemetry._observe_websocket_queue_depth(None)) == []
 
 
 @pytestmark_otel
@@ -882,6 +899,7 @@ def test_world_gauges_report_live_counts(otel_capture):
     _span_exporter, reader = otel_capture
     scenario = build_scenario()
     telemetry.register_world_gauges(scenario.actor)
+    telemetry.register_world_gauges(scenario.actor)
 
     points = _metric_points(reader)
     characters = points["bunnyland.world.characters"][0].value
@@ -915,6 +933,9 @@ def test_active_character_gauge_uses_bounded_controller_kinds(otel_capture):
     controlled(WebControllerComponent(client_id="sleeping"), sleeping=True)
     controlled(SuspendedControllerComponent())
     spawn_entity(scenario.actor.world, [CharacterComponent()])
+    blank_controller = spawn_entity(scenario.actor.world)
+    controlled_by_blank = spawn_entity(scenario.actor.world, [CharacterComponent()])
+    scenario.actor.assign_controller(controlled_by_blank.id, blank_controller.id)
     telemetry.register_world_gauges(scenario.actor)
 
     points = _metric_points(reader)["bunnyland.world.characters.active"]
@@ -927,8 +948,22 @@ def test_active_character_gauge_uses_bounded_controller_kinds(otel_capture):
         "scripted": 0,
         "web": 1,
         "suspended": 0,
-        "unknown": 1,
+        "unknown": 2,
     }
+
+
+def test_controller_kind_handles_dangling_controller_reference():
+    class MissingControllerWorld:
+        @staticmethod
+        def has_entity(_entity_id):
+            return False
+
+    class ControlledCharacter:
+        @staticmethod
+        def get_relationships(_edge_type):
+            return [(object(), "missing-controller_1")]
+
+    assert telemetry._controller_kind(MissingControllerWorld(), ControlledCharacter()) == "unknown"
 
 
 def test_active_character_counts_start_from_character_index():
@@ -976,6 +1011,7 @@ def test_runtime_gauges_report_queue_and_loop_state(otel_capture):
     )
     loop = GameLoop(scenario.actor, dispatch)
     telemetry.register_runtime_gauges(scenario.actor, dispatch, loop)
+    telemetry.register_runtime_gauges(scenario.actor, dispatch, loop)
 
     points = _metric_points(reader)
     depths = {
@@ -987,13 +1023,33 @@ def test_runtime_gauges_report_queue_and_loop_state(otel_capture):
     assert points["bunnyland.loop.paused"][0].value == 0
 
 
+def test_inflight_decision_counts_bucket_unregistered_controller_kind():
+    scenario = build_scenario()
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        ScriptedAgent([]),
+    )
+    dispatch._inflight_kinds["custom-character"] = "custom"
+
+    assert dispatch.inflight_decision_counts() == {
+        "llm": 0,
+        "behavior": 0,
+        "scripted": 0,
+        "unknown": 0,
+        "custom": 1,
+    }
+
+
 @pytestmark_otel
 def test_event_stream_emits_connection_loss_and_projection_metrics(otel_capture):
-    from bunnyland.server.subscriptions import EventStream
+    from bunnyland.server.subscriptions import EventStream, _event_data
 
     _span_exporter, reader = otel_capture
     scenario = build_scenario()
     stream = EventStream(scenario.actor)
+    telemetry.register_event_stream(stream)
+    assert _event_data({"type": "event", "data": "invalid"}) == {}
     subscription = stream.subscribe(max_queue_size=1)
     stream.broadcast({"type": "invalidate", "data": {"world_epoch": scenario.actor.epoch}})
     stream.broadcast({"type": "invalidate", "data": {"world_epoch": scenario.actor.epoch}})
@@ -1041,6 +1097,31 @@ def test_prometheus_port_validation(monkeypatch, value):
     monkeypatch.setenv("OTEL_EXPORTER_PROMETHEUS_PORT", value)
     with pytest.raises(ValueError, match="OTEL_EXPORTER_PROMETHEUS_PORT"):
         telemetry._prometheus_bind()
+
+
+def test_prometheus_host_validation(monkeypatch):
+    monkeypatch.setenv("OTEL_EXPORTER_PROMETHEUS_HOST", "   ")
+    with pytest.raises(ValueError, match="OTEL_EXPORTER_PROMETHEUS_HOST"):
+        telemetry._prometheus_bind()
+
+
+def test_metrics_exporter_validation(monkeypatch):
+    monkeypatch.setenv("OTEL_METRICS_EXPORTER", "console")
+    with pytest.raises(ValueError, match="OTEL_METRICS_EXPORTER"):
+        telemetry._build_metric_readers()
+
+
+@pytestmark_otel
+def test_enabled_span_forwards_explicit_events(otel_capture):
+    span_exporter, _reader = otel_capture
+
+    with telemetry.span("event.forwarding") as span:
+        span.add_event("decision.note", {"count": 1})
+
+    finished = _spans_by_name(span_exporter)["event.forwarding"]
+    assert [(event.name, event.attributes) for event in finished.events] == [
+        ("decision.note", {"count": 1})
+    ]
 
 
 @pytestmark_otel
