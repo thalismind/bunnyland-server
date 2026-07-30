@@ -42,8 +42,10 @@ from bunnyland.server.character_chat import (
     build_character_chat_service,
 )
 from bunnyland.server.client_ids import CLIENT_ID_HEADER
+from bunnyland.server.jobs import JobRegistry
 from bunnyland.server.models import (
     CharacterChatActionResult,
+    CharacterChatPendingResponse,
     CharacterChatRequest,
     CharacterChatResponse,
 )
@@ -764,6 +766,124 @@ async def test_character_chat_job_reports_pending_result_failure():
 
     assert fetched.json()["status"] == "failed"
     assert fetched.json()["failure"]["detail"] == "pending result failed"
+
+
+@pytest.mark.asyncio
+async def test_character_chat_job_handles_eviction_while_work_is_running(monkeypatch):
+    scenario = build_scenario()
+    monkeypatch.setattr(server_app, "JobRegistry", lambda: JobRegistry(max_total=1))
+    started = {
+        "success": asyncio.Event(),
+        "failure": asyncio.Event(),
+    }
+    release = {
+        "success": asyncio.Event(),
+        "failure": asyncio.Event(),
+    }
+
+    class EvictedChat:
+        async def chat(self, character_id, request):
+            outcome = request.message.removeprefix("first-")
+            if request.message.startswith("first-"):
+                started[outcome].set()
+                await release[outcome].wait()
+                if outcome == "failure":
+                    raise RuntimeError("evicted failure")
+            return CharacterChatResponse(
+                world_epoch=scenario.actor.epoch,
+                character_id=character_id,
+                reply=request.message,
+            )
+
+    app = create_app(
+        scenario.actor,
+        character_chat=EvictedChat(),
+        allow_unauthenticated_embedding=True,
+    )
+    async with route_client(app) as client:
+        first_success = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "first-success"},
+        )
+        await started["success"].wait()
+        await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "evict-success"},
+        )
+        release["success"].set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        first_failure = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "first-failure"},
+        )
+        await started["failure"].wait()
+        await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "evict-failure"},
+        )
+        release["failure"].set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert (await client.get(first_success.headers["Location"])).status_code == 404
+        assert (await client.get(first_failure.headers["Location"])).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_character_chat_job_fails_after_pending_action_timeout(monkeypatch):
+    scenario = build_scenario()
+    monkeypatch.setattr(server_app, "CHAT_JOB_PENDING_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(server_app, "CHAT_JOB_POLL_SECONDS", 0)
+
+    class NeverCompletesChat:
+        async def chat(self, character_id, _request):
+            return CharacterChatResponse(
+                world_epoch=scenario.actor.epoch,
+                character_id=character_id,
+                reply="",
+                complete=False,
+                action=CharacterChatActionResult(
+                    tool="say",
+                    command_id="command:pending",
+                    status="queued",
+                ),
+            )
+
+        async def pending_result(self, character_id, *_args):
+            return CharacterChatPendingResponse(
+                world_epoch=scenario.actor.epoch,
+                character_id=character_id,
+                command_id="command:pending",
+                reply="",
+                complete=False,
+                action=CharacterChatActionResult(
+                    tool="say",
+                    command_id="command:pending",
+                    status="queued",
+                ),
+            )
+
+    app = create_app(
+        scenario.actor,
+        character_chat=NeverCompletesChat(),
+        allow_unauthenticated_embedding=True,
+    )
+    async with route_client(app) as client:
+        submitted = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "hello"},
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        fetched = await client.get(submitted.headers["Location"])
+
+    assert fetched.json()["status"] == "failed"
+    assert (
+        fetched.json()["failure"]["detail"]
+        == "the character did not finish this action in time"
+    )
 
 
 @pytest.mark.asyncio

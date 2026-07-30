@@ -4956,12 +4956,22 @@ def test_v1_player_jobs_get_list_and_isolate_claims(scenario):
         f"/v1/play/claims/{first['id']}/jobs/missing",
         headers=_claim_headers("client-a", first_secret),
     )
+    additional = [
+        client.post(
+            f"/v1/play/claims/{first['id']}/jobs",
+            headers=_claim_headers("client-a", first_secret),
+            json={"kind": "scene_image"},
+        )
+        for _ in range(3)
+    ]
 
     assert first_job.status_code == 202
     assert second_job.status_code == 202
     assert [job["id"] for job in listed.json()] == [first_job.json()["id"]]
     assert fetched.json()["id"] == first_job.json()["id"]
     assert missing.status_code == 404
+    assert [response.status_code for response in additional] == [202, 202, 429]
+    assert int(additional[-1].headers["Retry-After"]) >= 1
 
 
 def test_v1_chat_job_keeps_existing_llm_controller(scenario):
@@ -7096,7 +7106,6 @@ def test_command_payload_and_identifiers_are_bounded(scenario):
     for _ in range(20):
         nested = {"deeper": nested}
     assert _submit({"command_type": "move", "payload": nested}).status_code == 422
-
     assert _submit({"command_type": "m" * 500, "payload": {}}).status_code == 422
     assert _submit({"command_type": "move", "id": "i" * 500}).status_code == 422
 
@@ -7147,3 +7156,34 @@ async def test_command_receipts_are_scoped_to_their_character(scenario):
     assert scenario.actor.receipt_for(str(scenario.character), shared_id) is not None
     # Its own outcome, reached independently of the first character's receipt.
     assert outcome.receipt is None or outcome.receipt.character_id == str(other.id)
+
+
+def test_scene_image_requests_are_rate_limited_per_caller(scenario, monkeypatch):
+    # Each scene image starts a GPU generation, so it needs its own cap rather than only the
+    # general request limiter.
+    monkeypatch.setenv("BUNNYLAND_SCENE_IMAGE_RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("BUNNYLAND_SCENE_IMAGE_RATE_LIMIT_WINDOW_SECONDS", "60")
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+    claimed_response = client.post(
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"character_id": str(scenario.character)},
+    )
+    claim_headers = {
+        CLIENT_ID_HEADER: "client-a",
+        "X-Bunnyland-Claim-Secret": claimed_response.headers["X-Bunnyland-Claim-Secret"],
+    }
+    path = f"/v1/play/claims/{claimed_response.json()['id']}/jobs"
+    body = {"kind": "scene_image"}
+
+    # Imagegen is not configured here, so the first request fails on that -- but only after
+    # passing the limiter, which is what the second request must then hit.
+    first = client.post(path, headers=claim_headers, json=body)
+    assert first.status_code != 429
+
+    limited = client.post(path, headers=claim_headers, json=body)
+    assert limited.status_code == 429
+    assert limited.json()["detail"] == "scene image rate limit exceeded"
+    assert int(limited.headers["Retry-After"]) >= 1

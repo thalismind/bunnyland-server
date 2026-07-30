@@ -319,6 +319,8 @@ class UserCredentialStore:
         """
 
         user = self.current_user(username)
+        # _password_hasher raises RuntimeError when pwdlib is missing entirely; this covers
+        # a partial install where the package imports but its exception module does not.
         hasher = _password_hasher()
         try:
             from pwdlib.exceptions import UnknownHashError

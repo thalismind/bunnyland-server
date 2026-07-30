@@ -85,10 +85,6 @@ class ConcurrencyLimiter:
         self._held: dict[str, int] = {}
         self._lock = Lock()
 
-    def held(self, key: str) -> int:
-        with self._lock:
-            return self._held.get(key, 0)
-
     def acquire(self, key: str) -> bool:
         """Take a slot for ``key``, returning ``False`` when it is already at the cap."""
 

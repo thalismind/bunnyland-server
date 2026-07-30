@@ -368,6 +368,21 @@ async def test_user_store_tolerates_bad_inventory_and_hashes(tmp_path, monkeypat
     auth_module._password_hasher.cache_clear()
 
 
+def test_password_verification_requires_pwdlib_exception_types(tmp_path, monkeypatch) -> None:
+    store = _credentials(tmp_path)
+
+    class FakeHasher:
+        @staticmethod
+        def verify(_password, _password_hash):
+            return True
+
+    monkeypatch.setattr(auth_module, "_password_hasher", lambda: FakeHasher())
+    monkeypatch.setitem(__import__("sys").modules, "pwdlib.exceptions", None)
+
+    with pytest.raises(RuntimeError, match=r"pwdlib\[argon2\]"):
+        store.verify_password("player", "correct horse")
+
+
 @pytest.mark.parametrize(
     "contents, message",
     [
@@ -1547,6 +1562,37 @@ def test_websocket_connections_are_capped_per_identity(tmp_path, monkeypatch) ->
     tokens.close()
 
 
+def test_admin_websocket_refuses_a_saturated_identity(tmp_path, monkeypatch) -> None:
+    from bunnyland.server.rate_limit import ConcurrencyLimiter
+
+    testclient = pytest.importorskip("fastapi.testclient")
+    websocket_error = pytest.importorskip("starlette.websockets").WebSocketDisconnect
+    identity_limiter = ConcurrencyLimiter(1)
+    assert identity_limiter.acquire("operator") is True
+    host_limiter = ConcurrencyLimiter(16)
+    limiters = iter((identity_limiter, host_limiter))
+    monkeypatch.setattr(server_app, "ConcurrencyLimiter", lambda _limit: next(limiters))
+
+    scenario = build_scenario()
+    tokens = TokenStore(tmp_path / "tokens.sqlite3")
+    operator_token, _ = tokens.issue(
+        "operator", [WORLD_ADMIN_SCOPE], automatic_rotation=False
+    )
+    app = create_app(
+        scenario.actor, token_store=tokens, user_credentials=_credentials(tmp_path)
+    )
+    client = testclient.TestClient(app)
+
+    with client.websocket_connect("/v1/admin/world/stream") as socket:
+        socket.send_json(_websocket_auth(operator_token))
+        with pytest.raises(websocket_error) as refused:
+            socket.receive_json()
+        assert refused.value.code == server_app.WEBSOCKET_OVERLOADED_CLOSE_CODE
+
+    identity_limiter.release("operator")
+    tokens.close()
+
+
 def test_unauthenticated_websockets_are_capped_per_host(tmp_path, monkeypatch) -> None:
     # A socket is accepted before the auth frame arrives, so without this cap a client could
     # park sockets in that window without ever presenting a credential.
@@ -1555,6 +1601,7 @@ def test_unauthenticated_websockets_are_capped_per_host(tmp_path, monkeypatch) -
     monkeypatch.setenv(server_app.WEBSOCKET_CONNECTIONS_PER_HOST_ENV, "1")
     scenario = build_scenario()
     tokens = TokenStore(tmp_path / "tokens.sqlite3")
+    player_token, _ = tokens.issue("player", [WORLD_PLAY_SCOPE], automatic_rotation=False)
     app = create_app(
         scenario.actor, token_store=tokens, user_credentials=_credentials(tmp_path)
     )
@@ -1570,4 +1617,16 @@ def test_unauthenticated_websockets_are_capped_per_host(tmp_path, monkeypatch) -
     # The slot is returned once the first socket closes.
     with client.websocket_connect("/v1/admin/world/stream"):
         pass
+
+    claim = client.post(
+        "/v1/play/claims",
+        headers={"Authorization": f"Bearer {player_token}", CLIENT_ID_HEADER: "browser-a"},
+        json={"character_id": str(scenario.character)},
+    )
+    player_path = f"/v1/play/claims/{claim.json()['id']}/stream"
+    with client.websocket_connect(player_path):
+        with pytest.raises(websocket_error) as refused:
+            with client.websocket_connect(player_path):
+                pass
+        assert refused.value.code == server_app.WEBSOCKET_OVERLOADED_CLOSE_CODE
     tokens.close()

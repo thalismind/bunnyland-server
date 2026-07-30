@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from bunnyland.server.jobs import JobRegistry
-from bunnyland.server.rate_limit import FixedWindowRateLimiter
-from bunnyland.server.v1_models import JobResource
+from bunnyland.server.rate_limit import ConcurrencyLimiter, FixedWindowRateLimiter
+from bunnyland.server.v1_models import JobResource, _json_depth
 
 
 class _Clock:
@@ -157,3 +159,66 @@ def test_rate_limiter_still_limits_a_key_it_is_tracking():
     for index in range(32):
         limiter.check(f"filler-{index}")
     assert limiter.check("alice") == (True, 0)
+
+
+def test_concurrency_limiter_with_a_zero_limit_is_disabled():
+    # 0 means "off", matching FixedWindowRateLimiter's convention, so a deployment can turn
+    # the websocket caps off deliberately.
+    limiter = ConcurrencyLimiter(0)
+
+    for _ in range(100):
+        assert limiter.acquire("anyone") is True
+    limiter.release("anyone")
+
+    assert limiter._held == {}
+
+
+def test_concurrency_limiter_releases_slots_and_forgets_idle_keys():
+    limiter = ConcurrencyLimiter(2)
+
+    assert limiter.acquire("a") is True
+    assert limiter.acquire("a") is True
+    assert limiter.acquire("a") is False
+    # Another identity is unaffected by the first one being at its cap.
+    assert limiter.acquire("b") is True
+
+    limiter.release("a")
+    assert limiter.acquire("a") is True
+    limiter.release("a")
+    limiter.release("a")
+    limiter.release("b")
+
+    # The map tracks live connections, not every identity ever seen.
+    assert limiter._held == {}
+
+
+def test_concurrency_limiter_slot_releases_even_when_the_block_raises():
+    limiter = ConcurrencyLimiter(1)
+
+    with pytest.raises(RuntimeError):
+        with limiter.slot("a") as acquired:
+            assert acquired is True
+            raise RuntimeError("boom")
+
+    assert limiter.acquire("a") is True
+
+
+def test_concurrency_limiter_slot_reports_refusal_without_taking_a_slot():
+    limiter = ConcurrencyLimiter(1)
+    limiter.acquire("a")
+
+    with limiter.slot("a") as acquired:
+        assert acquired is False
+
+    # The refused caller must not have consumed or released anyone else's slot.
+    assert limiter.acquire("a") is False
+
+
+def test_json_depth_counts_through_lists_as_well_as_objects():
+    # Nesting can hide in arrays too, so the payload depth bound has to descend both.
+    assert _json_depth({"a": 1}) == 2
+    assert _json_depth({"a": [1, 2]}) == 3
+    assert _json_depth({"a": [{"b": [{"c": 1}]}]}) == 6
+    assert _json_depth({}) == 1
+    assert _json_depth([]) == 1
+    assert _json_depth("scalar") == 1

@@ -70,6 +70,27 @@ async def test_body_within_the_cap_reaches_the_application():
     assert sent[1]["body"] == b"100"
 
 
+async def test_non_request_receive_message_passes_through_unchanged():
+    observed = []
+    sent = []
+
+    async def app(_scope, receive, send):
+        observed.append(await receive())
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+
+    middleware = MaxBodySizeMiddleware(app, max_bytes=1)
+    await middleware({"type": "http", "path": "/x", "headers": []}, receive, send)
+
+    assert observed == [{"type": "http.disconnect"}]
+    assert _status(sent) == 200
+
+
 async def test_declared_content_length_over_the_cap_is_rejected_before_the_app_runs():
     async def never(scope, receive, send):  # pragma: no cover - must not be reached
         raise AssertionError("application should not run")
