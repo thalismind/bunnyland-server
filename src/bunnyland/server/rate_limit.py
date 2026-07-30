@@ -1,11 +1,12 @@
-"""Small fixed-window overload guard for application request boundaries."""
+"""Small overload guards for application request and connection boundaries."""
 
 from __future__ import annotations
 
 import math
 import time
 from collections import OrderedDict, deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from threading import Lock
 
 #: Cap on distinct caller buckets held at once. Some limiters are keyed by values the
@@ -69,4 +70,59 @@ class FixedWindowRateLimiter:
             self._requests.pop(key, None)
 
 
-__all__ = ["MAX_TRACKED_KEYS", "FixedWindowRateLimiter"]
+class ConcurrencyLimiter:
+    """Cap how many long-lived connections one identity holds open at once.
+
+    A rate limiter bounds how fast connections are opened, not how many are held. A
+    websocket is a single request that then lives for as long as the client wants, so the
+    request limiter never saw it again after the upgrade and one caller could accumulate
+    sockets indefinitely -- each costing a task, a queue, and an upstream proxy connection.
+    """
+
+    def __init__(self, limit: int) -> None:
+        #: ``0`` disables the cap, matching FixedWindowRateLimiter's convention.
+        self.limit = max(0, int(limit))
+        self._held: dict[str, int] = {}
+        self._lock = Lock()
+
+    def held(self, key: str) -> int:
+        with self._lock:
+            return self._held.get(key, 0)
+
+    def acquire(self, key: str) -> bool:
+        """Take a slot for ``key``, returning ``False`` when it is already at the cap."""
+
+        if self.limit == 0:
+            return True
+        with self._lock:
+            current = self._held.get(key, 0)
+            if current >= self.limit:
+                return False
+            self._held[key] = current + 1
+        return True
+
+    def release(self, key: str) -> None:
+        if self.limit == 0:
+            return
+        with self._lock:
+            current = self._held.get(key, 0) - 1
+            # Dropping the key at zero keeps this map proportional to live connections
+            # rather than to every identity ever seen.
+            if current > 0:
+                self._held[key] = current
+            else:
+                self._held.pop(key, None)
+
+    @contextmanager
+    def slot(self, key: str) -> Iterator[bool]:
+        """Hold a slot for the duration of the block, releasing it however the block exits."""
+
+        acquired = self.acquire(key)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                self.release(key)
+
+
+__all__ = ["MAX_TRACKED_KEYS", "ConcurrencyLimiter", "FixedWindowRateLimiter"]

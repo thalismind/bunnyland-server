@@ -152,7 +152,7 @@ from .models import (
 )
 from .onboarding import OnboardingTracker
 from .patches import WorldPatchError, apply_world_patch
-from .rate_limit import FixedWindowRateLimiter
+from .rate_limit import ConcurrencyLimiter, FixedWindowRateLimiter
 from .schema import world_schema
 from .serialization import (
     serialize_character_list,
@@ -204,6 +204,21 @@ from .worldgen import (
 
 WEBSOCKET_HEARTBEAT_SECONDS = 30.0
 PLAYER_WEBSOCKET_AUTH_SECONDS = 5.0
+# Websockets bypass the HTTP middleware stack entirely (BaseHTTPMiddleware returns early for
+# any non-http scope), and a socket is one request that then lives as long as the client
+# wants, so neither the request rate limiter here nor `limit_req` at the edge bounds how
+# many one caller holds. These do. The unauthenticated cap covers the window between accept
+# and the first auth frame, which a client can otherwise use to park sockets for free.
+WEBSOCKET_CONNECTIONS_PER_IDENTITY_ENV = "BUNNYLAND_WEBSOCKET_CONNECTIONS_PER_IDENTITY"
+WEBSOCKET_CONNECTIONS_PER_HOST_ENV = "BUNNYLAND_WEBSOCKET_UNAUTHENTICATED_PER_HOST"
+WEBSOCKET_CONNECTIONS_PER_IDENTITY = 8
+WEBSOCKET_UNAUTHENTICATED_PER_HOST = 16
+#: Close code for "try again later", used when a cap is reached rather than 1008 (policy
+#: violation) so a client can tell overload from rejection.
+WEBSOCKET_OVERLOADED_CLOSE_CODE = 1013
+#: How often a live player socket revalidates its token and claim. Doing it per frame made
+#: every frame re-scan every claimed controller in the world.
+WEBSOCKET_REAUTHORIZE_SECONDS = 5.0
 UPLOAD_IMAGE_TYPES = {
     "image/png": "png",
     "image/jpeg": "jpg",
@@ -667,6 +682,20 @@ def create_app(
     )
     max_request_body_bytes = int(
         os.environ.get(MAX_REQUEST_BODY_BYTES_ENV, MAX_REQUEST_BODY_BYTES)
+    )
+    websocket_identity_limiter = ConcurrencyLimiter(
+        int(
+            os.environ.get(
+                WEBSOCKET_CONNECTIONS_PER_IDENTITY_ENV, WEBSOCKET_CONNECTIONS_PER_IDENTITY
+            )
+        )
+    )
+    websocket_host_limiter = ConcurrencyLimiter(
+        int(
+            os.environ.get(
+                WEBSOCKET_CONNECTIONS_PER_HOST_ENV, WEBSOCKET_UNAUTHENTICATED_PER_HOST
+            )
+        )
     )
     authenticator = (
         RequestAuthenticator(token_store, user_credentials) if token_store is not None else None
@@ -3101,6 +3130,9 @@ def create_app(
         # routers nested and lazy, while these internal routers are already prefixed.
         app.router.routes.extend(router.routes)
 
+    def _websocket_host(websocket: WebSocket) -> str:
+        return getattr(getattr(websocket, "client", None), "host", "") or "unknown"
+
     @app.websocket("/v1/admin/world/stream")
     async def world_updates(websocket: WebSocket) -> None:
         if not websocket_origin_is_trusted(websocket):
@@ -3109,32 +3141,47 @@ def create_app(
         if authenticator is None and not allow_unauthenticated_embedding:
             await websocket.close(code=1013)
             return
-        await websocket.accept()
-        try:
-            auth = await asyncio.wait_for(
-                websocket.receive_json(), timeout=PLAYER_WEBSOCKET_AUTH_SECONDS
-            )
-            data = auth.get("data") if isinstance(auth, dict) else None
-            if (
-                not isinstance(auth, dict)
-                or auth.get("type") != "authenticate"
-                or not isinstance(data, dict)
-            ):
-                raise ValueError("invalid authentication frame")
-            client_id = _client_id_header_value(
-                data.get("client_id") or websocket.headers.get(CLIENT_ID_HEADER)
-            )
-            if client_id is None:
-                raise HTTPException(status_code=403, detail="client identity is required")
-            _require_allowed_admin_client_id(client_id)
-            access_token = None
-            if authenticator is not None:
-                access_token, _principal = _authenticate_websocket_frame(
-                    websocket, data, AuthorizationSurface.ADMIN
+        # Held from before accept until the socket closes, so unauthenticated sockets parked
+        # in the auth window count against the same budget as established ones.
+        with websocket_host_limiter.slot(_websocket_host(websocket)) as host_slot:
+            if not host_slot:
+                await websocket.close(code=WEBSOCKET_OVERLOADED_CLOSE_CODE)
+                return
+            await websocket.accept()
+            try:
+                auth = await asyncio.wait_for(
+                    websocket.receive_json(), timeout=PLAYER_WEBSOCKET_AUTH_SECONDS
                 )
-        except (HTTPException, TimeoutError, ValueError, TypeError, WebSocketDisconnect):
-            await websocket.close(code=1008)
-            return
+                data = auth.get("data") if isinstance(auth, dict) else None
+                if (
+                    not isinstance(auth, dict)
+                    or auth.get("type") != "authenticate"
+                    or not isinstance(data, dict)
+                ):
+                    raise ValueError("invalid authentication frame")
+                client_id = _client_id_header_value(
+                    data.get("client_id") or websocket.headers.get(CLIENT_ID_HEADER)
+                )
+                if client_id is None:
+                    raise HTTPException(status_code=403, detail="client identity is required")
+                _require_allowed_admin_client_id(client_id)
+                access_token = None
+                principal = None
+                if authenticator is not None:
+                    access_token, principal = _authenticate_websocket_frame(
+                        websocket, data, AuthorizationSurface.ADMIN
+                    )
+            except (HTTPException, TimeoutError, ValueError, TypeError, WebSocketDisconnect):
+                await websocket.close(code=1008)
+                return
+            identity = principal.subject if principal is not None else client_id
+            with websocket_identity_limiter.slot(identity) as identity_slot:
+                if not identity_slot:
+                    await websocket.close(code=WEBSOCKET_OVERLOADED_CLOSE_CODE)
+                    return
+                await _stream_admin_updates(websocket, access_token)
+
+    async def _stream_admin_updates(websocket: WebSocket, access_token: str | None) -> None:
         def _admin_still_authorized() -> bool:
             # Re-check on every frame so a mid-stream downgrade (world:admin -> world:play),
             # revocation, or expiry tears the socket down instead of continuing to stream
@@ -3180,64 +3227,104 @@ def create_app(
         if authenticator is None and not allow_unauthenticated_embedding:
             await websocket.close(code=1013)
             return
-        await websocket.accept()
-        try:
-            auth = await asyncio.wait_for(
-                websocket.receive_json(),
-                timeout=PLAYER_WEBSOCKET_AUTH_SECONDS,
-            )
-        except (TimeoutError, ValueError, TypeError, WebSocketDisconnect):
-            await websocket.close(code=1008)
-            return
-        data = auth.get("data") if isinstance(auth, dict) else None
-        if (
-            not isinstance(auth, dict)
-            or auth.get("type") != "authenticate"
-            or not isinstance(data, dict)
-            or not isinstance(data.get("claim_secret"), (str, type(None)))
-        ):
-            await websocket.close(code=1008)
-            return
-        frame_claim_secret = data.get("claim_secret")
-        cookie_claim_secret = getattr(websocket, "cookies", {}).get(CLAIM_COOKIE_NAME)
-        if (
-            frame_claim_secret
-            and cookie_claim_secret
-            and not secrets.compare_digest(frame_claim_secret, cookie_claim_secret)
-        ):
-            await websocket.close(code=1008)
-            return
-        claim_secret = frame_claim_secret or cookie_claim_secret
-        client_id = _client_id_header_value(
-            data.get("client_id") or websocket.headers.get(CLIENT_ID_HEADER)
-        )
-        access_token = None
-        try:
-            if client_id is None:
-                raise HTTPException(status_code=403, detail="client identity is required")
-            access_token, principal = _authenticate_websocket_frame(
-                websocket, data, AuthorizationSurface.PLAY
-            )
-            owner = ClaimOwner(
-                "rest",
-                principal.subject if principal is not None else f"embedded:{client_id}",
-            )
-            claim_context = _claim_context_v1(claim_id, claim_secret, client_id, owner)
-        except HTTPException:
-            await websocket.close(code=1008)
-            return
-        character_id = str(claim_context[0].id)
-        onboarding.connected(claim_id)
-        subscription = stream.subscribe()
-
-        async def send_frame(frame: dict) -> bool:
+        with websocket_host_limiter.slot(_websocket_host(websocket)) as host_slot:
+            if not host_slot:
+                await websocket.close(code=WEBSOCKET_OVERLOADED_CLOSE_CODE)
+                return
+            await websocket.accept()
             try:
-                if access_token is not None and authenticator.verify_token(access_token) is None:
-                    raise HTTPException(status_code=401, detail="invalid bearer token")
-                _claim_context_v1(claim_id, claim_secret, client_id, owner)
+                auth = await asyncio.wait_for(
+                    websocket.receive_json(),
+                    timeout=PLAYER_WEBSOCKET_AUTH_SECONDS,
+                )
+            except (TimeoutError, ValueError, TypeError, WebSocketDisconnect):
+                await websocket.close(code=1008)
+                return
+            data = auth.get("data") if isinstance(auth, dict) else None
+            if (
+                not isinstance(auth, dict)
+                or auth.get("type") != "authenticate"
+                or not isinstance(data, dict)
+                or not isinstance(data.get("claim_secret"), (str, type(None)))
+            ):
+                await websocket.close(code=1008)
+                return
+            frame_claim_secret = data.get("claim_secret")
+            cookie_claim_secret = getattr(websocket, "cookies", {}).get(CLAIM_COOKIE_NAME)
+            if (
+                frame_claim_secret
+                and cookie_claim_secret
+                and not secrets.compare_digest(frame_claim_secret, cookie_claim_secret)
+            ):
+                await websocket.close(code=1008)
+                return
+            claim_secret = frame_claim_secret or cookie_claim_secret
+            client_id = _client_id_header_value(
+                data.get("client_id") or websocket.headers.get(CLIENT_ID_HEADER)
+            )
+            access_token = None
+            try:
+                if client_id is None:
+                    raise HTTPException(status_code=403, detail="client identity is required")
+                access_token, principal = _authenticate_websocket_frame(
+                    websocket, data, AuthorizationSurface.PLAY
+                )
+                owner = ClaimOwner(
+                    "rest",
+                    principal.subject if principal is not None else f"embedded:{client_id}",
+                )
+                claim_context = _claim_context_v1(claim_id, claim_secret, client_id, owner)
             except HTTPException:
                 await websocket.close(code=1008)
-                return False
+                return
+            identity = principal.subject if principal is not None else client_id
+            with websocket_identity_limiter.slot(identity) as identity_slot:
+                if not identity_slot:
+                    await websocket.close(code=WEBSOCKET_OVERLOADED_CLOSE_CODE)
+                    return
+                await _stream_character_updates(
+                    websocket,
+                    claim_id=claim_id,
+                    claim_secret=claim_secret,
+                    client_id=client_id,
+                    owner=owner,
+                    access_token=access_token,
+                    character_id=str(claim_context[0].id),
+                )
+
+    async def _stream_character_updates(
+        websocket: WebSocket,
+        *,
+        claim_id: str,
+        claim_secret: str | None,
+        client_id: str,
+        owner: ClaimOwner,
+        access_token: str | None,
+        character_id: str,
+    ) -> None:
+        onboarding.connected(claim_id)
+        subscription = stream.subscribe()
+        # Revalidating the claim meant re-scanning every claimed controller in the world on
+        # every frame, so cost scaled with claims x sockets x events. The authorization still
+        # has to be rechecked so a revoked token or released claim tears the socket down;
+        # it just does not need to happen more often than this.
+        next_recheck = 0.0
+
+        async def send_frame(frame: dict) -> bool:
+            nonlocal next_recheck
+            now = time.monotonic()
+            if now >= next_recheck:
+                try:
+                    if (
+                        access_token is not None
+                        and authenticator.verify_token(access_token) is None
+                    ):
+                        raise HTTPException(status_code=401, detail="invalid bearer token")
+                    _claim_context_v1(claim_id, claim_secret, client_id, owner)
+                except HTTPException:
+                    await websocket.close(code=1008)
+                    return False
+                next_recheck = now + WEBSOCKET_REAUTHORIZE_SECONDS
             await websocket.send_json(subscription.frame(actor, frame))
             return True
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gc
 import hashlib
 import sqlite3
@@ -1502,3 +1503,71 @@ async def test_password_verification_is_bounded_by_the_concurrency_semaphore(
     )
 
     assert peak <= 2
+
+
+def test_websocket_connections_are_capped_per_identity(tmp_path, monkeypatch) -> None:
+    # Websockets bypass the HTTP middleware stack, and a socket is one request that then
+    # lives as long as the client wants, so neither the request limiter nor the edge's
+    # limit_req bounds how many one caller holds open. Each costs a task, a 100-slot queue
+    # and an upstream connection.
+    testclient = pytest.importorskip("fastapi.testclient")
+    websocket_error = pytest.importorskip("starlette.websockets").WebSocketDisconnect
+    monkeypatch.setenv(server_app.WEBSOCKET_CONNECTIONS_PER_IDENTITY_ENV, "2")
+    scenario = build_scenario()
+    tokens = TokenStore(tmp_path / "tokens.sqlite3")
+    player_token, _ = tokens.issue("player", [WORLD_PLAY_SCOPE], automatic_rotation=False)
+    app = create_app(
+        scenario.actor, token_store=tokens, user_credentials=_credentials(tmp_path)
+    )
+    client = testclient.TestClient(app)
+    claim = client.post(
+        "/v1/play/claims",
+        headers={"Authorization": f"Bearer {player_token}", CLIENT_ID_HEADER: "browser-a"},
+        json={"character_id": str(scenario.character)},
+    )
+    path = f"/v1/play/claims/{claim.json()['id']}/stream"
+    secret = claim.headers["X-Bunnyland-Claim-Secret"]
+
+    with contextlib.ExitStack() as stack:
+        for _ in range(2):
+            socket = stack.enter_context(client.websocket_connect(path))
+            socket.send_json(_websocket_auth(player_token, claim_secret=secret))
+            assert socket.receive_json()["type"] == "ready"
+
+        with client.websocket_connect(path) as extra:
+            extra.send_json(_websocket_auth(player_token, claim_secret=secret))
+            with pytest.raises(websocket_error) as refused:
+                extra.receive_json()
+            assert refused.value.code == server_app.WEBSOCKET_OVERLOADED_CLOSE_CODE
+
+    # Slots are returned when sockets close, so the same identity can reconnect afterwards.
+    with client.websocket_connect(path) as socket:
+        socket.send_json(_websocket_auth(player_token, claim_secret=secret))
+        assert socket.receive_json()["type"] == "ready"
+    tokens.close()
+
+
+def test_unauthenticated_websockets_are_capped_per_host(tmp_path, monkeypatch) -> None:
+    # A socket is accepted before the auth frame arrives, so without this cap a client could
+    # park sockets in that window without ever presenting a credential.
+    testclient = pytest.importorskip("fastapi.testclient")
+    websocket_error = pytest.importorskip("starlette.websockets").WebSocketDisconnect
+    monkeypatch.setenv(server_app.WEBSOCKET_CONNECTIONS_PER_HOST_ENV, "1")
+    scenario = build_scenario()
+    tokens = TokenStore(tmp_path / "tokens.sqlite3")
+    app = create_app(
+        scenario.actor, token_store=tokens, user_credentials=_credentials(tmp_path)
+    )
+    client = testclient.TestClient(app)
+
+    with client.websocket_connect("/v1/admin/world/stream"):
+        # Refused before the handshake completes, so the client never gets an open socket.
+        with pytest.raises(websocket_error) as refused:
+            with client.websocket_connect("/v1/admin/world/stream"):
+                pass
+        assert refused.value.code == server_app.WEBSOCKET_OVERLOADED_CLOSE_CODE
+
+    # The slot is returned once the first socket closes.
+    with client.websocket_connect("/v1/admin/world/stream"):
+        pass
+    tokens.close()
