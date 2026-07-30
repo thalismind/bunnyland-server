@@ -7058,3 +7058,86 @@ async def test_event_stream_fans_out_pause_status_events(scenario):
         recent["data"]["event_type"] == WorldPauseStatusChangedEvent.__name__
         for recent in stream.recent_messages()
     )
+
+
+def test_command_payload_and_identifiers_are_bounded(scenario):
+    # A queued command is written into the world save, so an unbounded payload is disk
+    # growth and save/load cost, not just memory. Chat is capped at 4000 characters;
+    # commands had no bound at all.
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+    claimed_response = client.post(
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"character_id": str(scenario.character)},
+    )
+    claim_headers = {
+        CLIENT_ID_HEADER: "client-a",
+        "X-Bunnyland-Claim-Secret": claimed_response.headers["X-Bunnyland-Claim-Secret"],
+    }
+    path = f"/v1/play/claims/{claimed_response.json()['id']}/commands"
+
+    def _submit(body):
+        return client.post(path, headers=claim_headers, json=body)
+
+    oversized = _submit(
+        {"command_type": "move", "payload": {"direction": "north", "junk": "x" * 20_000}}
+    )
+    assert oversized.status_code == 422
+
+    nested = {"leaf": 1}
+    for _ in range(20):
+        nested = {"deeper": nested}
+    assert _submit({"command_type": "move", "payload": nested}).status_code == 422
+
+    assert _submit({"command_type": "m" * 500, "payload": {}}).status_code == 422
+    assert _submit({"command_type": "move", "id": "i" * 500}).status_code == 422
+
+    # Ordinary payloads are unaffected.
+    assert _submit(
+        {"command_type": "move", "payload": {"direction": "north"}}
+    ).status_code == 202
+
+
+async def test_command_receipts_are_scoped_to_their_character(scenario):
+    # Command ids are client-chosen on every player-facing surface. With one global receipt
+    # namespace, replaying another character's id returned that character's receipt status
+    # and reason, and squatting an id made a later legitimate submission report as already
+    # accepted without ever running.
+    other = spawn_entity(
+        scenario.actor.world,
+        [
+            CharacterComponent(),
+            IdentityComponent(name="Hazel", kind="character"),
+            ActionPointsComponent(current=5.0, maximum=5.0, regen_per_hour=1.0),
+        ],
+    )
+    shared_id = "same-command-id"
+
+    mine = build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="move",
+        payload={"direction": "north"},
+        command_id=shared_id,
+    )
+    assert (await scenario.actor.submit(mine)).accepted is True
+    await scenario.actor.tick(0)
+
+    # The same id from a different character is its own command, judged on its own merits,
+    # not a replay of the first one's receipt.
+    theirs = build_submitted_command(
+        character_id=str(other.id),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="move",
+        payload={"direction": "north"},
+        command_id=shared_id,
+    )
+    outcome = await scenario.actor.submit(theirs)
+
+    assert scenario.actor.receipt_for(str(scenario.character), shared_id) is not None
+    # Its own outcome, reached independently of the first character's receipt.
+    assert outcome.receipt is None or outcome.receipt.character_id == str(other.id)

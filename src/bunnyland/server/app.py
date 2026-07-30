@@ -99,6 +99,7 @@ from .auth import (
     UserCredentialStore,
     scope_granted,
 )
+from .body_limit import MaxBodySizeMiddleware
 from .character_chat import CharacterChatService
 from .client_ids import (
     ADMIN_CLIENT_IDS_ENV,
@@ -928,13 +929,6 @@ def create_app(
         )
 
     @app.middleware("http")
-    async def _enforce_request_body_size(request: Request, call_next):
-        declared = request.headers.get("content-length")
-        if declared and declared.isdigit() and int(declared) > max_request_body_bytes:
-            return _problem_response(request, 413, "request body too large")
-        return await call_next(request)
-
-    @app.middleware("http")
     async def _enforce_request_rate_limit(request: Request, call_next):
         if request.method == "OPTIONS" or request.url.path == "/v1/public/health":
             return await call_next(request)
@@ -1033,6 +1027,10 @@ def create_app(
         if request.url.scheme == "https":
             response.headers["Strict-Transport-Security"] = HSTS_VALUE
         return response
+
+    # Added last so it ends up outermost (Starlette prepends), rejecting an oversized body
+    # before any other middleware does work for it.
+    app.add_middleware(MaxBodySizeMiddleware, max_bytes=max_request_body_bytes)
 
     from ..foundation.media.plugin import plugin as media_plugin
 

@@ -1131,7 +1131,7 @@ async def run_session(
             await state.actor.tick(TURN_GAME_SECONDS)
             turn_decisions = [
                 decision.with_receipt(
-                    state.actor.receipt_for(decision.command_id)
+                    state.actor.receipt_for(decision.character_id, decision.command_id)
                     if decision.command_id
                     else None
                 )

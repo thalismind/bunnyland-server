@@ -123,7 +123,9 @@ async def run_fixed_snapshot_controller_benchmark(
                 await actor.tick(0)
             decisions.extend(
                 decision.with_receipt(
-                    actor.receipt_for(decision.command_id) if decision.command_id else None
+                    actor.receipt_for(character_id, decision.command_id)
+                    if decision.command_id
+                    else None
                 )
                 for decision in turn_decisions
                 if decision.character_id == character_id

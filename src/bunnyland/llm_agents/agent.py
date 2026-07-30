@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import Callable, Iterable
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
@@ -1252,10 +1253,13 @@ async def _call_provider_with_retries(
 ):
     last_exc: Exception | None = None
     base_attrs = {"provider": provider, **dict(attributes or {})}
+    model_value = base_attrs.get("model")
+    model = model_value if isinstance(model_value, str) else "unknown"
     attempts_made = 0
     attempt = 0
     while True:
         attempts_made = attempt + 1
+        attempt_started = time.perf_counter()
         try:
             with telemetry.span(
                 "llm.provider.attempt", {**base_attrs, "llm.attempt": attempt}
@@ -1263,10 +1267,22 @@ async def _call_provider_with_retries(
                 try:
                     result = await request()
                 except Exception as exc:
+                    telemetry.record_llm_request(
+                        time.perf_counter() - attempt_started,
+                        provider=provider,
+                        model=model,
+                        outcome="error",
+                    )
                     span.record_exception(exc)
                     telemetry.mark_span_error(str(exc), span)
                     raise
                 telemetry.mark_span_ok(span)
+                telemetry.record_llm_request(
+                    time.perf_counter() - attempt_started,
+                    provider=provider,
+                    model=model,
+                    outcome="success",
+                )
                 return result
         except Exception as exc:
             if not _is_transient_provider_error(exc):

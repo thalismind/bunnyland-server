@@ -982,7 +982,7 @@ async def test_clover_city_missing_parcel_resolves_through_world_actions_and_sur
         outcome = await actor.submit(command)
         assert outcome.accepted is True
         await actor.tick(0)
-        receipt = actor.receipt_for(command.command_id)
+        receipt = actor.receipt_for(command.character_id, command.command_id)
         assert receipt is not None
         assert receipt.status.value == "committed"
         assert receipt.event_ids
@@ -1091,7 +1091,7 @@ async def test_clover_city_water_shortage_recovers_and_survives_mid_story_reload
         )
         assert (await current_actor.submit(command)).accepted is True
         await current_actor.tick(0)
-        receipt = current_actor.receipt_for(command.command_id)
+        receipt = current_actor.receipt_for(command.character_id, command.command_id)
         assert receipt is not None
         return receipt
 
@@ -1247,7 +1247,7 @@ async def test_clover_city_elevator_disruption_recovers_and_survives_mid_story_r
         )
         assert (await current_actor.submit(command)).accepted is True
         await current_actor.tick(0)
-        receipt = current_actor.receipt_for(command.command_id)
+        receipt = current_actor.receipt_for(command.character_id, command.command_id)
         assert receipt is not None
         return receipt
 

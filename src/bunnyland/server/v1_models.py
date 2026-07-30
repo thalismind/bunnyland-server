@@ -7,16 +7,18 @@ migrate to this contract.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 from ..content import ContentLibrary
 from ..core.commands import Lane, OnInsufficientPoints
 from ..core.events import EventVisibility
 from ..core.perspective import PerspectiveQueryRequest
 from .models import (
+    IDENTIFIER_MAX_LENGTH,
     CharacterChatActionResult,
     CharacterChatHistoryMessage,
     ClientActionView,
@@ -179,8 +181,29 @@ class ClaimProjectionResource(WorldResource):
     actions: list[ClientActionView] = Field(default_factory=list)
 
 
+#: Caps on a submitted command payload. Chat is capped at 4000 characters; commands had no
+#: bound at all, and unlike chat a queued command is persisted into the world save.
+MAX_COMMAND_PAYLOAD_BYTES = 16 * 1024
+MAX_COMMAND_PAYLOAD_DEPTH = 8
+
+
+def _json_depth(value: object, depth: int = 1) -> int:
+    """Return the deepest nesting level in a decoded JSON value."""
+
+    if isinstance(value, dict):
+        children = value.values()
+    elif isinstance(value, list):
+        children = value
+    else:
+        return depth
+    return max((_json_depth(child, depth + 1) for child in children), default=depth)
+
+
 class ClaimCommandRequest(V1Request):
-    command_type: str
+    command_type: str = Field(max_length=IDENTIFIER_MAX_LENGTH)
+    #: Bounded because a queued command is written into the world save: an unbounded payload
+    #: is disk growth and save/load cost, not just memory. The nesting bound additionally
+    #: caps validation cost, since JsonValue is recursive.
     payload: dict[str, JsonValue] = Field(default_factory=dict)
     #: Optional. The server derives cost and lane from the action definition; supplying them
     #: asserts what the client believes the action is, and a mismatch rejects the command.
@@ -190,7 +213,23 @@ class ClaimCommandRequest(V1Request):
     on_insufficient_points: OnInsufficientPoints = OnInsufficientPoints.QUEUE
     expires_at_epoch: int | None = None
     expected_epoch: int | None = None
-    id: str | None = None
+    id: str | None = Field(default=None, max_length=IDENTIFIER_MAX_LENGTH)
+
+    @field_validator("payload")
+    @classmethod
+    def _bounded_payload(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        depth = _json_depth(value)
+        if depth > MAX_COMMAND_PAYLOAD_DEPTH:
+            raise ValueError(
+                f"payload nests {depth} levels deep; the limit is "
+                f"{MAX_COMMAND_PAYLOAD_DEPTH}"
+            )
+        size = len(json.dumps(value, separators=(",", ":"), default=str))
+        if size > MAX_COMMAND_PAYLOAD_BYTES:
+            raise ValueError(
+                f"payload is {size} bytes; the limit is {MAX_COMMAND_PAYLOAD_BYTES}"
+            )
+        return value
 
 
 class CommandResource(WorldResource):

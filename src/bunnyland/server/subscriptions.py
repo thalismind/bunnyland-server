@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from dataclasses import dataclass
-from typing import Any
 
+from pydantic import JsonValue
+
+from .. import telemetry
 from ..core.components import CharacterComponent
 from ..core.ecs import container_of, parse_entity_id
 from ..core.events import DomainEvent, serialized_event_visible_to
@@ -15,6 +17,15 @@ from .serialization import event_message
 
 STREAM_PROTOCOL_VERSION = 1
 PROJECTION_VERSION = 1
+StreamMessage = dict[str, JsonValue]
+
+
+def _event_data(message: StreamMessage) -> dict[str, JsonValue]:
+    data = message.get("data")
+    if not isinstance(data, dict):
+        return {}
+    event = data.get("event")
+    return event if isinstance(event, dict) else {}
 
 
 @dataclass(eq=False)
@@ -22,7 +33,7 @@ class EventSubscription:
     """A bounded queue registered with an ``EventStream``."""
 
     stream: EventStream
-    queue: asyncio.Queue[dict[str, Any]]
+    queue: asyncio.Queue[StreamMessage]
     dropped: bool = False
     stream_sequence: int = 0
 
@@ -34,17 +45,16 @@ class EventSubscription:
         self.dropped = False
         if dropped:
             self.stream.resyncs += 1
+            telemetry.record_websocket_resync()
             while not self.queue.empty():
                 self.queue.get_nowait()
         return dropped
 
-    def frame(self, actor: WorldActor, message: dict[str, Any]) -> dict[str, Any]:
+    def frame(self, actor: WorldActor, message: StreamMessage) -> StreamMessage:
         """Version one externally delivered frame and assign its connection sequence."""
 
         self.stream_sequence += 1
-        data = message.get("data")
-        event = data.get("event") if isinstance(data, dict) else None
-        event = event if isinstance(event, dict) else {}
+        event = _event_data(message)
         return {
             **message,
             "world_id": str(getattr(actor, "world_id", "")),
@@ -63,7 +73,7 @@ class EventStream:
     def __init__(self, actor: WorldActor, *, recent_limit: int = 200) -> None:
         self._actor = actor
         self._recent_limit = recent_limit
-        self._recent: deque[dict[str, Any]] = deque()
+        self._recent: deque[StreamMessage] = deque()
         self._audiences: dict[str, frozenset[str]] = {}
         self._started_at_epoch = actor.epoch
         self._discarded_through_epoch = actor.epoch
@@ -78,10 +88,11 @@ class EventStream:
         self.projection_latency_seconds = 0.0
         self.projection_latency_max_seconds = 0.0
         actor.bus.subscribe(DomainEvent, self.record)
+        telemetry.register_event_stream(self)
 
     def record(self, event: DomainEvent) -> None:
         message = event_message(event, self._registry)
-        event_data = message.get("data", {}).get("event", {})
+        event_data = _event_data(message)
         audience = frozenset(
             str(character.id)
             for character in self._actor.world.query()
@@ -95,7 +106,7 @@ class EventStream:
         )
         if len(self._recent) >= self._recent_limit:
             discarded = self._recent.popleft()
-            discarded_event = discarded.get("data", {}).get("event", {})
+            discarded_event = _event_data(discarded)
             discarded_id = str(discarded_event.get("event_id", ""))
             self._audiences.pop(discarded_id, None)
             self._discarded_through_epoch = max(
@@ -113,13 +124,14 @@ class EventStream:
         room_id = container_of(self._actor.world.get_entity(entity_id))
         return str(room_id) if room_id is not None else None
 
-    def broadcast(self, message: dict[str, Any]) -> None:
+    def broadcast(self, message: StreamMessage) -> None:
         """Fan out a websocket message without adding it to recent domain history."""
         for subscription in tuple(self._subscribers):
             queue = subscription.queue
             if queue.full():
                 subscription.dropped = True
                 self.dropped_frames += 1
+                telemetry.record_websocket_frame_dropped()
                 try:
                     queue.get_nowait()
                 except asyncio.QueueEmpty:
@@ -127,19 +139,19 @@ class EventStream:
             queue.put_nowait(message)
             self.max_queue_depth = max(self.max_queue_depth, queue.qsize())
 
-    def recent_messages(self) -> list[dict[str, Any]]:
+    def recent_messages(self) -> list[StreamMessage]:
         return list(self._recent)
 
     def changes_since(
         self, character_id: str, epoch: int
-    ) -> tuple[list[dict[str, Any]], bool, int]:
+    ) -> tuple[list[StreamMessage], bool, int]:
         """Return occurrence-time-visible history and whether the bounded answer is complete."""
 
         available_after_epoch = max(self._started_at_epoch, self._discarded_through_epoch)
         complete = epoch >= available_after_epoch
         messages = []
         for message in self._recent:
-            event = message.get("data", {}).get("event", {})
+            event = _event_data(message)
             if int(event.get("world_epoch", 0)) <= epoch:
                 continue
             event_id = str(event.get("event_id", ""))
@@ -151,26 +163,37 @@ class EventStream:
         subscription = EventSubscription(self, asyncio.Queue(maxsize=max_queue_size))
         self._subscribers.add(subscription)
         self.connections_total += 1
+        telemetry.record_websocket_connected()
         return subscription
 
     def unsubscribe(self, subscription: EventSubscription) -> None:
         if subscription in self._subscribers:
             self._subscribers.discard(subscription)
             self.connections_closed += 1
+            telemetry.record_websocket_closed()
 
     def record_projection_latency(self, seconds: float) -> None:
         self.projection_count += 1
         self.projection_latency_seconds += seconds
         self.projection_latency_max_seconds = max(self.projection_latency_max_seconds, seconds)
+        telemetry.record_websocket_projection(seconds)
+
+    @property
+    def active_connections(self) -> int:
+        return len(self._subscribers)
+
+    @property
+    def queue_depth(self) -> int:
+        return sum(item.queue.qsize() for item in self._subscribers)
 
     def stats(self) -> dict[str, int | float]:
         return {
-            "connections": len(self._subscribers),
+            "connections": self.active_connections,
             "connections_total": self.connections_total,
             "reconnects": self.connections_closed,
             "dropped_frames": self.dropped_frames,
             "resyncs": self.resyncs,
-            "queue_depth": sum(item.queue.qsize() for item in self._subscribers),
+            "queue_depth": self.queue_depth,
             "max_queue_depth": self.max_queue_depth,
             "projection_count": self.projection_count,
             "projection_latency_seconds": (

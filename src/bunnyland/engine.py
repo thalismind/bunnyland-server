@@ -109,12 +109,16 @@ class GameLoop:
                 # so a trace shows the full chain above controller.run_once (loop -> tick +
                 # dispatch). ``run_once`` hands slow LLM prompts to background tasks and
                 # returns promptly, so the world keeps ticking on cadence while agents think.
-                with telemetry.span(
-                    "game.loop.iteration",
-                    {
-                        "loop.tick_index": ticks,
-                        "loop.game_delta_seconds": game_delta_seconds,
-                    },
+                iteration_attributes = {
+                    "loop.tick_index": ticks,
+                    "loop.game_delta_seconds": game_delta_seconds,
+                }
+                with (
+                    telemetry.record_duration(
+                        telemetry.record_loop_iteration,
+                        {"paused": False},
+                    ),
+                    telemetry.span("game.loop.iteration", iteration_attributes),
                 ):
                     await self.actor.tick(game_delta_seconds)
                     await self.dispatch.run_once()

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import sqlite3
 import sys
 import types
@@ -137,6 +138,19 @@ def test_span_and_record_helpers_are_no_ops_when_disabled(monkeypatch):
     telemetry.record_tick(0.05)
     telemetry.record_handler(0.1, {"command_type": "move"})
     telemetry.record_llm_decision(0.2, {"provider": "local"})
+    telemetry.record_loop_iteration(0.2)
+    telemetry.record_controller_turn(0.2, {"controller_kind": "llm", "outcome": "wait"})
+    telemetry.record_prompt_build(0.01, {"controller_kind": "llm"})
+    telemetry.record_prompt_filter(0.01, {"controller_kind": "llm"})
+    telemetry.record_prompt_characters(100, {"controller_kind": "llm"})
+    telemetry.record_llm_request(
+        0.2, provider="ollama", model="model", outcome="success"
+    )
+    telemetry.record_websocket_connected()
+    telemetry.record_websocket_closed()
+    telemetry.record_websocket_frame_dropped()
+    telemetry.record_websocket_resync()
+    telemetry.record_websocket_projection(0.1)
     telemetry.record_llm_tokens("ollama", "m", 10, 5)
     telemetry.record_worldgen(0.3, {"generator": "empty"})
     telemetry.record_worldgen_request(0.1, {"provider": "ollama", "model": "m"})
@@ -561,6 +575,10 @@ async def test_dispatch_emits_agent_spans_and_decision_metric(otel_capture):
 
     points = _metric_points(reader)
     assert "bunnyland.llm.decision.duration" in points
+    assert "bunnyland.controller.turn.duration" in points
+    assert "bunnyland.prompt.build.duration" in points
+    assert "bunnyland.prompt.filter.duration" in points
+    assert "bunnyland.prompt.characters" in points
 
 
 @pytestmark_otel
@@ -597,7 +615,7 @@ async def test_terminal_command_receipt_is_traced_and_reconciles_decision(otel_c
     await dispatch.run_once()
     decision = (await dispatch.await_pending())[0]
     await scenario.actor.tick(0)
-    receipt = scenario.actor.receipt_for(decision.command_id)
+    receipt = scenario.actor.receipt_for(decision.character_id, decision.command_id)
     resolved = decision.with_receipt(receipt)
 
     terminal = _spans_by_name(span_exporter)["command.receipt"]
@@ -837,7 +855,7 @@ async def test_concurrent_character_decisions_each_emit_their_own_span(otel_capt
 
 @pytestmark_otel
 async def test_game_loop_iteration_is_the_trace_root(otel_capture):
-    span_exporter, _reader = otel_capture
+    span_exporter, reader = otel_capture
     scenario = build_scenario()
     dispatch = ControllerDispatch(
         scenario.actor,
@@ -856,6 +874,7 @@ async def test_game_loop_iteration_is_the_trace_root(otel_capture):
     # Both the world tick and the dispatch turn hang off the one iteration root.
     assert by_id[spans["game.tick"].parent.span_id] == "game.loop.iteration"
     assert by_id[spans["controller.run_once"].parent.span_id] == "game.loop.iteration"
+    assert "bunnyland.loop.iteration.duration" in _metric_points(reader)
 
 
 @pytestmark_otel
@@ -869,6 +888,159 @@ def test_world_gauges_report_live_counts(otel_capture):
     rooms = points["bunnyland.world.rooms"][0].value
     assert characters == 1
     assert rooms == 2
+
+
+@pytestmark_otel
+def test_active_character_gauge_uses_bounded_controller_kinds(otel_capture):
+    from bunnyland.core import (
+        CharacterComponent,
+        DiscordControllerComponent,
+        SleepingComponent,
+        SuspendedControllerComponent,
+        WebControllerComponent,
+    )
+
+    _span_exporter, reader = otel_capture
+    scenario = build_scenario()
+
+    def controlled(component, *, sleeping=False):
+        character = spawn_entity(scenario.actor.world, [CharacterComponent()])
+        if sleeping:
+            character.add_component(SleepingComponent())
+        controller = spawn_entity(scenario.actor.world, [component])
+        scenario.actor.assign_controller(character.id, controller.id)
+
+    controlled(DiscordControllerComponent(discord_user_id=1, default_channel_id=2))
+    controlled(WebControllerComponent(client_id="browser"))
+    controlled(WebControllerComponent(client_id="sleeping"), sleeping=True)
+    controlled(SuspendedControllerComponent())
+    spawn_entity(scenario.actor.world, [CharacterComponent()])
+    telemetry.register_world_gauges(scenario.actor)
+
+    points = _metric_points(reader)["bunnyland.world.characters.active"]
+    counts = {point.attributes["controller_kind"]: point.value for point in points}
+    assert counts == {
+        "discord": 1,
+        "llm": 1,
+        "mcp": 0,
+        "behavior": 0,
+        "scripted": 0,
+        "web": 1,
+        "suspended": 0,
+        "unknown": 1,
+    }
+
+
+def test_active_character_counts_start_from_character_index():
+    class CharacterQuery:
+        def __init__(self):
+            self.with_all_types = ()
+            self.with_none_types = ()
+
+        def with_all(self, component_types):
+            self.with_all_types = tuple(component_types)
+            return self
+
+        def with_none(self, component_types):
+            self.with_none_types = tuple(component_types)
+            return self
+
+        def execute_entities(self):
+            return ()
+
+    class IndexedWorld:
+        def __init__(self):
+            self.query_builder = CharacterQuery()
+
+        def query(self):
+            return self.query_builder
+
+    from bunnyland.core import CharacterComponent
+
+    world = IndexedWorld()
+    counts = telemetry._active_character_counts(world)
+    assert counts["llm"] == 0
+    assert world.query_builder.with_all_types == (CharacterComponent,)
+    assert world.query_builder.with_none_types
+
+
+@pytestmark_otel
+def test_runtime_gauges_report_queue_and_loop_state(otel_capture):
+    _span_exporter, reader = otel_capture
+    scenario = build_scenario()
+    scenario.actor.submit_nowait(_command(scenario))
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        ScriptedAgent([]),
+    )
+    loop = GameLoop(scenario.actor, dispatch)
+    telemetry.register_runtime_gauges(scenario.actor, dispatch, loop)
+
+    points = _metric_points(reader)
+    depths = {
+        point.attributes["stage"]: point.value
+        for point in points["bunnyland.command.queue.depth"]
+    }
+    assert depths == {"inbox": 1, "focus": 0, "world": 0}
+    assert points["bunnyland.loop.running"][0].value == 0
+    assert points["bunnyland.loop.paused"][0].value == 0
+
+
+@pytestmark_otel
+def test_event_stream_emits_connection_loss_and_projection_metrics(otel_capture):
+    from bunnyland.server.subscriptions import EventStream
+
+    _span_exporter, reader = otel_capture
+    scenario = build_scenario()
+    stream = EventStream(scenario.actor)
+    subscription = stream.subscribe(max_queue_size=1)
+    stream.broadcast({"type": "invalidate", "data": {"world_epoch": scenario.actor.epoch}})
+    stream.broadcast({"type": "invalidate", "data": {"world_epoch": scenario.actor.epoch}})
+    assert subscription.consume_dropped() is True
+    stream.record_projection_latency(0.25)
+
+    points = _metric_points(reader)
+    assert points["bunnyland.websocket.connections"][0].value == 1
+    assert points["bunnyland.websocket.connections.active"][0].value == 1
+    assert points["bunnyland.websocket.queue.depth"][0].value == 0
+    assert points["bunnyland.websocket.frames.dropped"][0].value == 1
+    assert points["bunnyland.websocket.resyncs"][0].value == 1
+    assert points["bunnyland.websocket.projection.duration"][0].count == 1
+
+    subscription.close()
+    points = _metric_points(reader)
+    assert points["bunnyland.websocket.connections.closed"][0].value == 1
+    assert points["bunnyland.websocket.connections.active"][0].value == 0
+
+
+@pytestmark_otel
+def test_prometheus_exporter_serves_private_metrics(monkeypatch, tmp_path):
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+
+    monkeypatch.setenv("BUNNYLAND_OTEL_ENABLED", "1")
+    monkeypatch.setenv("BUNNYLAND_OTEL_TRACE_FILE", str(tmp_path / "trace.jsonl"))
+    monkeypatch.setenv("OTEL_METRICS_EXPORTER", "prometheus")
+    monkeypatch.setenv("OTEL_EXPORTER_PROMETHEUS_HOST", "127.0.0.1")
+    monkeypatch.setenv("OTEL_EXPORTER_PROMETHEUS_PORT", str(port))
+    telemetry.reset_for_tests()
+    assert telemetry.init_telemetry() is True
+    telemetry.record_prompt_characters(42, {"controller_kind": "llm"})
+
+    response = httpx.get(f"http://127.0.0.1:{port}/metrics")
+    assert response.status_code == 200
+    assert "bunnyland_prompt_characters" in response.text
+    assert 'controller_kind="llm"' in response.text
+    assert "character.id" not in response.text
+
+
+@pytest.mark.parametrize("value", ["zero", "0", "65536"])
+def test_prometheus_port_validation(monkeypatch, value):
+    monkeypatch.setenv("OTEL_EXPORTER_PROMETHEUS_PORT", value)
+    with pytest.raises(ValueError, match="OTEL_EXPORTER_PROMETHEUS_PORT"):
+        telemetry._prometheus_bind()
 
 
 @pytestmark_otel
@@ -904,6 +1076,22 @@ def test_record_llm_usage_emits_total_tokens_and_cost(otel_capture):
     assert total.attributes == {"provider": "openrouter", "model": "openai/test"}
     assert cost.value == 0.004
     assert cost.attributes == {"provider": "openrouter", "model": "openai/test"}
+
+    telemetry.record_llm_request(
+        0.2,
+        provider="openrouter",
+        model="openai/test",
+        outcome="success",
+    )
+    points = _metric_points(reader)
+    request = points["bunnyland.llm.requests"][0]
+    assert request.value == 1
+    assert request.attributes == {
+        "provider": "openrouter",
+        "model": "openai/test",
+        "outcome": "success",
+    }
+    assert points["bunnyland.llm.request.duration"][0].count == 1
 
 
 @pytestmark_otel

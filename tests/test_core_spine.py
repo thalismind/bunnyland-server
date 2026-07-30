@@ -1007,7 +1007,7 @@ async def test_expected_epoch_rejects_at_execution_and_returns_same_duplicate_re
     assert first.accepted is True
     await scenario.actor.tick(1.0)
 
-    receipt = scenario.actor.receipt_for(command.command_id)
+    receipt = scenario.actor.receipt_for(command.character_id, command.command_id)
     assert receipt is not None
     assert receipt.status is CommitStatus.REJECTED
     assert receipt.reason == "world epoch changed"
@@ -1049,13 +1049,14 @@ async def test_actor_executes_handler_mutation_plan_and_bounds_receipt_cache():
     await scenario.actor.submit(first)
     await scenario.actor.tick(0)
     assert character.get_component(IdentityComponent).name == "Plan Committed"
-    assert scenario.actor.receipt_for(first.command_id).status is CommitStatus.COMMITTED
+    first_receipt = scenario.actor.receipt_for(first.character_id, first.command_id)
+    assert first_receipt.status is CommitStatus.COMMITTED
 
     second = replace(move_command(scenario), command_id="planned-second")
     await scenario.actor.submit(second)
     await scenario.actor.tick(0)
-    assert scenario.actor.receipt_for(first.command_id) is None
-    assert scenario.actor.receipt_for(second.command_id) is not None
+    assert scenario.actor.receipt_for(first.character_id, first.command_id) is None
+    assert scenario.actor.receipt_for(second.character_id, second.command_id) is not None
 
 
 def test_room_knowledge_skips_unplaced_and_nonroom_containers():
@@ -1103,7 +1104,7 @@ async def test_plan_event_failure_rolls_back_state_and_point_cost():
 
     assert character.get_component(IdentityComponent) == original_identity
     assert character.get_component(ActionPointsComponent) == original_points
-    receipt = scenario.actor.receipt_for(command.command_id)
+    receipt = scenario.actor.receipt_for(command.character_id, command.command_id)
     assert receipt is not None
     assert receipt.status is CommitStatus.REJECTED
     assert receipt.reason == "mutation failed: event projection failed"

@@ -14,6 +14,7 @@ import difflib
 import json
 import logging
 import re
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
@@ -111,6 +112,16 @@ AutonomousController = object
 
 DEFAULT_MAX_BUFFERED_EVENTS = 100
 DEFAULT_MAX_BUFFERED_EVENT_CHARS = 8_000
+
+
+def _autonomous_controller_kind(component: AutonomousController) -> str:
+    if isinstance(component, LLMControllerComponent):
+        return "llm"
+    if isinstance(component, BehaviorControllerComponent):
+        return "behavior"
+    if isinstance(component, ScriptedControllerComponent):
+        return "scripted"
+    return "unknown"
 
 
 def register_autonomous_controller(
@@ -280,6 +291,18 @@ class Decision:
         )
 
 
+def _decision_outcome(decision: Decision) -> str:
+    if decision.summary == "error":
+        return "error"
+    if decision.policy_rejections or decision.submission_accepted is False:
+        return "rejected"
+    if decision.tool is None:
+        return "wait"
+    if decision.submission_accepted:
+        return "accepted"
+    return "completed"
+
+
 @dataclass(frozen=True)
 class _EventBatch:
     events: tuple[PerceivedPromptEvent, ...] = ()
@@ -364,6 +387,8 @@ class _PromptProjection:
     model: str | None
     provider: str | None
     prompted: bool
+    controller_kind: str
+    started_at: float
 
 
 @dataclass
@@ -499,6 +524,7 @@ class ControllerDispatch:
         # game loop's world ticks. Keyed by character id: a character with a task still
         # running is never re-prompted, so each character has at most one decision pending.
         self._inflight: dict[str, asyncio.Task[Decision]] = {}
+        self._inflight_kinds: dict[str, str] = {}
         self._character_states: dict[str, _CharacterDispatchState] = {}
         # Decisions completed by background tasks since the last ``run_once``, surfaced (and
         # cleared) on the next pass so observers still see what autonomous agents chose.
@@ -573,6 +599,7 @@ class ControllerDispatch:
                 state.active_events = _EventBatch()
             task.cancel()
         self._inflight.clear()
+        self._inflight_kinds.clear()
         for state in self._character_states.values():
             state.active_task = None
 
@@ -580,6 +607,14 @@ class ControllerDispatch:
         """Cancel provider work and detach the dispatch event observer."""
         self.cancel_pending()
         self.actor.bus.unsubscribe(DomainEvent, self._record_perceived_event)
+
+    def inflight_decision_counts(self) -> dict[str, int]:
+        """Return current decision tasks grouped by the fixed controller kind."""
+
+        counts = {"llm": 0, "behavior": 0, "scripted": 0, "unknown": 0}
+        for kind in self._inflight_kinds.values():
+            counts[kind] = counts.get(kind, 0) + 1
+        return counts
 
     def _state_for(self, cid: str) -> _CharacterDispatchState:
         state = self._character_states.get(cid)
@@ -723,6 +758,7 @@ class ControllerDispatch:
         return None
 
     def _build_projection(self, character_id: EntityId) -> _PromptProjection | Decision:
+        started_at = time.perf_counter()
         controller = self._autonomous_controller(character_id)
         assert controller is not None  # filtered in _actable_characters
         controller_id, generation, controller_component = controller
@@ -735,7 +771,12 @@ class ControllerDispatch:
             return Decision(cid, None, f"wait: {exc}")
 
         prompted = isinstance(controller_component, LLMControllerComponent)
-        with telemetry.span("agent.prompt.build", {"character.id": cid}):
+        controller_kind = _autonomous_controller_kind(controller_component)
+        metric_attrs = {"controller_kind": controller_kind}
+        with (
+            telemetry.record_duration(telemetry.record_prompt_build, metric_attrs),
+            telemetry.span("agent.prompt.build", {"character.id": cid}),
+        ):
             context = self.builder.build(character_id, epoch=self.actor.epoch)
             pending = self._feedback.get(cid)
             if pending is not None:
@@ -772,6 +813,8 @@ class ControllerDispatch:
             model=model,
             provider=provider,
             prompted=prompted,
+            controller_kind=controller_kind,
+            started_at=started_at,
         )
 
     def _launch_projection(
@@ -792,6 +835,7 @@ class ControllerDispatch:
             "provider": projection.provider or "local",
             "model": projection.model or "unknown",
             "agent.kind": type(projection.agent).__name__,
+            "controller_kind": projection.controller_kind,
         }
         span_attrs = {
             **metric_attrs,
@@ -806,6 +850,14 @@ class ControllerDispatch:
             span_attrs["decision.prompt_chars"] = len(prompt)
             if telemetry.content_capture_enabled():
                 span_attrs["decision.prompt"] = telemetry.attr_text(prompt)
+        telemetry.record_prompt_characters(
+            len(prompt),
+            {
+                "controller_kind": projection.controller_kind,
+                "provider": projection.provider or "local",
+                "model": projection.model or "unknown",
+            },
+        )
 
         feedback = self._feedback.get(cid)
         if feedback is not None and feedback in context.warnings:
@@ -826,9 +878,12 @@ class ControllerDispatch:
                 metric_attrs,
                 self.actor.epoch,
                 event_batch,
+                projection.controller_kind,
+                projection.started_at,
             )
         )
         self._inflight[cid] = task
+        self._inflight_kinds[cid] = projection.controller_kind
         if projection.prompted:
             state = self._state_for(cid)
             state.active_task = task
@@ -850,6 +905,8 @@ class ControllerDispatch:
         metric_attrs: dict,
         input_epoch: int,
         event_batch: _EventBatch,
+        controller_kind: str,
+        started_at: float,
     ) -> Decision:
         """Await one character decision and finalize it without blocking other characters."""
         cid = str(character_id)
@@ -859,7 +916,13 @@ class ControllerDispatch:
                 telemetry.record_duration(telemetry.record_llm_decision, metric_attrs),
                 telemetry.span("agent.decide", span_attrs) as dspan,
             ):
-                with telemetry.span("agent.prompt.filter", {"character.id": cid}):
+                with (
+                    telemetry.record_duration(
+                        telemetry.record_prompt_filter,
+                        {"controller_kind": controller_kind},
+                    ),
+                    telemetry.span("agent.prompt.filter", {"character.id": cid}),
+                ):
                     prompt = await apply_prompt_filters(
                         prompt,
                         runtime=self.prompt_filter_runtime,
@@ -907,12 +970,20 @@ class ControllerDispatch:
             prompt_event_ids=tuple(event.event_id for event in event_batch.events),
             omitted_prompt_events=event_batch.omitted,
         )
+        telemetry.record_controller_turn(
+            time.perf_counter() - started_at,
+            {
+                "controller_kind": controller_kind,
+                "outcome": _decision_outcome(decision),
+            },
+        )
         self._completed.append(decision)
         return decision
 
     def _forget(self, cid: str, task: asyncio.Task[Decision]) -> None:
         if self._inflight.get(cid) is task:
             del self._inflight[cid]
+            self._inflight_kinds.pop(cid, None)
         state = self._character_states.get(cid)
         if state is not None and state.active_task is task:
             state.active_task = None

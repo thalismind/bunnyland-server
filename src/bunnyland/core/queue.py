@@ -77,6 +77,14 @@ class CommandQueues:
     def characters_with_pending(self) -> list[str]:
         return [cid for cid, lanes in self._lanes.items() if any(lanes[la] for la in Lane)]
 
+    def depths(self) -> dict[Lane, int]:
+        """Return aggregate queue depth for each fixed execution lane."""
+
+        return {
+            lane: sum(len(lanes[lane]) for lanes in self._lanes.values())
+            for lane in Lane
+        }
+
     def flush_character(self, character_id: str) -> list[SubmittedCommand]:
         """Drop all queued commands for a character (e.g. controller change). Returns them."""
         lanes = self._lanes.pop(character_id, None)

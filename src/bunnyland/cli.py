@@ -910,6 +910,7 @@ async def _serve(args) -> None:
         autosave_every=args.autosave_every,
         paused=bool(args.load and args.load_paused),
     )
+    telemetry.register_runtime_gauges(actor, dispatch, loop)
     discord_bot = _setup_discord_bot(
         actor,
         loop,

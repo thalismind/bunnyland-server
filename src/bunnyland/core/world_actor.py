@@ -204,7 +204,11 @@ class WorldActor:
         self._rng = rng or random.Random()
         self._submission_sequence = 0
         self._receipt_cache_size = receipt_cache_size
-        self._receipts: OrderedDict[str, CommitReceipt] = OrderedDict()
+        # Keyed by (character_id, command_id). Command ids are client-chosen on every
+        # player-facing surface, so a global namespace let one caller replay another
+        # character's id and read back its receipt status and reason, or squat an id so a
+        # later legitimate submission was reported as already accepted.
+        self._receipts: OrderedDict[tuple[str, str], CommitReceipt] = OrderedDict()
         self._lock = asyncio.Lock()
         self.persistence = WorldPersistenceContext()
         self.world_id = ""
@@ -343,16 +347,17 @@ class WorldActor:
             },
         ) as span:
             try:
-                receipt = self._receipts.get(command.command_id)
+                receipt_key = (command.character_id, command.command_id)
+                receipt = self._receipts.get(receipt_key)
                 if receipt is not None:
-                    self._receipts.move_to_end(command.command_id)
+                    self._receipts.move_to_end(receipt_key)
                     return SubmissionOutcome(
                         accepted=receipt.status is CommitStatus.COMMITTED,
                         command_id=command.command_id,
                         reason=receipt.reason,
                         receipt=receipt,
                     )
-                if self._command_pending(command.command_id):
+                if self._command_pending(command.character_id, command.command_id):
                     return SubmissionOutcome(accepted=True, command_id=command.command_id)
                 self._submission_sequence += 1
                 object.__setattr__(command, "submission_sequence", self._submission_sequence)
@@ -396,19 +401,27 @@ class WorldActor:
                 telemetry.mark_span_error(str(exc), span)
                 raise
 
-    def _command_pending(self, command_id: str) -> bool:
-        if any(command.command_id == command_id for command in self.pending_submissions()):
+    def _command_pending(self, character_id: str, command_id: str) -> bool:
+        """Report whether one character already has this command id in flight.
+
+        Scoped to the character: two characters using the same id are unrelated commands,
+        and ids are client-chosen.
+        """
+
+        if any(
+            command.command_id == command_id and command.character_id == character_id
+            for command in self.pending_submissions()
+        ):
             return True
         return any(
             command.command_id == command_id
-            for character_id in self.queues.characters_with_pending()
             for command in self.queues.pending(character_id)
         )
 
-    def receipt_for(self, command_id: str) -> CommitReceipt | None:
+    def receipt_for(self, character_id: str, command_id: str) -> CommitReceipt | None:
         """Return a terminal receipt while it remains in the bounded retry cache."""
 
-        return self._receipts.get(command_id)
+        return self._receipts.get((character_id, command_id))
 
     def _record_receipt(
         self,
@@ -442,8 +455,9 @@ class WorldActor:
             },
         ) as receipt_span:
             telemetry.mark_span_ok(receipt_span)
-        self._receipts[command.command_id] = receipt
-        self._receipts.move_to_end(command.command_id)
+        receipt_key = (command.character_id, command.command_id)
+        self._receipts[receipt_key] = receipt
+        self._receipts.move_to_end(receipt_key)
         while len(self._receipts) > self._receipt_cache_size:
             self._receipts.popitem(last=False)
         if self.persistence.save_path is not None:
@@ -740,6 +754,16 @@ class WorldActor:
         """Return commands accepted for ingestion on the next tick."""
 
         return list(self._inbox._queue)
+
+    def command_queue_depths(self) -> dict[str, int]:
+        """Return bounded operational queue depths without exposing queued commands."""
+
+        lane_depths = self.queues.depths()
+        return {
+            "inbox": self._inbox.qsize(),
+            "focus": lane_depths[Lane.FOCUS],
+            "world": lane_depths[Lane.WORLD],
+        }
 
     async def cancel_command(self, character_id: str, command_id: str) -> SubmittedCommand | None:
         """Remove one queued command for a character by id, from inbox or lane queues."""

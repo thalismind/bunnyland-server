@@ -565,6 +565,7 @@
       "additionalProperties": false,
       "properties": {
         "command_type": {
+          "maxLength": 128,
           "title": "Command Type",
           "type": "string"
         },
@@ -603,6 +604,7 @@
         "id": {
           "anyOf": [
             {
+              "maxLength": 128,
               "type": "string"
             },
             {

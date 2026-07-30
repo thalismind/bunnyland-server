@@ -320,7 +320,7 @@ async def test_alias_rewrites_full_lifecycle_and_runs_only_destination(caplog):
     assert outcome.accepted is True
     assert pending.command_id == command.command_id
     assert duplicate.accepted is True
-    assert duplicate.receipt == scenario.actor.receipt_for(command.command_id)
+    assert duplicate.receipt == scenario.actor.receipt_for(command.character_id, command.command_id)
     assert pending.command_type == "destination"
     assert pending.lane is Lane.FOCUS
     assert pending.cost == CommandCost(focus=2)
@@ -340,7 +340,8 @@ async def test_alias_rewrites_full_lifecycle_and_runs_only_destination(caplog):
     assert len(destination_events) == 1
     assert executed[0].result_events[0]["event_type"] == "DestinationEvent"
     assert destination.commands == [pending]
-    assert scenario.actor.receipt_for(command.command_id).command_type == "destination"
+    receipt = scenario.actor.receipt_for(command.character_id, command.command_id)
+    assert receipt.command_type == "destination"
     character = scenario.actor.world.get_entity(scenario.character)
     assert character.get_component(ActionPointsComponent).current == before_action
     assert character.get_component(FocusPointsComponent).current == before_focus - 2
