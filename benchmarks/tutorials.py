@@ -922,7 +922,7 @@ async def preflight_openrouter_models(
         raise ProviderBenchmarkError(
             f"OpenRouter model preflight failed: {exc}"
         ) from exc
-    available = {item.id: item for item in response.data}
+    available = {item.id: item for item in response.result.data}
     missing = [model for model in models if model not in available]
     if missing:
         raise ProviderBenchmarkError(
