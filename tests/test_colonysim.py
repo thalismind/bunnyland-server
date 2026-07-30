@@ -2088,7 +2088,9 @@ def test_colonysim_component_prompt_fragments_cover_self_and_nearby_state():
 
 
 async def test_colonysim_catalogue_profile_jobs_prisoners_research_trade_and_surgery():
-    scenario = build_scenario()
+    # A long catalogue walk: every verb now costs its definition's points, so give the pawn
+    # a pool deep enough to reach the end of the sequence.
+    scenario = build_scenario(action_current=60.0, focus_current=60.0)
     _install(scenario.actor)
     room = scenario.actor.world.get_entity(scenario.room_a)
     prisoner = spawn_entity(

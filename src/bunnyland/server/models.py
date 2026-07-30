@@ -18,6 +18,14 @@ IDENTIFIER_MAX_LENGTH = 128
 
 
 class CommandCostRequest(BaseModel):
+    """A client's stated expectation of what an action costs. Optional.
+
+    The server always charges the cost registered on the action definition
+    (``WorldActor._authoritative_cost``). Sending this block does not choose a cost; it
+    asserts the cost the client believes it is paying, and a disagreement rejects the
+    command rather than silently executing a different action.
+    """
+
     action: int = 0
     focus: int = 0
 
@@ -29,14 +37,25 @@ class CommandRequest(BaseModel):
     claim_id: str | None = None
     command_type: str
     payload: dict[str, Any] = Field(default_factory=dict)
-    cost: CommandCostRequest = Field(default_factory=CommandCostRequest)
-    lane: Lane = Lane.WORLD
+    #: Optional client assertions. The server derives both from the action definition; when
+    #: supplied they are only checked for agreement. See ``CommandCostRequest``.
+    cost: CommandCostRequest | None = None
+    lane: Lane | None = None
     on_insufficient_points: OnInsufficientPoints = OnInsufficientPoints.QUEUE
     expires_at_epoch: int | None = None
     expected_epoch: int | None = None
     command_id: str | None = None
 
+    def expected_cost(self) -> CommandCost | None:
+        """Return the client's asserted cost, or ``None`` when it did not state one."""
+
+        if self.cost is None:
+            return None
+        return CommandCost(action=self.cost.action, focus=self.cost.focus)
+
     def to_submitted(self, *, submitted_at_epoch: int) -> SubmittedCommand:
+        # cost and lane are placeholders: WorldActor.submit overwrites both from the action
+        # definition before anything reads them.
         return SubmittedCommand(
             command_id=self.command_id or uuid4().hex,
             character_id=self.character_id,
@@ -44,8 +63,8 @@ class CommandRequest(BaseModel):
             controller_generation=self.controller_generation,
             command_type=self.command_type,
             payload=dict(self.payload),
-            cost=CommandCost(action=self.cost.action, focus=self.cost.focus),
-            lane=self.lane,
+            cost=CommandCost(),
+            lane=self.lane or Lane.WORLD,
             on_insufficient_points=self.on_insufficient_points,
             submitted_at_epoch=submitted_at_epoch,
             expires_at_epoch=self.expires_at_epoch,

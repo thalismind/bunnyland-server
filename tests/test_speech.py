@@ -256,17 +256,18 @@ async def test_say_is_heard_by_others_in_room():
     assert event.inferred_intent == SpeechIntent.QUESTION.value
 
 
-async def test_say_spends_action_and_focus():
+async def test_say_spends_the_definition_cost_not_the_submitted_one():
     scenario = speech_scenario()
     from bunnyland.core import ActionPointsComponent, FocusPointsComponent
 
+    # The helper submits an inflated cost. The server charges what the `say` definition
+    # registers (SPEECH_COST, free), so speech spends nothing regardless of what was sent.
     await scenario.actor.submit(say(scenario, "A plain statement."))
     await scenario.actor.tick(HOUR)
 
     char = scenario.actor.world.get_entity(scenario.character)
-    # started at 5 action / 3 focus, capped by regen, minus 1 each
-    assert char.get_component(ActionPointsComponent).current == 4.0
-    assert char.get_component(FocusPointsComponent).current == 2.0
+    assert char.get_component(ActionPointsComponent).current == 5.0
+    assert char.get_component(FocusPointsComponent).current == 3.0
 
 
 async def test_say_records_author_intent_separately_from_inferred():

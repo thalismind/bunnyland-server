@@ -182,8 +182,11 @@ class ClaimProjectionResource(WorldResource):
 class ClaimCommandRequest(V1Request):
     command_type: str
     payload: dict[str, JsonValue] = Field(default_factory=dict)
-    cost: CommandCostRequest = Field(default_factory=CommandCostRequest)
-    lane: Lane = Lane.WORLD
+    #: Optional. The server derives cost and lane from the action definition; supplying them
+    #: asserts what the client believes the action is, and a mismatch rejects the command.
+    #: See ``CommandCostRequest``.
+    cost: CommandCostRequest | None = None
+    lane: Lane | None = None
     on_insufficient_points: OnInsufficientPoints = OnInsufficientPoints.QUEUE
     expires_at_epoch: int | None = None
     expected_epoch: int | None = None

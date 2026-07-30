@@ -92,7 +92,11 @@ def build_scenario(
                 maximum=max(5.0, action_current),
                 regen_per_hour=1.0,
             ),
-            FocusPointsComponent(current=focus_current, maximum=3.0, regen_per_hour=0.5),
+            FocusPointsComponent(
+                current=focus_current,
+                maximum=max(3.0, focus_current),
+                regen_per_hour=0.5,
+            ),
             InitiativeComponent(score=initiative),
         ],
     )

@@ -22,7 +22,7 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from relics import EntityId, World
 
@@ -39,6 +39,7 @@ from .availability import (
 from .claim_timeout import record_claim_activity
 from .commands import (
     ActionOverrideRoute,
+    CommandCost,
     CommitReceipt,
     CommitStatus,
     Lane,
@@ -121,6 +122,18 @@ if TYPE_CHECKING:
 #: bypass generation/participation gates so handoff and resume always work.
 CONTROL_COMMANDS = frozenset({"take-control", "release-to-llm", "suspend", "resume"})
 LOG = logging.getLogger(__name__)
+
+class CommandExpectationError(ValueError):
+    """A client's stated command cost or lane disagreed with the action definition.
+
+    ``field`` names which assertion failed so callers can report it distinctly instead of
+    flattening every disagreement into one opaque conflict.
+    """
+
+    def __init__(self, message: str, *, field: Literal["cost", "lane"]) -> None:
+        super().__init__(message)
+        self.field: Literal["cost", "lane"] = field
+
 
 #: A policy gate inspects a command against the world and returns ``(allowed, reason)``.
 CommandGate = Callable[[World, SubmittedCommand], tuple[bool, "str | None"]]
@@ -344,6 +357,13 @@ class WorldActor:
                 self._submission_sequence += 1
                 object.__setattr__(command, "submission_sequence", self._submission_sequence)
                 command, override_reason = self._resolve_action_override(command)
+                # Overwrite the submitted cost and lane with the definition's before
+                # anything reads them, so the affordability check below, the queue the
+                # command lands in, and the spend at tick all use the server's numbers. Set
+                # in place (as with submission_sequence above) to keep the caller's command
+                # object identity, which cancellation relies on.
+                object.__setattr__(command, "cost", self._authoritative_cost(command))
+                object.__setattr__(command, "lane", self._authoritative_lane(command))
                 span.set_attribute("command.type", command.command_type)
                 span.set_attribute("command.lane", command.lane.value)
                 for key, value in self._override_attributes(command).items():
@@ -448,6 +468,71 @@ class WorldActor:
                 definition.command_type: definition for definition in self.action_definitions()
             }
         return self._definition_cache.get(command_type)
+
+    def _authoritative_cost(self, command: SubmittedCommand) -> CommandCost:
+        """Return the server-owned point cost for a command, ignoring the submitted one.
+
+        ``SubmittedCommand.cost`` arrives from the wire on every client-facing surface and
+        is spent verbatim in ``_cost_operations``, so a caller that picks its own cost can
+        act for free (``0``) or mint points outright (a negative cost is subtracted). The
+        registered ``ActionDefinition`` is the only authority: its cost is already validated
+        into the documented effort tiers. Override routes are resolved from a definition by
+        ``_resolve_action_override`` and keep that resolved cost. Control verbs and unknown
+        command types carry no cost -- the former by design (spec 7.4), the latter because
+        ``_validate_submission`` rejects them immediately afterwards.
+        """
+
+        if command.action_override is not None:
+            return command.cost
+        if command.command_type in CONTROL_COMMANDS:
+            return CommandCost()
+        definition = self._definition_for(command.command_type)
+        return definition.cost if definition is not None else CommandCost()
+
+    def _authoritative_lane(self, command: SubmittedCommand) -> Lane:
+        """Return the server-owned lane for a command, ignoring the submitted one.
+
+        Lane selection decides which queue serialises the command, so letting a caller pick
+        it lets them sidestep the ordering their action is supposed to obey. As with cost,
+        the definition owns this; override routes already carry a definition-resolved lane.
+        """
+
+        if command.action_override is not None:
+            return command.lane
+        definition = self._definition_for(command.command_type)
+        return definition.lane if definition is not None else command.lane
+
+    def confirm_command_expectations(
+        self,
+        command_type: str,
+        *,
+        cost: CommandCost | None = None,
+        lane: Lane | None = None,
+    ) -> None:
+        """Raise ``CommandExpectationError`` when a client's stated cost/lane disagree.
+
+        Client surfaces may omit cost and lane entirely -- the server derives both. When a
+        client does state them it is asserting the action it believes it is taking, so a
+        mismatch means the two sides disagree about the next action and the command should
+        be refused rather than quietly executed as something else.
+        """
+
+        definition = self._definition_for(command_type)
+        if definition is None:
+            return
+        if cost is not None and cost != definition.cost:
+            raise CommandExpectationError(
+                f"cost mismatch for {command_type!r}: server charges "
+                f"action={definition.cost.action} focus={definition.cost.focus}, "
+                f"client expected action={cost.action} focus={cost.focus}",
+                field="cost",
+            )
+        if lane is not None and lane != definition.lane:
+            raise CommandExpectationError(
+                f"lane mismatch for {command_type!r}: server uses {definition.lane.value!r}, "
+                f"client expected {lane.value!r}",
+                field="lane",
+            )
 
     def _resolve_action_override(
         self, command: SubmittedCommand
@@ -1351,4 +1436,4 @@ class WorldActor:
         )
 
 
-__all__ = ["WorldActor"]
+__all__ = ["CommandExpectationError", "WorldActor"]

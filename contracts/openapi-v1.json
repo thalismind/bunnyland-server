@@ -570,7 +570,14 @@
             "type": "string"
           },
           "cost": {
-            "$ref": "#/components/schemas/CommandCostRequest"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CommandCostRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "expected_epoch": {
             "anyOf": [
@@ -606,8 +613,14 @@
             "title": "Id"
           },
           "lane": {
-            "$ref": "#/components/schemas/Lane",
-            "default": "world"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Lane"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "on_insufficient_points": {
             "$ref": "#/components/schemas/OnInsufficientPoints",
@@ -1577,6 +1590,7 @@
         "type": "object"
       },
       "CommandCostRequest": {
+        "description": "A client's stated expectation of what an action costs. Optional.\n\nThe server always charges the cost registered on the action definition\n(``WorldActor._authoritative_cost``). Sending this block does not choose a cost; it\nasserts the cost the client believes it is paying, and a disagreement rejects the\ncommand rather than silently executing a different action.",
         "properties": {
           "action": {
             "default": 0,
@@ -5116,6 +5130,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The command was refused. `code` distinguishes the reason: `insufficient_points` when the character cannot afford the action, `cost_mismatch`/`lane_mismatch` when the client's stated cost or lane disagrees with the action definition, `command_rejected` otherwise."
           },
           "422": {
             "content": {

@@ -569,7 +569,14 @@
           "type": "string"
         },
         "cost": {
-          "$ref": "#/$defs/CommandCostRequest"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CommandCostRequest"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "expected_epoch": {
           "anyOf": [
@@ -605,8 +612,14 @@
           "title": "Id"
         },
         "lane": {
-          "$ref": "#/$defs/Lane",
-          "default": "world"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Lane"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "on_insufficient_points": {
           "$ref": "#/$defs/OnInsufficientPoints",
@@ -1576,6 +1589,7 @@
       "type": "object"
     },
     "CommandCostRequest": {
+      "description": "A client's stated expectation of what an action costs. Optional.\n\nThe server always charges the cost registered on the action definition\n(``WorldActor._authoritative_cost``). Sending this block does not choose a cost; it\nasserts the cost the client believes it is paying, and a disagreement rejects the\ncommand rather than silently executing a different action.",
       "properties": {
         "action": {
           "default": 0,

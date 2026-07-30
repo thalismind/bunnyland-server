@@ -980,7 +980,9 @@ async def test_trigger_encounter_zone_updates_last_triggered_epoch():
 
 
 async def test_accept_and_complete_quest_objective_completes_quest_and_grants_reward():
-    scenario = build_scenario()
+    # accept-quest and complete-objective both draw on the focus lane (1 + 3 focus by their
+    # definitions), so the run needs more than the default three-point pool.
+    scenario = build_scenario(focus_current=8.0)
     _install(scenario.actor)
     quest, objective = _quest(scenario)
     reward, item = _quest_reward(scenario)
@@ -1012,7 +1014,7 @@ async def test_accept_and_complete_quest_objective_completes_quest_and_grants_re
 
 
 async def test_complete_quest_grants_reward_item_without_source_container():
-    scenario = build_scenario()
+    scenario = build_scenario(focus_current=8.0)
     _install(scenario.actor)
     quest, objective = _quest(scenario)
     item = spawn_entity(
@@ -1041,7 +1043,7 @@ async def test_complete_quest_grants_reward_item_without_source_container():
 
 
 async def test_complete_nonfinal_objective_by_description_keeps_quest_active():
-    scenario = build_scenario()
+    scenario = build_scenario(focus_current=8.0)
     _install(scenario.actor)
     quest, objective = _quest(scenario)
     second_objective = spawn_entity(
@@ -1757,7 +1759,7 @@ def _word(scenario, *, name="Unrelenting Force", min_souls=1, skill_name="", min
 
 
 async def test_absorb_great_soul_then_learn_and_speak_word():
-    scenario = build_scenario()
+    scenario = build_scenario(focus_current=12.0)
     _install(scenario.actor)
     beast = _dead_beast(scenario)
     word = _word(scenario, skill_name="voice", min_skill_level=2)

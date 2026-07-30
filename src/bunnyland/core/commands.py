@@ -154,14 +154,20 @@ class WaitCommand(Command):
     """No-op; yields the character's turn (spec 13.1)."""
 
 
+#: Placeholder cost for a command whose real cost WorldActor.submit fills in.
+_NO_COST = CommandCost()
+
+
 def build_submitted_command(
     *,
     character_id: str,
     controller_id: str,
     controller_generation: int,
     command_type: str,
-    cost: CommandCost,
-    lane: Lane,
+    # Placeholders. WorldActor.submit overwrites both from the action definition, so callers
+    # that go through submission do not need to state them.
+    cost: CommandCost = _NO_COST,
+    lane: Lane = Lane.WORLD,
     payload: CommandPayload | None = None,
     on_insufficient_points: OnInsufficientPoints = OnInsufficientPoints.QUEUE,
     submitted_at_epoch: int = 0,

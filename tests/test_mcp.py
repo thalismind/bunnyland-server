@@ -5,6 +5,7 @@ import inspect
 import json
 import socket
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -17,6 +18,7 @@ import bunnyland.mcp.server as mcp_server
 from bunnyland.claims import ClaimSecretRegistry, add_claim
 from bunnyland.cli import select_plugins
 from bunnyland.core import (
+    ActionPointsComponent,
     CharacterComponent,
     ClaimedComponent,
     ControlledBy,
@@ -27,6 +29,7 @@ from bunnyland.core import (
     WebControllerComponent,
     WorldActor,
     parse_entity_id,
+    replace_component,
     spawn_entity,
 )
 from bunnyland.core.events import ActorMovedEvent
@@ -1850,13 +1853,29 @@ async def test_mcp_play_send_command_reports_submission_rejection(monkeypatch, s
         character_name="Juniper",
     )
 
+    # A caller cannot make an action unaffordable by inflating its cost -- cost is the
+    # server's, so a stated cost that disagrees with the definition is refused outright.
+    # ToolError is monkeypatched to RuntimeError by _install_fake_fastmcp.
+    with pytest.raises(RuntimeError, match="cost mismatch"):
+        await registered_tools["play_send_command"](
+            client_id="client-a",
+            command_type="move",
+            payload={"direction": "north"},
+            cost_action=100,
+            **_claim_args(claimed),
+        )
+
     # An unaffordable command under DENY is rejected synchronously (line 977 path) instead
-    # of being queued.
+    # of being queued. Drain the pool rather than fabricating a cost.
+    character = scenario.actor.world.get_entity(scenario.character)
+    replace_component(
+        character,
+        replace(character.get_component(ActionPointsComponent), current=0.0),
+    )
     result = await registered_tools["play_send_command"](
         client_id="client-a",
         command_type="move",
         payload={"direction": "north"},
-        cost_action=100,
         on_insufficient_points="deny",
         **_claim_args(claimed),
     )
@@ -1864,6 +1883,11 @@ async def test_mcp_play_send_command_reports_submission_rejection(monkeypatch, s
     assert result["ok"] is False
     assert result["queued"] is False
     assert result["reason"]
+
+    replace_component(
+        character,
+        replace(character.get_component(ActionPointsComponent), current=5.0),
+    )
 
     # A valid move queues successfully (the accepted branch).
     queued = await registered_tools["play_send_command"](

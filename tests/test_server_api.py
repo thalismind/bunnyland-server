@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -24,6 +25,7 @@ from bunnyland.content import load_content_library
 from bunnyland.core import (
     ActionArgument,
     ActionDefinition,
+    ActionPointsComponent,
     BehaviorControllerComponent,
     CharacterComponent,
     ClaimedComponent,
@@ -692,16 +694,17 @@ def test_editor_display_component_serializes_emoji_for_clients(scenario):
 
 
 def test_world_snapshot_serializes_queued_commands(scenario):
-    command = CommandRequest(
+    command = build_submitted_command(
         character_id=str(scenario.character),
         controller_id=str(scenario.controller),
         controller_generation=scenario.generation,
         command_type="say",
         payload={"text": "hold on"},
-        cost={"action": 1, "focus": 1},
+        cost=CommandCost(action=1, focus=1),
         lane=Lane.WORLD,
         command_id="cmd-waiting",
-    ).to_submitted(submitted_at_epoch=42)
+        submitted_at_epoch=42,
+    )
     scenario.actor.queues.enqueue(command)
 
     snapshot = serialize_world(scenario.actor)
@@ -721,16 +724,17 @@ def test_world_snapshot_serializes_queued_commands(scenario):
 
 
 def test_world_snapshot_serializes_pending_submitted_commands_before_tick(scenario):
-    command = CommandRequest(
+    command = build_submitted_command(
         character_id=str(scenario.character),
         controller_id=str(scenario.controller),
         controller_generation=scenario.generation,
         command_type="say",
         payload={"text": "next tick"},
-        cost={"action": 1, "focus": 1},
+        cost=CommandCost(action=1, focus=1),
         lane=Lane.WORLD,
         command_id="cmd-next-tick",
-    ).to_submitted(submitted_at_epoch=42)
+        submitted_at_epoch=42,
+    )
     scenario.actor.submit_nowait(command)
 
     snapshot = serialize_world(scenario.actor)
@@ -1190,16 +1194,19 @@ def test_character_queued_commands_scopes_commands_to_character(scenario):
         scenario.actor.world,
         [CharacterComponent(), IdentityComponent(name="Hazel", kind="character")],
     )
-    included = CommandRequest(
+    # Built directly rather than through CommandRequest: cost is server-owned, so the DTO no
+    # longer carries one, and this test is about serializing whatever cost a command holds.
+    included = build_submitted_command(
         character_id=str(scenario.character),
         controller_id=str(scenario.controller),
         controller_generation=scenario.generation,
         command_type="say",
         payload={"text": "next"},
-        cost={"action": 1},
+        cost=CommandCost(action=1),
         lane=Lane.WORLD,
         command_id="cmd-included",
-    ).to_submitted(submitted_at_epoch=42)
+        submitted_at_epoch=42,
+    )
     pending = CommandRequest(
         character_id=str(scenario.character),
         controller_id=str(scenario.controller),
@@ -1398,8 +1405,12 @@ def test_command_request_builds_submitted_command():
     assert command.character_id == "entity_1"
     assert command.command_type == "move"
     assert command.payload == {"direction": "north"}
-    assert command.cost == CommandCost(action=1, focus=0)
     assert command.submitted_at_epoch == 42
+    # The DTO does not choose a cost; it carries a placeholder that WorldActor.submit
+    # replaces with the action definition's. The submitted value is surfaced separately so
+    # the caller's stated expectation can be checked for agreement.
+    assert command.cost == CommandCost()
+    assert request.expected_cost() == CommandCost(action=1, focus=0)
 
 
 async def test_event_stream_records_recent_events_and_fans_out_to_subscribers(scenario):
@@ -2755,6 +2766,100 @@ def test_room_description_prefers_long_then_short_description(scenario):
     assert _room_description(empty) == "Empty Room"
 
 
+def test_fastapi_command_endpoint_reports_insufficient_points(scenario):
+    # A player who cannot afford an action must be told so with a failing status and a
+    # distinguishable problem code -- not a 202 whose body quietly says "rejected".
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+    claimed_response = client.post(
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"character_id": str(scenario.character)},
+    )
+    claimed = claimed_response.json()
+    claim_headers = {
+        CLIENT_ID_HEADER: "client-a",
+        "X-Bunnyland-Claim-Secret": claimed_response.headers["X-Bunnyland-Claim-Secret"],
+    }
+    character = scenario.actor.world.get_entity(scenario.character)
+    replace_component(
+        character,
+        replace(character.get_component(ActionPointsComponent), current=0.0),
+    )
+
+    body = {
+        "command_type": "move",
+        "payload": {"direction": "north"},
+        "on_insufficient_points": "deny",
+    }
+    denied = client.post(
+        f"/v1/play/claims/{claimed['id']}/commands", headers=claim_headers, json=body
+    )
+
+    assert denied.status_code == 409
+    assert denied.headers["content-type"].startswith("application/problem+json")
+    assert denied.json()["detail"] == "insufficient points"
+    assert denied.json()["code"] == "insufficient_points"
+
+    # Under the default queue policy the same unaffordable command is accepted and waits
+    # for regen, so this stays a 202.
+    queued = client.post(
+        f"/v1/play/claims/{claimed['id']}/commands",
+        headers=claim_headers,
+        json={"command_type": "move", "payload": {"direction": "north"}},
+    )
+    assert queued.status_code == 202
+    assert queued.json()["status"] == "queued"
+
+
+def test_fastapi_command_endpoint_refuses_a_disagreeing_cost_or_lane(scenario):
+    # cost and lane are server-owned. A client may omit them entirely; if it states them it
+    # is asserting which action it believes it is taking, so a disagreement is refused
+    # rather than silently executed as the server's (different, possibly costlier) action.
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+    claimed_response = client.post(
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"character_id": str(scenario.character)},
+    )
+    claimed = claimed_response.json()
+    claim_headers = {
+        CLIENT_ID_HEADER: "client-a",
+        "X-Bunnyland-Claim-Secret": claimed_response.headers["X-Bunnyland-Claim-Secret"],
+    }
+
+    def _submit(body):
+        return client.post(
+            f"/v1/play/claims/{claimed['id']}/commands",
+            headers=claim_headers,
+            json={"command_type": "move", "payload": {"direction": "north"}, **body},
+        )
+
+    # Claiming `move` is free, or that it mints points, is refused outright.
+    free = _submit({"cost": {"action": 0, "focus": 0}})
+    assert free.status_code == 409
+    assert "cost mismatch" in free.json()["detail"]
+    assert free.json()["code"] == "cost_mismatch"
+
+    minted = _submit({"cost": {"action": -1000, "focus": 0}})
+    assert minted.status_code == 409
+    assert "cost mismatch" in minted.json()["detail"]
+    assert minted.json()["code"] == "cost_mismatch"
+
+    # So is picking a different queue than the definition's.
+    relaned = _submit({"lane": "focus"})
+    assert relaned.status_code == 409
+    assert "lane mismatch" in relaned.json()["detail"]
+    assert relaned.json()["code"] == "lane_mismatch"
+
+    # Omitting both is the normal path, and stating the definition's own values agrees.
+    assert _submit({}).status_code == 202
+    assert _submit({"cost": {"action": 1, "focus": 0}, "lane": "world"}).status_code == 202
+
+
 def test_fastapi_command_endpoint_queues_command_and_recent_events(scenario):
     testclient = pytest.importorskip("fastapi.testclient")
     app = create_app(scenario.actor)
@@ -3494,9 +3599,9 @@ def test_web_command_submission_resumes_idle_claim(scenario):
         ),
     )
 
-    assert response.status_code == 202
-    assert response.json()["status"] == "rejected"
-    assert response.json()["reason"] == "no handler for say"
+    assert response.status_code == 409
+    assert response.json()["detail"] == "no handler for say"
+    assert response.json()["code"] == "command_rejected"
     web_controller_id = parse_entity_id(claimed["controller_id"])
     assert web_controller_id is not None
     assert scenario.actor.current_generation(scenario.character, web_controller_id) is not None
@@ -3541,8 +3646,8 @@ def test_web_command_submission_keeps_active_matching_web_claim(scenario):
         ),
     )
 
-    assert response.status_code == 202
-    assert response.json()["reason"] == "no handler for say"
+    assert response.status_code == 409
+    assert response.json()["detail"] == "no handler for say"
     assert (
         scenario.actor.current_generation(
             scenario.character,
@@ -3592,8 +3697,8 @@ def test_web_command_submission_rejects_unclaimed_and_resumes_portable_claims(
         ),
     )
 
-    assert non_web.status_code == 202
-    assert non_web.json()["reason"] == "no handler for say"
+    assert non_web.status_code == 409
+    assert non_web.json()["detail"] == "no handler for say"
     active_controller_id = character.get_relationships(ControlledBy)[0][1]
     active_controller = scenario.actor.world.get_entity(active_controller_id)
     assert active_controller.id != actor_controller.id
@@ -3648,8 +3753,11 @@ def test_web_command_submission_resumes_idle_claim_with_new_web_controller(scena
         ),
     )
 
-    assert response.status_code == 202
-    assert response.json()["reason"] == "no handler for say"
+    # A command with no registered handler is refused, so the submission reports the
+    # rejection as a 409 rather than a 202 that merely says 'rejected' in its body.
+    assert response.status_code == 409
+    assert response.json()["detail"] == "no handler for say"
+    assert response.json()["code"] == "command_rejected"
     character = scenario.actor.world.get_entity(scenario.character)
     _edge, controller_id = character.get_relationships(ControlledBy)[0]
     assert controller_id != idle.id

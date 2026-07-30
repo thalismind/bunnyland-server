@@ -286,7 +286,9 @@ def _handler_cmd(scenario, command_type, *, character_id=None, **payload):
 
 
 async def test_aspiration_milestone_completion_can_reward_inventory_item():
-    scenario = build_scenario()
+    # Aspiration verbs are focus-lane actions charged at their definition cost, so this
+    # multi-command run needs more than the default three-point focus pool.
+    scenario = build_scenario(focus_current=12.0)
     _install(scenario.actor)
     completed: list[MilestoneCompletedEvent] = []
     scenario.actor.bus.subscribe(MilestoneCompletedEvent, completed.append)

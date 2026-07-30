@@ -62,7 +62,7 @@ from ..core.events import (
     serialized_event_visible_to,
 )
 from ..core.perspective import PerspectiveQueryResult
-from ..core.world_actor import CONTROL_COMMANDS, WorldActor
+from ..core.world_actor import CONTROL_COMMANDS, CommandExpectationError, WorldActor
 from ..imagegen.components import PortraitImageComponent
 from ..imagegen.media import (
     SEGMENT_PORTRAITS,
@@ -2591,18 +2591,29 @@ def create_app(
         "/claims/{claim_id}/commands",
         response_model=CommandResource,
         status_code=202,
+        responses={
+            409: {
+                "model": ProblemDetails,
+                "description": (
+                    "The command was refused. `code` distinguishes the reason: "
+                    "`insufficient_points` when the character cannot afford the action, "
+                    "`cost_mismatch`/`lane_mismatch` when the client's stated cost or lane "
+                    "disagrees with the action definition, `command_rejected` otherwise."
+                ),
+            }
+        },
     )
     async def v1_submit_command(
         claim_id: str,
         body: ClaimCommandRequest,
-        request: Request,
+        http_request: Request,
         response: Response,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
         client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> CommandResource:
         normalized_client_id = _required_client_id(client_id)
-        owner = _claim_owner_for_request(request, normalized_client_id)
-        claim_secret = _request_claim_secret(request, claim_secret)
+        owner = _claim_owner_for_request(http_request, normalized_client_id)
+        claim_secret = _request_claim_secret(http_request, claim_secret)
         character, controller, edge, _claim = _claim_context_v1(
             claim_id, claim_secret, normalized_client_id, owner
         )
@@ -2621,13 +2632,42 @@ def create_app(
             command_id=body.id,
         )
         _with_claim_secret(request, claim_secret)
+        # cost and lane are server-owned. A client may omit them; if it states them it is
+        # asserting which action it thinks it is taking, so a disagreement is refused
+        # instead of being executed as the server's (different, possibly costlier) action.
+        try:
+            actor.confirm_command_expectations(
+                body.command_type,
+                cost=request.expected_cost(),
+                lane=body.lane,
+            )
+        except CommandExpectationError as exc:
+            return _problem_response(
+                http_request, 409, str(exc), code=f"{exc.field}_mismatch"
+            )
         result = await _submit_command_request(request, (character, controller, _claim))
+        if not result.queued:
+            # A refused command is not "accepted". Returning 202 here made every synchronous
+            # rejection -- an unaffordable action under DENY, an unknown verb, a failed
+            # policy gate -- look like success to any client that reads the HTTP status
+            # rather than the body. The reason keeps its own problem code so a client can
+            # tell "you cannot afford this" from "that verb does not exist".
+            return _problem_response(
+                http_request,
+                409,
+                result.reason or "command rejected",
+                code=(
+                    "insufficient_points"
+                    if result.reason == "insufficient points"
+                    else "command_rejected"
+                ),
+            )
         onboarding.command_submitted(claim_id, result.command_id, body.command_type)
         response.headers["Location"] = f"/v1/play/claims/{claim_id}/commands/{result.command_id}"
         return CommandResource(
             **_world_fields(),
             id=result.command_id,
-            status="queued" if result.queued else "rejected",
+            status="queued",
             reason=result.reason,
         )
 

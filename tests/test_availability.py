@@ -11,6 +11,7 @@ from relics import Component, Edge
 from bunnyland.core import (
     ActionArgument,
     ActionDefinition,
+    ActionPointsComponent,
     ActionRequirement,
     CommandCost,
     ContainmentMode,
@@ -277,6 +278,17 @@ def _say_command(scenario, payload, **kwargs):
     )
 
 
+def _move_command(scenario, **kwargs):
+    return build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type="move",
+        payload={"direction": "north"},
+        **kwargs,
+    )
+
+
 def _capture_rejections(actor):
     rejected: list[CommandRejectedEvent] = []
     actor.bus.subscribe(CommandRejectedEvent, rejected.append)
@@ -327,14 +339,14 @@ def test_submit_rejects_unknown_command_type():
 
 
 def test_submit_denies_unaffordable_only_under_deny_policy():
+    # `move` costs one action point by its definition; `say` is free, so affordability has to
+    # be exercised with a verb the server actually charges for.
     scenario = build_scenario(action_current=0.0)
-    scenario.actor.register_handler(SayHandler())
 
     denied = asyncio.run(
         scenario.actor.submit(
-            _say_command(
+            _move_command(
                 scenario,
-                {"text": "hi"},
                 on_insufficient_points=OnInsufficientPoints.DENY,
             )
         )
@@ -344,9 +356,8 @@ def test_submit_denies_unaffordable_only_under_deny_policy():
 
     queued = asyncio.run(
         scenario.actor.submit(
-            _say_command(
+            _move_command(
                 scenario,
-                {"text": "hi"},
                 on_insufficient_points=OnInsufficientPoints.QUEUE,
             )
         )
@@ -396,3 +407,91 @@ def test_submit_rejects_unmet_capability_requirement():
     _character(scenario).add_component(SkillSetComponent(levels={"lockpicking": 1}))
     met = asyncio.run(scenario.actor.submit(_pick()))
     assert met.accepted is True
+
+
+# -- server-owned cost and lane ---------------------------------------------------------
+#
+# The submitted cost and lane arrive from the wire on every client-facing surface. Before
+# they were server-owned, a caller could send cost 0 to act for free, or a negative cost to
+# mint points outright (the spend is a subtraction), and could pick which lane serialised
+# its command. These pin that shut.
+
+
+def _submitted(scenario, command_type, payload=None, **kwargs):
+    return build_submitted_command(
+        character_id=str(scenario.character),
+        controller_id=str(scenario.controller),
+        controller_generation=scenario.generation,
+        command_type=command_type,
+        payload=payload if payload is not None else {"direction": "north"},
+        **kwargs,
+    )
+
+
+def test_submitted_zero_cost_does_not_make_an_action_free():
+    scenario = build_scenario()
+    command = _submitted(scenario, "move", cost=CommandCost(action=0, focus=0))
+
+    asyncio.run(scenario.actor.submit(command))
+
+    # `move` costs one action point by definition, whatever the caller asked for.
+    assert command.cost == CommandCost(action=1, focus=0)
+
+
+def test_submitted_negative_cost_cannot_mint_points():
+    scenario = build_scenario()
+    before = _character(scenario).get_component(ActionPointsComponent).current
+    command = _submitted(scenario, "move", cost=CommandCost(action=-1000, focus=-1000))
+
+    asyncio.run(scenario.actor.submit(command))
+    asyncio.run(scenario.actor.tick(3600))
+
+    assert command.cost == CommandCost(action=1, focus=0)
+    # Regen is capped at the pool maximum, so the balance can never exceed where it started.
+    assert _character(scenario).get_component(ActionPointsComponent).current <= before
+
+
+def test_submitted_lane_does_not_choose_the_queue():
+    scenario = build_scenario()
+    # `remember` is a focus-lane action; asking for the world lane must not move it.
+    command = _submitted(scenario, "remember", lane=Lane.WORLD, payload={"query": "moss"})
+
+    asyncio.run(scenario.actor.submit(command))
+
+    assert command.lane is Lane.FOCUS
+
+
+def test_confirm_command_expectations_accepts_agreement_and_silence():
+    scenario = build_scenario()
+
+    # Stating nothing is the normal path.
+    scenario.actor.confirm_command_expectations("move")
+    # Stating the definition's own values agrees.
+    scenario.actor.confirm_command_expectations(
+        "move", cost=CommandCost(action=1, focus=0), lane=Lane.WORLD
+    )
+    # An unregistered verb has nothing to disagree with; submission rejects it separately.
+    scenario.actor.confirm_command_expectations("not-a-verb", cost=CommandCost(action=99))
+
+
+def test_confirm_command_expectations_rejects_a_disagreeing_cost():
+    scenario = build_scenario()
+
+    try:
+        scenario.actor.confirm_command_expectations("move", cost=CommandCost(action=0))
+    except ValueError as exc:
+        assert "cost mismatch for 'move'" in str(exc)
+        assert "action=1" in str(exc)
+    else:  # pragma: no cover - the call above must raise
+        raise AssertionError("expected a cost mismatch")
+
+
+def test_confirm_command_expectations_rejects_a_disagreeing_lane():
+    scenario = build_scenario()
+
+    try:
+        scenario.actor.confirm_command_expectations("remember", lane=Lane.WORLD)
+    except ValueError as exc:
+        assert "lane mismatch for 'remember'" in str(exc)
+    else:  # pragma: no cover - the call above must raise
+        raise AssertionError("expected a lane mismatch")

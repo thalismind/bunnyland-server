@@ -1688,13 +1688,18 @@ def create_bunnyland_mcp_app(
         character_id: str | None = None,
         claim_id: str | None = None,
         claim_secret: str | None = None,
-        cost_action: int = 1,
-        cost_focus: int = 0,
-        lane: str = "world",
+        cost_action: int | None = None,
+        cost_focus: int | None = None,
+        lane: str | None = None,
         on_insufficient_points: str = "queue",
         expires_at_epoch: int | None = None,
     ) -> dict[str, Any]:
-        """Queue a world command from an MCP-controlled character."""
+        """Queue a world command from an MCP-controlled character.
+
+        ``cost_action``, ``cost_focus`` and ``lane`` are optional and are not choices: the
+        server charges and routes by the registered action definition. Supplying them
+        asserts what the caller believes the action is, and a mismatch rejects the command.
+        """
 
         try:
             character, controller, generation = controlled_or_requested_player(
@@ -1717,14 +1722,26 @@ def create_bunnyland_mcp_app(
                     f"unknown command_type {command_type!r}; call search_actions to find "
                     "valid verbs before sending"
                 )
+            expected_cost = (
+                CommandCost(action=cost_action or 0, focus=cost_focus or 0)
+                if cost_action is not None or cost_focus is not None
+                else None
+            )
+            actor.confirm_command_expectations(
+                command_type,
+                cost=expected_cost,
+                lane=Lane(lane) if lane is not None else None,
+            )
+            # cost and lane are placeholders; actor.submit overwrites both from the
+            # action definition.
             command = build_submitted_command(
                 character_id=str(character),
                 controller_id=str(controller),
                 controller_generation=generation,
                 command_type=command_type,
                 payload=payload or {},
-                cost=CommandCost(action=cost_action, focus=cost_focus),
-                lane=Lane(lane),
+                cost=CommandCost(),
+                lane=Lane(lane) if lane is not None else Lane.WORLD,
                 on_insufficient_points=OnInsufficientPoints(on_insufficient_points),
                 submitted_at_epoch=actor.epoch,
                 expires_at_epoch=expires_at_epoch,
