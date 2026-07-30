@@ -837,7 +837,7 @@ def create_app(
                 detail="login rate limit exceeded",
                 headers={"Retry-After": str(max(ip_retry_after, username_retry_after))},
             )
-        user = user_credentials.authenticate(login.username, login.password)
+        user = await user_credentials.authenticate(login.username, login.password)
         if user is None:
             raise HTTPException(
                 status_code=401,

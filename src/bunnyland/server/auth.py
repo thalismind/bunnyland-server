@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -33,6 +34,12 @@ HUMAN_TOKEN_LIFETIME_SECONDS = 7 * 24 * 60 * 60
 HUMAN_ROTATE_AFTER_SECONDS = 24 * 60 * 60
 AUTOMATION_TOKEN_LIFETIME_SECONDS = 90 * 24 * 60 * 60
 ROTATION_GRACE_SECONDS = 30
+
+#: Ceiling on password verifications running at once. Each Argon2id verification holds a
+#: large working set for tens of milliseconds, so an unbounded number of them would exhaust
+#: the container's memory even though none of them blocks the loop any more.
+MAX_CONCURRENT_VERIFICATIONS = 4
+_VERIFICATION_SEMAPHORE: asyncio.Semaphore | None = None
 
 _TOKEN_RE = re.compile(r"^blt_([a-f0-9]{16})_([A-Za-z0-9_-]{32,})$")
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -304,10 +311,16 @@ class UserCredentialStore:
         self._reload_if_changed()
         return self._users.get(username)
 
-    def authenticate(self, username: str, password: str) -> UserCredential | None:
+    def verify_password(self, username: str, password: str) -> UserCredential | None:
+        """Verify one password. Blocking: Argon2 is deliberately expensive.
+
+        Callers on the event loop must use ``authenticate`` instead; this is the body that
+        runs in a worker thread.
+        """
+
         user = self.current_user(username)
+        hasher = _password_hasher()
         try:
-            from pwdlib import PasswordHash
             from pwdlib.exceptions import UnknownHashError
         except ImportError as exc:
             raise RuntimeError("password login requires pwdlib[argon2]") from exc
@@ -315,24 +328,63 @@ class UserCredentialStore:
             candidate_hash = (
                 user.password_hash if user is not None and user.enabled else _dummy_password_hash()
             )
-            valid = PasswordHash.recommended().verify(password, candidate_hash)
+            valid = hasher.verify(password, candidate_hash)
         except (TypeError, ValueError, UnknownHashError):
             valid = False
         return user if user is not None and user.enabled and valid else None
+
+    async def authenticate(self, username: str, password: str) -> UserCredential | None:
+        """Verify one password off the event loop, under a concurrency bound.
+
+        Argon2id at pwdlib's recommended parameters costs tens of milliseconds and tens of
+        megabytes per attempt, and the rejected-login path deliberately pays the same price
+        against a dummy hash so failures are not faster than successes. Run inline on the
+        loop it stalled everything else in the process -- the game loop, every websocket,
+        every in-flight request -- so a login flood became a server-wide freeze. The
+        semaphore additionally bounds how many verifications hold their working set at
+        once, which matters under the container's memory cap.
+        """
+
+        async with _verification_slot():
+            return await asyncio.to_thread(self.verify_password, username, password)
+
+
+@lru_cache(maxsize=1)
+def _password_hasher():
+    """Return the process-wide Argon2 hasher.
+
+    ``PasswordHash.recommended()`` was previously constructed per call, on the request path.
+    ``lru_cache`` does not memoise exceptions, so a deployment without pwdlib keeps raising.
+    """
+
+    try:
+        from pwdlib import PasswordHash
+    except ImportError as exc:
+        raise RuntimeError("password login requires pwdlib[argon2]") from exc
+    return PasswordHash.recommended()
 
 
 @lru_cache(maxsize=1)
 def _dummy_password_hash() -> str:
     """Return one process-local Argon2 hash for constant-work rejected logins."""
-    from pwdlib import PasswordHash
 
-    return PasswordHash.recommended().hash(secrets.token_urlsafe(32))
+    return _password_hasher().hash(secrets.token_urlsafe(32))
+
+
+def _verification_slot():
+    """Return the process-wide semaphore bounding concurrent password verifications.
+
+    Created lazily so it binds to the running loop rather than import time.
+    """
+
+    global _VERIFICATION_SEMAPHORE
+    if _VERIFICATION_SEMAPHORE is None:
+        _VERIFICATION_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_VERIFICATIONS)
+    return _VERIFICATION_SEMAPHORE
 
 
 def hash_password(password: str) -> str:
-    from pwdlib import PasswordHash
-
-    return PasswordHash.recommended().hash(password)
+    return _password_hasher().hash(password)
 
 
 class TokenStore:
@@ -821,6 +873,7 @@ __all__ = [
     "RequestAuthenticator",
     "TokenPrincipal",
     "TokenResponse",
+    "MAX_CONCURRENT_VERIFICATIONS",
     "TokenStore",
     "UserCredentialStore",
     "WORLD_ADMIN_SCOPE",

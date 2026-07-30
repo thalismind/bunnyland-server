@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import gc
 import hashlib
 import sqlite3
@@ -18,6 +19,7 @@ from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, SecurityScopes
 from starlette.requests import Request
 
+import bunnyland.server.auth as auth_module
 from bunnyland.server import app as server_app
 from bunnyland.server.app import HSTS_VALUE, create_app
 from bunnyland.server.auth import (
@@ -342,23 +344,27 @@ def test_token_operator_lifecycle_and_rejection_paths(tmp_path) -> None:
     store.close()
 
 
-def test_user_store_tolerates_bad_inventory_and_hashes(tmp_path, monkeypatch) -> None:
+async def test_user_store_tolerates_bad_inventory_and_hashes(tmp_path, monkeypatch) -> None:
     missing = UserCredentialStore(tmp_path / "missing.yml")
-    assert missing.authenticate("x", "y") is None
+    assert await missing.authenticate("x", "y") is None
     path = tmp_path / "users.yml"
     path.write_text("users: nope\n")
-    assert UserCredentialStore(path).authenticate("x", "y") is None
+    assert await UserCredentialStore(path).authenticate("x", "y") is None
     path.write_text("users:\n  ignored: nope\n  valid:\n    password_hash: bad\n    scopes: nope\n")
-    assert UserCredentialStore(path).authenticate("valid", "y") is None
+    assert await UserCredentialStore(path).authenticate("valid", "y") is None
     path.write_text("users:\n  - nope\n  - username: ''\n    password_hash: bad\n")
-    assert UserCredentialStore(path).authenticate("", "y") is None
+    assert await UserCredentialStore(path).authenticate("", "y") is None
     path.write_text("users: !unsupported value\n")
-    assert UserCredentialStore(path).authenticate("x", "y") is None
+    assert await UserCredentialStore(path).authenticate("x", "y") is None
 
     monkeypatch.setitem(__import__("sys").modules, "pwdlib", None)
+    # The Argon2 hasher is cached for the life of the process, so drop it as well. lru_cache
+    # does not memoise the raise, and monkeypatch restores sys.modules afterwards.
+    auth_module._password_hasher.cache_clear()
     path.write_text("users:\n  user:\n    password_hash: bad\n")
     with pytest.raises(RuntimeError, match="pwdlib"):
-        UserCredentialStore(path).authenticate("user", "y")
+        await UserCredentialStore(path).authenticate("user", "y")
+    auth_module._password_hasher.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -476,11 +482,9 @@ def test_user_store_startup_validation_accepts_valid_argon2_inventory(tmp_path) 
     UserCredentialStore(path).validate()
 
 
-def test_user_store_authentication_treats_verifier_errors_as_rejection(
+async def test_user_store_authentication_treats_verifier_errors_as_rejection(
     tmp_path, monkeypatch
 ) -> None:
-    import pwdlib
-
     store = _credentials(tmp_path)
     store.validate()
 
@@ -488,12 +492,16 @@ def test_user_store_authentication_treats_verifier_errors_as_rejection(
         def verify(self, _password, _password_hash):
             raise ValueError("invalid verifier state")
 
-    monkeypatch.setattr(pwdlib.PasswordHash, "recommended", lambda: BrokenVerifier())
+    # Patch the cached accessor rather than PasswordHash.recommended: the hasher is built
+    # once per process, so patching the factory alone would not be observed.
+    monkeypatch.setattr(auth_module, "_password_hasher", lambda: BrokenVerifier())
 
-    assert store.authenticate("player", "correct horse") is None
+    assert await store.authenticate("player", "correct horse") is None
 
 
-def test_user_store_throttles_file_checks_and_reloads_valid_changes(tmp_path, monkeypatch) -> None:
+async def test_user_store_throttles_file_checks_and_reloads_valid_changes(
+    tmp_path, monkeypatch
+) -> None:
     path = tmp_path / "users.yml"
     first_hash = hash_password("first password")
     second_hash = hash_password("second password")
@@ -514,7 +522,7 @@ def test_user_store_throttles_file_checks_and_reloads_valid_changes(tmp_path, mo
     monkeypatch.setattr("bunnyland.server.auth.time.monotonic", lambda: clock["now"])
     store = UserCredentialStore(path)
 
-    assert store.authenticate("player", "first password") is not None
+    assert await store.authenticate("player", "first password") is not None
     original_stat = Path.stat
     stat_calls = 0
 
@@ -546,8 +554,8 @@ def test_user_store_throttles_file_checks_and_reloads_valid_changes(tmp_path, mo
     for _ in range(100):
         assert store.current_user("player").scopes == {WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE}
     assert stat_calls == 1
-    assert store.authenticate("player", "second password") is not None
-    assert store.authenticate("player", "first password") is None
+    assert await store.authenticate("player", "second password") is not None
+    assert await store.authenticate("player", "first password") is None
 
     clock["now"] += 1.0
     store._reload_lock.acquire()
@@ -968,7 +976,7 @@ async def test_auth_metadata_rotation_delivery_and_failure_rate_limit(tmp_path) 
 @pytest.mark.asyncio
 async def test_login_limits_ip_spraying_and_distributed_username_attempts(tmp_path) -> None:
     class RejectingCredentials:
-        def authenticate(self, username: str, password: str):
+        async def authenticate(self, username: str, password: str):
             del username, password
             return None
 
@@ -1017,7 +1025,7 @@ async def test_login_limits_ip_spraying_and_distributed_username_attempts(tmp_pa
 @pytest.mark.asyncio
 async def test_raw_proxy_headers_do_not_change_auth_failure_buckets(tmp_path) -> None:
     class RejectingCredentials:
-        def authenticate(self, username: str, password: str):
+        async def authenticate(self, username: str, password: str):
             del username, password
             return None
 
@@ -1154,10 +1162,10 @@ async def test_auth_routes_reject_when_authentication_is_not_configured() -> Non
         assert login.status_code == 401
 
 
-def test_disabled_user_cannot_authenticate(tmp_path) -> None:
+async def test_disabled_user_cannot_authenticate(tmp_path) -> None:
     credentials = _credentials(tmp_path, enabled=False)
-    assert credentials.authenticate("player", "correct horse") is None
-    assert credentials.authenticate("missing", "correct horse") is None
+    assert await credentials.authenticate("player", "correct horse") is None
+    assert await credentials.authenticate("missing", "correct horse") is None
 
 
 def test_websockets_authenticate_in_first_frame_with_scopes(tmp_path) -> None:
@@ -1436,3 +1444,61 @@ def test_unauthenticated_embedding_rejects_mixed_authentication_stores(tmp_path)
             allow_unauthenticated_embedding=True,
         )
     tokens.close()
+
+
+async def test_password_verification_does_not_block_the_event_loop(tmp_path) -> None:
+    # Argon2 verification used to run inline on the loop, so every login attempt stalled the
+    # game loop, every websocket and every in-flight request for its full duration. It now
+    # runs in a worker thread: other tasks must keep being scheduled while it is in flight.
+    store = _credentials(tmp_path)
+    store.validate()
+    ticks = 0
+
+    async def spin() -> None:
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await asyncio.sleep(0)
+
+    spinner = asyncio.create_task(spin())
+    await asyncio.sleep(0)
+    try:
+        assert await store.authenticate("player", "correct horse") is not None
+    finally:
+        spinner.cancel()
+        await asyncio.gather(spinner, return_exceptions=True)
+
+    # One verification takes ~40ms. Run inline it yields the loop exactly zero chances to
+    # schedule anything else; off the loop the spinner gets tens of thousands. The threshold
+    # only has to separate "some" from "none".
+    assert ticks > 100
+
+
+async def test_password_verification_is_bounded_by_the_concurrency_semaphore(
+    tmp_path, monkeypatch
+) -> None:
+    store = _credentials(tmp_path)
+    store.validate()
+    monkeypatch.setattr(auth_module, "_VERIFICATION_SEMAPHORE", asyncio.Semaphore(2))
+    live = 0
+    peak = 0
+    lock = threading.Lock()
+
+    class CountingVerifier:
+        def verify(self, _password, _password_hash):
+            nonlocal live, peak
+            with lock:
+                live += 1
+                peak = max(peak, live)
+            time.sleep(0.02)
+            with lock:
+                live -= 1
+            return True
+
+    monkeypatch.setattr(auth_module, "_password_hasher", lambda: CountingVerifier())
+
+    await asyncio.gather(
+        *(store.authenticate("player", "correct horse") for _ in range(12))
+    )
+
+    assert peak <= 2
