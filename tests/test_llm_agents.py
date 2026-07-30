@@ -1934,6 +1934,35 @@ class _FakeOpenRouterClient:
         self.chat = _FakeOpenRouterChat()
 
 
+async def test_openrouter_agent_closes_sdk_http_clients(monkeypatch):
+    closed: list[str] = []
+
+    class SyncClient:
+        def close(self):
+            closed.append("sync")
+
+    class AsyncClient:
+        async def aclose(self):
+            closed.append("async")
+
+    class ClosableOpenRouter:
+        def __init__(self, **kwargs):
+            del kwargs
+            self.sdk_configuration = types.SimpleNamespace(
+                client=SyncClient(),
+                async_client=AsyncClient(),
+            )
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = ClosableOpenRouter
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(model="openai/gpt-4.1-mini", api_key="key")
+    await agent.close()
+
+    assert closed == ["sync", "async"]
+
+
 class _FlakyOpenRouterChat(_FakeOpenRouterChat):
     failures = 1
 

@@ -488,6 +488,11 @@ class OllamaWorldAgent:
         )
         return (await self._ask(instruction, _ItemListResponse)).objects
 
+    async def close(self) -> None:
+        """Release the provider client and any pending HTTP connection resources."""
+
+        await self._client.close()
+
 
 class OpenRouterWorldAgent(OllamaWorldAgent):
     """Prompts OpenRouter node-by-node on the same ``WorldAgent`` proposal surface.
@@ -560,6 +565,12 @@ class OpenRouterWorldAgent(OllamaWorldAgent):
         self._history.append(_message_to_history(message))
         content = getattr(message, "content", None) or "{}"
         return response_model.model_validate_json(content)
+
+    async def close(self) -> None:
+        """Release the SDK's synchronous and asynchronous HTTP clients."""
+
+        self._client.sdk_configuration.client.close()
+        await self._client.sdk_configuration.async_client.aclose()
 
 
 def _annotate_worldgen_usage(request_span, provider: str, model: str, usage) -> None:

@@ -250,13 +250,15 @@ class _InstructionPromptBuilder(PromptBuilder):
 @pytest.mark.asyncio
 async def test_live_ollama_character_agent_can_call_wait_tool():
     agent = _character_agent("ollama")
-
-    call = await agent.decide(
-        "Call exactly one tool: wait. Do not call any other tool.",
-        None,
-        character_id="live-ollama",
-        tools=_wait_tool_schema(),
-    )
+    try:
+        call = await agent.decide(
+            "Call exactly one tool: wait. Do not call any other tool.",
+            None,
+            character_id="live-ollama",
+            tools=_wait_tool_schema(),
+        )
+    finally:
+        await agent.close()
 
     assert call is not None
     assert call.name == "wait"
@@ -265,8 +267,12 @@ async def test_live_ollama_character_agent_can_call_wait_tool():
 @pytest.mark.asyncio
 async def test_live_ollama_world_agent_can_propose_room():
     agent = _world_agent("ollama")
-
-    room = await agent.propose_room("a tiny live-test moss room", behind=None, known_rooms={})
+    try:
+        room = await agent.propose_room(
+            "a tiny live-test moss room", behind=None, known_rooms={}
+        )
+    finally:
+        await agent.close()
 
     assert room.title
     assert room.description
@@ -275,13 +281,15 @@ async def test_live_ollama_world_agent_can_propose_room():
 @pytest.mark.asyncio
 async def test_live_openrouter_character_agent_can_call_wait_tool():
     agent = _character_agent("openrouter")
-
-    call = await agent.decide(
-        "Call exactly one tool: wait. Do not call any other tool.",
-        None,
-        character_id="live-openrouter",
-        tools=_wait_tool_schema(),
-    )
+    try:
+        call = await agent.decide(
+            "Call exactly one tool: wait. Do not call any other tool.",
+            None,
+            character_id="live-openrouter",
+            tools=_wait_tool_schema(),
+        )
+    finally:
+        await agent.close()
 
     assert call is not None
     assert call.name == "wait"
@@ -290,8 +298,12 @@ async def test_live_openrouter_character_agent_can_call_wait_tool():
 @pytest.mark.asyncio
 async def test_live_openrouter_world_agent_can_propose_room():
     agent = _world_agent("openrouter")
-
-    room = await agent.propose_room("a tiny live-test moss room", behind=None, known_rooms={})
+    try:
+        room = await agent.propose_room(
+            "a tiny live-test moss room", behind=None, known_rooms={}
+        )
+    finally:
+        await agent.close()
 
     assert room.title
     assert room.description

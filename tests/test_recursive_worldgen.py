@@ -469,6 +469,55 @@ class _FakeOpenRouterClient:
         self.chat = _FakeOpenRouterChat()
 
 
+async def test_ollama_world_agent_closes_provider_client(monkeypatch):
+    closed: list[bool] = []
+
+    class ClosableOllamaClient:
+        def __init__(self):
+            pass
+
+        async def close(self):
+            closed.append(True)
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = ClosableOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaWorldAgent(model="deepseek-v4-pro")
+    await agent.close()
+
+    assert closed == [True]
+
+
+async def test_openrouter_world_agent_closes_sdk_http_clients(monkeypatch):
+    closed: list[str] = []
+
+    class SyncClient:
+        def close(self):
+            closed.append("sync")
+
+    class AsyncClient:
+        async def aclose(self):
+            closed.append("async")
+
+    class ClosableOpenRouter:
+        def __init__(self, **kwargs):
+            del kwargs
+            self.sdk_configuration = types.SimpleNamespace(
+                client=SyncClient(),
+                async_client=AsyncClient(),
+            )
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = ClosableOpenRouter
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterWorldAgent(model="openai/gpt-4.1", api_key="key")
+    await agent.close()
+
+    assert closed == ["sync", "async"]
+
+
 async def test_openrouter_world_agent_parses_json_response(monkeypatch):
     fake_module = types.ModuleType("openrouter")
     fake_module.OpenRouter = _FakeOpenRouterClient

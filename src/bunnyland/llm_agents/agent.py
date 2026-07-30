@@ -1111,6 +1111,12 @@ class OpenRouterAgent:
             options["max_completion_tokens"] = self._max_output_tokens
         return options
 
+    async def close(self) -> None:
+        """Release the SDK's synchronous and asynchronous HTTP clients."""
+
+        self._client.sdk_configuration.client.close()
+        await self._client.sdk_configuration.async_client.aclose()
+
     def _observe_response(self, response: object) -> None:
         if self._response_observer is not None:
             self._response_observer(
