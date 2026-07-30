@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import math
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from threading import Lock
+
+#: Cap on distinct caller buckets held at once. Some limiters are keyed by values the
+#: caller chooses -- the login limiter keys on the submitted username -- and cleanup only
+#: ran once per window, so a flood of unique keys grew the map unboundedly between sweeps.
+#: Past the cap the least recently seen bucket is dropped; a caller that loses its bucket
+#: is only ever granted a fresh allowance, never denied one it should have had.
+MAX_TRACKED_KEYS = 8192
 
 
 class FixedWindowRateLimiter:
@@ -16,11 +23,13 @@ class FixedWindowRateLimiter:
         window_seconds: float,
         *,
         clock: Callable[[], float] = time.monotonic,
+        max_tracked_keys: int = MAX_TRACKED_KEYS,
     ) -> None:
         self.requests = max(0, int(requests))
         self.window_seconds = max(0.001, float(window_seconds))
+        self.max_tracked_keys = max(1, int(max_tracked_keys))
         self._clock = clock
-        self._requests: dict[str, deque[float]] = {}
+        self._requests: OrderedDict[str, deque[float]] = OrderedDict()
         self._last_cleanup = 0.0
         self._lock = Lock()
 
@@ -42,6 +51,9 @@ class FixedWindowRateLimiter:
                     del self._requests[caller]
                 self._last_cleanup = current
             entries = self._requests.setdefault(key, deque())
+            self._requests.move_to_end(key)
+            while len(self._requests) > self.max_tracked_keys:
+                self._requests.popitem(last=False)
             while entries and entries[0] <= cutoff:
                 entries.popleft()
             if len(entries) >= self.requests:
@@ -57,4 +69,4 @@ class FixedWindowRateLimiter:
             self._requests.pop(key, None)
 
 
-__all__ = ["FixedWindowRateLimiter"]
+__all__ = ["MAX_TRACKED_KEYS", "FixedWindowRateLimiter"]

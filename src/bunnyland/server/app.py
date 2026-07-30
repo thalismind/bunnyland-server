@@ -107,6 +107,7 @@ from .client_ids import (
     configured_client_id_allowlist,
     require_allowed_client_id,
 )
+from .jobs import JobRegistry
 from .models import (
     IDENTIFIER_MAX_LENGTH,
     CharacterChatRequest,
@@ -264,6 +265,11 @@ CHAT_JOB_RATE_LIMIT_REQUESTS_ENV = "BUNNYLAND_CHAT_JOB_RATE_LIMIT_REQUESTS"
 CHAT_JOB_RATE_LIMIT_WINDOW_ENV = "BUNNYLAND_CHAT_JOB_RATE_LIMIT_WINDOW_SECONDS"
 CHAT_JOB_RATE_LIMIT_REQUESTS = 10
 CHAT_JOB_RATE_LIMIT_WINDOW_SECONDS = 60
+# A chat job whose action was queued polls for the result. Both bounds exist so a queued
+# action that never completes cannot leave a task polling forever: without a deadline every
+# such job pinned a permanent 4 Hz poll for the life of the process.
+CHAT_JOB_POLL_SECONDS = 0.25
+CHAT_JOB_PENDING_TIMEOUT_SECONDS = 120.0
 # In-app request body cap as a backstop to the edge nginx `client_max_body_size`, so the
 # limit does not vanish if the app is ever exposed without that reverse proxy in front. It
 # sits above the largest legitimate body (a max-size image upload plus multipart framing),
@@ -271,6 +277,9 @@ CHAT_JOB_RATE_LIMIT_WINDOW_SECONDS = 60
 MAX_REQUEST_BODY_BYTES_ENV = "BUNNYLAND_MAX_REQUEST_BODY_BYTES"
 MAX_REQUEST_BODY_BYTES = MAX_UPLOAD_IMAGE_BYTES + 2 * 1024 * 1024
 HSTS_VALUE = "max-age=31536000"
+# Generation jobs are admin-only and world-wide, so they share one owner bucket rather
+# than being scoped per caller.
+GENERATION_JOB_OWNER = "admin"
 
 
 class AuthorizationSurface(StrEnum):
@@ -676,16 +685,15 @@ def create_app(
     )
     generator_registry = collect_generators(plugins or ())
     generation_job = None
-    player_jobs: dict[str, JobResource] = {}
-    player_job_claims: dict[str, str] = {}
+    # One bounded registry per job family, replacing plain dicts that nothing evicted. Chat
+    # jobs additionally carried three parallel side maps (client id, character id, subject);
+    # those now ride along on the record so they cannot drift out of sync with the job.
+    player_job_registry = JobRegistry()
+    # Chat records carry the authenticated subject that created them, so a reader cannot
+    # fetch another account's job by guessing its id and spoofing the client-id header.
+    character_chat_job_registry = JobRegistry()
+    generation_job_registry = JobRegistry()
     onboarding = OnboardingTracker(actor)
-    character_chat_jobs: dict[str, JobResource] = {}
-    character_chat_job_clients: dict[str, str] = {}
-    character_chat_job_characters: dict[str, str] = {}
-    # Authenticated subject that created each chat job, so a reader cannot fetch another
-    # account's job by guessing its id and spoofing the client-id header.
-    character_chat_job_subjects: dict[str, str] = {}
-    generation_jobs: dict[str, JobResource] = {}
     memory_store = memory_store or getattr(actor, "memory_store", None)
     media_store = (
         (getattr(imagegen, "media", None) if imagegen is not None else None)
@@ -2102,33 +2110,42 @@ def create_app(
         principal = getattr(request.state, "auth_principal", None)
         return principal.subject if isinstance(principal, TokenPrincipal) else None
 
+    def _chat_job_attributes(character_id: str, subject: str | None) -> dict[str, str | None]:
+        return {"character_id": character_id, "subject": subject}
+
     def _chat_job_for_client(
         job_id: str, character_id: str, client_id: str, subject: str | None
     ) -> JobResource:
-        job = character_chat_jobs.get(job_id)
-        if (
-            job is None
-            or character_chat_job_characters.get(job_id) != character_id
-            or character_chat_job_clients.get(job_id) != client_id
-            or character_chat_job_subjects.get(job_id) != subject
-        ):
+        job = character_chat_job_registry.get(
+            job_id,
+            owner=client_id,
+            attributes=_chat_job_attributes(character_id, subject),
+        )
+        if job is None:
             raise HTTPException(status_code=404, detail="chat job does not exist")
         return job
 
+    def _chat_job(job_id: str) -> JobResource | None:
+        return character_chat_job_registry.get(job_id)
+
     def _chat_job_failure(character_id: str, job_id: str, detail: str) -> None:
-        job = character_chat_jobs[job_id]
-        character_chat_jobs[job_id] = job.model_copy(
-            update={
-                "status": "failed",
-                "updated_at": datetime.now(UTC),
-                "failure": ProblemDetails(
-                    title="Chat failed",
-                    status=409,
-                    detail=detail,
-                    code="chat_unavailable",
-                    instance=f"/v1/chat/characters/{character_id}/jobs/{job_id}",
-                ),
-            }
+        job = _chat_job(job_id)
+        if job is None:
+            return
+        character_chat_job_registry.update(
+            job.model_copy(
+                update={
+                    "status": "failed",
+                    "updated_at": datetime.now(UTC),
+                    "failure": ProblemDetails(
+                        title="Chat failed",
+                        status=409,
+                        detail=detail,
+                        code="chat_unavailable",
+                        instance=f"/v1/chat/characters/{character_id}/jobs/{job_id}",
+                    ),
+                }
+            )
         )
 
     async def _run_character_chat_job(
@@ -2138,10 +2155,14 @@ def create_app(
         body: ChatJobRequest,
         client_id: str,
     ) -> None:
-        job = character_chat_jobs[job_id]
-        character_chat_jobs[job_id] = job.model_copy(
-            update={"status": "running", "updated_at": datetime.now(UTC)}
-        )
+        def _patch_job(**update) -> None:
+            current = _chat_job(job_id)
+            if current is not None:
+                character_chat_job_registry.update(
+                    current.model_copy(update={"updated_at": datetime.now(UTC), **update})
+                )
+
+        _patch_job(status="running")
         try:
             result = await world_character_chat(
                 service,
@@ -2159,16 +2180,15 @@ def create_app(
             return
         final_result = result
         if result.action.status == "queued" and result.action.command_id:
-            character_chat_jobs[job_id] = character_chat_jobs[job_id].model_copy(
-                update={
-                    "updated_at": datetime.now(UTC),
-                    "result": JOB_RESULT_ADAPTER.validate_python(
-                        _without_preview_fields(result)
-                    ),
-                }
+            _patch_job(result=JOB_RESULT_ADAPTER.validate_python(_without_preview_fields(result)))
+            # Bounded wait. This used to be an unbounded `while True`, so a queued action
+            # that never completed left the task polling at 4 Hz for the life of the
+            # process, and every such job added another one.
+            deadline = (
+                asyncio.get_running_loop().time() + CHAT_JOB_PENDING_TIMEOUT_SECONDS
             )
             while True:
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(CHAT_JOB_POLL_SECONDS)
                 try:
                     pending = await service.pending_result(
                         character_id,
@@ -2178,25 +2198,22 @@ def create_app(
                 except Exception as exc:
                     _chat_job_failure(character_id, job_id, str(exc))
                     return
-                character_chat_jobs[job_id] = character_chat_jobs[job_id].model_copy(
-                    update={
-                        "updated_at": datetime.now(UTC),
-                        "result": JOB_RESULT_ADAPTER.validate_python(
-                            _without_preview_fields(pending)
-                        ),
-                    }
+                _patch_job(
+                    result=JOB_RESULT_ADAPTER.validate_python(_without_preview_fields(pending))
                 )
                 if pending.complete:
                     final_result = pending
                     break
-        character_chat_jobs[job_id] = character_chat_jobs[job_id].model_copy(
-            update={
-                "status": "succeeded",
-                "updated_at": datetime.now(UTC),
-                "result": JOB_RESULT_ADAPTER.validate_python(
-                    _without_preview_fields(final_result)
-                ),
-            }
+                if asyncio.get_running_loop().time() >= deadline:
+                    _chat_job_failure(
+                        character_id,
+                        job_id,
+                        "the character did not finish this action in time",
+                    )
+                    return
+        _patch_job(
+            status="succeeded",
+            result=JOB_RESULT_ADAPTER.validate_python(_without_preview_fields(final_result)),
         )
 
     @chat_v1.post(
@@ -2244,10 +2261,11 @@ def create_app(
             created_at=created,
             updated_at=created,
         )
-        character_chat_jobs[job.id] = job
-        character_chat_job_clients[job.id] = normalized_client_id
-        character_chat_job_characters[job.id] = character_id
-        character_chat_job_subjects[job.id] = subject
+        character_chat_job_registry.put(
+            job,
+            owner=normalized_client_id,
+            attributes=_chat_job_attributes(character_id, subject),
+        )
         response.headers["Location"] = f"/v1/chat/characters/{character_id}/jobs/{job.id}"
         if controller_kind == "llm":
             if character_chat is None:
@@ -2284,7 +2302,8 @@ def create_app(
                 job.id,
                 f"{controller_kind} character is not available to chat",
             )
-        return character_chat_jobs[job.id].model_copy(deep=True)
+        stored = _chat_job(job.id)
+        return (stored or job).model_copy(deep=True)
 
     @chat_v1.get(
         "/characters/{character_id}/jobs/{job_id}",
@@ -2527,8 +2546,12 @@ def create_app(
         character, _controller, _edge, _claim = _claim_context_v1(
             claim_id, claim_secret, normalized_client_id, owner
         )
-        job = character_chat_jobs.get(job_id)
-        if job is None or character_chat_job_characters.get(job_id) != str(character.id):
+        # The claim holder is the character's controller, not necessarily the client that
+        # opened the chat job, so this matches on the character rather than the job owner.
+        job = character_chat_job_registry.get(
+            job_id, attributes={"character_id": str(character.id)}
+        )
+        if job is None:
             raise HTTPException(status_code=404, detail="chat job does not exist")
         if job.status not in {"queued", "running"}:
             raise HTTPException(status_code=409, detail="chat job is already complete")
@@ -2537,14 +2560,15 @@ def create_app(
             character_id=str(character.id),
             reply=body.reply,
         )
-        character_chat_jobs[job_id] = job.model_copy(
+        replied = job.model_copy(
             update={
                 "status": "succeeded",
                 "updated_at": datetime.now(UTC),
                 "result": JOB_RESULT_ADAPTER.validate_python(_without_preview_fields(result)),
             }
         )
-        return character_chat_jobs[job_id]
+        character_chat_job_registry.update(replied)
+        return replied
 
     @play_v1.get("/claims/{claim_id}/projection", response_model=ClaimProjectionResource)
     async def v1_claim_projection(
@@ -2783,8 +2807,7 @@ def create_app(
             updated_at=datetime.now(UTC),
             result=JOB_RESULT_ADAPTER.validate_python(_without_preview_fields(image)),
         )
-        player_jobs[job.id] = job
-        player_job_claims[job.id] = claim_id
+        player_job_registry.put(job, owner=claim_id)
         response.headers["Location"] = f"/v1/play/claims/{claim_id}/jobs/{job.id}"
         return job
 
@@ -2799,13 +2822,10 @@ def create_app(
         owner = _claim_owner_for_request(request, normalized_client_id)
         claim_secret = _request_claim_secret(request, claim_secret)
         _claim_context_v1(claim_id, claim_secret, normalized_client_id, owner)
-        for job_id, job in list(player_jobs.items()):
-            if player_job_claims.get(job_id) != claim_id:
-                continue
-            player_jobs[job_id] = _refresh_image_job_v1(job)
-        return [
-            job for job_id, job in player_jobs.items() if player_job_claims.get(job_id) == claim_id
-        ]
+        refreshed = [_refresh_image_job_v1(job) for job in player_job_registry.list_for(claim_id)]
+        for job in refreshed:
+            player_job_registry.update(job)
+        return refreshed
 
     @play_v1.get("/claims/{claim_id}/jobs/{job_id}", response_model=JobResource)
     async def v1_get_player_job(
@@ -2819,11 +2839,11 @@ def create_app(
         owner = _claim_owner_for_request(request, normalized_client_id)
         claim_secret = _request_claim_secret(request, claim_secret)
         _claim_context_v1(claim_id, claim_secret, normalized_client_id, owner)
-        job = player_jobs.get(job_id)
-        if job is None or player_job_claims.get(job_id) != claim_id:
+        job = player_job_registry.get(job_id, owner=claim_id)
+        if job is None:
             raise HTTPException(status_code=404, detail="job does not exist")
         refreshed = _refresh_image_job_v1(job)
-        player_jobs[job_id] = refreshed
+        player_job_registry.update(refreshed)
         return refreshed
 
     @admin_v1.get("/world")
@@ -2959,19 +2979,19 @@ def create_app(
             updated_at=datetime.now(UTC),
             result=JOB_RESULT_ADAPTER.validate_python(result_data),
         )
-        generation_jobs[job.id] = job
+        generation_job_registry.put(job, owner=GENERATION_JOB_OWNER)
         response.headers["Location"] = f"/v1/admin/world/generation-jobs/{job.id}"
         refreshed = await _refresh_generation_job_v1(job)
-        generation_jobs[job_id] = refreshed
+        generation_job_registry.update(refreshed)
         return refreshed
 
     @admin_v1.get("/world/generation-jobs/{job_id}", response_model=JobResource)
     async def v1_generation_job(job_id: str) -> JobResource:
-        job = generation_jobs.get(job_id)
+        job = generation_job_registry.get(job_id, owner=GENERATION_JOB_OWNER)
         if job is None:
             raise HTTPException(status_code=404, detail="generation job does not exist")
         refreshed = await _refresh_generation_job_v1(job)
-        generation_jobs[job_id] = refreshed
+        generation_job_registry.update(refreshed)
         return refreshed
 
     @admin_v1.get("/memory/collections")

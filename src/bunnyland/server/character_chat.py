@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -46,6 +47,13 @@ CHAT_SYSTEM_PROMPT = (
 )
 ACTION_RESULT_TIMEOUT_SECONDS = 1.5
 CHAT_TRACE_TEXT_CHARS = 4096
+#: Bounds on the two chat bookkeeping maps. Both are subscribed to world-wide command
+#: events, so without a cap they grow with total command volume for the life of the
+#: process, not with chat volume. A pending action lives only until its chat job polls the
+#: result, and a completed action only until the pending action that raced it is
+#: registered, so a small recent window is all either needs.
+PENDING_ACTION_CACHE_SIZE = 512
+COMPLETED_ACTION_CACHE_SIZE = 512
 
 
 @dataclass
@@ -70,6 +78,8 @@ class CharacterChatService:
         *,
         prompt_filter_runtime: PromptFilterRuntime | None = None,
         result_timeout_seconds: float = ACTION_RESULT_TIMEOUT_SECONDS,
+        pending_cache_size: int = PENDING_ACTION_CACHE_SIZE,
+        completed_cache_size: int = COMPLETED_ACTION_CACHE_SIZE,
     ) -> None:
         self.actor = actor
         self.builder = builder
@@ -81,8 +91,10 @@ class CharacterChatService:
             self.prompt_filter_runtime = PromptFilterRuntime.from_actor(actor, llm=agent)
             actor.prompt_filter_runtime = self.prompt_filter_runtime
         self.result_timeout_seconds = max(0.0, result_timeout_seconds)
-        self._pending: dict[tuple[str, str, str], PendingChatAction] = {}
-        self._completed_actions: dict[str, CharacterChatActionResult] = {}
+        self._pending_cache_size = max(1, pending_cache_size)
+        self._completed_cache_size = max(1, completed_cache_size)
+        self._pending: OrderedDict[tuple[str, str, str], PendingChatAction] = OrderedDict()
+        self._completed_actions: OrderedDict[str, CharacterChatActionResult] = OrderedDict()
         self.actor.bus.subscribe(CommandExecutedEvent, self._complete_pending)
         self.actor.bus.subscribe(CommandRejectedEvent, self._complete_pending)
 
@@ -262,14 +274,24 @@ class CharacterChatService:
                 continue
             pending.action = self._action_from_event(event, pending.action.tool)
             matched = True
-        if not matched:
-            self._completed_actions[event.command_id] = action
+        if matched:
+            return
+        # This fires for every command in the world, not just chat-driven ones, so the
+        # landing pad for results that beat their pending action has to stay bounded.
+        self._completed_actions[event.command_id] = action
+        self._completed_actions.move_to_end(event.command_id)
+        while len(self._completed_actions) > self._completed_cache_size:
+            self._completed_actions.popitem(last=False)
 
     def _register_pending(self, pending: PendingChatAction) -> None:
         completed = self._completed_actions.pop(pending.command_id, None)
         if completed is not None:
             pending.action = completed.model_copy(update={"tool": pending.action.tool})
-        self._pending[(pending.client_id, pending.character_id, pending.command_id)] = pending
+        key = (pending.client_id, pending.character_id, pending.command_id)
+        self._pending[key] = pending
+        self._pending.move_to_end(key)
+        while len(self._pending) > self._pending_cache_size:
+            self._pending.popitem(last=False)
 
     @staticmethod
     def _action_from_event(

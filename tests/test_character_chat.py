@@ -949,3 +949,54 @@ def test_build_character_chat_service_factory_returns_service():
     )
 
     assert isinstance(service, CharacterChatService)
+
+
+async def test_completed_action_cache_stays_bounded_under_world_command_volume():
+    # _complete_pending is subscribed to every CommandExecutedEvent and CommandRejectedEvent
+    # in the world, not just chat-driven ones, and parked each unmatched result in
+    # _completed_actions. Nothing evicted them, so the map grew with total command volume
+    # for the life of the process -- NPC ticks alone were enough to leak it.
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    service = chat_service(scenario, FakeChatAgent([]), timeout=0.0)
+    service._completed_cache_size = 32
+
+    for index in range(500):
+        await scenario.actor.bus.publish(
+            CommandRejectedEvent(
+                **scenario.actor._event_base(
+                    actor_id=str(scenario.character),
+                    command_id=f"unrelated-{index}",
+                    command_type="move",
+                    reason="nope",
+                )
+            )
+        )
+
+    assert len(service._completed_actions) <= 32
+
+
+async def test_pending_action_cache_stays_bounded():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    service = chat_service(scenario, FakeChatAgent([]), timeout=0.0)
+    service._pending_cache_size = 16
+
+    for index in range(200):
+        service._register_pending(
+            PendingChatAction(
+                client_id="client-a",
+                character_id=str(scenario.character),
+                command_id=f"cmd-{index}",
+                messages=[],
+                user_message="hi",
+                model=None,
+                provider=None,
+                action=CharacterChatActionResult(tool="say", command_id=f"cmd-{index}"),
+            )
+        )
+
+    assert len(service._pending) <= 16
+    # The most recent pending action is still resolvable; the oldest were dropped.
+    assert ("client-a", str(scenario.character), "cmd-199") in service._pending
+    assert ("client-a", str(scenario.character), "cmd-0") not in service._pending
