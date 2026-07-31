@@ -2311,7 +2311,9 @@ def create_app(
                 status_code=409,
                 detail="unconscious character is not available to chat",
             )
-        if character.has_component(SleepingComponent):
+        if character.has_component(SleepingComponent) and (
+            character_chat is None or not character_chat.allow_sleeping_character_chat
+        ):
             raise HTTPException(
                 status_code=409,
                 detail="sleeping character cannot be interrupted by chat",

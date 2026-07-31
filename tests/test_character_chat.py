@@ -1259,6 +1259,50 @@ async def test_character_chat_route_validates_request_and_reports_allowed_tools(
 
 
 @pytest.mark.asyncio
+async def test_character_chat_route_allows_sleeping_character_only_when_enabled():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        SleepingComponent(started_at_epoch=1)
+    )
+    disabled_app = create_app(
+        scenario.actor,
+        character_chat=chat_service(scenario, FakeChatAgent([])),
+        allow_unauthenticated_embedding=True,
+    )
+
+    async with route_client(disabled_app) as client:
+        rejected = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "Can you hear me?"},
+        )
+
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"] == "sleeping character cannot be interrupted by chat"
+
+    enabled_app = create_app(
+        scenario.actor,
+        character_chat=chat_service(
+            scenario,
+            FakeChatAgent([ChatAgentReply(content="I can still hear you.")]),
+            allow_sleeping_character_chat=True,
+        ),
+        allow_unauthenticated_embedding=True,
+    )
+    async with route_client(enabled_app) as client:
+        submitted = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "Can you hear me?"},
+        )
+        await asyncio.sleep(0)
+        fetched = await client.get(submitted.headers["Location"])
+
+    assert submitted.status_code == 202
+    assert fetched.json()["status"] == "succeeded"
+    assert fetched.json()["result"]["reply"] == "I can still hear you."
+
+
+@pytest.mark.asyncio
 async def test_character_chat_job_reports_and_completes_queued_action():
     scenario = build_scenario()
     install_core(scenario.actor)

@@ -5038,6 +5038,7 @@ def test_v1_chat_job_keeps_existing_llm_controller(scenario):
 def test_v1_chat_job_rejects_inactive_characters(scenario, component, detail):
     class FakeChat:
         allowed_tools: tuple[str, ...] = ()
+        allow_sleeping_character_chat = False
 
         async def chat(self, character_id, request):
             raise AssertionError("inactive character chat must not start")

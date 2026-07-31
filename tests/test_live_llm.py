@@ -6,10 +6,12 @@ and provider-specific connection environment variables.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import replace
 from pathlib import Path
 
+import httpx
 import pytest
 
 from bunnyland import telemetry
@@ -40,11 +42,13 @@ from bunnyland.foundation.persona.mechanics import (
 )
 from bunnyland.llm_agents import ControllerDispatch, OllamaAgent, OpenRouterAgent, tool_schemas
 from bunnyland.llm_agents.agent import CHARACTER_SYSTEM_PROMPT
+from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_persona_fragments
 from bunnyland.plugins.ids import CORE_VERBS, MEMORY
 from bunnyland.prompts.builder import PromptBuilder, render_prompt
 from bunnyland.server.app import create_app
 from bunnyland.server.character_chat import ALLOWED_CHAT_TOOLS, build_character_chat_service
+from bunnyland.server.client_ids import CLIENT_ID_HEADER
 from bunnyland.server.models import (
     CharacterChatRequest,
     WorldCharacterGenerationRequest,
@@ -53,6 +57,7 @@ from bunnyland.server.models import (
     WorldRoomGenerationRequest,
 )
 from bunnyland.server.patches import apply_world_patch
+from bunnyland.server.v1_models import ChatJobResult, JobResource
 from bunnyland.server.worldgen import (
     generate_character_patch,
     generate_event_patch,
@@ -560,6 +565,7 @@ def _chat_endpoint_actor(provider: str) -> tuple[WorldActor, object]:
     apply_plugins(
         [plugin for plugin in bunnyland_plugins() if plugin.id in (CORE_VERBS, MEMORY)], actor
     )
+    install_memory(actor, InMemoryStore())
 
     room = spawn_entity(
         actor.world,
@@ -649,49 +655,75 @@ def _contextual_chat_actor(provider: str) -> tuple[WorldActor, object]:
     return actor, character.id
 
 
+async def _run_live_chat_job(
+    actor: WorldActor,
+    client: httpx.AsyncClient,
+    character_id: object,
+    payload: dict[str, object],
+) -> ChatJobResult:
+    submitted = await client.post(
+        f"/v1/chat/characters/{character_id}/jobs",
+        json=payload,
+    )
+    assert submitted.status_code == 202, submitted.text
+    location = submitted.headers["Location"]
+    deadline = asyncio.get_running_loop().time() + 180.0
+    while True:
+        job = JobResource.model_validate((await client.get(location)).json())
+        if job.status == "succeeded":
+            assert isinstance(job.result, ChatJobResult)
+            return job.result
+        if job.status == "failed":
+            pytest.fail(str(job.failure))
+        if asyncio.get_running_loop().time() >= deadline:
+            pytest.fail("live character chat job did not finish within 180 seconds")
+        await actor.tick(0)
+        await asyncio.sleep(0.25)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider", PROVIDERS)
-def test_live_character_chat_endpoints_use_real_llm(provider):
-    testclient = pytest.importorskip("fastapi.testclient")
+async def test_live_character_chat_endpoints_use_real_llm(provider):
     actor, character_id = _chat_endpoint_actor(provider)
     service = build_character_chat_service(
         actor,
         PromptBuilder(actor.world),
         _character_agent(provider),
     )
-    client = testclient.TestClient(
-        create_app(actor, character_chat=service, allow_unauthenticated_embedding=True)
+    app = create_app(actor, character_chat=service, allow_unauthenticated_embedding=True)
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        headers={CLIENT_ID_HEADER: f"live-{provider}"},
     )
 
-    status = client.get("/play/world/chat/status")
-    assert status.status_code == 200
-    status_body = status.json()
-    assert status_body["enabled"] is True
-    assert set(status_body["allowed_tools"]) == ALLOWED_CHAT_TOOLS
-    assert {"remember", "take_note", "reflect", "forget"}.issubset(status_body["allowed_tools"])
+    async with client:
+        features = await client.get("/v1/public/features")
+        assert features.status_code == 200
+        assert features.json()["character_chat"] is True
+        assert set(service.allowed_tools) == ALLOWED_CHAT_TOOLS
+        assert {"remember", "take_note", "reflect", "forget"}.issubset(service.allowed_tools)
+        body = await _run_live_chat_job(
+            actor,
+            client,
+            character_id,
+            {
+                "kind": "chat",
+                "message": (
+                    "Reply in character with one short sentence. Prefer no tool unless "
+                    "Juniper would naturally choose one."
+                ),
+                "history_summary": "The human greeted Juniper before this live endpoint test.",
+                "history": [
+                    {"role": "user", "text": "hello"},
+                    {"role": "character", "text": "quietly, hello"},
+                ],
+            },
+        )
 
-    response = client.post(
-        f"/play/world/character/{character_id}/chat",
-        json={
-            "client_id": f"live-{provider}",
-            "message": (
-                "Reply in character with one short sentence. Prefer no tool unless "
-                "Juniper would naturally choose one."
-            ),
-            "history_summary": "The human greeted Juniper before this live endpoint test.",
-            "history": [
-                {"role": "user", "text": "hello"},
-                {"role": "character", "text": "quietly, hello"},
-            ],
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["schema_version"] == 1
-    assert body["character_id"] == str(character_id)
-    assert body["reply"].strip()
-    assert body["action"]["status"] in {
+    assert body.character_id == str(character_id)
+    assert body.reply.strip()
+    assert body.action.status in {
         "none",
         "queued",
         "executed",
@@ -699,43 +731,46 @@ def test_live_character_chat_endpoints_use_real_llm(provider):
         "unresolved",
         "failed",
     }
-    if body["action"]["tool"]:
-        assert body["action"]["tool"] in ALLOWED_CHAT_TOOLS
+    if body.action.tool:
+        assert body.action.tool in ALLOWED_CHAT_TOOLS
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider", PROVIDERS)
-def test_live_character_chat_take_note_prompt_calls_tool(provider):
-    testclient = pytest.importorskip("fastapi.testclient")
+async def test_live_character_chat_take_note_prompt_calls_tool(provider):
     actor, character_id = _chat_endpoint_actor(provider)
     service = build_character_chat_service(
         actor,
         PromptBuilder(actor.world),
         _character_agent(provider),
     )
-    client = testclient.TestClient(
-        create_app(actor, character_chat=service, allow_unauthenticated_embedding=True)
+    app = create_app(actor, character_chat=service, allow_unauthenticated_embedding=True)
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        headers={CLIENT_ID_HEADER: f"live-note-{provider}"},
     )
 
-    response = client.post(
-        f"/play/world/character/{character_id}/chat",
-        json={
-            "client_id": f"live-note-{provider}",
-            "message": (
-                "This is critical info. Use your take_note tool now to record exactly this: "
-                "the pale plants are a hybrid of human and alien vines that will, given time, "
-                "take over the greenhouse. Do not merely describe writing a note; call the "
-                "take_note tool."
-            ),
-            "history_summary": "",
-            "history": [],
-        },
-    )
+    async with client:
+        body = await _run_live_chat_job(
+            actor,
+            client,
+            character_id,
+            {
+                "kind": "chat",
+                "message": (
+                    "This is critical info. Use your take_note tool now to record exactly this: "
+                    "the pale plants are a hybrid of human and alien vines that will, given time, "
+                    "take over the greenhouse. Do not merely describe writing a note; call the "
+                    "take_note tool."
+                ),
+                "history_summary": "",
+                "history": [],
+            },
+        )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["action"]["tool"] == "take_note", body["reply"]
-    assert body["action"]["status"] in {"queued", "executed"}
+    assert body.action.tool == "take_note", body.reply
+    assert body.action.status == "executed", body.action
 
 
 @pytest.mark.asyncio
