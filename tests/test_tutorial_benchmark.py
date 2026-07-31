@@ -1027,7 +1027,7 @@ async def test_openrouter_preflight_lists_models_without_inference(monkeypatch):
                 id="openai/gpt-5.6-terra",
                 architecture=architecture,
             )
-            return SimpleNamespace(data=[model])
+            return SimpleNamespace(result=SimpleNamespace(data=[model]))
 
     class FakeClient:
         def __init__(self, *, api_key, server_url):
