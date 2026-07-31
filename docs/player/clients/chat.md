@@ -4,12 +4,13 @@
 `--server` it generates and hosts a world in the current process; no Bunnyland HTTP server
 is needed. With `--server` it submits and polls the server's existing v1 chat jobs.
 
-Character chat is available only while the character's current controller is an LLM. A
-suspended, scripted, web-controlled, or otherwise unsupported character reports that state
-instead of inventing a second dialogue system. Saved history remains visible, but the message
-input becomes read-only. A signed-in administrator can choose one of the world's existing LLM
-controllers and assign it from the Textual conversation screen; successful assignment refreshes
-the screen and enables sending.
+Character chat is available only while the character's current controller is an LLM. Dead or
+unconscious characters are unavailable for chat, and sleeping characters cannot be interrupted
+by chat. A suspended character keeps saved history visible in read-only mode. A signed-in
+administrator can activate that character on the world's default LLM controller from the
+Textual conversation screen; successful activation refreshes the screen and enables sending.
+Other unsupported controllers remain read-only and can be replaced with one of the world's
+existing LLM controllers by an administrator.
 
 ## Local Ollama
 
@@ -112,6 +113,13 @@ Local `--cli` mode cannot open the setup screen, so it requires saved configurat
 explicit `--chat-provider` (and model when desired). Conversation history is shared with
 the Textual clients and bounded to the latest 24 messages. Line-oriented chat prints that
 history before the prompt and enforces the same controller rule as Textual chat. In read-only
-mode, administrators (and local world hosts) can use `/controllers` to list existing LLM
-controllers and `/controller <id>` to assign one. `/meta` or `/help` lists the available
-client-side commands; these commands never send their text as character dialogue.
+mode, administrators (and local world hosts) can use `/activate` to attach a suspended
+character to the default LLM controller, `/controllers` to list existing LLM controllers,
+or `/controller <id>` to assign one explicitly. For example:
+
+```text
+you> /activate
+```
+
+`/meta` or `/help` lists the available client-side commands; these commands never send their
+text as character dialogue.
