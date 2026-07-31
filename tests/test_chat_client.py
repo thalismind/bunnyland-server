@@ -542,7 +542,7 @@ async def test_line_chat_keeps_history_readable_and_assigns_before_sending(
     assert "You: Are you there?" in output
     assert "Juniper: I was." in output
     assert "existing chat history is read-only" in output
-    assert "Meta: /controller <id>, /controllers, /help, /quit" in output
+    assert "Meta: /activate, /controller <id>, /controllers, /help, /quit" in output
     assert "controller:llm · default (ollama/qwen)" in output
     assert "That LLM controller is not assignable" in output
     assert "Juniper is now assigned to an LLM controller" in output
@@ -569,6 +569,67 @@ async def test_line_chat_read_only_without_assignable_controllers(capsys):
     assert "existing chat history is read-only" in output
     assert "Use /controllers to list assignable" not in output
     assert backend.submitted == []
+
+
+async def test_line_chat_activates_suspended_character_with_default_controller(capsys):
+    backend = FakeChatBackend(
+        access=CharacterChatAccess(
+            writable=False,
+            reason="Juniper is suspended.",
+            controllers=(
+                CharacterChatController("controller:writer", "writer"),
+                CharacterChatController("controller:default", "default", is_default=True),
+            ),
+            activation_controller_id="controller:default",
+        )
+    )
+
+    with patch("builtins.input", side_effect=["/activate", "/quit"]):
+        assert await chat._run_cli(backend, "Juniper") == 0
+
+    output = capsys.readouterr().out
+    assert "attach the suspended character to the default LLM controller" in output
+    assert "Juniper is now active on the default LLM controller" in output
+    assert backend.assignments == [("char:1", "controller:default")]
+
+
+async def test_line_chat_rejects_activation_when_character_is_not_suspended(capsys):
+    backend = FakeChatBackend(
+        access=CharacterChatAccess(
+            writable=False,
+            reason="Juniper is sleeping and cannot be interrupted by chat.",
+        )
+    )
+
+    with patch("builtins.input", side_effect=["/activate", "/quit"]):
+        assert await chat._run_cli(backend, "Juniper") == 0
+
+    assert "This character cannot be activated from chat." in capsys.readouterr().out
+    assert backend.assignments == []
+
+
+async def test_line_chat_reports_activation_failure(capsys):
+    class ActivationBackend(FakeChatBackend):
+        async def assign_character_chat_controller(self, character_id, controller_id):
+            self.assignments.append((character_id, controller_id))
+            raise RuntimeError("controller offline")
+
+    backend = ActivationBackend(
+        access=CharacterChatAccess(
+            writable=False,
+            reason="Juniper is suspended.",
+            controllers=(
+                CharacterChatController("controller:default", "default", is_default=True),
+            ),
+            activation_controller_id="controller:default",
+        )
+    )
+
+    with patch("builtins.input", side_effect=["/activate", "/quit"]):
+        assert await chat._run_cli(backend, "Juniper") == 0
+
+    assert "Character activation failed: controller offline" in capsys.readouterr().out
+    assert backend.assignments == [("char:1", "controller:default")]
 
 
 async def test_line_chat_reports_assignment_failure_and_still_read_only(capsys):
@@ -699,6 +760,7 @@ async def test_remote_chat_access_uses_profile_admin_snapshot_and_assignment_con
                             "generation": 3,
                             "kind": "llm" if self.assigned else "web",
                         },
+                        "sheet": {"status": [] if self.assigned else ["suspended"]},
                     }
                 )
             if url.endswith("/admin/world/snapshot"):
@@ -753,8 +815,13 @@ async def test_remote_chat_access_uses_profile_admin_snapshot_and_assignment_con
         reason="Juniper has web; existing chat history is read-only.",
         controllers=(
             CharacterChatController("controller:unnamed", "controller:unnamed"),
-            CharacterChatController("controller:llm", "default (ollama/qwen)"),
+            CharacterChatController(
+                "controller:llm",
+                "default (ollama/qwen)",
+                is_default=True,
+            ),
         ),
+        activation_controller_id="controller:llm",
     )
 
     refreshed = await backend.assign_character_chat_controller("character:1", "controller:llm")
@@ -772,6 +839,53 @@ async def test_remote_chat_assignment_requires_admin_scope_without_snapshot_requ
     assert await backend.assignable_character_chat_controllers() == ()
     with pytest.raises(PermissionError, match="Administrator scope"):
         await backend.assign_character_chat_controller("character:1", "controller:llm")
+
+
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [
+        ("dead", "Juniper is dead and is not available to chat."),
+        ("downed (stable)", "Juniper is unconscious and is not available to chat."),
+        ("sleeping", "Juniper is sleeping and cannot be interrupted by chat."),
+    ],
+)
+async def test_remote_chat_access_blocks_lifecycle_inactive_characters(status, reason):
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self): ...
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        async def get(self, url):
+            if url.endswith("/public/features"):
+                return Response({"character_chat": True})
+            if "/profile/characters/" in url:
+                return Response(
+                    {
+                        "world_id": "world:1",
+                        "world_epoch": 7,
+                        "character_id": "character:1",
+                        "character_name": "Juniper",
+                        "controller": {
+                            "controller_id": "controller:llm",
+                            "generation": 3,
+                            "kind": "llm",
+                        },
+                        "sheet": {"status": [status]},
+                    }
+                )
+            raise AssertionError(url)
+
+    backend = RemoteBackend("https://server.example/v1", client_id="client-1")
+    backend._client = Client()
+
+    access = await backend.character_chat_access("character:1")
+
+    assert access == CharacterChatAccess(writable=False, reason=reason)
 
 
 async def test_remote_auth_rejects_missing_login_and_rotation_tokens():

@@ -259,6 +259,8 @@ def _print_controller_choices(access: CharacterChatAccess) -> None:
     print("Assignable LLM controllers:")
     for controller in access.controllers:
         print(f"  {controller.controller_id} · {controller.label}")
+    if access.can_activate:
+        print("Use /activate to attach the suspended character to the default LLM controller.")
     print("Use /controller <id> to assign one.")
 
 
@@ -303,11 +305,26 @@ async def _run_cli(backend: Backend, wanted: str) -> int:
             if message in {"/quit", "/exit"}:
                 break
             if message in {"/help", "/meta"}:
-                print("Meta: /controller <id>, /controllers, /help, /quit")
+                print("Meta: /activate, /controller <id>, /controllers, /help, /quit")
                 continue
             if message == "/controllers":
                 access = await backend.character_chat_access(character.character_id)
                 _print_controller_choices(access)
+                continue
+            if message == "/activate":
+                access = await backend.character_chat_access(character.character_id)
+                if not access.can_activate:
+                    print("This character cannot be activated from chat.")
+                    continue
+                try:
+                    access = await backend.assign_character_chat_controller(
+                        character.character_id,
+                        access.activation_controller_id,
+                    )
+                except Exception as exc:
+                    print(f"Character activation failed: {exc}")
+                    continue
+                print(f"{character.name} is now active on the default LLM controller.")
                 continue
             if message == "/controller" or message.startswith("/controller "):
                 controller_id = message.removeprefix("/controller").strip()

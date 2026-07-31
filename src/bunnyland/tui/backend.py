@@ -287,6 +287,7 @@ class CharacterChatController:
 
     controller_id: str
     label: str
+    is_default: bool = False
 
 
 @dataclass(frozen=True)
@@ -296,10 +297,15 @@ class CharacterChatAccess:
     writable: bool
     reason: str = ""
     controllers: tuple[CharacterChatController, ...] = ()
+    activation_controller_id: str = ""
 
     @property
     def can_assign(self) -> bool:
         return bool(self.controllers)
+
+    @property
+    def can_activate(self) -> bool:
+        return bool(self.activation_controller_id)
 
 
 class _AdminSnapshotEntity(BaseModel):
@@ -455,14 +461,35 @@ class Backend(ABC):
         if not available:
             return CharacterChatAccess(writable=False, reason=reason)
         profile = await self.fetch_character_profile(character_id)
+        statuses = {status.split(" (", 1)[0].strip().lower() for status in profile.sheet.status}
+        if "dead" in statuses:
+            return CharacterChatAccess(
+                writable=False,
+                reason=f"{profile.character_name} is dead and is not available to chat.",
+            )
+        if "downed" in statuses:
+            return CharacterChatAccess(
+                writable=False,
+                reason=f"{profile.character_name} is unconscious and is not available to chat.",
+            )
+        if "sleeping" in statuses:
+            return CharacterChatAccess(
+                writable=False,
+                reason=f"{profile.character_name} is sleeping and cannot be interrupted by chat.",
+            )
         controller = profile.controller
         if controller is not None and controller.kind == "llm":
             return CharacterChatAccess(writable=True)
         kind = controller.kind if controller is not None and controller.kind else "no controller"
+        controllers = await self.assignable_character_chat_controllers()
+        default = next((choice for choice in controllers if choice.is_default), None)
         return CharacterChatAccess(
             writable=False,
             reason=(f"{profile.character_name} has {kind}; existing chat history is read-only."),
-            controllers=await self.assignable_character_chat_controllers(),
+            controllers=controllers,
+            activation_controller_id=(
+                default.controller_id if "suspended" in statuses and default is not None else ""
+            ),
         )
 
     async def assignable_character_chat_controllers(
@@ -684,7 +711,13 @@ class LocalBackend(Backend):
             llm = controller.get_component(LLMControllerComponent)
             detail = f"{llm.provider}/{llm.model}" if llm.model else llm.provider
             label = f"{llm.profile_name} ({detail})" if detail else llm.profile_name
-            choices.append(CharacterChatController(str(controller.id), label))
+            choices.append(
+                CharacterChatController(
+                    str(controller.id),
+                    label,
+                    is_default=llm.profile_name == "default",
+                )
+            )
         return tuple(
             sorted(choices, key=lambda choice: (choice.label.lower(), choice.controller_id))
         )
@@ -1254,7 +1287,13 @@ class RemoteBackend(Backend):
             ]
             detail = "/".join(detail_parts)
             label = f"{profile_label} ({detail})" if detail else profile_label
-            choices.append(CharacterChatController(entity.id, label))
+            choices.append(
+                CharacterChatController(
+                    entity.id,
+                    label,
+                    is_default=profile_name == "default",
+                )
+            )
         return tuple(
             sorted(choices, key=lambda choice: (choice.label.lower(), choice.controller_id))
         )

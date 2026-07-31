@@ -12,7 +12,14 @@ from typing import Any
 from relics import EntityId
 
 from .. import telemetry
-from ..core import CharacterComponent, parse_entity_id
+from ..core import (
+    CharacterComponent,
+    DeadComponent,
+    DownedComponent,
+    SleepingComponent,
+    SuspendedComponent,
+    parse_entity_id,
+)
 from ..core.actions import action_definitions
 from ..core.controllers import LLMControllerComponent
 from ..core.edges import ControlledBy
@@ -120,6 +127,14 @@ class CharacterChatService:
             character = self.actor.world.get_entity(parsed)
             if not character.has_component(CharacterComponent):
                 raise TypeError("entity is not a character")
+            if character.has_component(DeadComponent):
+                raise PermissionError("dead character is not available to chat")
+            if character.has_component(DownedComponent):
+                raise PermissionError("unconscious character is not available to chat")
+            if character.has_component(SleepingComponent):
+                raise PermissionError("sleeping character cannot be interrupted by chat")
+            if character.has_component(SuspendedComponent):
+                raise PermissionError("suspended character must be activated before chatting")
 
             controller = self._llm_controller(parsed)
             if controller is None:

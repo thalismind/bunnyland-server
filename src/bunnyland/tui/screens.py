@@ -406,7 +406,10 @@ class ConversationScreen(ModalScreen[None]):
             [(choice.label, choice.controller_id) for choice in self._access.controllers]
         )
         if self._access.controllers:
-            select.value = self._access.controllers[0].controller_id
+            select.value = (
+                self._access.activation_controller_id or self._access.controllers[0].controller_id
+            )
+        assign.label = "Activate default LLM" if self._access.can_activate else "Assign LLM"
         assign.disabled = not self._access.can_assign
         if self._access.writable:
             input_widget.focus()

@@ -12,9 +12,13 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     ControlledBy,
+    DeadComponent,
+    DownedComponent,
     IdentityComponent,
     MemoryProfileComponent,
     PortableComponent,
+    SleepingComponent,
+    SuspendedComponent,
     SuspendedControllerComponent,
     WebControllerComponent,
     spawn_entity,
@@ -95,6 +99,35 @@ def route_client(app) -> httpx.AsyncClient:
         base_url="http://testserver",
         headers={CLIENT_ID_HEADER: "chat-client"},
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("component", "reason"),
+    [
+        (DeadComponent(died_at_epoch=1, cause="old age"), "dead character is not available"),
+        (
+            DownedComponent(downed_at_epoch=1, cause="injury"),
+            "unconscious character is not available",
+        ),
+        (SleepingComponent(started_at_epoch=1), "sleeping character cannot be interrupted"),
+        (SuspendedComponent(reason="offline", suspended_at_epoch=1), "must be activated"),
+    ],
+)
+async def test_character_chat_rejects_inactive_character_before_calling_agent(
+    component, reason
+):
+    scenario = build_scenario()
+    scenario.actor.world.get_entity(scenario.character).add_component(component)
+    agent = FakeChatAgent([ChatAgentReply(content="should not run")])
+
+    with pytest.raises(PermissionError, match=reason):
+        await chat_service(scenario, agent).chat(
+            str(scenario.character),
+            chat_request(),
+        )
+
+    assert agent.calls == []
 
 
 async def claim_character(client: httpx.AsyncClient, character_id: str) -> tuple[str, dict]:

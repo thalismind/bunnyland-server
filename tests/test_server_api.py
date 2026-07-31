@@ -5013,6 +5013,51 @@ def test_v1_chat_job_keeps_existing_llm_controller(scenario):
     )
 
 
+@pytest.mark.parametrize(
+    ("component", "detail"),
+    [
+        (
+            DeadComponent(died_at_epoch=1, cause="old age"),
+            "dead character is not available to chat",
+        ),
+        (
+            DownedComponent(downed_at_epoch=1, cause="injury"),
+            "unconscious character is not available to chat",
+        ),
+        (SleepingComponent(started_at_epoch=1), "sleeping character cannot be interrupted by chat"),
+        (
+            SuspendedComponent(reason="offline", suspended_at_epoch=1),
+            "suspended character must be activated before chatting",
+        ),
+    ],
+)
+def test_v1_chat_job_rejects_inactive_characters(scenario, component, detail):
+    class FakeChat:
+        allowed_tools: tuple[str, ...] = ()
+
+        async def chat(self, character_id, request):
+            raise AssertionError("inactive character chat must not start")
+
+    llm = spawn_entity(
+        scenario.actor.world,
+        [LLMControllerComponent(profile_name="default", model="claim-model")],
+    )
+    scenario.actor.assign_controller(scenario.character, llm.id)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(component)
+    app = create_app(scenario.actor, character_chat=FakeChat())
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+
+    response = client.post(
+        f"/v1/chat/characters/{scenario.character}/jobs",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json=ChatJobRequest(kind="chat", message="hello").model_dump(mode="json"),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == detail
+
+
 def test_v1_chat_job_rate_limited_per_caller(scenario, monkeypatch):
     monkeypatch.setenv("BUNNYLAND_CHAT_JOB_RATE_LIMIT_REQUESTS", "2")
     monkeypatch.setenv("BUNNYLAND_CHAT_JOB_RATE_LIMIT_WINDOW_SECONDS", "60")

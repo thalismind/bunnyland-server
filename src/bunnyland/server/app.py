@@ -39,9 +39,12 @@ from ..content import load_content_library
 from ..content_warnings import world_content_flags
 from ..core import (
     CharacterComponent,
+    DeadComponent,
+    DownedComponent,
     IdentityComponent,
     LLMControllerComponent,
     MemoryProfileComponent,
+    SleepingComponent,
     SuspendedComponent,
     SuspendedControllerComponent,
     WebControllerComponent,
@@ -2296,6 +2299,23 @@ def create_app(
         character = actor.world.get_entity(parsed)
         if not character.has_component(CharacterComponent):
             raise HTTPException(status_code=400, detail="entity is not a character")
+        if character.has_component(DeadComponent):
+            raise HTTPException(status_code=409, detail="dead character is not available to chat")
+        if character.has_component(DownedComponent):
+            raise HTTPException(
+                status_code=409,
+                detail="unconscious character is not available to chat",
+            )
+        if character.has_component(SleepingComponent):
+            raise HTTPException(
+                status_code=409,
+                detail="sleeping character cannot be interrupted by chat",
+            )
+        if character.has_component(SuspendedComponent):
+            raise HTTPException(
+                status_code=409,
+                detail="suspended character must be activated before chatting",
+            )
         normalized_client_id = _required_client_id(client_id)
         # Cap chat submissions per authenticated caller (falling back to client id when the
         # server runs unauthenticated). Chat is the most abuse-prone mutation because it
