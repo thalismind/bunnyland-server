@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue
 
 from ..content import ContentLibrary
 from ..core.claim_timeout import CLAIM_TIMEOUT_MAX_SECONDS, CLAIM_TIMEOUT_MIN_SECONDS
@@ -36,7 +36,7 @@ class CommandRequest(BaseModel):
     controller_generation: int
     claim_id: str | None = None
     command_type: str
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
     #: Optional client assertions. The server derives both from the action definition; when
     #: supplied they are only checked for agreement. See ``CommandCostRequest``.
     cost: CommandCostRequest | None = None
@@ -86,12 +86,13 @@ class CommandCancelResponse(BaseModel):
 
 
 class RecentEventsResponse(BaseModel):
-    events: list[dict[str, Any]] = Field(default_factory=list)
+    events: list[dict[str, JsonValue]] = Field(default_factory=list)
 
 
 class FeatureStatusResponse(BaseModel):
     mcp: bool = False
     character_chat: bool = False
+    allow_sleeping_character_chat: bool = False
     character_sheets: bool = True
     image_generation: bool = False
 
@@ -122,7 +123,7 @@ class CharacterChatActionResult(BaseModel):
     command_id: str | None = None
     status: Literal["none", "queued", "executed", "rejected", "unresolved", "failed"] = "none"
     reason: str = ""
-    result_events: list[dict[str, Any]] = Field(default_factory=list)
+    result_events: list[dict[str, JsonValue]] = Field(default_factory=list)
 
 
 class CharacterChatResponse(BaseModel):
@@ -165,7 +166,7 @@ class QueuedCommandView(BaseModel):
     command_id: str
     character_id: str
     command_type: str
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
     cost: CommandCostRequest = Field(default_factory=CommandCostRequest)
     lane: Lane = Lane.WORLD
     submitted_at_epoch: int
@@ -254,7 +255,7 @@ class ClientActionView(BaseModel):
     lane: Lane = Lane.WORLD
     cost: CommandCostRequest = Field(default_factory=CommandCostRequest)
     arguments: list[ClientActionArgumentView] = Field(default_factory=list)
-    natural_patterns: list[dict[str, Any]] = Field(default_factory=list)
+    natural_patterns: list[dict[str, JsonValue]] = Field(default_factory=list)
     # Per-character availability (character projection only; defaults keep the
     # character-agnostic action search backward compatible).
     available: bool = True
@@ -404,7 +405,7 @@ class MemoryCharactersResponse(BaseModel):
 class MemoryDocumentView(BaseModel):
     id: str
     document: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class MemoryDocumentsResponse(BaseModel):
@@ -417,7 +418,7 @@ class MemoryDocumentsResponse(BaseModel):
 
 class MemoryDocumentUpdateRequest(BaseModel):
     document: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class MemoryDocumentResponse(BaseModel):
@@ -454,7 +455,7 @@ class ExamineResponse(BaseModel):
     kind: str = "other"
     is_character: bool = False
     is_self: bool = False
-    details: dict[str, Any] = Field(default_factory=dict)
+    details: dict[str, JsonValue] = Field(default_factory=dict)
     facts: list[PromptFactView] = Field(default_factory=list)
     status: list[str] = Field(default_factory=list)
     points: ClientPointsView | None = None
@@ -559,12 +560,12 @@ class ClaimReleaseResponse(BaseModel):
 
 class ComponentPatchSpec(BaseModel):
     type: str
-    fields: dict[str, Any] = Field(default_factory=dict)
+    fields: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class EdgePatchSpec(BaseModel):
     type: str
-    fields: dict[str, Any] = Field(default_factory=dict)
+    fields: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class AddEntityPatchRequest(BaseModel):
@@ -671,7 +672,7 @@ class WorldGenerateRequest(BaseModel):
 class WorldPatchResponse(BaseModel):
     ok: bool = True
     world_epoch: int
-    changed_entities: list[dict[str, Any]] = Field(default_factory=list)
+    changed_entities: list[dict[str, JsonValue]] = Field(default_factory=list)
     deleted_entities: list[str] = Field(default_factory=list)
 
 
@@ -778,7 +779,7 @@ class EcsTypeSchema(BaseModel):
     name: str
     module: str
     qualname: str
-    json_schema: dict[str, Any]
+    json_schema: dict[str, JsonValue]
     used: bool = False
     count: int = 0
     schema_error: str | None = None

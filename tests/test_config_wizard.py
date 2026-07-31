@@ -169,6 +169,7 @@ def test_bunnyland_config_round_trips_yaml_with_private_mode(tmp_path: Path) -> 
         discord=DiscordConfig(enabled=True, token="discord-token"),
         server=ServerConfig(
             character_chat=True,
+            allow_sleeping_character_chat=True,
             auth_users_file="/tmp/users.yml",
             token_db="/tmp/tokens.sqlite3",
         ),
@@ -180,6 +181,7 @@ def test_bunnyland_config_round_trips_yaml_with_private_mode(tmp_path: Path) -> 
     loaded = BunnylandConfig.load(path)
     assert loaded.server.auth_users_file == "/tmp/users.yml"
     assert loaded.server.token_db == "/tmp/tokens.sqlite3"
+    assert loaded.server.allow_sleeping_character_chat is True
     assert loaded.llm.ollama_api_key == "ollama-key"
     assert loaded.world.memory_backend == "json"
 
@@ -239,6 +241,7 @@ def test_bunnyland_config_renders_setup_env() -> None:
             cooldown_seconds=3,
         ),
         server=ServerConfig(
+            allow_sleeping_character_chat=True,
             http_rate_limit_requests=20,
             http_rate_limit_window_seconds=2.5,
             cors_origins=("https://sandbox.example.com",),
@@ -262,6 +265,7 @@ def test_bunnyland_config_renders_setup_env() -> None:
     assert env["BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS"] == "123"
     assert env["BUNNYLAND_DISCORD_COOLDOWN_SECONDS"] == "3"
     assert env["BUNNYLAND_HTTP_RATE_LIMIT_REQUESTS"] == "20"
+    assert env["BUNNYLAND_ALLOW_SLEEPING_CHARACTER_CHAT"] == "1"
     assert env["BUNNYLAND_HTTP_RATE_LIMIT_WINDOW_SECONDS"] == "2.5"
     assert env["BUNNYLAND_CORS_ORIGINS"] == "https://sandbox.example.com"
     assert env["BUNNYLAND_FORWARDED_ALLOW_IPS"] == "172.28.0.2"

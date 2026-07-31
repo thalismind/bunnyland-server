@@ -6,10 +6,9 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
 
 import yaml
-from pydantic import Field, TypeAdapter
+from pydantic import Field, JsonValue, TypeAdapter
 from pydantic.dataclasses import dataclass
 
 from .cli_defaults import DEFAULT_CHARACTER_MODEL, DEFAULT_WORLDGEN_MODEL, OLLAMA_CLOUD_HOST
@@ -19,7 +18,7 @@ def _csv(values: Sequence[int | str] | None) -> str:
     return ",".join(str(value) for value in values or ())
 
 
-def _set_if(env: dict[str, str], key: str, value: Any) -> None:
+def _set_if(env: dict[str, str], key: str, value: object) -> None:
     if value is None:
         return
     if isinstance(value, bool):
@@ -69,13 +68,13 @@ class WorldConfig:
 @dataclass(frozen=True)
 class PluginConfig:
     enabled: tuple[str, ...] | None = None
-    config: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    config: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class AddonConfig:
     modules: tuple[str, ...] = ()
-    config: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    config: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -122,6 +121,7 @@ class ServerConfig:
     admin_client_ids: tuple[str, ...] = ()
     character_chat: bool = False
     open_character_chat: bool = True
+    allow_sleeping_character_chat: bool = False
     http_rate_limit_requests: int = 0
     http_rate_limit_window_seconds: float = 1.0
     cors_origins: tuple[str, ...] = ()
@@ -196,7 +196,7 @@ class BunnylandConfig:
     imagegen: ImageGenConfigBlock = Field(default_factory=ImageGenConfigBlock)
 
     @classmethod
-    def from_mapping(cls, data: Mapping[str, Any] | None) -> BunnylandConfig:
+    def from_mapping(cls, data: Mapping[str, object] | None) -> BunnylandConfig:
         mapped = dict(data or {})
         obsolete: list[str] = []
         if "auth" in mapped:
@@ -225,8 +225,10 @@ class BunnylandConfig:
             raise ValueError("Bunnyland config YAML must contain a mapping at the top level")
         return cls.from_mapping(raw)
 
-    def to_mapping(self) -> dict[str, Any]:
-        return _CONFIG_ADAPTER.dump_python(self, mode="json", exclude_none=True)
+    def to_mapping(self) -> dict[str, JsonValue]:
+        return TypeAdapter(dict[str, JsonValue]).validate_python(
+            _CONFIG_ADAPTER.dump_python(self, mode="json", exclude_none=True)
+        )
 
     def save(self, path: str | Path) -> None:
         target = Path(path)
@@ -235,8 +237,8 @@ class BunnylandConfig:
         target.write_text(text, encoding="utf-8")
         os.chmod(target, 0o600)
 
-    def to_web_config(self) -> dict[str, Any]:
-        web_config: dict[str, Any] = {
+    def to_web_config(self) -> dict[str, JsonValue]:
+        web_config: dict[str, JsonValue] = {
             "serverUrl": "/api/",
             "autoConnect": True,
             "playerAuthRequired": self.web.player_auth_required,
@@ -252,7 +254,7 @@ class BunnylandConfig:
             ]
         elif isinstance(self.web.themes, str) and self.web.themes not in {"", "[]"}:
             web_config["replaceThemes"] = True
-            web_config["themes"] = json.loads(self.web.themes)
+            web_config["themes"] = TypeAdapter(JsonValue).validate_json(self.web.themes)
         return web_config
 
     def save_web_config(self, path: str | Path) -> None:
@@ -264,7 +266,7 @@ class BunnylandConfig:
         )
         os.chmod(target, 0o600)
 
-    def to_serve_args(self) -> dict[str, Any]:
+    def to_serve_args(self) -> dict[str, object]:
         world = self.world
         server = self.server
         llm = self.llm
@@ -309,6 +311,7 @@ class BunnylandConfig:
             "mcp": self.mcp.enabled,
             "character_chat": server.character_chat,
             "open_character_chat": server.open_character_chat,
+            "allow_sleeping_character_chat": server.allow_sleeping_character_chat,
             "auth_users_file": server.auth_users_file,
             "token_db": server.token_db,
             "player_client_id": list(server.player_client_ids) or None,
@@ -374,6 +377,11 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_ENABLE_MCP", self.mcp.enabled)
         _set_if(env, "BUNNYLAND_ENABLE_CHARACTER_CHAT", server.character_chat)
         _set_if(env, "BUNNYLAND_OPEN_CHARACTER_CHAT", server.open_character_chat)
+        _set_if(
+            env,
+            "BUNNYLAND_ALLOW_SLEEPING_CHARACTER_CHAT",
+            server.allow_sleeping_character_chat,
+        )
         _set_if(env, "BUNNYLAND_AUTH_USERS_FILE", server.auth_users_file)
         _set_if(env, "BUNNYLAND_TOKEN_DB", server.token_db)
         _set_if(env, "BUNNYLAND_PLAYER_CLIENT_IDS", _csv(server.player_client_ids))

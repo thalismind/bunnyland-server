@@ -479,17 +479,20 @@ def _build_provider_agent(args, credentials: ServeCredentials, models: ServeMode
     from .llm_agents import OllamaAgent, OpenRouterAgent, ProviderRouterAgent
 
     providers = {}
+    reject_text_tool_calls = getattr(args, "reject_text_tool_calls", True)
     if credentials.api_key:
         providers["ollama"] = OllamaAgent(
             model=models.character_model,
             host=credentials.host,
             api_key=credentials.api_key,
+            reject_text_tool_calls=reject_text_tool_calls,
         )
     if credentials.openrouter_api_key:
         providers["openrouter"] = OpenRouterAgent(
             model=models.character_model,
             api_key=credentials.openrouter_api_key,
             server_url=credentials.openrouter_server_url,
+            reject_text_tool_calls=reject_text_tool_calls,
         )
     if args.llm_provider not in providers:
         raise SystemExit(f"no LLM agent configured for provider {args.llm_provider!r}")
@@ -512,7 +515,13 @@ def _build_character_chat_service(args, actor, builder, credentials, models):
 
     agent = _build_provider_agent(args, credentials, models)
     print("Character chat enabled for current LLM-controlled characters.")
-    return build_character_chat_service(actor, builder, agent)
+    return build_character_chat_service(
+        actor,
+        builder,
+        agent,
+        reject_text_tool_calls=getattr(args, "reject_text_tool_calls", True),
+        allow_sleeping_character_chat=getattr(args, "allow_sleeping_character_chat", False),
+    )
 
 
 def _make_autosave(actor: WorldActor, args, meta: WorldMeta):
@@ -828,6 +837,10 @@ _CONFIG_ARG_FLAGS: dict[str, tuple[str, ...]] = {
     "discord_allowed_bot_user_id": ("--discord-allowed-bot-user-id",),
     "mcp": ("--mcp",),
     "character_chat": ("--character-chat",),
+    "allow_sleeping_character_chat": (
+        "--allow-sleeping-character-chat",
+        "--no-allow-sleeping-character-chat",
+    ),
     "auth_users_file": ("--auth-users-file",),
     "token_db": ("--token-db",),
     "player_client_id": ("--player-client-id",),
@@ -1243,6 +1256,27 @@ def main(argv: list[str] | None = None) -> int:
             "let any authenticated player chat with llm-controlled characters (default: "
             "enabled); --no-open-character-chat routes chat only to human controllers "
             "(env: BUNNYLAND_OPEN_CHARACTER_CHAT)"
+        ),
+    )
+    serve.add_argument(
+        "--reject-text-tool-calls",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("BUNNYLAND_REJECT_TEXT_TOOL_CALLS") is not False,
+        help=(
+            "reject provider replies containing <invoke>, DSML, or similar tool-call text "
+            "and retry once for a native structured call or clean prose (default: enabled); "
+            "disable with "
+            "--no-reject-text-tool-calls (env: BUNNYLAND_REJECT_TEXT_TOOL_CALLS)"
+        ),
+    )
+    serve.add_argument(
+        "--allow-sleeping-character-chat",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("BUNNYLAND_ALLOW_SLEEPING_CHARACTER_CHAT") is True,
+        help=(
+            "allow sleeping characters to receive character chat (default: disabled); "
+            "disable with --no-allow-sleeping-character-chat "
+            "(env: BUNNYLAND_ALLOW_SLEEPING_CHARACTER_CHAT)"
         ),
     )
     serve.add_argument(

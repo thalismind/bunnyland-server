@@ -17,7 +17,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
 from typing import Literal, Protocol
@@ -39,11 +39,91 @@ CHARACTER_SYSTEM_PROMPT = (
     "You are an autonomous character in Bunnyland, an asynchronous social sandbox. "
     "Choose exactly one available structured tool call that fits your prompt context. "
     "Call the wait tool when you intentionally want to wait. Never describe a tool call "
-    "only in prose."
+    "only in prose or write it as <invoke>, DSML, XML, JSON, or other message text."
+)
+TEXT_TOOL_CALL_CORRECTION_PROMPT = (
+    "Your previous response wrote a tool invocation as message text. That response was "
+    "rejected. Respond again using exactly one native structured tool call from the "
+    "available tools. Do not write <invoke>, DSML, <tool_call>, <function_call>, XML, or "
+    "JSON tool-call syntax in message content."
+)
+TEXT_REPLY_CORRECTION_PROMPT = (
+    "Your previous response wrote a tool invocation as message text. That response was "
+    "rejected. Respond again with either one native structured tool call from the available "
+    "tools or normal prose without tool-call tags. Do not write <invoke>, DSML, "
+    "<tool_call>, <function_call>, XML, or JSON tool-call syntax in message content."
+)
+PROSE_REPLY_CORRECTION_PROMPT = (
+    "Your previous response wrote a tool invocation as message text. That response was "
+    "rejected. No tools are available for this response. Answer using normal prose without "
+    "<invoke>, DSML, <tool_call>, <function_call>, XML, JSON tool-call syntax, or other "
+    "tool-call tags."
+)
+TEXT_TOOL_CALL_TAG = re.compile(
+    r"<\s*/?\s*(?:invoke\b|[|｜]\s*dsml\s*[|｜]|tool_call\b|function_call\b)",
+    re.IGNORECASE,
 )
 
 logger = logging.getLogger("bunnyland.llm")
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
+
+
+def contains_text_tool_call(content: str) -> bool:
+    """Return whether assistant prose contains a known textual tool-call tag."""
+
+    return bool(TEXT_TOOL_CALL_TAG.search(content))
+
+
+def _text_tool_retry_messages(
+    messages: list[dict],
+    content: str,
+    *,
+    tools_available: bool,
+    require_tool: bool,
+) -> list[dict]:
+    if require_tool:
+        correction = TEXT_TOOL_CALL_CORRECTION_PROMPT
+    elif tools_available:
+        correction = TEXT_REPLY_CORRECTION_PROMPT
+    else:
+        correction = PROSE_REPLY_CORRECTION_PROMPT
+    return [
+        *messages,
+        {"role": "assistant", "content": content},
+        {"role": "user", "content": correction},
+    ]
+
+
+async def _validated_chat_reply(
+    request_reply: Callable[[list[dict]], Awaitable[ChatAgentReply | None]],
+    messages: list[dict],
+    *,
+    tools_available: bool,
+    reject_text_tool_calls: bool,
+) -> ChatAgentReply:
+    reply = await request_reply(messages)
+    if reply is None:
+        return ChatAgentReply()
+    if not reject_text_tool_calls or not contains_text_tool_call(reply.content):
+        return reply
+    telemetry.set_span_attributes({"llm.text_tool_call.rejected": True})
+    if reply.tool_call is not None:
+        return ChatAgentReply(tool_call=reply.tool_call)
+    corrected = await request_reply(
+        _text_tool_retry_messages(
+            messages,
+            reply.content,
+            tools_available=tools_available,
+            require_tool=False,
+        )
+    )
+    if corrected is None:
+        return ChatAgentReply()
+    if not contains_text_tool_call(corrected.content):
+        return corrected
+    if corrected.tool_call is not None:
+        return ChatAgentReply(tool_call=corrected.tool_call)
+    return ChatAgentReply()
 
 
 @dataclass(frozen=True)
@@ -707,6 +787,7 @@ class OllamaAgent:
         request_timeout_seconds: float | None = None,
         response_observer: OllamaResponseObserver | None = None,
         log_thinking: bool = False,
+        reject_text_tool_calls: bool = True,
     ) -> None:
         try:
             import ollama
@@ -737,6 +818,7 @@ class OllamaAgent:
         self._retry_delay_seconds = max(0.0, retry_delay_seconds)
         self._response_observer = response_observer
         self._log_thinking = log_thinking
+        self._reject_text_tool_calls = reject_text_tool_calls
         # character_id -> running provider-native user/assistant/tool message history.
         self._history: dict[str, list[dict]] = {}
         # The authoritative visible result is available in PromptContext on the next turn.
@@ -813,8 +895,42 @@ class OllamaAgent:
         _record_llm_usage("ollama", resolved_model, _ollama_usage(response))
         message = response["message"]
         tool_calls = message.get("tool_calls") or []
+        content = str(message.get("content") or "").strip()
+        if (
+            self._reject_text_tool_calls
+            and not tool_calls
+            and contains_text_tool_call(content)
+        ):
+            telemetry.set_span_attributes({"llm.text_tool_call.rejected": True})
+            messages = _text_tool_retry_messages(
+                messages,
+                content,
+                tools_available=bool(resolved_tools),
+                require_tool=True,
+            )
+            corrected_response = await _call_provider_with_retries(
+                "ollama",
+                request,
+                max_retries=self._max_retries,
+                empty_response_retries=EMPTY_RESPONSE_MAX_RETRIES,
+                retry_delay_seconds=self._retry_delay_seconds,
+                attributes=request_attrs,
+            )
+            if corrected_response is not None:
+                self._observe_response(corrected_response)
+                _record_llm_usage(
+                    "ollama",
+                    resolved_model,
+                    _ollama_usage(corrected_response),
+                )
+                message = corrected_response["message"]
+                tool_calls = message.get("tool_calls") or []
+                content = str(message.get("content") or "").strip()
         history.append(user_message)
-        history.append(_ollama_message_to_history(message))
+        history_message = _ollama_message_to_history(message)
+        if contains_text_tool_call(content):
+            history_message["content"] = ""
+        history.append(history_message)
         if tool_calls:
             self._pending_tool_results[character_id] = str(
                 tool_calls[0]["function"].get("name", "unknown")
@@ -838,42 +954,58 @@ class OllamaAgent:
         del character_id, provider
         resolved_model = normalize_model(model or self._model)
         resolved_tools = tools or []
-        request_attrs = _llm_request_attrs(
-            "character_chat",
-            resolved_model,
-            messages,
-            resolved_tools,
-            system_prompt=str(messages[0].get("content", "")) if messages else "",
-        )
 
-        async def request():
-            return await self._client.chat(
-                model=resolved_model,
-                messages=messages,
-                tools=resolved_tools,
-                **self._request_options(),
+        async def request_reply(
+            request_messages: list[dict],
+        ) -> ChatAgentReply | None:
+            request_attrs = _llm_request_attrs(
+                "character_chat",
+                resolved_model,
+                request_messages,
+                resolved_tools,
+                system_prompt=(
+                    str(request_messages[0].get("content", ""))
+                    if request_messages
+                    else ""
+                ),
             )
 
-        response = await _call_provider_with_retries(
-            "ollama",
-            request,
-            max_retries=self._max_retries,
-            retry_delay_seconds=self._retry_delay_seconds,
-            attributes=request_attrs,
-        )
-        if response is None:
-            return ChatAgentReply()
-        self._observe_response(response)
-        _record_llm_usage("ollama", resolved_model, _ollama_usage(response))
-        message = response["message"]
-        tool_calls = message.get("tool_calls") or []
-        tool_call = None
-        if tool_calls:
-            call = tool_calls[0]["function"]
-            tool_call = ToolCall(name=call["name"], arguments=dict(call.get("arguments", {})))
-        return ChatAgentReply(
-            content=str(message.get("content") or "").strip(),
-            tool_call=tool_call,
+            async def request():
+                return await self._client.chat(
+                    model=resolved_model,
+                    messages=request_messages,
+                    tools=resolved_tools,
+                    **self._request_options(),
+                )
+
+            response = await _call_provider_with_retries(
+                "ollama",
+                request,
+                max_retries=self._max_retries,
+                retry_delay_seconds=self._retry_delay_seconds,
+                attributes=request_attrs,
+            )
+            if response is None:
+                return None
+            self._observe_response(response)
+            _record_llm_usage("ollama", resolved_model, _ollama_usage(response))
+            message = response["message"]
+            content = str(message.get("content") or "").strip()
+            tool_calls = message.get("tool_calls") or []
+            tool_call = None
+            if tool_calls:
+                call = tool_calls[0]["function"]
+                tool_call = ToolCall(
+                    name=call["name"],
+                    arguments=dict(call.get("arguments", {})),
+                )
+            return ChatAgentReply(content=content, tool_call=tool_call)
+
+        return await _validated_chat_reply(
+            request_reply,
+            messages,
+            tools_available=bool(resolved_tools),
+            reject_text_tool_calls=self._reject_text_tool_calls,
         )
 
     def _request_options(self) -> dict[str, object]:
@@ -921,6 +1053,7 @@ class OpenRouterAgent:
         retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
         response_observer: ProviderResponseObserver | None = None,
         log_thinking: bool = False,
+        reject_text_tool_calls: bool = True,
     ) -> None:
         try:
             from openrouter import OpenRouter
@@ -941,6 +1074,7 @@ class OpenRouterAgent:
         self._retry_delay_seconds = max(0.0, retry_delay_seconds)
         self._response_observer = response_observer
         self._log_thinking = log_thinking
+        self._reject_text_tool_calls = reject_text_tool_calls
         self._history: dict[str, list[dict]] = {}
         self._pending_tool_results: dict[str, str] = {}
 
@@ -1021,8 +1155,45 @@ class OpenRouterAgent:
         )
         message = response.choices[0].message
         tool_calls = getattr(message, "tool_calls", None) or []
+        content = str(getattr(message, "content", "") or "").strip()
+        if (
+            self._reject_text_tool_calls
+            and not tool_calls
+            and contains_text_tool_call(content)
+        ):
+            telemetry.set_span_attributes({"llm.text_tool_call.rejected": True})
+            messages = _text_tool_retry_messages(
+                messages,
+                content,
+                tools_available=bool(resolved_tools),
+                require_tool=True,
+            )
+            corrected_response = await _call_provider_with_retries(
+                "openrouter",
+                request,
+                max_retries=self._max_retries,
+                empty_response_retries=EMPTY_RESPONSE_MAX_RETRIES,
+                retry_delay_seconds=self._retry_delay_seconds,
+                attributes=request_attrs,
+            )
+            if corrected_response is not None:
+                self._observe_response(corrected_response)
+                _record_llm_usage(
+                    "openrouter",
+                    resolved_model,
+                    await _openrouter_enriched_usage(
+                        self._client,
+                        corrected_response,
+                    ),
+                )
+                message = corrected_response.choices[0].message
+                tool_calls = getattr(message, "tool_calls", None) or []
+                content = str(getattr(message, "content", "") or "").strip()
         history.append(user_message)
-        history.append(_message_to_history(message))
+        history_message = _message_to_history(message)
+        if contains_text_tool_call(content):
+            history_message["content"] = ""
+        history.append(history_message)
         if tool_calls:
             tool_call_id = str(getattr(tool_calls[0], "id", "") or "")
             if not tool_call_id:
@@ -1057,49 +1228,64 @@ class OpenRouterAgent:
         del character_id, provider
         resolved_model = normalize_model(model or self._model)
         resolved_tools = tools or []
-        request_attrs = _llm_request_attrs(
-            "character_chat",
-            resolved_model,
+
+        async def request_reply(
+            request_messages: list[dict],
+        ) -> ChatAgentReply | None:
+            request_attrs = _llm_request_attrs(
+                "character_chat",
+                resolved_model,
+                request_messages,
+                resolved_tools,
+                system_prompt=(
+                    str(request_messages[0].get("content", ""))
+                    if request_messages
+                    else ""
+                ),
+            )
+
+            async def request():
+                return await self._client.chat.send_async(
+                    model=resolved_model,
+                    messages=request_messages,
+                    tools=resolved_tools,
+                    **self._request_options(),
+                )
+
+            response = await _call_provider_with_retries(
+                "openrouter",
+                request,
+                max_retries=self._max_retries,
+                retry_delay_seconds=self._retry_delay_seconds,
+                attributes=request_attrs,
+            )
+            if response is None:
+                return None
+            self._observe_response(response)
+            _record_llm_usage(
+                "openrouter",
+                resolved_model,
+                await _openrouter_enriched_usage(self._client, response),
+            )
+            message = response.choices[0].message
+            content = str(getattr(message, "content", "") or "").strip()
+            tool_calls = getattr(message, "tool_calls", None) or []
+            tool_call = None
+            if tool_calls:
+                function = tool_calls[0].function
+                tool_call = ToolCall(
+                    name=function.name,
+                    arguments=_openrouter_arguments(
+                        getattr(function, "arguments", {})
+                    ),
+                )
+            return ChatAgentReply(content=content, tool_call=tool_call)
+
+        return await _validated_chat_reply(
+            request_reply,
             messages,
-            resolved_tools,
-            system_prompt=str(messages[0].get("content", "")) if messages else "",
-        )
-
-        async def request():
-            return await self._client.chat.send_async(
-                model=resolved_model,
-                messages=messages,
-                tools=resolved_tools,
-                **self._request_options(),
-            )
-
-        response = await _call_provider_with_retries(
-            "openrouter",
-            request,
-            max_retries=self._max_retries,
-            retry_delay_seconds=self._retry_delay_seconds,
-            attributes=request_attrs,
-        )
-        if response is None:
-            return ChatAgentReply()
-        self._observe_response(response)
-        _record_llm_usage(
-            "openrouter",
-            resolved_model,
-            await _openrouter_enriched_usage(self._client, response),
-        )
-        message = response.choices[0].message
-        tool_calls = getattr(message, "tool_calls", None) or []
-        tool_call = None
-        if tool_calls:
-            function = tool_calls[0].function
-            tool_call = ToolCall(
-                name=function.name,
-                arguments=_openrouter_arguments(getattr(function, "arguments", {})),
-            )
-        return ChatAgentReply(
-            content=str(getattr(message, "content", "") or "").strip(),
-            tool_call=tool_call,
+            tools_available=bool(resolved_tools),
+            reject_text_tool_calls=self._reject_text_tool_calls,
         )
 
     def _request_options(self) -> dict[str, object]:
@@ -1379,12 +1565,20 @@ def _invalid_agent_response(message: object) -> InvalidAgentResponse:
     if len(content) > len(excerpt):
         excerpt = f"{excerpt}..."
     detail = json.dumps(excerpt or "<empty>")
-    reason = "provider response contained no structured tool call"
-    feedback = (
-        f"Invalid action response: {reason}. The assistant content was {detail}. "
-        "Prose such as 'Selected tool ...' does not execute an action. Return exactly one "
-        "structured tool call using an available tool; call the wait tool to wait."
-    )
+    if contains_text_tool_call(content):
+        reason = "provider response wrote a tool call as message text"
+        feedback = (
+            f"Invalid action response: {reason}. The assistant content was {detail}. "
+            "Tagged text does not execute an action. Return exactly one native structured "
+            "tool call using an available tool; call the wait tool to wait."
+        )
+    else:
+        reason = "provider response contained no structured tool call"
+        feedback = (
+            f"Invalid action response: {reason}. The assistant content was {detail}. "
+            "Prose such as 'Selected tool ...' does not execute an action. Return exactly "
+            "one structured tool call using an available tool; call the wait tool to wait."
+        )
     return InvalidAgentResponse(reason=reason, feedback=feedback)
 
 

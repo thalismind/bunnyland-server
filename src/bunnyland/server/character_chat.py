@@ -7,8 +7,9 @@ import json
 from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Protocol
 
+from pydantic import JsonValue
 from relics import EntityId
 
 from .. import telemetry
@@ -20,12 +21,17 @@ from ..core import (
     SuspendedComponent,
     parse_entity_id,
 )
-from ..core.actions import action_definitions
+from ..core.actions import ActionDefinition, action_definitions
 from ..core.controllers import LLMControllerComponent
 from ..core.edges import ControlledBy
 from ..core.events import CommandExecutedEvent, CommandRejectedEvent
 from ..core.world_actor import WorldActor
-from ..llm_agents.agent import ChatAgentReply
+from ..llm_agents.agent import (
+    PROSE_REPLY_CORRECTION_PROMPT,
+    TEXT_REPLY_CORRECTION_PROMPT,
+    ChatAgentReply,
+    contains_text_tool_call,
+)
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.tools import ToolCall, command_from_tool_call, reference_arg_keys
 from ..prompts.builder import PromptBuilder, render_prompt
@@ -49,6 +55,8 @@ CHAT_SYSTEM_PROMPT = (
     "order. Use tools only when your character chooses to observe, recall, speak, wait, or "
     "manage notes through normal game actions. When your character chooses an action that "
     "matches an available tool, call that tool instead of merely describing the action. "
+    "Use the provider's native structured tool-call interface; never write tool calls as "
+    "<invoke>, DSML, XML, JSON, or other message text. "
     "For important information your character should record, prefer take_note. For "
     "searching memory or notes, use remember."
 )
@@ -61,6 +69,18 @@ CHAT_TRACE_TEXT_CHARS = 4096
 #: registered, so a small recent window is all either needs.
 PENDING_ACTION_CACHE_SIZE = 512
 COMPLETED_ACTION_CACHE_SIZE = 512
+
+
+class CharacterChatAgent(Protocol):
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+        tools: list[dict[str, JsonValue]] | None = None,
+    ) -> ChatAgentReply: ...
 
 
 @dataclass
@@ -81,12 +101,14 @@ class CharacterChatService:
         self,
         actor: WorldActor,
         builder: PromptBuilder,
-        agent,
+        agent: CharacterChatAgent,
         *,
         prompt_filter_runtime: PromptFilterRuntime | None = None,
         result_timeout_seconds: float = ACTION_RESULT_TIMEOUT_SECONDS,
         pending_cache_size: int = PENDING_ACTION_CACHE_SIZE,
         completed_cache_size: int = COMPLETED_ACTION_CACHE_SIZE,
+        reject_text_tool_calls: bool = True,
+        allow_sleeping_character_chat: bool = False,
     ) -> None:
         self.actor = actor
         self.builder = builder
@@ -98,6 +120,8 @@ class CharacterChatService:
             self.prompt_filter_runtime = PromptFilterRuntime.from_actor(actor, llm=agent)
             actor.prompt_filter_runtime = self.prompt_filter_runtime
         self.result_timeout_seconds = max(0.0, result_timeout_seconds)
+        self.reject_text_tool_calls = reject_text_tool_calls
+        self.allow_sleeping_character_chat = allow_sleeping_character_chat
         self._pending_cache_size = max(1, pending_cache_size)
         self._completed_cache_size = max(1, completed_cache_size)
         self._pending: OrderedDict[tuple[str, str, str], PendingChatAction] = OrderedDict()
@@ -131,7 +155,10 @@ class CharacterChatService:
                 raise PermissionError("dead character is not available to chat")
             if character.has_component(DownedComponent):
                 raise PermissionError("unconscious character is not available to chat")
-            if character.has_component(SleepingComponent):
+            if (
+                character.has_component(SleepingComponent)
+                and not self.allow_sleeping_character_chat
+            ):
                 raise PermissionError("sleeping character cannot be interrupted by chat")
             if character.has_component(SuspendedComponent):
                 raise PermissionError("suspended character must be activated before chatting")
@@ -161,15 +188,24 @@ class CharacterChatService:
                 span.set_attribute("chat.prompt", _trace_text(prompt))
             span.set_attribute("chat.messages.count", len(messages))
 
+        tools = self._allowed_tool_schemas()
         reply = await self._call_agent(
             messages,
             character_id=character_id,
             model=component.model,
             provider=component.provider,
-            tools=self._allowed_tool_schemas(),
+            tools=tools,
             phase="initial",
         )
         _trace_reply(reply, phase="initial")
+        reply = await self._correct_text_tool_call(
+            reply,
+            messages,
+            character_id=character_id,
+            model=component.model,
+            provider=component.provider,
+            tools=tools,
+        )
         if reply.tool_call is None:
             final_attributes = {
                 "chat.action.status": "none",
@@ -193,13 +229,26 @@ class CharacterChatService:
         )
         final = reply.content
         if action.status in {"executed", "rejected"}:
+            followup_messages = self._followup_messages(
+                messages,
+                request.message,
+                action,
+            )
             final_reply = await self._call_agent(
-                self._followup_messages(messages, request.message, action),
+                followup_messages,
                 character_id=character_id,
                 model=component.model,
                 provider=component.provider,
                 tools=[],
                 phase="followup",
+            )
+            final_reply = await self._correct_text_tool_call(
+                final_reply,
+                followup_messages,
+                character_id=character_id,
+                model=component.model,
+                provider=component.provider,
+                tools=[],
             )
             final = final_reply.content or final
             _trace_reply(final_reply, phase="followup")
@@ -254,13 +303,26 @@ class CharacterChatService:
             span.set_attribute("chat.action.status", pending.action.status)
             span.set_attribute("chat.pending.complete", complete)
         if complete and not pending.reply:
+            followup_messages = self._followup_messages(
+                pending.messages,
+                pending.user_message,
+                pending.action,
+            )
             final_reply = await self._call_agent(
-                self._followup_messages(pending.messages, pending.user_message, pending.action),
+                followup_messages,
                 character_id=character_id,
                 model=pending.model,
                 provider=pending.provider,
                 tools=[],
                 phase="pending_followup",
+            )
+            final_reply = await self._correct_text_tool_call(
+                final_reply,
+                followup_messages,
+                character_id=character_id,
+                model=pending.model,
+                provider=pending.provider,
+                tools=[],
             )
             pending.reply = final_reply.content or self._fallback_reply(pending.action)
             _trace_reply(final_reply, phase="pending_followup")
@@ -326,7 +388,7 @@ class CharacterChatService:
             result_events=[dict(item) for item in event.result_events],
         )
 
-    def _allowed_definitions(self):
+    def _allowed_definitions(self) -> tuple[ActionDefinition, ...]:
         # Chat-safety is declared per verb via ActionDefinition.chat_safe so plugins can
         # opt their own verbs into character chat. The default is False, so a new or
         # plugin-contributed verb is never chat-exposed unless it explicitly declares it.
@@ -339,10 +401,12 @@ class CharacterChatService:
     def _chat_safe_tool_names(self) -> frozenset[str]:
         return frozenset(definition.name for definition in self._allowed_definitions())
 
-    def _allowed_tool_schemas(self) -> list[dict[str, Any]]:
+    def _allowed_tool_schemas(self) -> list[dict[str, JsonValue]]:
         return [definition.tool_schema() for definition in self._allowed_definitions()]
 
-    def _llm_controller(self, character_id: EntityId):
+    def _llm_controller(
+        self, character_id: EntityId
+    ) -> tuple[EntityId, int, LLMControllerComponent] | None:
         character = self.actor.world.get_entity(character_id)
         for edge, controller_id in character.get_relationships(ControlledBy):
             controller = self.actor.world.get_entity(controller_id)
@@ -393,7 +457,7 @@ class CharacterChatService:
         character_id: str,
         model: str | None,
         provider: str | None,
-        tools: list[dict[str, Any]],
+        tools: list[dict[str, JsonValue]],
         phase: str,
     ) -> ChatAgentReply:
         with _chat_span(
@@ -433,6 +497,52 @@ class CharacterChatService:
                     )
             return reply
 
+    async def _correct_text_tool_call(
+        self,
+        reply: ChatAgentReply,
+        messages: list[dict[str, str]],
+        *,
+        character_id: str,
+        model: str | None,
+        provider: str | None,
+        tools: list[dict[str, JsonValue]],
+    ) -> ChatAgentReply:
+        if not self.reject_text_tool_calls or not contains_text_tool_call(reply.content):
+            return reply
+        if reply.tool_call is not None and tools:
+            return ChatAgentReply(tool_call=reply.tool_call)
+
+        telemetry.set_span_attributes(
+            {
+                "chat.text_tool_call.rejected": True,
+                "chat.text_tool_call.retry_count": 1,
+            }
+        )
+        corrected = await self._call_agent(
+            [
+                *messages,
+                {"role": "assistant", "content": reply.content},
+                {
+                    "role": "user",
+                    "content": (
+                        TEXT_REPLY_CORRECTION_PROMPT if tools else PROSE_REPLY_CORRECTION_PROMPT
+                    ),
+                },
+            ],
+            character_id=character_id,
+            model=model,
+            provider=provider,
+            tools=tools,
+            phase="tool_format_retry",
+        )
+        _trace_reply(corrected, phase="tool_format_retry")
+        if contains_text_tool_call(corrected.content):
+            telemetry.set_span_attributes({"chat.text_tool_call.retry_failed": True})
+            if corrected.tool_call is not None and tools:
+                return ChatAgentReply(tool_call=corrected.tool_call)
+            return ChatAgentReply()
+        return corrected
+
     async def _submit_tool(
         self,
         character_id: EntityId,
@@ -454,9 +564,7 @@ class CharacterChatService:
             span.set_attribute("command.id", action.command_id or "")
             if telemetry.content_capture_enabled():
                 span.set_attribute("chat.action.reason", _trace_text(action.reason))
-                span.set_attribute(
-                    "chat.action.result_events", _trace_json(action.result_events)
-                )
+                span.set_attribute("chat.action.result_events", _trace_json(action.result_events))
             return action
 
     async def _submit_tool_inner(
@@ -557,16 +665,27 @@ class CharacterChatService:
 
 
 def build_character_chat_service(
-    actor: WorldActor, builder: PromptBuilder, agent
+    actor: WorldActor,
+    builder: PromptBuilder,
+    agent: CharacterChatAgent,
+    *,
+    reject_text_tool_calls: bool = True,
+    allow_sleeping_character_chat: bool = False,
 ) -> CharacterChatService:
-    return CharacterChatService(actor, builder, agent)
+    return CharacterChatService(
+        actor,
+        builder,
+        agent,
+        reject_text_tool_calls=reject_text_tool_calls,
+        allow_sleeping_character_chat=allow_sleeping_character_chat,
+    )
 
 
 def _trace_text(value: str) -> str:
     return telemetry.attr_text(value, limit=CHAT_TRACE_TEXT_CHARS)
 
 
-def _trace_json(value: Any) -> str:
+def _trace_json(value: object) -> str:
     try:
         text = json.dumps(value, sort_keys=True)
     except TypeError:
@@ -584,14 +703,12 @@ def _trace_reply(reply: ChatAgentReply, *, phase: str) -> None:
     if reply.tool_call is not None:
         attributes[f"chat.{phase}.tool_name"] = reply.tool_call.name
         if telemetry.content_capture_enabled():
-            attributes[f"chat.{phase}.tool_arguments"] = _trace_json(
-                reply.tool_call.arguments
-            )
+            attributes[f"chat.{phase}.tool_arguments"] = _trace_json(reply.tool_call.arguments)
     telemetry.set_span_attributes(attributes)
 
 
 @contextmanager
-def _chat_span(name: str, attributes: dict[str, Any] | None = None):
+def _chat_span(name: str, attributes: dict[str, object] | None = None):
     with telemetry.span(name, attributes) as span:
         try:
             yield span

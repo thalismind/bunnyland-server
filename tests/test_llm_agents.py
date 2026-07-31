@@ -46,6 +46,7 @@ from bunnyland.foundation.social.mechanics import SocialBond
 from bunnyland.llm_agents import (
     DISCOVER_ACTION_TOOL,
     BehaviorProfileAgent,
+    ChatAgentReply,
     ControllerDispatch,
     GoalDirectedAgent,
     InvalidAgentResponse,
@@ -80,6 +81,9 @@ from bunnyland.llm_agents import (
 from bunnyland.llm_agents.agent import (
     CHARACTER_SYSTEM_PROMPT,
     DEFAULT_MODEL,
+    PROSE_REPLY_CORRECTION_PROMPT,
+    TEXT_REPLY_CORRECTION_PROMPT,
+    TEXT_TOOL_CALL_CORRECTION_PROMPT,
     OllamaAgent,
     _AutonomySignals,
     _call_provider_with_retries,
@@ -1716,6 +1720,89 @@ async def test_ollama_agent_rejects_plain_assistant_reply_and_trims_history(monk
     ]
 
 
+async def test_ollama_agent_retries_tagged_autonomous_reply_as_structured_call(
+    monkeypatch,
+):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class TaggedThenValidOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            if len(self.calls) == 1:
+                return {"message": {"role": "assistant", "content": malformed}}
+            return _fake_ollama_response()
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = TaggedThenValidOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3")
+    result = await agent.decide("turn one", None, character_id="hazel")
+
+    assert result == ToolCall("wait", {})
+    assert len(agent._client.calls) == 2
+    assert agent._client.calls[1][-2] == {
+        "role": "assistant",
+        "content": malformed,
+    }
+    assert agent._client.calls[1][-1] == {
+        "role": "user",
+        "content": TEXT_TOOL_CALL_CORRECTION_PROMPT,
+    }
+    assert malformed not in str(agent._history["hazel"])
+
+
+async def test_ollama_agent_can_disable_tagged_autonomous_retry(monkeypatch):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class TaggedOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            return {"message": {"role": "assistant", "content": malformed}}
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = TaggedOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3", reject_text_tool_calls=False)
+    result = await agent.decide("turn one", None, character_id="hazel")
+
+    assert isinstance(result, InvalidAgentResponse)
+    assert result.reason == "provider response wrote a tool call as message text"
+    assert len(agent._client.calls) == 1
+    assert agent._history["hazel"][-1]["content"] == ""
+
+
+async def test_ollama_agent_rejects_tagged_reply_when_corrective_request_fails(
+    monkeypatch,
+):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class TaggedThenFailingOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            if len(self.calls) == 1:
+                return {"message": {"role": "assistant", "content": malformed}}
+            raise _FakeProviderError(502)
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = TaggedThenFailingOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3", retry_delay_seconds=0)
+    result = await agent.decide("turn one", None, character_id="hazel")
+
+    assert isinstance(result, InvalidAgentResponse)
+    assert result.reason == "provider response wrote a tool call as message text"
+    assert len(agent._client.calls) == 4
+
+
 async def test_ollama_agent_bounds_invalid_response_feedback(monkeypatch):
     class LongReplyOllamaClient(_FakeOllamaClient):
         async def chat(self, *, model, messages, tools):
@@ -1879,6 +1966,159 @@ async def test_ollama_agent_chat_returns_content_without_tool(monkeypatch):
     assert reply.tool_call is None
 
 
+async def test_ollama_agent_chat_retries_tagged_reply_as_clean_prose(monkeypatch):
+    malformed = "<｜DSML｜ name=\"target_id\">crate</｜DSML｜>"
+
+    class TaggedThenPlainOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            if len(self.calls) == 1:
+                return {"message": {"role": "assistant", "content": malformed}}
+            return {"message": {"role": "assistant", "content": "Clean prose."}}
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = TaggedThenPlainOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3")
+    reply = await agent.chat([{"role": "user", "content": "hello"}], character_id="hazel")
+
+    assert reply == ChatAgentReply(content="Clean prose.")
+    assert agent._client.calls[1][-1]["content"] == PROSE_REPLY_CORRECTION_PROMPT
+
+
+async def test_ollama_agent_chat_keeps_native_call_and_drops_tagged_content(
+    monkeypatch,
+):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class TaggedThenMixedOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            if len(self.calls) == 1:
+                return {"message": {"role": "assistant", "content": malformed}}
+            response = _fake_ollama_response()
+            response["message"]["content"] = malformed
+            return response
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = TaggedThenMixedOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+    tools = [{"type": "function", "function": {"name": "wait"}}]
+
+    agent = OllamaAgent(model="llama3")
+    reply = await agent.chat(
+        [{"role": "user", "content": "hello"}],
+        character_id="hazel",
+        tools=tools,
+    )
+
+    assert reply == ChatAgentReply(tool_call=ToolCall("wait", {}))
+    assert agent._client.calls[1][-1]["content"] == TEXT_REPLY_CORRECTION_PROMPT
+
+
+async def test_ollama_agent_chat_drops_tagged_content_from_initial_native_call(
+    monkeypatch,
+):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class MixedOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            response = _fake_ollama_response()
+            response["message"]["content"] = malformed
+            return response
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = MixedOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3")
+    reply = await agent.chat(
+        [{"role": "user", "content": "hello"}],
+        character_id="hazel",
+    )
+
+    assert reply == ChatAgentReply(tool_call=ToolCall("wait", {}))
+    assert len(agent._client.calls) == 1
+
+
+async def test_ollama_agent_chat_suppresses_tagged_reply_when_retry_fails(
+    monkeypatch,
+):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class TaggedThenFailingOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            if len(self.calls) == 1:
+                return {"message": {"role": "assistant", "content": malformed}}
+            raise _FakeProviderError(502)
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = TaggedThenFailingOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3", max_retries=0)
+    reply = await agent.chat(
+        [{"role": "user", "content": "hello"}],
+        character_id="hazel",
+    )
+
+    assert reply == ChatAgentReply()
+    assert len(agent._client.calls) == 2
+
+
+async def test_ollama_agent_chat_suppresses_repeated_tagged_prose(monkeypatch):
+    malformed = '<tool_call>{"name": "wait"}</tool_call>'
+
+    class TaggedOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            return {"message": {"role": "assistant", "content": malformed}}
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = TaggedOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3")
+    reply = await agent.chat([{"role": "user", "content": "hello"}], character_id="hazel")
+
+    assert reply == ChatAgentReply()
+    assert len(agent._client.calls) == 2
+
+
+async def test_ollama_agent_chat_can_allow_tagged_prose_for_debugging(monkeypatch):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class TaggedOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            return {"message": {"role": "assistant", "content": malformed}}
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = TaggedOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3", reject_text_tool_calls=False)
+    reply = await agent.chat([{"role": "user", "content": "hello"}], character_id="hazel")
+
+    assert reply == ChatAgentReply(content=malformed)
+    assert len(agent._client.calls) == 1
+
+
 async def test_ollama_agent_chat_returns_empty_after_transient_provider_retries(monkeypatch):
     class AlwaysFailOllamaClient(_FlakyOllamaClient):
         failures = 99
@@ -1901,31 +2141,45 @@ class _FakeOpenRouterChat:
 
     async def send_async(self, *, model, messages, tools):
         self.calls.append({"model": model, "messages": [dict(m) for m in messages], "tools": tools})
+        return _fake_openrouter_response()
+
+
+def _fake_openrouter_response(
+    *, content: str = "ok", include_tool_call: bool = True
+):
+    tool_calls = None
+    serialized_tool_calls = None
+    if include_tool_call:
         function = types.SimpleNamespace(name="wait", arguments='{"reason": "rest"}')
         tool_call = types.SimpleNamespace(id="call_wait", function=function)
-        message = types.SimpleNamespace(
-            role="assistant",
-            content="ok",
-            tool_calls=[tool_call],
-            model_dump=lambda **_: {
-                "role": "assistant",
-                "content": "ok",
-                "tool_calls": [
-                    {
-                        "id": "call_wait",
-                        "type": "function",
-                        "function": {"name": "wait", "arguments": '{"reason": "rest"}'},
-                    }
-                ],
-            },
-        )
-        usage = types.SimpleNamespace(
-            prompt_tokens=14,
-            completion_tokens=6,
-            total_tokens=20,
-            cost=0.0012,
-        )
-        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)], usage=usage)
+        tool_calls = [tool_call]
+        serialized_tool_calls = [
+            {
+                "id": "call_wait",
+                "type": "function",
+                "function": {"name": "wait", "arguments": '{"reason": "rest"}'},
+            }
+        ]
+    message = types.SimpleNamespace(
+        role="assistant",
+        content=content,
+        tool_calls=tool_calls,
+        model_dump=lambda **_: {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": serialized_tool_calls,
+        },
+    )
+    usage = types.SimpleNamespace(
+        prompt_tokens=14,
+        completion_tokens=6,
+        total_tokens=20,
+        cost=0.0012,
+    )
+    return types.SimpleNamespace(
+        choices=[types.SimpleNamespace(message=message)],
+        usage=usage,
+    )
 
 
 class _FakeOpenRouterClient:
@@ -2483,6 +2737,121 @@ async def test_openrouter_agent_rejects_plain_assistant_reply_and_trims_history(
     ]
 
 
+async def test_openrouter_agent_retries_tagged_autonomous_reply_as_structured_call(
+    monkeypatch,
+):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class TaggedThenValidOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            self.calls.append(
+                {"model": model, "messages": [dict(m) for m in messages], "tools": tools}
+            )
+            if len(self.calls) == 1:
+                return _fake_openrouter_response(
+                    content=malformed,
+                    include_tool_call=False,
+                )
+            return _fake_openrouter_response()
+
+    class TaggedThenValidOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = TaggedThenValidOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = TaggedThenValidOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(model="model", api_key="key")
+    result = await agent.decide("turn one", None, character_id="hazel")
+
+    assert result == ToolCall("wait", {"reason": "rest"})
+    assert len(agent._client.chat.calls) == 2
+    assert agent._client.chat.calls[1]["messages"][-2] == {
+        "role": "assistant",
+        "content": malformed,
+    }
+    assert agent._client.chat.calls[1]["messages"][-1] == {
+        "role": "user",
+        "content": TEXT_TOOL_CALL_CORRECTION_PROMPT,
+    }
+    assert malformed not in str(agent._history["hazel"])
+
+
+async def test_openrouter_agent_can_disable_tagged_autonomous_retry(monkeypatch):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class TaggedOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            self.calls.append(
+                {"model": model, "messages": [dict(m) for m in messages], "tools": tools}
+            )
+            return _fake_openrouter_response(
+                content=malformed,
+                include_tool_call=False,
+            )
+
+    class TaggedOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = TaggedOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = TaggedOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(
+        model="model",
+        api_key="key",
+        reject_text_tool_calls=False,
+    )
+    result = await agent.decide("turn one", None, character_id="hazel")
+
+    assert isinstance(result, InvalidAgentResponse)
+    assert result.reason == "provider response wrote a tool call as message text"
+    assert len(agent._client.chat.calls) == 1
+    assert agent._history["hazel"][-1]["content"] == ""
+
+
+async def test_openrouter_agent_rejects_tagged_reply_when_corrective_request_fails(
+    monkeypatch,
+):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class TaggedThenFailingOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            self.calls.append(
+                {"model": model, "messages": [dict(m) for m in messages], "tools": tools}
+            )
+            if len(self.calls) == 1:
+                return _fake_openrouter_response(
+                    content=malformed,
+                    include_tool_call=False,
+                )
+            raise _FakeProviderError(502)
+
+    class TaggedThenFailingOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = TaggedThenFailingOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = TaggedThenFailingOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(
+        model="model",
+        api_key="key",
+        retry_delay_seconds=0,
+    )
+    result = await agent.decide("turn one", None, character_id="hazel")
+
+    assert isinstance(result, InvalidAgentResponse)
+    assert result.reason == "provider response wrote a tool call as message text"
+    assert len(agent._client.chat.calls) == 4
+
+
 async def test_openrouter_agent_rejects_missing_response_after_transient_provider_retries(
     monkeypatch,
 ):
@@ -2549,6 +2918,226 @@ async def test_openrouter_agent_chat_returns_content_without_tool(monkeypatch):
 
     assert reply.content == "just text"
     assert reply.tool_call is None
+
+
+async def test_openrouter_agent_chat_retries_tagged_reply_as_clean_prose(monkeypatch):
+    malformed = "<｜DSML｜ name=\"target_id\">crate</｜DSML｜>"
+
+    class TaggedThenPlainOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            self.calls.append(
+                {"model": model, "messages": [dict(m) for m in messages], "tools": tools}
+            )
+            if len(self.calls) == 1:
+                return _fake_openrouter_response(
+                    content=malformed,
+                    include_tool_call=False,
+                )
+            return _fake_openrouter_response(
+                content="Clean prose.",
+                include_tool_call=False,
+            )
+
+    class TaggedThenPlainOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = TaggedThenPlainOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = TaggedThenPlainOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(model="model", api_key="key")
+    reply = await agent.chat(
+        [{"role": "user", "content": "hello"}],
+        character_id="hazel",
+    )
+
+    assert reply == ChatAgentReply(content="Clean prose.")
+    assert (
+        agent._client.chat.calls[1]["messages"][-1]["content"]
+        == PROSE_REPLY_CORRECTION_PROMPT
+    )
+
+
+async def test_openrouter_agent_chat_keeps_native_call_and_drops_tagged_content(
+    monkeypatch,
+):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class TaggedThenMixedOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            self.calls.append(
+                {"model": model, "messages": [dict(m) for m in messages], "tools": tools}
+            )
+            if len(self.calls) == 1:
+                return _fake_openrouter_response(
+                    content=malformed,
+                    include_tool_call=False,
+                )
+            return _fake_openrouter_response(content=malformed)
+
+    class TaggedThenMixedOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = TaggedThenMixedOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = TaggedThenMixedOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+    tools = [{"type": "function", "function": {"name": "wait"}}]
+
+    agent = OpenRouterAgent(model="model", api_key="key")
+    reply = await agent.chat(
+        [{"role": "user", "content": "hello"}],
+        character_id="hazel",
+        tools=tools,
+    )
+
+    assert reply == ChatAgentReply(
+        tool_call=ToolCall("wait", {"reason": "rest"})
+    )
+    assert (
+        agent._client.chat.calls[1]["messages"][-1]["content"]
+        == TEXT_REPLY_CORRECTION_PROMPT
+    )
+
+
+async def test_openrouter_agent_chat_drops_tagged_content_from_initial_native_call(
+    monkeypatch,
+):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class MixedOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            self.calls.append(
+                {"model": model, "messages": [dict(m) for m in messages], "tools": tools}
+            )
+            return _fake_openrouter_response(content=malformed)
+
+    class MixedOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = MixedOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = MixedOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(model="model", api_key="key")
+    reply = await agent.chat(
+        [{"role": "user", "content": "hello"}],
+        character_id="hazel",
+    )
+
+    assert reply == ChatAgentReply(
+        tool_call=ToolCall("wait", {"reason": "rest"})
+    )
+    assert len(agent._client.chat.calls) == 1
+
+
+async def test_openrouter_agent_chat_suppresses_tagged_reply_when_retry_fails(
+    monkeypatch,
+):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class TaggedThenFailingOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            self.calls.append(
+                {"model": model, "messages": [dict(m) for m in messages], "tools": tools}
+            )
+            if len(self.calls) == 1:
+                return _fake_openrouter_response(
+                    content=malformed,
+                    include_tool_call=False,
+                )
+            raise _FakeProviderError(502)
+
+    class TaggedThenFailingOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = TaggedThenFailingOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = TaggedThenFailingOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(model="model", api_key="key", max_retries=0)
+    reply = await agent.chat(
+        [{"role": "user", "content": "hello"}],
+        character_id="hazel",
+    )
+
+    assert reply == ChatAgentReply()
+    assert len(agent._client.chat.calls) == 2
+
+
+async def test_openrouter_agent_chat_suppresses_repeated_tagged_prose(monkeypatch):
+    malformed = '<tool_call>{"name": "wait"}</tool_call>'
+
+    class TaggedOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            self.calls.append(
+                {"model": model, "messages": [dict(m) for m in messages], "tools": tools}
+            )
+            return _fake_openrouter_response(
+                content=malformed,
+                include_tool_call=False,
+            )
+
+    class TaggedOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = TaggedOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = TaggedOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(model="model", api_key="key")
+    reply = await agent.chat(
+        [{"role": "user", "content": "hello"}],
+        character_id="hazel",
+    )
+
+    assert reply == ChatAgentReply()
+    assert len(agent._client.chat.calls) == 2
+
+
+async def test_openrouter_agent_chat_can_allow_tagged_prose_for_debugging(monkeypatch):
+    malformed = '<invoke name="wait"></invoke>'
+
+    class TaggedOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            self.calls.append(
+                {"model": model, "messages": [dict(m) for m in messages], "tools": tools}
+            )
+            return _fake_openrouter_response(
+                content=malformed,
+                include_tool_call=False,
+            )
+
+    class TaggedOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = TaggedOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = TaggedOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(
+        model="model",
+        api_key="key",
+        reject_text_tool_calls=False,
+    )
+    reply = await agent.chat(
+        [{"role": "user", "content": "hello"}],
+        character_id="hazel",
+    )
+
+    assert reply == ChatAgentReply(content=malformed)
+    assert len(agent._client.chat.calls) == 1
 
 
 async def test_openrouter_agent_chat_returns_empty_after_transient_provider_retries(monkeypatch):

@@ -320,6 +320,8 @@ def _serve_args(**overrides):
         "api_port": None,
         "autosave_every": 0,
         "character_chat": False,
+        "allow_sleeping_character_chat": False,
+        "reject_text_tool_calls": True,
         "character_model": None,
         "claim_timeout_controller": None,
         "claim_timeout_seconds": 0,
@@ -1153,7 +1155,85 @@ def test_cli_build_character_chat_service_constructs_opt_in_service(monkeypatch,
 
     assert service is not None
     assert isinstance(service.agent, DummyAgent)
+    assert service.allow_sleeping_character_chat is False
+    assert service.reject_text_tool_calls is True
     assert built["provider_args"][0].character_chat is True
+
+
+def test_cli_build_character_chat_service_can_disable_text_tool_call_rejection(
+    monkeypatch, scenario
+):
+    class DummyAgent:
+        pass
+
+    monkeypatch.setattr(cli, "_build_provider_agent", lambda *_args: DummyAgent())
+    service = cli._build_character_chat_service(
+        _serve_args(character_chat=True, reject_text_tool_calls=False),
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        cli.ServeCredentials(worldgen_provider="ollama"),
+        cli.ServeModels(worldgen_model="world", character_model="character"),
+    )
+
+    assert service is not None
+    assert service.reject_text_tool_calls is False
+
+
+def test_cli_build_character_chat_service_can_allow_sleeping_characters(monkeypatch, scenario):
+    class DummyAgent:
+        pass
+
+    monkeypatch.setattr(cli, "_build_provider_agent", lambda *_args: DummyAgent())
+    service = cli._build_character_chat_service(
+        _serve_args(character_chat=True, allow_sleeping_character_chat=True),
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        cli.ServeCredentials(worldgen_provider="ollama"),
+        cli.ServeModels(worldgen_model="world", character_model="character"),
+    )
+
+    assert service is not None
+    assert service.allow_sleeping_character_chat is True
+
+
+def test_cli_text_tool_call_rejection_is_default_on_with_env_and_flag_opt_out(
+    monkeypatch,
+):
+    parsed = []
+
+    def fake_run(coro):
+        parsed.append(coro.cr_frame.f_locals["args"].reject_text_tool_calls)
+        coro.close()
+
+    monkeypatch.setattr(cli.asyncio, "run", fake_run)
+    monkeypatch.delenv("BUNNYLAND_REJECT_TEXT_TOOL_CALLS", raising=False)
+    assert main(["serve"]) == 0
+
+    monkeypatch.setenv("BUNNYLAND_REJECT_TEXT_TOOL_CALLS", "0")
+    assert main(["serve"]) == 0
+    assert main(["serve", "--reject-text-tool-calls"]) == 0
+    assert main(["serve", "--no-reject-text-tool-calls"]) == 0
+
+    assert parsed == [True, False, True, False]
+
+
+def test_cli_sleeping_character_chat_is_default_off_with_env_and_flag_opt_in(monkeypatch):
+    parsed = []
+
+    def fake_run(coro):
+        parsed.append(coro.cr_frame.f_locals["args"].allow_sleeping_character_chat)
+        coro.close()
+
+    monkeypatch.setattr(cli.asyncio, "run", fake_run)
+    monkeypatch.delenv("BUNNYLAND_ALLOW_SLEEPING_CHARACTER_CHAT", raising=False)
+    assert main(["serve"]) == 0
+
+    monkeypatch.setenv("BUNNYLAND_ALLOW_SLEEPING_CHARACTER_CHAT", "1")
+    assert main(["serve"]) == 0
+    assert main(["serve", "--no-allow-sleeping-character-chat"]) == 0
+    assert main(["serve", "--allow-sleeping-character-chat"]) == 0
+
+    assert parsed == [False, True, False, True]
 
 
 def test_cli_chat_command_forwards_options(monkeypatch):
@@ -1625,12 +1705,36 @@ def test_build_serve_agent_constructs_enabled_providers(monkeypatch):
         "model": "character-model",
         "host": "https://ollama.example",
         "api_key": "ollama-key",
+        "reject_text_tool_calls": True,
     }
     assert calls["openrouter"] == {
         "model": "character-model",
         "api_key": "openrouter-key",
         "server_url": "https://openrouter.example",
+        "reject_text_tool_calls": True,
     }
+
+    cli._build_serve_agent(
+        _serve_args(
+            llm=True,
+            llm_provider="openrouter",
+            reject_text_tool_calls=False,
+        ),
+        cli.ServeCredentials(
+            worldgen_provider="openrouter",
+            host="https://ollama.example",
+            api_key="ollama-key",
+            openrouter_api_key="openrouter-key",
+            openrouter_server_url="https://openrouter.example",
+        ),
+        cli.ServeModels(
+            worldgen_model="world-model",
+            character_model="character-model",
+        ),
+    )
+
+    assert calls["ollama"]["reject_text_tool_calls"] is False
+    assert calls["openrouter"]["reject_text_tool_calls"] is False
 
 
 def test_build_serve_agent_rejects_missing_provider():

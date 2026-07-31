@@ -5,8 +5,9 @@
 is needed. With `--server` it submits and polls the server's existing v1 chat jobs.
 
 Character chat is available only while the character's current controller is an LLM. Dead or
-unconscious characters are unavailable for chat, and sleeping characters cannot be interrupted
-by chat. A suspended character keeps saved history visible in read-only mode. A signed-in
+unconscious characters are unavailable for chat. Sleeping characters cannot normally be
+interrupted by chat, unless the server operator explicitly enables sleeping character chat.
+A suspended character keeps saved history visible in read-only mode. A signed-in
 administrator can activate that character on the world's default LLM controller from the
 Textual conversation screen; successful activation refreshes the screen and enables sending.
 Other unsupported controllers remain read-only and can be replaced with one of the world's

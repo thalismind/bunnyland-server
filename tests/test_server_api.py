@@ -2116,6 +2116,9 @@ def test_health_reports_configured_feature_flags(scenario, monkeypatch):
         async def aclose(self):
             pass
 
+    class ChatService:
+        allow_sleeping_character_chat = True
+
     monkeypatch.setattr(
         server_app,
         "create_bunnyland_mcp_app",
@@ -2125,7 +2128,7 @@ def test_health_reports_configured_feature_flags(scenario, monkeypatch):
         scenario.actor,
         plugins=select(bunnyland_plugins(), [MCP]),
         imagegen=ImageService(),
-        character_chat=object(),
+        character_chat=ChatService(),
     )
     client = TestClient(app)
 
@@ -2137,6 +2140,7 @@ def test_health_reports_configured_feature_flags(scenario, monkeypatch):
         "character_chat": True,
         "character_sheets": True,
         "image_generation": True,
+        "allow_sleeping_character_chat": True,
     }
 
 

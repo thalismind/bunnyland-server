@@ -30,7 +30,11 @@ from bunnyland.foundation.persona.mechanics import (
     PreferenceComponent,
     TraitSetComponent,
 )
-from bunnyland.llm_agents.agent import ChatAgentReply
+from bunnyland.llm_agents.agent import (
+    PROSE_REPLY_CORRECTION_PROMPT,
+    TEXT_REPLY_CORRECTION_PROMPT,
+    ChatAgentReply,
+)
 from bunnyland.llm_agents.tools import ToolCall
 from bunnyland.memory import InMemoryStore, install_memory
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, collect_persona_fragments
@@ -84,12 +88,21 @@ def chat_request(message="hello") -> CharacterChatRequest:
     return CharacterChatRequest(client_id="test-client", message=message)
 
 
-def chat_service(scenario, agent, *, timeout=0.01) -> CharacterChatService:
+def chat_service(
+    scenario,
+    agent,
+    *,
+    timeout=0.01,
+    reject_text_tool_calls=True,
+    allow_sleeping_character_chat=False,
+) -> CharacterChatService:
     return CharacterChatService(
         scenario.actor,
         PromptBuilder(scenario.actor.world),
         agent,
         result_timeout_seconds=timeout,
+        reject_text_tool_calls=reject_text_tool_calls,
+        allow_sleeping_character_chat=allow_sleeping_character_chat,
     )
 
 
@@ -114,9 +127,7 @@ def route_client(app) -> httpx.AsyncClient:
         (SuspendedComponent(reason="offline", suspended_at_epoch=1), "must be activated"),
     ],
 )
-async def test_character_chat_rejects_inactive_character_before_calling_agent(
-    component, reason
-):
+async def test_character_chat_rejects_inactive_character_before_calling_agent(component, reason):
     scenario = build_scenario()
     scenario.actor.world.get_entity(scenario.character).add_component(component)
     agent = FakeChatAgent([ChatAgentReply(content="should not run")])
@@ -128,6 +139,24 @@ async def test_character_chat_rejects_inactive_character_before_calling_agent(
         )
 
     assert agent.calls == []
+
+
+@pytest.mark.asyncio
+async def test_character_chat_can_allow_sleeping_character_when_enabled():
+    scenario = build_scenario()
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        SleepingComponent(started_at_epoch=1)
+    )
+    agent = FakeChatAgent([ChatAgentReply(content="I can still hear you.")])
+
+    response = await chat_service(
+        scenario,
+        agent,
+        allow_sleeping_character_chat=True,
+    ).chat(str(scenario.character), chat_request())
+
+    assert response.reply == "I can still hear you."
+    assert len(agent.calls) == 1
 
 
 async def claim_character(client: httpx.AsyncClient, character_id: str) -> tuple[str, dict]:
@@ -152,6 +181,7 @@ async def test_character_chat_no_tool_reply_does_not_submit_command():
     assert scenario.actor.pending_submissions() == []
     system_prompt = agent.calls[0]["messages"][0]["content"]
     assert "call that tool instead of merely describing the action" in system_prompt
+    assert "native structured tool-call interface" in system_prompt
     assert "prefer take_note" in system_prompt
     tool_names = {
         tool["function"]["name"]
@@ -160,6 +190,114 @@ async def test_character_chat_no_tool_reply_does_not_submit_command():
     }
     assert tool_names == ALLOWED_CHAT_TOOLS
     assert "move" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_character_chat_retries_text_tool_call_as_native_structured_call():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    malformed = (
+        '<invoke name="inspect"> <｜DSML｜ name="target_id" '
+        'string="true">courier letter</｜DSML｜> </invoke>'
+    )
+    agent = FakeChatAgent(
+        [
+            ChatAgentReply(content=malformed),
+            ChatAgentReply(content=malformed, tool_call=ToolCall("look", {})),
+        ]
+    )
+    service = chat_service(scenario, agent, timeout=0.0)
+
+    response = await service.chat(str(scenario.character), chat_request("look around"))
+
+    assert response.action.status == "queued"
+    assert response.action.tool == "look"
+    assert malformed not in response.reply
+    assert len(agent.calls) == 2
+    retry_messages = agent.calls[1]["messages"]
+    assert retry_messages[-2] == {"role": "assistant", "content": malformed}
+    assert retry_messages[-1] == {
+        "role": "user",
+        "content": TEXT_REPLY_CORRECTION_PROMPT,
+    }
+    assert agent.calls[1]["tools"] == agent.calls[0]["tools"]
+
+
+@pytest.mark.asyncio
+async def test_character_chat_keeps_native_call_and_drops_tagged_content():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    malformed = '<invoke name="look"></invoke>'
+    agent = FakeChatAgent([ChatAgentReply(content=malformed, tool_call=ToolCall("look", {}))])
+    service = chat_service(scenario, agent, timeout=0.0)
+
+    response = await service.chat(str(scenario.character), chat_request("look around"))
+
+    assert response.action.status == "queued"
+    assert response.action.tool == "look"
+    assert malformed not in response.reply
+    assert len(agent.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        '<invoke name="look"></invoke>',
+        '<｜DSML｜ name="target_id">crate</｜DSML｜>',
+        '<tool_call>{"name": "look"}</tool_call>',
+        '<function_call name="look"></function_call>',
+    ],
+)
+@pytest.mark.asyncio
+async def test_character_chat_detects_text_tool_call_tag_variants(malformed):
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    agent = FakeChatAgent(
+        [
+            ChatAgentReply(content=malformed),
+            ChatAgentReply(content="Let me answer plainly."),
+        ]
+    )
+    service = chat_service(scenario, agent)
+
+    response = await service.chat(str(scenario.character), chat_request("try again"))
+
+    assert response.reply == "Let me answer plainly."
+    assert len(agent.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_character_chat_suppresses_repeated_text_tool_call():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    malformed = '<invoke name="look"></invoke>'
+    agent = FakeChatAgent(
+        [
+            ChatAgentReply(content=malformed),
+            ChatAgentReply(content=malformed),
+        ]
+    )
+    service = chat_service(scenario, agent)
+
+    response = await service.chat(str(scenario.character), chat_request("try again"))
+
+    assert response.reply == "..."
+    assert malformed not in response.reply
+    assert len(agent.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_character_chat_can_allow_text_tool_calls_for_provider_debugging():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    malformed = '<invoke name="look"></invoke>'
+    agent = FakeChatAgent([ChatAgentReply(content=malformed)])
+    service = chat_service(scenario, agent, reject_text_tool_calls=False)
+
+    response = await service.chat(str(scenario.character), chat_request("look around"))
+
+    assert response.reply == malformed
+    assert len(agent.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -291,6 +429,30 @@ async def test_character_chat_look_executes_and_second_pass_gets_result_events()
 
 
 @pytest.mark.asyncio
+async def test_character_chat_retries_tagged_action_followup_as_clean_prose():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    malformed = '<invoke name="look"></invoke>'
+    agent = FakeChatAgent(
+        [
+            ChatAgentReply(tool_call=ToolCall("look", {})),
+            ChatAgentReply(content=malformed),
+            ChatAgentReply(content="I can answer without tags."),
+        ]
+    )
+    service = chat_service(scenario, agent, timeout=1.0)
+
+    task = asyncio.create_task(service.chat(str(scenario.character), chat_request("what is here?")))
+    await asyncio.sleep(0)
+    await scenario.actor.tick(0)
+    response = await task
+
+    assert response.reply == "I can answer without tags."
+    assert agent.calls[2]["tools"] == []
+    assert agent.calls[2]["messages"][-1]["content"] == PROSE_REPLY_CORRECTION_PROMPT
+
+
+@pytest.mark.asyncio
 async def test_character_chat_action_queues_without_immediate_tick():
     scenario = build_scenario()
     install_core(scenario.actor)
@@ -341,6 +503,37 @@ async def test_character_chat_queued_remember_result_is_wrapped_when_polled():
     assert wrapped.action.result_events[0]["event_type"] == "NotesSearchedEvent"
     assert wrapped.reply == "I remember the greenhouse vines are a hybrid."
     assert "human alien hybrid" in str(agent.calls[-1]["messages"])
+
+
+@pytest.mark.asyncio
+async def test_character_chat_retries_tagged_pending_followup_as_clean_prose():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    malformed = '<｜DSML｜ name="target_id">room</｜DSML｜>'
+    agent = FakeChatAgent(
+        [
+            ChatAgentReply(tool_call=ToolCall("say", {"text": "soon"})),
+            ChatAgentReply(content=malformed),
+            ChatAgentReply(content="That is done."),
+        ]
+    )
+    service = chat_service(scenario, agent, timeout=0.0)
+
+    response = await service.chat(
+        str(scenario.character),
+        chat_request("say something"),
+    )
+    await scenario.actor.tick(0)
+    pending = await service.pending_result(
+        str(scenario.character),
+        "test-client",
+        response.action.command_id,
+    )
+
+    assert pending.complete is True
+    assert pending.reply == "That is done."
+    assert agent.calls[2]["tools"] == []
+    assert agent.calls[2]["messages"][-1]["content"] == PROSE_REPLY_CORRECTION_PROMPT
 
 
 @pytest.mark.asyncio
@@ -607,7 +800,9 @@ async def test_character_chat_status_and_disabled_route():
     app = create_app(scenario.actor, allow_unauthenticated_embedding=True)
 
     async with route_client(app) as client:
-        assert (await client.get("/v1/public/features")).json()["character_chat"] is False
+        features = (await client.get("/v1/public/features")).json()
+        assert features["character_chat"] is False
+        assert features["allow_sleeping_character_chat"] is False
         response = await client.post(
             f"/v1/chat/characters/{scenario.character}/jobs",
             json={"kind": "chat", "message": "hi"},
@@ -661,9 +856,10 @@ async def test_claim_job_rejects_chat_without_changing_controller():
             json={"kind": "chat", "message": "hi"},
         )
     assert response.status_code == 422
-    assert scenario.actor.world.get_entity(scenario.character).get_relationships(ControlledBy)[0][
-        1
-    ] == controller_before
+    assert (
+        scenario.actor.world.get_entity(scenario.character).get_relationships(ControlledBy)[0][1]
+        == controller_before
+    )
 
 
 @pytest.mark.asyncio
@@ -694,9 +890,10 @@ async def test_character_profile_and_chat_do_not_require_or_change_a_claim():
     assert submitted.status_code == 202
     assert fetched.json()["status"] == "succeeded"
     assert fetched.json()["result"]["reply"] == "hi"
-    assert scenario.actor.world.get_entity(scenario.character).get_relationships(
-        ControlledBy
-    )[0][1] == scenario.controller
+    assert (
+        scenario.actor.world.get_entity(scenario.character).get_relationships(ControlledBy)[0][1]
+        == scenario.controller
+    )
 
 
 @pytest.mark.asyncio
@@ -913,10 +1110,7 @@ async def test_character_chat_job_fails_after_pending_action_timeout(monkeypatch
         fetched = await client.get(submitted.headers["Location"])
 
     assert fetched.json()["status"] == "failed"
-    assert (
-        fetched.json()["failure"]["detail"]
-        == "the character did not finish this action in time"
-    )
+    assert fetched.json()["failure"]["detail"] == "the character did not finish this action in time"
 
 
 @pytest.mark.asyncio
@@ -938,9 +1132,7 @@ async def test_character_chat_requires_client_and_supported_controller():
     assert missing_poll_client.status_code == 403
 
     submit_route = next(
-        route
-        for route in app.routes
-        if route.path == "/v1/chat/characters/{character_id}/jobs"
+        route for route in app.routes if route.path == "/v1/chat/characters/{character_id}/jobs"
     )
     poll_route = next(
         route
@@ -1047,11 +1239,17 @@ async def test_human_controlled_character_receives_chat_and_replies_through_clai
 async def test_character_chat_route_validates_request_and_reports_allowed_tools():
     scenario = build_scenario()
     install_core(scenario.actor)
-    service = chat_service(scenario, FakeChatAgent([ChatAgentReply(content="hi")]))
+    service = chat_service(
+        scenario,
+        FakeChatAgent([ChatAgentReply(content="hi")]),
+        allow_sleeping_character_chat=True,
+    )
     app = create_app(scenario.actor, character_chat=service, allow_unauthenticated_embedding=True)
 
     async with route_client(app) as client:
-        assert (await client.get("/v1/public/features")).json()["character_chat"] is True
+        features = (await client.get("/v1/public/features")).json()
+        assert features["character_chat"] is True
+        assert features["allow_sleeping_character_chat"] is True
         claim_id, headers = await claim_character(client, str(scenario.character))
         response = await client.post(
             f"/v1/chat/characters/{scenario.character}/jobs",
@@ -1102,6 +1300,7 @@ def test_build_character_chat_service_factory_returns_service():
     )
 
     assert isinstance(service, CharacterChatService)
+    assert service.allow_sleeping_character_chat is False
 
 
 async def test_completed_action_cache_stays_bounded_under_world_command_volume():

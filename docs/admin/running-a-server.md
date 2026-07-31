@@ -149,6 +149,8 @@ uv run bunnyland serve --config bunnyland.yml
 | `--api-host`     | `127.0.0.1`    | Host for the optional HTTP/websocket client API.                |
 | `--api-port`     | (none)         | Port for the optional HTTP/websocket client API.                |
 | `--mcp`          | off            | Mount MCP at `/v1/mcp` on the existing API server.              |
+| `--[no-]allow-sleeping-character-chat` | off | Allow character chat with sleeping characters; also configurable with `BUNNYLAND_ALLOW_SLEEPING_CHARACTER_CHAT`. |
+| `--[no-]reject-text-tool-calls` | on | Reject provider replies containing tagged tool-call text such as `<invoke>` or DSML, then retry once for a native structured call or clean prose. Applies to autonomous characters and character chat; also configurable with `BUNNYLAND_REJECT_TEXT_TOOL_CALLS`. |
 | `--auth-users-file` | `data/auth-users.yml` | Deployment-rendered Argon2 user credentials. |
 | `--token-db` | `data/auth-tokens.sqlite3` | Private SQLite opaque-token and revocation store. |
 | `--player-client-id` | env        | Allow one player `client_id`; repeat or pass comma-separated values. Defaults to `BUNNYLAND_PLAYER_CLIENT_IDS`; unset allows any player client ID. |

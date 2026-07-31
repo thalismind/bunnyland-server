@@ -53,6 +53,7 @@ from ..server.models import (
     CharacterChatRequest,
     CharacterListResponse,
     CharacterSummaryView,
+    FeatureStatusResponse,
 )
 from ..server.serialization import (
     serialize_character_list,
@@ -454,6 +455,9 @@ class Backend(ABC):
             return True, ""
         return False, "Character chat is not available for this session"
 
+    async def allows_sleeping_character_chat(self) -> bool:
+        return False
+
     async def character_chat_access(self, character_id: str) -> CharacterChatAccess:
         """Return whether this character can receive chat and any safe handoff choices."""
 
@@ -472,7 +476,7 @@ class Backend(ABC):
                 writable=False,
                 reason=f"{profile.character_name} is unconscious and is not available to chat.",
             )
-        if "sleeping" in statuses:
+        if "sleeping" in statuses and not await self.allows_sleeping_character_chat():
             return CharacterChatAccess(
                 writable=False,
                 reason=f"{profile.character_name} is sleeping and cannot be interrupted by chat.",
@@ -591,6 +595,12 @@ class LocalBackend(Backend):
     @property
     def supports_character_chat(self) -> bool:
         return bool(self.chat_config and self.chat_config.enabled)
+
+    async def allows_sleeping_character_chat(self) -> bool:
+        return bool(
+            self.character_chat is not None
+            and self.character_chat.allow_sleeping_character_chat
+        )
 
     @property
     def supports_image_requests(self) -> bool:
@@ -1315,9 +1325,17 @@ class RemoteBackend(Backend):
     async def character_chat_availability(self) -> tuple[bool, str]:
         res = await self._client.get(f"{self.base}/public/features")
         res.raise_for_status()
-        if res.json().get("character_chat"):
+        features = FeatureStatusResponse.model_validate(res.json())
+        if features.character_chat:
             return True, ""
         return False, "Character chat is not enabled on this server"
+
+    async def allows_sleeping_character_chat(self) -> bool:
+        res = await self._client.get(f"{self.base}/public/features")
+        res.raise_for_status()
+        return FeatureStatusResponse.model_validate(
+            res.json()
+        ).allow_sleeping_character_chat
 
     @staticmethod
     def _character_chat_job(resource: JobResource, character_id: str) -> CharacterChatJob:

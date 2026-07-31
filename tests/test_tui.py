@@ -555,6 +555,7 @@ async def test_backend_base_open_character_sheet_default():
     image = await _Stub().request_image(PLAYER)
     assert image.ok is False
     assert image.status == "unavailable"
+    assert await _Stub().allows_sleeping_character_chat() is False
 
 
 def test_local_backend_image_capability_reflects_service():
@@ -564,6 +565,15 @@ def test_local_backend_image_capability_reflects_service():
     assert backend.supports_image_requests is False
     backend.imagegen = object()
     assert backend.supports_image_requests is True
+
+
+async def test_local_backend_sleeping_chat_capability_reflects_service():
+    from bunnyland.tui.backend import LocalBackend
+
+    backend = LocalBackend(autorun=False)
+    assert await backend.allows_sleeping_character_chat() is False
+    backend.character_chat = SimpleNamespace(allow_sleeping_character_chat=True)
+    assert await backend.allows_sleeping_character_chat() is True
 
 
 async def test_local_backend_request_image_reports_unconfigured_service():

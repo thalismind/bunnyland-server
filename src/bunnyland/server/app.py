@@ -951,6 +951,11 @@ def create_app(
         return FeatureStatusResponse(
             mcp=mcp_enabled(plugins),
             character_chat=character_chat is not None,
+            allow_sleeping_character_chat=(
+                character_chat.allow_sleeping_character_chat
+                if character_chat is not None
+                else False
+            ),
             character_sheets=True,
             image_generation=imagegen is not None,
         )

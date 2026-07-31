@@ -888,6 +888,50 @@ async def test_remote_chat_access_blocks_lifecycle_inactive_characters(status, r
     assert access == CharacterChatAccess(writable=False, reason=reason)
 
 
+async def test_remote_chat_access_allows_sleeping_character_when_server_enables_it():
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self): ...
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        async def get(self, url):
+            if url.endswith("/public/features"):
+                return Response(
+                    {
+                        "character_chat": True,
+                        "allow_sleeping_character_chat": True,
+                    }
+                )
+            if "/profile/characters/" in url:
+                return Response(
+                    {
+                        "world_id": "world:1",
+                        "world_epoch": 7,
+                        "character_id": "character:1",
+                        "character_name": "Juniper",
+                        "controller": {
+                            "controller_id": "controller:llm",
+                            "generation": 3,
+                            "kind": "llm",
+                        },
+                        "sheet": {"status": ["sleeping"]},
+                    }
+                )
+            raise AssertionError(url)
+
+    backend = RemoteBackend("https://server.example/v1", client_id="client-1")
+    backend._client = Client()
+
+    access = await backend.character_chat_access("character:1")
+
+    assert access == CharacterChatAccess(writable=True)
+
+
 async def test_remote_auth_rejects_missing_login_and_rotation_tokens():
     class Response:
         status_code = 200
