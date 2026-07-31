@@ -329,6 +329,7 @@ jobs:
           context: .
           build-args: |
             BUNNYLAND_GIT_HASH=${{ github.sha }}
+          no-cache: true
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.server-meta.outputs.tags }}
           labels: ${{ steps.server-meta.outputs.labels }}
