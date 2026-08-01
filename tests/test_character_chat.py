@@ -429,6 +429,41 @@ async def test_character_chat_look_executes_and_second_pass_gets_result_events()
 
 
 @pytest.mark.asyncio
+async def test_character_chat_inspect_resolves_reachable_target_and_executes():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    pebble = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="pebble", kind="item"), PortableComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), pebble.id
+    )
+    agent = FakeChatAgent(
+        [
+            ChatAgentReply(tool_call=ToolCall("inspect", {"target_id": "pebble"})),
+            ChatAgentReply(content="It is a small pebble."),
+        ]
+    )
+    service = chat_service(scenario, agent, timeout=1.0)
+
+    assert {"look", "inspect"}.issubset(service.allowed_tools)
+
+    task = asyncio.create_task(
+        service.chat(str(scenario.character), chat_request("inspect the pebble"))
+    )
+    await asyncio.sleep(0)
+    await scenario.actor.tick(0)
+    response = await task
+
+    assert response.reply == "It is a small pebble."
+    assert response.action.status == "executed"
+    assert response.action.tool == "inspect"
+    assert response.action.result_events[0]["event_type"] == "EntityInspectedEvent"
+    assert response.action.result_events[0]["target_ids"] == [str(pebble.id)]
+
+
+@pytest.mark.asyncio
 async def test_character_chat_retries_tagged_action_followup_as_clean_prose():
     scenario = build_scenario()
     install_core(scenario.actor)
