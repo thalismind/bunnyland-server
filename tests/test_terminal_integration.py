@@ -91,6 +91,29 @@ class FlaggedBackend(EmptyBackend):
         )
 
 
+class PublicWorldBackend(EmptyBackend):
+    def __init__(
+        self,
+        *,
+        title: str = "",
+        description: str = "",
+        content_flags: tuple[str, ...] = (),
+    ):
+        super().__init__()
+        self.title = title
+        self.description = description
+        self.content_flags = content_flags
+
+    async def fetch_public_world(self):
+        return PublicWorldResource(
+            world_id="world-1",
+            world_epoch=7,
+            title=self.title,
+            description=self.description,
+            content_flags=list(self.content_flags),
+        )
+
+
 async def test_terminal_player_clients_block_loading_until_content_warning_acceptance():
     for app in (BunnylandTUI(FlaggedBackend()), BunnylandReplApp(FlaggedBackend())):
         async with app.run_test() as pilot:
@@ -116,6 +139,53 @@ async def test_terminal_player_clients_block_loading_until_content_warning_accep
             backend = app.backend if isinstance(app, BunnylandTUI) else app.repl.backend
             app._pending_public_world = await backend.fetch_public_world()
             assert app._show_world_introduction() is False
+
+
+async def test_terminal_player_clients_enter_unadorned_worlds_without_entry_screens():
+    for app in (
+        BunnylandTUI(PublicWorldBackend(title="  ", description="\n")),
+        BunnylandReplApp(PublicWorldBackend(title="  ", description="\n")),
+    ):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app._pending_public_world is None
+            assert not any(
+                isinstance(screen, (ContentWarningScreen, WorldIntroductionScreen))
+                for screen in app.screen_stack
+            )
+
+
+async def test_terminal_player_clients_show_partial_world_introductions():
+    introductions = (("Clover City", ""), ("", "Mind the foxes after dark."))
+    for title, description in introductions:
+        for app in (
+            BunnylandTUI(PublicWorldBackend(title=title, description=description)),
+            BunnylandReplApp(PublicWorldBackend(title=title, description=description)),
+        ):
+            async with app.run_test() as pilot:
+                introduction = next(
+                    screen
+                    for screen in app.screen_stack
+                    if isinstance(screen, WorldIntroductionScreen)
+                )
+                assert introduction.world_title == title
+                assert introduction.world_description == description
+                await pilot.click("#world-introduction-continue")
+
+
+async def test_terminal_player_clients_finish_after_warning_when_intro_is_empty():
+    for app in (
+        BunnylandTUI(PublicWorldBackend(content_flags=("adult:violence",))),
+        BunnylandReplApp(PublicWorldBackend(content_flags=("adult:violence",))),
+    ):
+        async with app.run_test() as pilot:
+            assert any(isinstance(screen, ContentWarningScreen) for screen in app.screen_stack)
+            await pilot.click("#content-warning-accept")
+            await pilot.pause()
+            assert app._pending_public_world is None
+            assert not any(
+                isinstance(screen, WorldIntroductionScreen) for screen in app.screen_stack
+            )
 
 
 async def test_terminal_player_clients_skip_configured_ignored_content_flags():

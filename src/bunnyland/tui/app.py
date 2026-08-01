@@ -19,7 +19,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
-from ..content_warnings import visible_content_flags
+from ..content_warnings import has_world_introduction, visible_content_flags
 from ..core.actions import action_icon_for
 from ..core.claim_timeout import normalize_claim_timeout
 from ..imagegen.affordance import DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
@@ -555,7 +555,11 @@ class BunnylandTUI(App[None]):
 
     def _show_world_introduction(self) -> bool:
         world = self._pending_public_world
-        if world is None or not world.world_id:
+        if (
+            world is None
+            or not world.world_id
+            or not has_world_introduction(world.title, world.description)
+        ):
             return False
         server = self.backend.world_introduction_server
         scope = world_introduction_scope(server, world.world_id)

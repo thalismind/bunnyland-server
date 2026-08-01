@@ -33,4 +33,15 @@ def visible_content_flags(
     return tuple(flag for flag in normalize_content_flags(content_flags) if flag not in ignored)
 
 
-__all__ = ["normalize_content_flags", "visible_content_flags", "world_content_flags"]
+def has_world_introduction(title: str, description: str) -> bool:
+    """Return whether a world has meaningful identity text to show before entry."""
+
+    return bool(title.strip() or description.strip())
+
+
+__all__ = [
+    "has_world_introduction",
+    "normalize_content_flags",
+    "visible_content_flags",
+    "world_content_flags",
+]

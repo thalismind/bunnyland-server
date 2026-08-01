@@ -20,7 +20,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer, Header, Input, RichLog
 
-from ..content_warnings import visible_content_flags
+from ..content_warnings import has_world_introduction, visible_content_flags
 from ..core.claim_timeout import normalize_claim_timeout
 from ..server.v1_models import PublicWorldResource
 from ..terminal_config import (
@@ -290,7 +290,11 @@ class BunnylandReplApp(App[None]):
 
     def _show_world_introduction(self) -> bool:
         world = self._pending_public_world
-        if world is None or not world.world_id:
+        if (
+            world is None
+            or not world.world_id
+            or not has_world_introduction(world.title, world.description)
+        ):
             return False
         server = self.repl.backend.world_introduction_server
         scope = world_introduction_scope(server, world.world_id)
