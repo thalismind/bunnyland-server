@@ -26,7 +26,7 @@ bunnyland recovery-manifest \
   --pin web=WEB_COMMIT \
   --pin ui=UI_COMMIT \
   --pin homepage=HOME_COMMIT \
-  --pin 3d=THREE_D_COMMIT \
+  --pin 3d=3D_COMMIT \
   --pin media=MEDIA_COMMIT \
   --pin vps=VPS_COMMIT \
   --rollback-checkpoint main.json.bak.1

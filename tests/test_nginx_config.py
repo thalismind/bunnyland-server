@@ -87,6 +87,22 @@ def test_no_config_sets_security_headers_inline(name: str) -> None:
         assert header not in text, f"{name} should include security-headers.inc instead"
 
 
+@pytest.mark.parametrize("name", SERVER_CONFIGS)
+def test_frontends_compress_text_and_apply_content_aware_cache_policy(name: str) -> None:
+    text = _read(name)
+
+    assert "gzip on;" in text
+    assert (
+        "gzip_types application/javascript application/json image/svg+xml text/css text/plain;"
+        in text
+    )
+    assert "map $uri $bunnyland_cache_control {" in text
+    assert '/config.json "no-store";' in text
+    assert '"public, max-age=31536000, immutable"' in text
+    assert 'default "no-cache";' in text
+    assert "add_header Cache-Control $bunnyland_cache_control always;" in text
+
+
 def test_api_location_caps_concurrent_connections_and_request_rate() -> None:
     text = _read("api-locations.inc")
 
