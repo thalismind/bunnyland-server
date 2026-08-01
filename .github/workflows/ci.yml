@@ -441,3 +441,37 @@ jobs:
         run: |
           sudo --preserve-env=BUNNYLAND_CONTAINER_RUNTIME,BUNNYLAND_SERVER_IMAGE \
             scripts/container-auth-smoke
+
+  dispatch-3d-promotion:
+    name: Request 3D server-base promotion
+    runs-on: ubuntu-latest
+    needs:
+      - container
+      - vps-setup
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+
+    steps:
+      - name: Dispatch immutable server image to 3D
+        env:
+          GH_TOKEN: ${{ secrets.BUNNYLAND_3D_PROMOTION_TOKEN }}
+          SERVER_DIGEST: ${{ needs.container.outputs.digest }}
+        run: |
+          test -n "$GH_TOKEN"
+          [[ "$SERVER_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          jq -n \
+            --arg source_repo "$GITHUB_REPOSITORY" \
+            --arg source_ref "$GITHUB_REF" \
+            --arg source_sha "$GITHUB_SHA" \
+            --arg digest "$SERVER_DIGEST" \
+            '{
+              event_type: "promote-server",
+              client_payload: {
+                source_repo: $source_repo,
+                source_ref: $source_ref,
+                source_sha: $source_sha,
+                digest: $digest
+              }
+            }' |
+            gh api --method POST repos/thalismind/bunnyland-3d/dispatches --input -
