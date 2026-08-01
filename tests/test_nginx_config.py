@@ -98,6 +98,11 @@ def test_frontends_compress_text_and_apply_content_aware_cache_policy(name: str)
     )
     assert "map $uri $bunnyland_cache_control {" in text
     assert '/config.json "no-store";' in text
+    assert (
+        '"~^/(?:[^/]+/)*assets/.*-[A-Za-z0-9_-]{8,}\\.[^/]+$" '
+        '"public, max-age=31536000, immutable";'
+        in text
+    )
     assert '"public, max-age=31536000, immutable"' in text
     assert 'default "no-cache";' in text
     assert "add_header Cache-Control $bunnyland_cache_control always;" in text
