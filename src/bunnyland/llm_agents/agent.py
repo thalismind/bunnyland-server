@@ -17,7 +17,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Callable, Iterable
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
 from typing import Literal, Protocol
@@ -32,9 +32,11 @@ from .tools import ToolCall, tool_schemas
 DEFAULT_MODEL = "deepseek-v4-flash"
 LEGACY_DEFAULT_MODEL = "llama3"
 DEFAULT_PROVIDER_RETRIES = 2
-EMPTY_RESPONSE_MAX_RETRIES = 3
 DEFAULT_RETRY_DELAY_SECONDS = 1.0
 TRANSIENT_STATUS_CODES = frozenset({408, 409, 425, 429})
+TOKEN_LIMIT_FINISH_REASONS = frozenset(
+    {"length", "max_tokens", "max_output_tokens", "token_limit"}
+)
 CHARACTER_SYSTEM_PROMPT = (
     "You are an autonomous character in Bunnyland, an asynchronous social sandbox. "
     "Choose exactly one available structured tool call that fits your prompt context. "
@@ -60,7 +62,7 @@ PROSE_REPLY_CORRECTION_PROMPT = (
     "tool-call tags."
 )
 TEXT_TOOL_CALL_TAG = re.compile(
-    r"<\s*/?\s*(?:invoke\b|[|｜]\s*dsml\s*[|｜]|tool_call\b|function_call\b)",
+    r"<\s*/?\s*(?:infer\b|invoke\b|[|｜]\s*dsml\s*[|｜]|tool_call\b|function_call\b)",
     re.IGNORECASE,
 )
 
@@ -72,58 +74,6 @@ def contains_text_tool_call(content: str) -> bool:
     """Return whether assistant prose contains a known textual tool-call tag."""
 
     return bool(TEXT_TOOL_CALL_TAG.search(content))
-
-
-def _text_tool_retry_messages(
-    messages: list[dict],
-    content: str,
-    *,
-    tools_available: bool,
-    require_tool: bool,
-) -> list[dict]:
-    if require_tool:
-        correction = TEXT_TOOL_CALL_CORRECTION_PROMPT
-    elif tools_available:
-        correction = TEXT_REPLY_CORRECTION_PROMPT
-    else:
-        correction = PROSE_REPLY_CORRECTION_PROMPT
-    return [
-        *messages,
-        {"role": "assistant", "content": content},
-        {"role": "user", "content": correction},
-    ]
-
-
-async def _validated_chat_reply(
-    request_reply: Callable[[list[dict]], Awaitable[ChatAgentReply | None]],
-    messages: list[dict],
-    *,
-    tools_available: bool,
-    reject_text_tool_calls: bool,
-) -> ChatAgentReply:
-    reply = await request_reply(messages)
-    if reply is None:
-        return ChatAgentReply()
-    if not reject_text_tool_calls or not contains_text_tool_call(reply.content):
-        return reply
-    telemetry.set_span_attributes({"llm.text_tool_call.rejected": True})
-    if reply.tool_call is not None:
-        return ChatAgentReply(tool_call=reply.tool_call)
-    corrected = await request_reply(
-        _text_tool_retry_messages(
-            messages,
-            reply.content,
-            tools_available=tools_available,
-            require_tool=False,
-        )
-    )
-    if corrected is None:
-        return ChatAgentReply()
-    if not contains_text_tool_call(corrected.content):
-        return corrected
-    if corrected.tool_call is not None:
-        return ChatAgentReply(tool_call=corrected.tool_call)
-    return ChatAgentReply()
 
 
 @dataclass(frozen=True)
@@ -154,6 +104,185 @@ class InvalidAgentResponse:
 
     reason: str
     feedback: str
+
+
+@dataclass(frozen=True)
+class AssistantResponseView:
+    """Provider-neutral fields used to filter one assistant generation."""
+
+    content: str
+    has_tool_call: bool
+    token_limited: bool
+
+
+@dataclass(frozen=True)
+class ResponseFilterContext:
+    tools_available: bool
+    require_tool: bool
+    reject_text_tool_calls: bool
+
+
+@dataclass(frozen=True)
+class ResponseFilterRejection:
+    filter_name: str
+    reason: str
+    correction_prompt: str
+    telemetry_attribute: str
+
+
+class AssistantResponseFilter(Protocol):
+    """Reject one unusable assistant response before it reaches conversation history."""
+
+    def reject(
+        self,
+        response: AssistantResponseView,
+        context: ResponseFilterContext,
+    ) -> ResponseFilterRejection | None: ...
+
+
+class InvalidMarkupResponseFilter:
+    def reject(
+        self,
+        response: AssistantResponseView,
+        context: ResponseFilterContext,
+    ) -> ResponseFilterRejection | None:
+        if (
+            not context.reject_text_tool_calls
+            or response.has_tool_call
+            or not contains_text_tool_call(response.content)
+        ):
+            return None
+        if context.require_tool:
+            correction = TEXT_TOOL_CALL_CORRECTION_PROMPT
+        elif context.tools_available:
+            correction = TEXT_REPLY_CORRECTION_PROMPT
+        else:
+            correction = PROSE_REPLY_CORRECTION_PROMPT
+        return ResponseFilterRejection(
+            filter_name="invalid_markup",
+            reason="provider response wrote a tool call as message text",
+            correction_prompt=correction,
+            telemetry_attribute="llm.text_tool_call.rejected",
+        )
+
+
+class EmptyResponseFilter:
+    def reject(
+        self,
+        response: AssistantResponseView,
+        context: ResponseFilterContext,
+    ) -> ResponseFilterRejection | None:
+        if response.content or response.has_tool_call:
+            return None
+        return ResponseFilterRejection(
+            filter_name="empty",
+            reason="provider returned empty response after retries",
+            correction_prompt=_response_correction_prompt(
+                "Your previous response was completely empty.", context
+            ),
+            telemetry_attribute="llm.empty_response.rejected",
+        )
+
+
+class TokenLimitedResponseFilter:
+    def reject(
+        self,
+        response: AssistantResponseView,
+        context: ResponseFilterContext,
+    ) -> ResponseFilterRejection | None:
+        if not response.token_limited or response.has_tool_call:
+            return None
+        return ResponseFilterRejection(
+            filter_name="token_limited",
+            reason="provider response reached its output token limit",
+            correction_prompt=_response_correction_prompt(
+                "Your previous response reached the output token limit before producing "
+                "a usable result.",
+                context,
+            ),
+            telemetry_attribute="llm.token_limited_response.rejected",
+        )
+
+
+DEFAULT_RESPONSE_FILTERS: tuple[AssistantResponseFilter, ...] = (
+    InvalidMarkupResponseFilter(),
+    EmptyResponseFilter(),
+    TokenLimitedResponseFilter(),
+)
+
+
+def _response_correction_prompt(
+    problem: str,
+    context: ResponseFilterContext,
+) -> str:
+    if context.require_tool:
+        instruction = "Return exactly one concise native structured tool call."
+    elif context.tools_available:
+        instruction = (
+            "Return either one concise native structured tool call or a concise prose reply."
+        )
+    else:
+        instruction = "Return a concise prose reply."
+    return f"{problem} That response was rejected. {instruction}"
+
+
+def _response_filter_rejection(
+    response: AssistantResponseView,
+    context: ResponseFilterContext,
+    response_filters: tuple[AssistantResponseFilter, ...],
+) -> ResponseFilterRejection | None:
+    for response_filter in response_filters:
+        rejection = response_filter.reject(response, context)
+        if rejection is not None:
+            return rejection
+    return None
+
+
+def _response_filter_retry_messages(
+    messages: list[dict],
+    content: str,
+    rejection: ResponseFilterRejection,
+) -> list[dict]:
+    return [
+        *messages,
+        {"role": "assistant", "content": content},
+        {"role": "user", "content": rejection.correction_prompt},
+    ]
+
+
+def _field_value(source: object, name: str) -> object:
+    if isinstance(source, MappingABC):
+        return source.get(name)
+    return getattr(source, name, None)
+
+
+def _finish_reason_is_token_limited(reason: object) -> bool:
+    return str(reason or "").strip().lower() in TOKEN_LIMIT_FINISH_REASONS
+
+
+def _ollama_response_view(response: object, message: object) -> AssistantResponseView:
+    content = str(_field_value(message, "content") or "").strip()
+    tool_calls = _field_value(message, "tool_calls")
+    return AssistantResponseView(
+        content=content,
+        has_tool_call=bool(tool_calls),
+        token_limited=_finish_reason_is_token_limited(
+            _field_value(response, "done_reason")
+        ),
+    )
+
+
+def _openrouter_response_view(response: object, message: object) -> AssistantResponseView:
+    choices = _field_value(response, "choices")
+    first_choice = choices[0] if isinstance(choices, (list, tuple)) and choices else None
+    finish_reason = _field_value(first_choice, "finish_reason")
+    if finish_reason is None:
+        finish_reason = _field_value(first_choice, "native_finish_reason")
+    return AssistantResponseView(
+        content=str(_field_value(message, "content") or "").strip(),
+        has_tool_call=bool(_field_value(message, "tool_calls")),
+        token_limited=_finish_reason_is_token_limited(finish_reason),
+    )
 
 
 AgentDecision = ToolCall | InvalidAgentResponse | None
@@ -788,6 +917,7 @@ class OllamaAgent:
         response_observer: OllamaResponseObserver | None = None,
         log_thinking: bool = False,
         reject_text_tool_calls: bool = True,
+        response_filters: tuple[AssistantResponseFilter, ...] = DEFAULT_RESPONSE_FILTERS,
     ) -> None:
         try:
             import ollama
@@ -819,6 +949,7 @@ class OllamaAgent:
         self._response_observer = response_observer
         self._log_thinking = log_thinking
         self._reject_text_tool_calls = reject_text_tool_calls
+        self._response_filters = tuple(response_filters)
         # character_id -> running provider-native user/assistant/tool message history.
         self._history: dict[str, list[dict]] = {}
         # The authoritative visible result is available in PromptContext on the next turn.
@@ -850,11 +981,15 @@ class OllamaAgent:
             resolved_tools,
             system_prompt=CHARACTER_SYSTEM_PROMPT,
         )
-        empty_responses = 0
-        last_empty_response: object | None = None
+        last_rejection: ResponseFilterRejection | None = None
+        filter_context = ResponseFilterContext(
+            tools_available=bool(resolved_tools),
+            require_tool=True,
+            reject_text_tool_calls=self._reject_text_tool_calls,
+        )
 
         async def request():
-            nonlocal empty_responses, last_empty_response
+            nonlocal last_rejection, messages
             response = await self._client.chat(
                 model=resolved_model,
                 messages=messages,
@@ -862,27 +997,37 @@ class OllamaAgent:
                 **self._request_options(),
             )
             message = response["message"]
-            if _provider_message_is_empty(message):
-                empty_responses += 1
-                last_empty_response = response
-                raise _EmptyProviderResponseError("Ollama returned an empty assistant message")
+            self._observe_response(response)
+            _record_llm_usage("ollama", resolved_model, _ollama_usage(response))
+            view = _ollama_response_view(response, message)
+            last_rejection = _response_filter_rejection(
+                view, filter_context, self._response_filters
+            )
+            if last_rejection is not None:
+                telemetry.set_span_attributes(
+                    {last_rejection.telemetry_attribute: True}
+                )
+                messages = _response_filter_retry_messages(
+                    messages,
+                    view.content,
+                    last_rejection,
+                )
+                raise _RejectedProviderResponseError(last_rejection)
             return response
 
         response = await _call_provider_with_retries(
             "ollama",
             request,
             max_retries=self._max_retries,
-            empty_response_retries=EMPTY_RESPONSE_MAX_RETRIES,
             retry_delay_seconds=self._retry_delay_seconds,
             attributes=request_attrs,
         )
         if response is None:
-            empty_attempts = EMPTY_RESPONSE_MAX_RETRIES + 1
-            if empty_responses == empty_attempts:
-                assert last_empty_response is not None
-                self._observe_response(last_empty_response)
-                return _empty_response_rejection("Ollama", empty_attempts)
             attempts = self._max_retries + 1
+            if last_rejection is not None:
+                return _filtered_response_rejection(
+                    "Ollama", last_rejection, attempts
+                )
             return InvalidAgentResponse(
                 reason="provider returned no response after retries",
                 feedback=(
@@ -891,41 +1036,9 @@ class OllamaAgent:
                     "tool call on this turn."
                 ),
             )
-        self._observe_response(response)
-        _record_llm_usage("ollama", resolved_model, _ollama_usage(response))
         message = response["message"]
         tool_calls = message.get("tool_calls") or []
         content = str(message.get("content") or "").strip()
-        if (
-            self._reject_text_tool_calls
-            and not tool_calls
-            and contains_text_tool_call(content)
-        ):
-            telemetry.set_span_attributes({"llm.text_tool_call.rejected": True})
-            messages = _text_tool_retry_messages(
-                messages,
-                content,
-                tools_available=bool(resolved_tools),
-                require_tool=True,
-            )
-            corrected_response = await _call_provider_with_retries(
-                "ollama",
-                request,
-                max_retries=self._max_retries,
-                empty_response_retries=EMPTY_RESPONSE_MAX_RETRIES,
-                retry_delay_seconds=self._retry_delay_seconds,
-                attributes=request_attrs,
-            )
-            if corrected_response is not None:
-                self._observe_response(corrected_response)
-                _record_llm_usage(
-                    "ollama",
-                    resolved_model,
-                    _ollama_usage(corrected_response),
-                )
-                message = corrected_response["message"]
-                tool_calls = message.get("tool_calls") or []
-                content = str(message.get("content") or "").strip()
         history.append(user_message)
         history_message = _ollama_message_to_history(message)
         if contains_text_tool_call(content):
@@ -954,59 +1067,71 @@ class OllamaAgent:
         del character_id, provider
         resolved_model = normalize_model(model or self._model)
         resolved_tools = tools or []
+        request_messages = messages
+        filter_context = ResponseFilterContext(
+            tools_available=bool(resolved_tools),
+            require_tool=False,
+            reject_text_tool_calls=self._reject_text_tool_calls,
+        )
+        request_attrs = _llm_request_attrs(
+            "character_chat",
+            resolved_model,
+            request_messages,
+            resolved_tools,
+            system_prompt=(
+                str(request_messages[0].get("content", ""))
+                if request_messages
+                else ""
+            ),
+        )
 
-        async def request_reply(
-            request_messages: list[dict],
-        ) -> ChatAgentReply | None:
-            request_attrs = _llm_request_attrs(
-                "character_chat",
-                resolved_model,
-                request_messages,
-                resolved_tools,
-                system_prompt=(
-                    str(request_messages[0].get("content", ""))
-                    if request_messages
-                    else ""
-                ),
+        async def request():
+            nonlocal request_messages
+            response = await self._client.chat(
+                model=resolved_model,
+                messages=request_messages,
+                tools=resolved_tools,
+                **self._request_options(),
             )
-
-            async def request():
-                return await self._client.chat(
-                    model=resolved_model,
-                    messages=request_messages,
-                    tools=resolved_tools,
-                    **self._request_options(),
-                )
-
-            response = await _call_provider_with_retries(
-                "ollama",
-                request,
-                max_retries=self._max_retries,
-                retry_delay_seconds=self._retry_delay_seconds,
-                attributes=request_attrs,
-            )
-            if response is None:
-                return None
             self._observe_response(response)
             _record_llm_usage("ollama", resolved_model, _ollama_usage(response))
             message = response["message"]
-            content = str(message.get("content") or "").strip()
-            tool_calls = message.get("tool_calls") or []
-            tool_call = None
-            if tool_calls:
-                call = tool_calls[0]["function"]
-                tool_call = ToolCall(
-                    name=call["name"],
-                    arguments=dict(call.get("arguments", {})),
+            view = _ollama_response_view(response, message)
+            rejection = _response_filter_rejection(
+                view, filter_context, self._response_filters
+            )
+            if rejection is not None:
+                telemetry.set_span_attributes({rejection.telemetry_attribute: True})
+                request_messages = _response_filter_retry_messages(
+                    request_messages,
+                    view.content,
+                    rejection,
                 )
-            return ChatAgentReply(content=content, tool_call=tool_call)
+                raise _RejectedProviderResponseError(rejection)
+            return response
 
-        return await _validated_chat_reply(
-            request_reply,
-            messages,
-            tools_available=bool(resolved_tools),
-            reject_text_tool_calls=self._reject_text_tool_calls,
+        response = await _call_provider_with_retries(
+            "ollama",
+            request,
+            max_retries=self._max_retries,
+            retry_delay_seconds=self._retry_delay_seconds,
+            attributes=request_attrs,
         )
+        if response is None:
+            return ChatAgentReply()
+        message = response["message"]
+        content = str(message.get("content") or "").strip()
+        tool_calls = message.get("tool_calls") or []
+        tool_call = None
+        if tool_calls:
+            call = tool_calls[0]["function"]
+            tool_call = ToolCall(
+                name=call["name"],
+                arguments=dict(call.get("arguments", {})),
+            )
+            if contains_text_tool_call(content):
+                content = ""
+        return ChatAgentReply(content=content, tool_call=tool_call)
 
     def _request_options(self) -> dict[str, object]:
         options: dict[str, object] = {}
@@ -1054,6 +1179,7 @@ class OpenRouterAgent:
         response_observer: ProviderResponseObserver | None = None,
         log_thinking: bool = False,
         reject_text_tool_calls: bool = True,
+        response_filters: tuple[AssistantResponseFilter, ...] = DEFAULT_RESPONSE_FILTERS,
     ) -> None:
         try:
             from openrouter import OpenRouter
@@ -1075,6 +1201,7 @@ class OpenRouterAgent:
         self._response_observer = response_observer
         self._log_thinking = log_thinking
         self._reject_text_tool_calls = reject_text_tool_calls
+        self._response_filters = tuple(response_filters)
         self._history: dict[str, list[dict]] = {}
         self._pending_tool_results: dict[str, str] = {}
 
@@ -1104,11 +1231,15 @@ class OpenRouterAgent:
             resolved_tools,
             system_prompt=CHARACTER_SYSTEM_PROMPT,
         )
-        empty_responses = 0
-        last_empty_response: object | None = None
+        last_rejection: ResponseFilterRejection | None = None
+        filter_context = ResponseFilterContext(
+            tools_available=bool(resolved_tools),
+            require_tool=True,
+            reject_text_tool_calls=self._reject_text_tool_calls,
+        )
 
         async def request():
-            nonlocal empty_responses, last_empty_response
+            nonlocal last_rejection, messages
             response = await self._client.chat.send_async(
                 model=resolved_model,
                 messages=messages,
@@ -1116,29 +1247,41 @@ class OpenRouterAgent:
                 **self._request_options(),
             )
             message = response.choices[0].message
-            if _provider_message_is_empty(message):
-                empty_responses += 1
-                last_empty_response = response
-                raise _EmptyProviderResponseError(
-                    "OpenRouter returned an empty assistant message"
+            self._observe_response(response)
+            _record_llm_usage(
+                "openrouter",
+                resolved_model,
+                await _openrouter_enriched_usage(self._client, response),
+            )
+            view = _openrouter_response_view(response, message)
+            last_rejection = _response_filter_rejection(
+                view, filter_context, self._response_filters
+            )
+            if last_rejection is not None:
+                telemetry.set_span_attributes(
+                    {last_rejection.telemetry_attribute: True}
                 )
+                messages = _response_filter_retry_messages(
+                    messages,
+                    view.content,
+                    last_rejection,
+                )
+                raise _RejectedProviderResponseError(last_rejection)
             return response
 
         response = await _call_provider_with_retries(
             "openrouter",
             request,
             max_retries=self._max_retries,
-            empty_response_retries=EMPTY_RESPONSE_MAX_RETRIES,
             retry_delay_seconds=self._retry_delay_seconds,
             attributes=request_attrs,
         )
         if response is None:
-            empty_attempts = EMPTY_RESPONSE_MAX_RETRIES + 1
-            if empty_responses == empty_attempts:
-                assert last_empty_response is not None
-                self._observe_response(last_empty_response)
-                return _empty_response_rejection("OpenRouter", empty_attempts)
             attempts = self._max_retries + 1
+            if last_rejection is not None:
+                return _filtered_response_rejection(
+                    "OpenRouter", last_rejection, attempts
+                )
             return InvalidAgentResponse(
                 reason="provider returned no response after retries",
                 feedback=(
@@ -1147,48 +1290,9 @@ class OpenRouterAgent:
                     "tool call on this turn."
                 ),
             )
-        self._observe_response(response)
-        _record_llm_usage(
-            "openrouter",
-            resolved_model,
-            await _openrouter_enriched_usage(self._client, response),
-        )
         message = response.choices[0].message
         tool_calls = getattr(message, "tool_calls", None) or []
         content = str(getattr(message, "content", "") or "").strip()
-        if (
-            self._reject_text_tool_calls
-            and not tool_calls
-            and contains_text_tool_call(content)
-        ):
-            telemetry.set_span_attributes({"llm.text_tool_call.rejected": True})
-            messages = _text_tool_retry_messages(
-                messages,
-                content,
-                tools_available=bool(resolved_tools),
-                require_tool=True,
-            )
-            corrected_response = await _call_provider_with_retries(
-                "openrouter",
-                request,
-                max_retries=self._max_retries,
-                empty_response_retries=EMPTY_RESPONSE_MAX_RETRIES,
-                retry_delay_seconds=self._retry_delay_seconds,
-                attributes=request_attrs,
-            )
-            if corrected_response is not None:
-                self._observe_response(corrected_response)
-                _record_llm_usage(
-                    "openrouter",
-                    resolved_model,
-                    await _openrouter_enriched_usage(
-                        self._client,
-                        corrected_response,
-                    ),
-                )
-                message = corrected_response.choices[0].message
-                tool_calls = getattr(message, "tool_calls", None) or []
-                content = str(getattr(message, "content", "") or "").strip()
         history.append(user_message)
         history_message = _message_to_history(message)
         if contains_text_tool_call(content):
@@ -1228,39 +1332,32 @@ class OpenRouterAgent:
         del character_id, provider
         resolved_model = normalize_model(model or self._model)
         resolved_tools = tools or []
+        request_messages = messages
+        filter_context = ResponseFilterContext(
+            tools_available=bool(resolved_tools),
+            require_tool=False,
+            reject_text_tool_calls=self._reject_text_tool_calls,
+        )
+        request_attrs = _llm_request_attrs(
+            "character_chat",
+            resolved_model,
+            request_messages,
+            resolved_tools,
+            system_prompt=(
+                str(request_messages[0].get("content", ""))
+                if request_messages
+                else ""
+            ),
+        )
 
-        async def request_reply(
-            request_messages: list[dict],
-        ) -> ChatAgentReply | None:
-            request_attrs = _llm_request_attrs(
-                "character_chat",
-                resolved_model,
-                request_messages,
-                resolved_tools,
-                system_prompt=(
-                    str(request_messages[0].get("content", ""))
-                    if request_messages
-                    else ""
-                ),
+        async def request():
+            nonlocal request_messages
+            response = await self._client.chat.send_async(
+                model=resolved_model,
+                messages=request_messages,
+                tools=resolved_tools,
+                **self._request_options(),
             )
-
-            async def request():
-                return await self._client.chat.send_async(
-                    model=resolved_model,
-                    messages=request_messages,
-                    tools=resolved_tools,
-                    **self._request_options(),
-                )
-
-            response = await _call_provider_with_retries(
-                "openrouter",
-                request,
-                max_retries=self._max_retries,
-                retry_delay_seconds=self._retry_delay_seconds,
-                attributes=request_attrs,
-            )
-            if response is None:
-                return None
             self._observe_response(response)
             _record_llm_usage(
                 "openrouter",
@@ -1268,25 +1365,44 @@ class OpenRouterAgent:
                 await _openrouter_enriched_usage(self._client, response),
             )
             message = response.choices[0].message
-            content = str(getattr(message, "content", "") or "").strip()
-            tool_calls = getattr(message, "tool_calls", None) or []
-            tool_call = None
-            if tool_calls:
-                function = tool_calls[0].function
-                tool_call = ToolCall(
-                    name=function.name,
-                    arguments=_openrouter_arguments(
-                        getattr(function, "arguments", {})
-                    ),
+            view = _openrouter_response_view(response, message)
+            rejection = _response_filter_rejection(
+                view, filter_context, self._response_filters
+            )
+            if rejection is not None:
+                telemetry.set_span_attributes({rejection.telemetry_attribute: True})
+                request_messages = _response_filter_retry_messages(
+                    request_messages,
+                    view.content,
+                    rejection,
                 )
-            return ChatAgentReply(content=content, tool_call=tool_call)
+                raise _RejectedProviderResponseError(rejection)
+            return response
 
-        return await _validated_chat_reply(
-            request_reply,
-            messages,
-            tools_available=bool(resolved_tools),
-            reject_text_tool_calls=self._reject_text_tool_calls,
+        response = await _call_provider_with_retries(
+            "openrouter",
+            request,
+            max_retries=self._max_retries,
+            retry_delay_seconds=self._retry_delay_seconds,
+            attributes=request_attrs,
         )
+        if response is None:
+            return ChatAgentReply()
+        message = response.choices[0].message
+        content = str(getattr(message, "content", "") or "").strip()
+        tool_calls = getattr(message, "tool_calls", None) or []
+        tool_call = None
+        if tool_calls:
+            function = tool_calls[0].function
+            tool_call = ToolCall(
+                name=function.name,
+                arguments=_openrouter_arguments(
+                    getattr(function, "arguments", {})
+                ),
+            )
+            if contains_text_tool_call(content):
+                content = ""
+        return ChatAgentReply(content=content, tool_call=tool_call)
 
     def _request_options(self) -> dict[str, object]:
         options: dict[str, object] = {}
@@ -1380,27 +1496,26 @@ class ProviderRouterAgent:
         )
 
 
-class _EmptyProviderResponseError(RuntimeError):
-    """A provider returned an assistant message with no content or tool call."""
+class _RejectedProviderResponseError(RuntimeError):
+    """A response filter rejected a provider's assistant generation."""
+
+    def __init__(self, rejection: ResponseFilterRejection) -> None:
+        super().__init__(rejection.reason)
+        self.rejection = rejection
 
 
-def _provider_message_is_empty(message: object) -> bool:
-    if isinstance(message, MappingABC):
-        content = message.get("content")
-        tool_calls = message.get("tool_calls")
-    else:
-        content = getattr(message, "content", None)
-        tool_calls = getattr(message, "tool_calls", None)
-    return not str(content or "").strip() and not tool_calls
-
-
-def _empty_response_rejection(provider: str, attempts: int) -> InvalidAgentResponse:
+def _filtered_response_rejection(
+    provider: str,
+    rejection: ResponseFilterRejection,
+    attempts: int,
+) -> InvalidAgentResponse:
     return InvalidAgentResponse(
-        reason="provider returned empty response after retries",
+        reason=rejection.reason,
         feedback=(
-            f"Invalid action response: {provider} returned an empty assistant message on "
-            f"{attempts} consecutive attempt(s), so no action was submitted. Return exactly "
-            "one structured tool call using an available tool; call the wait tool to wait."
+            f"Invalid action response: {provider} responses were rejected by the "
+            f"{rejection.filter_name} filter after {attempts} attempt(s), so no action "
+            "was submitted. Return exactly one native structured tool call using an "
+            "available tool; call the wait tool to wait."
         ),
     )
 
@@ -1417,7 +1532,7 @@ def _provider_status_code(exc: BaseException) -> int | None:
 
 
 def _is_transient_provider_error(exc: BaseException) -> bool:
-    if isinstance(exc, _EmptyProviderResponseError):
+    if isinstance(exc, _RejectedProviderResponseError):
         return True
     if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
         return True
@@ -1433,7 +1548,6 @@ async def _call_provider_with_retries(
     request,
     *,
     max_retries: int,
-    empty_response_retries: int = 0,
     retry_delay_seconds: float,
     attributes: MappingABC[str, object] | None = None,
 ):
@@ -1474,17 +1588,18 @@ async def _call_provider_with_retries(
             if not _is_transient_provider_error(exc):
                 raise
             last_exc = exc
-            retry_limit = (
-                empty_response_retries
-                if isinstance(exc, _EmptyProviderResponseError)
-                else max_retries
-            )
-            if attempt < retry_limit:
+            if attempt < max_retries:
+                failure_kind = (
+                    "response rejection"
+                    if isinstance(exc, _RejectedProviderResponseError)
+                    else "transient error"
+                )
                 logger.warning(
-                    "%s provider transient error on attempt %s/%s; retrying: %s",
+                    "%s provider %s on attempt %s/%s; retrying: %s",
                     provider,
+                    failure_kind,
                     attempt + 1,
-                    retry_limit + 1,
+                    max_retries + 1,
                     exc,
                 )
                 if retry_delay_seconds > 0:

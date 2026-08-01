@@ -45,6 +45,7 @@ from bunnyland.foundation.persona.mechanics import GoalComponent
 from bunnyland.foundation.social.mechanics import SocialBond
 from bunnyland.llm_agents import (
     DISCOVER_ACTION_TOOL,
+    AssistantResponseView,
     BehaviorProfileAgent,
     ChatAgentReply,
     ControllerDispatch,
@@ -52,6 +53,8 @@ from bunnyland.llm_agents import (
     InvalidAgentResponse,
     OpenRouterAgent,
     ProviderRouterAgent,
+    ResponseFilterContext,
+    ResponseFilterRejection,
     ScriptedAgent,
     ToolCall,
     action_discovery_schema,
@@ -81,6 +84,7 @@ from bunnyland.llm_agents import (
 from bunnyland.llm_agents.agent import (
     CHARACTER_SYSTEM_PROMPT,
     DEFAULT_MODEL,
+    DEFAULT_RESPONSE_FILTERS,
     PROSE_REPLY_CORRECTION_PROMPT,
     TEXT_REPLY_CORRECTION_PROMPT,
     TEXT_TOOL_CALL_CORRECTION_PROMPT,
@@ -93,6 +97,7 @@ from bunnyland.llm_agents.agent import (
     _openrouter_enriched_usage,
     _openrouter_response_json,
     _openrouter_usage,
+    contains_text_tool_call,
     normalize_model,
 )
 from bunnyland.llm_agents.dispatch import (
@@ -106,6 +111,15 @@ from bunnyland.plugins import PluginRegistry, bunnyland_plugins, collect_persona
 from bunnyland.plugins.ids import CORE_VERBS
 from bunnyland.prompts import PerceivedPromptEvent
 from bunnyland.prompts.builder import PromptBuilder, PromptContext
+
+
+def test_default_response_filters_cover_invalid_empty_and_token_limited_outputs():
+    assert [type(response_filter).__name__ for response_filter in DEFAULT_RESPONSE_FILTERS] == [
+        "InvalidMarkupResponseFilter",
+        "EmptyResponseFilter",
+        "TokenLimitedResponseFilter",
+    ]
+    assert contains_text_tool_call("<infer>select wait</infer>") is True
 
 
 class _PromptMessageEvent(DomainEvent):
@@ -1800,7 +1814,7 @@ async def test_ollama_agent_rejects_tagged_reply_when_corrective_request_fails(
 
     assert isinstance(result, InvalidAgentResponse)
     assert result.reason == "provider response wrote a tool call as message text"
-    assert len(agent._client.calls) == 4
+    assert len(agent._client.calls) == 3
 
 
 async def test_ollama_agent_bounds_invalid_response_feedback(monkeypatch):
@@ -1865,14 +1879,14 @@ async def test_ollama_agent_retries_empty_responses_before_recording_history(mon
 
     assert call == ToolCall("wait", {})
     assert len(agent._client.calls) == 3
-    assert len(observed) == 1
+    assert len(observed) == 3
     assert agent._history["hazel"] == [
         {"role": "user", "content": "turn one"},
         _fake_ollama_response()["message"],
     ]
 
 
-async def test_ollama_agent_rejects_empty_response_after_three_retries(monkeypatch):
+async def test_ollama_agent_rejects_empty_response_after_shared_retry_budget(monkeypatch):
     class AlwaysEmptyOllamaClient(_FakeOllamaClient):
         async def chat(self, *, model, messages, tools):
             self.models.append(model)
@@ -1900,10 +1914,83 @@ async def test_ollama_agent_rejects_empty_response_after_three_retries(monkeypat
 
     assert isinstance(call, InvalidAgentResponse)
     assert call.reason == "provider returned empty response after retries"
-    assert "4 consecutive attempt(s)" in call.feedback
-    assert len(agent._client.calls) == 4
-    assert len(observed) == 1
+    assert "after 3 attempt(s)" in call.feedback
+    assert len(agent._client.calls) == 3
+    assert len(observed) == 3
     assert observed[0]["message"]["content"] == ""
+    assert agent._history["hazel"] == []
+
+
+async def test_ollama_agent_retries_token_limited_response(monkeypatch):
+    class TokenLimitedThenValidOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            if len(self.calls) == 1:
+                return {
+                    "done_reason": "length",
+                    "message": {
+                        "role": "assistant",
+                        "content": "still explaining",
+                        "tool_calls": [],
+                    },
+                }
+            return _fake_ollama_response()
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = TokenLimitedThenValidOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3", retry_delay_seconds=0)
+    call = await agent.decide("turn one", None, character_id="hazel")
+
+    assert call == ToolCall("wait", {})
+    assert len(agent._client.calls) == 2
+    assert "reached the output token limit" in agent._client.calls[1][-1]["content"]
+
+
+async def test_ollama_agent_mixed_filtered_outputs_share_one_retry_budget(monkeypatch):
+    class MixedInvalidOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            if len(self.calls) == 1:
+                return {
+                    "message": {
+                        "role": "assistant",
+                        "content": "<infer>wait</infer>",
+                    }
+                }
+            if len(self.calls) == 2:
+                return {"message": {"role": "assistant", "content": ""}}
+            if len(self.calls) == 3:
+                return {
+                    "done_reason": "length",
+                    "message": {
+                        "role": "assistant",
+                        "content": "still explaining",
+                    },
+                }
+            return _fake_ollama_response()
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = MixedInvalidOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+    observed: list[dict[str, JsonValue]] = []
+
+    agent = OllamaAgent(
+        model="llama3",
+        retry_delay_seconds=0,
+        response_observer=observed.append,
+    )
+    call = await agent.decide("turn one", None, character_id="hazel")
+
+    assert isinstance(call, InvalidAgentResponse)
+    assert call.reason == "provider response reached its output token limit"
+    assert len(agent._client.calls) == 3
+    assert len(observed) == 3
     assert agent._history["hazel"] == []
 
 
@@ -1964,6 +2051,89 @@ async def test_ollama_agent_chat_returns_content_without_tool(monkeypatch):
 
     assert reply.content == "just text"
     assert reply.tool_call is None
+
+
+@pytest.mark.parametrize(
+    ("tools", "correction"),
+    [
+        (None, "Return a concise prose reply."),
+        (
+            [{"type": "function", "function": {"name": "wait"}}],
+            "native structured tool call or a concise prose reply",
+        ),
+    ],
+)
+async def test_ollama_agent_chat_retries_empty_reply_through_response_filters(
+    monkeypatch,
+    tools,
+    correction,
+):
+    class EmptyThenPlainOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            if len(self.calls) == 1:
+                return {"message": {"role": "assistant", "content": "  "}}
+            return {"message": {"role": "assistant", "content": "Clean prose."}}
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = EmptyThenPlainOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3", max_retries=1, retry_delay_seconds=0)
+    reply = await agent.chat(
+        [{"role": "user", "content": "hello"}],
+        character_id="hazel",
+        tools=tools,
+    )
+
+    assert reply == ChatAgentReply(content="Clean prose.")
+    assert len(agent._client.calls) == 2
+    assert "completely empty" in agent._client.calls[1][-1]["content"]
+    assert correction in agent._client.calls[1][-1]["content"]
+
+
+async def test_ollama_agent_accepts_additional_content_filter(monkeypatch):
+    class InappropriateContentFilter:
+        def reject(
+            self,
+            response: AssistantResponseView,
+            context: ResponseFilterContext,
+        ) -> ResponseFilterRejection | None:
+            del context
+            if "blocked topic" not in response.content:
+                return None
+            return ResponseFilterRejection(
+                filter_name="content_safety",
+                reason="provider response violated content policy",
+                correction_prompt="Answer without the blocked topic.",
+                telemetry_attribute="llm.content_safety.rejected",
+            )
+
+    class FilteredThenPlainOllamaClient(_FakeOllamaClient):
+        async def chat(self, *, model, messages, tools):
+            self.models.append(model)
+            self.tools.append(tools)
+            self.calls.append([dict(message) for message in messages])
+            if len(self.calls) == 1:
+                return {"message": {"role": "assistant", "content": "blocked topic"}}
+            return {"message": {"role": "assistant", "content": "Clean prose."}}
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = FilteredThenPlainOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(
+        model="llama3",
+        max_retries=1,
+        retry_delay_seconds=0,
+        response_filters=(*DEFAULT_RESPONSE_FILTERS, InappropriateContentFilter()),
+    )
+    reply = await agent.chat([{"role": "user", "content": "hello"}], character_id="hazel")
+
+    assert reply == ChatAgentReply(content="Clean prose.")
+    assert agent._client.calls[1][-1]["content"] == "Answer without the blocked topic."
 
 
 async def test_ollama_agent_chat_retries_tagged_reply_as_clean_prose(monkeypatch):
@@ -2074,7 +2244,7 @@ async def test_ollama_agent_chat_suppresses_tagged_reply_when_retry_fails(
     )
 
     assert reply == ChatAgentReply()
-    assert len(agent._client.calls) == 2
+    assert len(agent._client.calls) == 1
 
 
 async def test_ollama_agent_chat_suppresses_repeated_tagged_prose(monkeypatch):
@@ -2095,7 +2265,7 @@ async def test_ollama_agent_chat_suppresses_repeated_tagged_prose(monkeypatch):
     reply = await agent.chat([{"role": "user", "content": "hello"}], character_id="hazel")
 
     assert reply == ChatAgentReply()
-    assert len(agent._client.calls) == 2
+    assert len(agent._client.calls) == 3
 
 
 async def test_ollama_agent_chat_can_allow_tagged_prose_for_debugging(monkeypatch):
@@ -2145,7 +2315,10 @@ class _FakeOpenRouterChat:
 
 
 def _fake_openrouter_response(
-    *, content: str = "ok", include_tool_call: bool = True
+    *,
+    content: str = "ok",
+    include_tool_call: bool = True,
+    finish_reason: str | None = None,
 ):
     tool_calls = None
     serialized_tool_calls = None
@@ -2177,7 +2350,12 @@ def _fake_openrouter_response(
         cost=0.0012,
     )
     return types.SimpleNamespace(
-        choices=[types.SimpleNamespace(message=message)],
+        choices=[
+            types.SimpleNamespace(
+                message=message,
+                finish_reason=finish_reason,
+            )
+        ],
         usage=usage,
     )
 
@@ -2636,7 +2814,7 @@ async def test_openrouter_agent_retries_empty_responses_before_recording_history
     assert agent._history["hazel"][1]["content"] == "ok"
 
 
-async def test_openrouter_agent_rejects_empty_response_after_three_retries(
+async def test_openrouter_agent_rejects_empty_response_after_shared_retry_budget(
     monkeypatch,
 ):
     class AlwaysEmptyOpenRouterChat(_FakeOpenRouterChat):
@@ -2693,13 +2871,55 @@ async def test_openrouter_agent_rejects_empty_response_after_three_retries(
 
     assert isinstance(call, InvalidAgentResponse)
     assert call.reason == "provider returned empty response after retries"
-    assert "4 consecutive attempt(s)" in call.feedback
-    assert len(agent._client.chat.calls) == 4
-    assert len(observed) == 1
+    assert "after 3 attempt(s)" in call.feedback
+    assert len(agent._client.chat.calls) == 3
+    assert len(observed) == 3
     choices = observed[0]["choices"]
     assert isinstance(choices, list)
     assert choices[0]["message"]["content"] == ""
     assert agent._history["hazel"] == []
+
+
+async def test_openrouter_agent_retries_token_limited_response(monkeypatch):
+    class TokenLimitedThenValidOpenRouterChat(_FakeOpenRouterChat):
+        async def send_async(self, *, model, messages, tools):
+            self.calls.append(
+                {
+                    "model": model,
+                    "messages": [dict(message) for message in messages],
+                    "tools": tools,
+                }
+            )
+            if len(self.calls) == 1:
+                return _fake_openrouter_response(
+                    content="still explaining",
+                    include_tool_call=False,
+                    finish_reason="length",
+                )
+            return _fake_openrouter_response()
+
+    class TokenLimitedThenValidOpenRouterClient(_FakeOpenRouterClient):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chat = TokenLimitedThenValidOpenRouterChat()
+
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = TokenLimitedThenValidOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(
+        model="model",
+        api_key="key",
+        retry_delay_seconds=0,
+    )
+    call = await agent.decide("turn one", None, character_id="hazel")
+
+    assert call == ToolCall("wait", {"reason": "rest"})
+    assert len(agent._client.chat.calls) == 2
+    assert (
+        "reached the output token limit"
+        in agent._client.chat.calls[1]["messages"][-1]["content"]
+    )
 
 
 async def test_openrouter_agent_rejects_plain_assistant_reply_and_trims_history(monkeypatch):
@@ -2849,7 +3069,7 @@ async def test_openrouter_agent_rejects_tagged_reply_when_corrective_request_fai
 
     assert isinstance(result, InvalidAgentResponse)
     assert result.reason == "provider response wrote a tool call as message text"
-    assert len(agent._client.chat.calls) == 4
+    assert len(agent._client.chat.calls) == 3
 
 
 async def test_openrouter_agent_rejects_missing_response_after_transient_provider_retries(
@@ -3069,7 +3289,7 @@ async def test_openrouter_agent_chat_suppresses_tagged_reply_when_retry_fails(
     )
 
     assert reply == ChatAgentReply()
-    assert len(agent._client.chat.calls) == 2
+    assert len(agent._client.chat.calls) == 1
 
 
 async def test_openrouter_agent_chat_suppresses_repeated_tagged_prose(monkeypatch):
@@ -3101,7 +3321,7 @@ async def test_openrouter_agent_chat_suppresses_repeated_tagged_prose(monkeypatc
     )
 
     assert reply == ChatAgentReply()
-    assert len(agent._client.chat.calls) == 2
+    assert len(agent._client.chat.calls) == 3
 
 
 async def test_openrouter_agent_chat_can_allow_tagged_prose_for_debugging(monkeypatch):

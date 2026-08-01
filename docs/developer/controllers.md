@@ -69,16 +69,25 @@ model-authored narration and does not claim success before validation. Human-fac
 terminal, and Discord clients continue to render those authoritative events as prose or UI;
 provider roles are internal to LLM conversation history.
 
-An assistant response without `tool_calls` is invalid for character decisions. A completely
-empty Ollama or OpenRouter response is retried before it enters conversation history, using
-three retries after the original response. If all four attempts are empty, the final empty
-response is retained for evidence and dispatch records an
-`invalid_agent_response` policy rejection; it does not become a wait or abort the controller.
-A non-empty response without `tool_calls` is rejected immediately with a bounded excerpt of
-its content, and those details are returned in the next prompt. Only an explicit call to the
-`wait` tool is an intentional LLM wait. Deterministic behavior and scripted controllers may
-still return `None` as their internal hold signal because they do not participate in a
-provider message protocol.
+An assistant response without `tool_calls` is invalid for character decisions. Provider
+responses pass through three filters enabled by default: invalid textual tool-call markup,
+completely empty or whitespace-only output, and output that reaches the provider token limit
+without a native tool call. Filtered responses never enter conversation history. Every
+filtered response and transient provider failure consumes from the same configured retry
+budget, so changing failure modes cannot extend the request beyond `max_retries + 1` total
+attempts. Each returned response is still sent to the response observer for evidence. After
+the budget is exhausted, dispatch records an `invalid_agent_response` policy rejection; it
+does not become a wait or abort the controller. Other non-empty responses without
+`tool_calls` are rejected immediately with a bounded excerpt of their content, and those
+details are returned in the next prompt. Only an explicit call to the `wait` tool is an
+intentional LLM wait. Deterministic behavior and scripted controllers may still return
+`None` as their internal hold signal because they do not participate in a provider message
+protocol.
+
+The filter contract uses a provider-neutral view of assistant content, native tool-call
+presence, and termination reason. Additional policy filters, such as content-safety rules,
+can be supplied to provider agents through `response_filters` without changing Ollama or
+OpenRouter response decoding.
 
 These provider retries, structured rejections, per-character single-flight locks, latest
 prompt projection slots, and perceived-event buffers are gameplay-engine behavior in
