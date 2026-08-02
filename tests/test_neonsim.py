@@ -28,7 +28,7 @@ from bunnyland.core import (
     replace_component,
     spawn_entity,
 )
-from bunnyland.core.events import CommandRejectedEvent
+from bunnyland.core.events import CommandRejectedEvent, StealthChangedEvent
 from bunnyland.core.handlers.inventory import DropHandler
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 from bunnyland.simpacks.colonysim.mechanics import ResourceStackComponent
@@ -811,6 +811,28 @@ async def test_sneak_through_calm_checkpoint_succeeds():
     stealth = scenario.actor.world.get_entity(scenario.character).get_component(StealthComponent)
     assert stealth.hiding is True
     assert stealth.visibility_level == 0.0
+
+
+async def test_sneak_through_checkpoint_while_hidden_does_not_repeat_stealth_event():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(
+        StealthComponent(visibility_level=0.0, hiding=True, since_epoch=scenario.actor.epoch)
+    )
+    gate = _room_entity(
+        scenario, "fence gap", "checkpoint", [CheckpointComponent(clearance_required=2)]
+    )
+    passed: list[CheckpointPassedEvent] = []
+    changed: list[StealthChangedEvent] = []
+    scenario.actor.bus.subscribe(CheckpointPassedEvent, passed.append)
+    scenario.actor.bus.subscribe(StealthChangedEvent, changed.append)
+
+    await scenario.actor.submit(_cmd(scenario, "sneak", target_id=str(gate)))
+    await scenario.actor.tick(1.0)
+
+    assert passed[0].method == "stealth"
+    assert changed == []
 
 
 # --- claim-safehouse -----------------------------------------------------------------
