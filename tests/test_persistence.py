@@ -34,6 +34,13 @@ from bunnyland.core.ecs import contents
 from bunnyland.discord.components import DiscordRoomFeedComponent
 from bunnyland.engine import GameLoop
 from bunnyland.foundation.needs.mechanics import HungerComponent
+from bunnyland.foundation.storyteller.mechanics import (
+    IncidentComponent,
+    RaidDefender,
+    RaidDefenseComponent,
+    RaidLifecycleComponent,
+    RaidPhase,
+)
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.migrations import WorldMigrationError, migrate_snapshot
 from bunnyland.offline import advance_offline_life
@@ -1882,6 +1889,43 @@ def test_affliction_lifecycle_types_and_legacy_defaults_survive_persistence(tmp_
     assert legacy.stage == "incubating"
     assert legacy.incubation_ends_epoch is None
     assert CureRequestComponent("legacy curse").requested_at_epoch == 0
+
+
+def test_phased_raid_types_survive_persistence(tmp_path):
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    room = spawn_entity(
+        actor.world,
+        [RoomComponent(title="fort"), RaidDefenseComponent(current=40, maximum=80)],
+    )
+    defender = spawn_entity(actor.world, [IdentityComponent(name="guard", kind="character")])
+    incident = spawn_entity(
+        actor.world,
+        [
+            IncidentComponent(kind="barbarian_raid", budget_spent=16, started_at_epoch=10),
+            RaidLifecycleComponent(
+                phase=RaidPhase.ATTACK,
+                total_waves=2,
+                current_wave=1,
+                next_wave_epoch=30,
+            ),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), incident.id)
+    incident.add_relationship(RaidDefender(enrolled_at_epoch=12), defender.id)
+    path = tmp_path / "phased-raid.json"
+
+    save_world(actor, path, meta=WorldMeta(seed="raid"))
+    loaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+
+    loaded_incident = loaded.world.get_entity(incident.id)
+    lifecycle = loaded_incident.get_component(RaidLifecycleComponent)
+    assert lifecycle.phase is RaidPhase.ATTACK
+    assert lifecycle.total_waves == 2
+    assert loaded.world.get_entity(room.id).get_component(RaidDefenseComponent).current == 40
+    assert loaded_incident.get_relationships(RaidDefender) == [
+        (RaidDefender(enrolled_at_epoch=12), defender.id)
+    ]
 
 
 async def test_reloaded_world_keeps_playing(tmp_path):

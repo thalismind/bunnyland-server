@@ -52,3 +52,18 @@ Form a caravan:
 ```
 
 Cargo is removed from inventory and stored on the caravan entity.
+
+Destinations are settlement room ids or exact, unique map-location names. Every member
+must be in the origin room. The caravan and co-located members then advance one connected
+room per tick. A broken route pauses the caravan visibly while it retries live route
+planning; it never teleports around a missing or locked exit.
+
+On arrival, mark the settlement visit and later return along a newly planned route:
+
+```text
+!visit-settlement caravan_id="caravan id"
+!return-caravan caravan_id="caravan id"
+```
+
+The caravan prompt reports outbound, visiting, returning, and paused state. Reaching the
+origin completes the trip and releases its membership relationships.

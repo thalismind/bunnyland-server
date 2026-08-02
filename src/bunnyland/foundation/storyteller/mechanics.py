@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import replace
+from enum import StrEnum
 from functools import partial
 
 from pydantic.dataclasses import dataclass
@@ -16,6 +17,7 @@ from ...core.components import (
     ButtonComponent,
     CharacterComponent,
     DeadComponent,
+    DownedComponent,
     GenerationIntentComponent,
     HealthComponent,
     IdentityComponent,
@@ -72,9 +74,61 @@ class IncidentComponent(Component):
         return (f"Active incident: {self.kind.replace('_', ' ')}.",)
 
 
+class RaidPhase(StrEnum):
+    WARNING = "warning"
+    ATTACK = "attack"
+    RECOVERY = "recovery"
+    COMPLETE = "complete"
+
+
+class RaidOutcome(StrEnum):
+    VICTORY = "victory"
+    DEFEAT = "defeat"
+
+
+@dataclass(frozen=True)
+class RaidLifecycleComponent(Component):
+    phase: RaidPhase = RaidPhase.WARNING
+    warning_until_epoch: int = 0
+    warning_announced: bool = False
+    wave_interval_seconds: int = 30
+    recovery_seconds: int = 120
+    total_waves: int = 1
+    current_wave: int = 0
+    next_wave_epoch: int = 0
+    recovery_until_epoch: int = 0
+    outcome: RaidOutcome | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        wave = f", wave {self.current_wave}/{self.total_waves}" if self.current_wave else ""
+        outcome = f", {self.outcome.value}" if self.outcome is not None else ""
+        return (f"Raid phase: {self.phase.value}{wave}{outcome}.",)
+
+
+@dataclass(frozen=True)
+class RaidDefenseComponent(Component):
+    current: int
+    maximum: int
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        return (f"Raid defense integrity: {self.current}/{self.maximum}.",)
+
+
 @dataclass(frozen=True)
 class IncidentSpawned(Edge):
     kind: str = "spawn"
+
+
+@dataclass(frozen=True)
+class RaidDefender(Edge):
+    enrolled_at_epoch: int = 0
+
+
+@dataclass(frozen=True)
+class RaidAttacker(Edge):
+    wave: int = 1
 
 
 @dataclass(frozen=True)
@@ -137,6 +191,37 @@ class IncidentGeneratedEvent(DomainEvent):
     @property
     def needs(self) -> tuple[str, ...]:
         return self.generation.needs
+
+
+class RaidWarningEvent(DomainEvent):
+    incident_id: str
+    warning_until_epoch: int
+    total_waves: int
+
+
+class RaidPhaseChangedEvent(DomainEvent):
+    incident_id: str
+    phase: RaidPhase
+
+
+class RaidWaveStartedEvent(DomainEvent):
+    incident_id: str
+    wave: int
+    raider_ids: tuple[str, ...]
+
+
+class RaidAttackEvent(DomainEvent):
+    incident_id: str
+    raider_ids: tuple[str, ...]
+    defender_ids: tuple[str, ...]
+    raw_damage: float
+    defense_damage: int
+
+
+class RaidOutcomeEvent(DomainEvent):
+    incident_id: str
+    outcome: RaidOutcome
+    loot_id: str | None = None
 
 
 _event_base = partial(event_base, default_visibility=EventVisibility.SYSTEM)
@@ -316,7 +401,16 @@ def _loot_claimed(world: World, incident: Entity, entity: Entity) -> bool:
 
 def _monster_neutralized(world: World, incident: Entity, entity: Entity) -> bool:
     del world, incident
-    return entity.has_component(DeadComponent) or entity.has_component(SuspendedComponent)
+    if (
+        entity.has_component(DeadComponent)
+        or entity.has_component(DownedComponent)
+        or entity.has_component(SuspendedComponent)
+    ):
+        return True
+    return (
+        entity.has_component(HealthComponent)
+        and entity.get_component(HealthComponent).current <= 0
+    )
 
 
 def _returned_to_incident_room(world: World, incident: Entity, entity: Entity) -> bool:
@@ -383,6 +477,10 @@ def _incident_ready_to_resolve(
     incident_entity: Entity,
     rules: tuple[IncidentResolutionRule, ...] = DEFAULT_RESOLUTION_RULES,
 ) -> bool:
+    if incident_entity.has_component(RaidLifecycleComponent):
+        lifecycle = incident_entity.get_component(RaidLifecycleComponent)
+        if lifecycle.phase is not RaidPhase.COMPLETE:
+            return False
     spawned = tuple(incident_entity.get_relationships(IncidentSpawned))
     if not spawned:
         return False
@@ -606,6 +704,10 @@ def storyteller_fragments(world: World, character) -> list[str]:
             world, entity, perspective=ctx.perspective, room=ctx.room
         )
         lines.extend(entity.get_component(IncidentComponent).prompt_fragments(incident_ctx))
+        if entity.has_component(RaidLifecycleComponent):
+            lines.extend(entity.get_component(RaidLifecycleComponent).prompt_fragments(incident_ctx))
+    if ctx.room.has_component(RaidDefenseComponent):
+        lines.extend(ctx.room.get_component(RaidDefenseComponent).prompt_fragments(ctx))
     return sorted(lines)
 
 
@@ -645,6 +747,17 @@ __all__ = [
     "IncidentResolvedEvent",
     "IncidentSpawned",
     "IncidentStartedEvent",
+    "RaidAttackEvent",
+    "RaidAttacker",
+    "RaidDefender",
+    "RaidDefenseComponent",
+    "RaidLifecycleComponent",
+    "RaidOutcome",
+    "RaidOutcomeEvent",
+    "RaidPhase",
+    "RaidPhaseChangedEvent",
+    "RaidWarningEvent",
+    "RaidWaveStartedEvent",
     "ResolveIncidentHandler",
     "StorytellerIncidentEnrichment",
     "StorytellerComponent",

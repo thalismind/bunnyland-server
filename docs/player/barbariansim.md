@@ -70,14 +70,16 @@ Fortifications track durability. Raids apply damage against that durability.
 
 ## Storyteller raid incidents
 
-Barbarian raids are also storyteller incidents when both `bunnyland.barbariansim` and
-`bunnyland.colonysim` are enabled. The storyteller budget can select a `barbarian_raid`,
-place an active incident in a room, and split the attack budget into a swarm of weak
-raiders led by a few officers and a warlord. Defeating or pacifying the whole swarm lets
-an admin resolve the incident with the normal storyteller command:
+Barbarian raids are Storyteller incidents when both `bunnyland.barbariansim` and
+`bunnyland.colonysim` are enabled. The Storyteller remains the only raid budget and
+cooldown authority. A selected `barbarian_raid` warns for five minutes before spawning
+one to three sequential waves. Newly arrived defenders enroll automatically, attacks
+reduce both defender health and settlement defense integrity, and the prompt reports the
+current phase and wave. Victory creates raid loot; defeat creates none. The incident
+resolves automatically after recovery.
 
 ```text
-!resolve-incident incident_id="barbarian raid"
+!look
 ```
 
 ## Poison and corruption
@@ -159,7 +161,9 @@ Buildings can decay, be upgraded, and be demolished:
 !demolish-building building_id="ruined shack"
 ```
 
-Prepare a base for a siege, then resolve a purge wave against it:
+Prepare a base for a siege. `start-purge-wave` remains a deprecated compatibility alias;
+it now spends the Storyteller's available raid budget and creates the same phased incident
+instead of creating legacy purge state:
 
 ```text
 !prepare-siege base_id="river camp" score=3

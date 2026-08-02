@@ -13,6 +13,7 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     DownedComponent,
+    ExitTo,
     HandlerContext,
     HasInjury,
     HealthComponent,
@@ -20,6 +21,7 @@ from bunnyland.core import (
     InjuryComponent,
     Lane,
     PortableComponent,
+    RoomComponent,
     SleepingComponent,
     build_submitted_command,
     container_of,
@@ -59,8 +61,13 @@ from bunnyland.simpacks.colonysim.mechanics import (
     BakeHandler,
     BedRestComponent,
     BodyPartHealthComponent,
+    CaravanArrivedEvent,
     CaravanComponent,
     CaravanFormedEvent,
+    CaravanPausedEvent,
+    CaravanPhase,
+    CaravanReturnedEvent,
+    CaravanTravelConsequence,
     ClaimOwnershipHandler,
     ColonyIncidentComponent,
     ColonyIncidentResolvedEvent,
@@ -112,6 +119,7 @@ from bunnyland.simpacks.colonysim.mechanics import (
     ResourceNodeComponent,
     ResourceRegenSystem,
     ResourceStackComponent,
+    ReturnCaravanHandler,
     RoomQualityComponent,
     RoomQualityConsequence,
     RoomQualityUpdatedEvent,
@@ -132,8 +140,10 @@ from bunnyland.simpacks.colonysim.mechanics import (
     TradeCompletedEvent,
     TradeOfferComponent,
     UpdatePawnProfileHandler,
+    VisitSettlementHandler,
     WorkPriorityComponent,
     WorkstationComponent,
+    WorldMapLocationComponent,
     colonysim_fragments,
 )
 
@@ -177,6 +187,7 @@ def _install(actor):
     actor.register_consequence(ColonyWealthConsequence())
     actor.register_consequence(MedicalRecoveryConsequence())
     actor.register_consequence(MentalStateConsequence())
+    actor.register_consequence(CaravanTravelConsequence())
 
 
 def _cmd(scenario, command_type, **payload):
@@ -2093,6 +2104,9 @@ async def test_colonysim_catalogue_profile_jobs_prisoners_research_trade_and_sur
     scenario = build_scenario(action_current=60.0, focus_current=60.0)
     _install(scenario.actor)
     room = scenario.actor.world.get_entity(scenario.room_a)
+    scenario.actor.world.get_entity(scenario.room_b).add_component(
+        WorldMapLocationComponent(name="hill market")
+    )
     prisoner = spawn_entity(
         scenario.actor.world,
         [
@@ -2256,6 +2270,7 @@ def test_colonysim_catalogue_handlers_reject_bad_state_directly():
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     room = scenario.actor.world.get_entity(scenario.room_a)
     other_room = scenario.actor.world.get_entity(scenario.room_b)
+    other_room.add_component(WorldMapLocationComponent(name="town"))
     character = scenario.actor.world.get_entity(scenario.character)
     wrong_kind = spawn_entity(
         scenario.actor.world,
@@ -3075,6 +3090,7 @@ def test_form_caravan_skips_zero_quantity_cargo():
     world = scenario.actor.world
     ctx = HandlerContext(world, scenario.actor.epoch)
     character = world.get_entity(scenario.character)
+    world.get_entity(scenario.room_b).add_component(WorldMapLocationComponent(name="town"))
     _stack(scenario, "wood", 3)
 
     result = execute_handler(
@@ -3092,6 +3108,142 @@ def test_form_caravan_skips_zero_quantity_cargo():
     # Zero-quantity cargo entries are validated but consume nothing.
     wood = world.get_entity(_stack_lookup(world, character, "wood"))
     assert wood.get_component(ResourceStackComponent).quantity == 3
+
+
+def test_caravan_travels_visits_and_returns_with_members():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    origin = world.get_entity(scenario.room_a)
+    destination = world.get_entity(scenario.room_b)
+    destination.add_component(WorldMapLocationComponent(name="hill market", faction_id="hill"))
+    ctx = HandlerContext(world, 10)
+
+    formed = execute_handler(
+        FormCaravanHandler(),
+        ctx,
+        _handler_cmd(scenario, "form-caravan", destination="hill market"),
+    )
+    assert formed.ok is True
+    caravan = next(world.query().with_all([CaravanComponent]).execute_entities())
+    assert container_of(caravan) == origin.id
+
+    arrival_events = CaravanTravelConsequence().process(world, 11)
+    state = caravan.get_component(CaravanComponent)
+    assert container_of(caravan) == destination.id
+    assert container_of(world.get_entity(scenario.character)) == destination.id
+    assert state.phase is CaravanPhase.VISITING
+    assert isinstance(arrival_events[0], CaravanArrivedEvent)
+
+    visit = execute_handler(
+        VisitSettlementHandler(),
+        HandlerContext(world, 12),
+        _handler_cmd(scenario, "visit-settlement", caravan_id=str(caravan.id)),
+    )
+    assert visit.ok is True
+    assert caravan.get_component(CaravanComponent).visited_at_epoch == 12
+
+    returning = execute_handler(
+        ReturnCaravanHandler(),
+        HandlerContext(world, 13),
+        _handler_cmd(scenario, "return-caravan", caravan_id=str(caravan.id)),
+    )
+    assert returning.ok is True
+    returned_events = CaravanTravelConsequence().process(world, 14)
+    assert container_of(caravan) == origin.id
+    assert container_of(world.get_entity(scenario.character)) == origin.id
+    assert caravan.get_component(CaravanComponent).phase is CaravanPhase.COMPLETE
+    assert caravan.get_component(CaravanComponent).returned is True
+    assert world.get_entity(scenario.character).get_relationships(MemberOfCaravan) == []
+    assert isinstance(returned_events[0], CaravanReturnedEvent)
+
+
+def test_caravan_pauses_and_replans_when_route_breaks():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    origin = world.get_entity(scenario.room_a)
+    destination = world.get_entity(scenario.room_b)
+    destination.add_component(WorldMapLocationComponent(name="market"))
+    result = execute_handler(
+        FormCaravanHandler(),
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "form-caravan", destination=str(destination.id)),
+    )
+    assert result.ok is True
+    caravan = next(world.query().with_all([CaravanComponent]).execute_entities())
+    exit_edge = next(
+        edge for edge, target in origin.get_relationships(ExitTo) if target == destination.id
+    )
+    origin.remove_relationship(ExitTo, destination.id)
+
+    paused = CaravanTravelConsequence().process(world, 2)
+    assert container_of(caravan) == origin.id
+    assert caravan.get_component(CaravanComponent).pause_reason == "route is blocked"
+    assert isinstance(paused[0], CaravanPausedEvent)
+
+    origin.add_relationship(exit_edge, destination.id)
+    resumed = CaravanTravelConsequence().process(world, 3)
+    assert container_of(caravan) == destination.id
+    assert caravan.get_component(CaravanComponent).pause_reason is None
+    assert isinstance(resumed[0], CaravanArrivedEvent)
+
+
+def test_form_caravan_validates_location_route_and_colocation():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    origin = world.get_entity(scenario.room_a)
+    destination = world.get_entity(scenario.room_b)
+    destination.add_component(WorldMapLocationComponent(name="duplicate"))
+    spawn_entity(
+        world,
+        [RoomComponent(title="duplicate"), WorldMapLocationComponent(name="duplicate")],
+    )
+    unreachable = spawn_entity(
+        world,
+        [RoomComponent(title="isolated"), WorldMapLocationComponent(name="isolated")],
+    )
+    traveler = spawn_entity(world, [CharacterComponent()])
+    destination.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), traveler.id)
+    ctx = HandlerContext(world, 1)
+
+    cases = (
+        ("entity_999", (), "destination does not exist"),
+        (str(traveler.id), (), "destination is not a world map location"),
+        ("duplicate", (), "destination name is ambiguous"),
+        (str(unreachable.id), (), "destination is unreachable"),
+        (str(destination.id), (str(traveler.id),), "caravan members must be co-located"),
+    )
+    for destination_value, members, reason in cases:
+        result = execute_handler(
+            FormCaravanHandler(),
+            ctx,
+            _handler_cmd(
+                scenario,
+                "form-caravan",
+                destination=destination_value,
+                member_ids=members,
+            ),
+        )
+        assert result.ok is False
+        assert result.reason == reason
+    assert container_of(world.get_entity(scenario.character)) == origin.id
+
+
+def test_caravan_consequence_uses_component_index_with_world_decoys():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    destination = world.get_entity(scenario.room_b)
+    destination.add_component(WorldMapLocationComponent(name="market"))
+    for index in range(500):
+        spawn_entity(world, [IdentityComponent(name=f"decoy {index}", kind="prop")])
+    result = execute_handler(
+        FormCaravanHandler(),
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "form-caravan", destination="market"),
+    )
+    assert result.ok is True
+    events = CaravanTravelConsequence().process(world, 2)
+    assert len(events) == 1
+    assert isinstance(events[0], CaravanArrivedEvent)
 
 
 def _stack_lookup(world, character, resource_type):

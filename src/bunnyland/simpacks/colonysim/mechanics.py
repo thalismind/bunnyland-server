@@ -6,7 +6,9 @@ intentionally does not include base building or hidden job automation.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import field, replace
+from enum import StrEnum
 from functools import partial
 
 from pydantic.dataclasses import dataclass
@@ -43,7 +45,7 @@ from ...core.ecs import (
 from ...core.ecs import (
     room_id_for as _room_id,
 )
-from ...core.edges import ContainmentMode, Contains, HasInjury
+from ...core.edges import ContainmentMode, Contains, ExitTo, HasInjury
 from ...core.events import (
     DomainEvent,
     EventVisibility,
@@ -324,17 +326,49 @@ class TradeOfferComponent(Component):
 
 
 @dataclass(frozen=True)
+class WorldMapLocationComponent(Component):
+    name: str
+    faction_id: str | None = None
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        faction = f" ({self.faction_id})" if self.faction_id else ""
+        return (f"Settlement: {self.name}{faction}.",)
+
+
+class CaravanPhase(StrEnum):
+    OUTBOUND = "outbound"
+    VISITING = "visiting"
+    RETURNING = "returning"
+    COMPLETE = "complete"
+
+
+@dataclass(frozen=True)
 class CaravanComponent(Component):
     destination: str
     cargo: dict[str, int] = field(default_factory=dict)
     departed_at_epoch: int = 0
     returned: bool = False
+    origin_room_id: str | None = None
+    destination_room_id: str | None = None
+    route: tuple[str, ...] = ()
+    phase: CaravanPhase = CaravanPhase.OUTBOUND
+    progress: int = 0
+    arrived_at_epoch: int = 0
+    visited_at_epoch: int = 0
+    returned_at_epoch: int = 0
+    pause_reason: str | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         del ctx
         if self.returned:
             return ()
-        return (f"Caravan bound for {self.destination}.",)
+        if self.origin_room_id is None or self.destination_room_id is None:
+            return (f"Caravan bound for {self.destination}.",)
+        state = self.phase.value
+        if self.pause_reason:
+            state = f"{state}, paused: {self.pause_reason}"
+        return (f"Caravan bound for {self.destination} ({state}).",)
 
 
 @dataclass(frozen=True)
@@ -546,6 +580,26 @@ class TradeCompletedEvent(DomainEvent):
 class CaravanFormedEvent(DomainEvent):
     caravan_id: str
     destination: str
+
+
+class CaravanPausedEvent(DomainEvent):
+    caravan_id: str
+    reason: str
+
+
+class CaravanArrivedEvent(DomainEvent):
+    caravan_id: str
+    location_id: str
+
+
+class SettlementVisitedEvent(DomainEvent):
+    caravan_id: str
+    location_id: str
+
+
+class CaravanReturnedEvent(DomainEvent):
+    caravan_id: str
+    origin_id: str
 
 
 class SurgeryPerformedEvent(DomainEvent):
@@ -817,6 +871,209 @@ class MentalStateConsequence:
         return events
 
 
+def _resolve_caravan_destination(
+    world: World, destination: str
+) -> tuple[EntityId | None, str | None]:
+    destination_id = parse_entity_id(destination)
+    if destination_id is not None:
+        if not world.has_entity(destination_id):
+            return None, "destination does not exist"
+        if not world.get_entity(destination_id).has_component(WorldMapLocationComponent):
+            return None, "destination is not a world map location"
+        return destination_id, None
+    matches = [
+        entity.id
+        for entity in world.query().with_all([WorldMapLocationComponent]).execute_entities()
+        if entity.get_component(WorldMapLocationComponent).name == destination
+    ]
+    if not matches:
+        return None, "destination does not exist"
+    if len(matches) > 1:
+        return None, "destination name is ambiguous"
+    return matches[0], None
+
+
+def _caravan_route(
+    world: World, origin_id: EntityId, destination_id: EntityId
+) -> tuple[EntityId, ...] | None:
+    if origin_id == destination_id:
+        return (origin_id,)
+    queue = deque([(origin_id, (origin_id,))])
+    visited = {origin_id}
+    while queue:
+        room_id, path = queue.popleft()
+        if not world.has_entity(room_id):
+            continue
+        room = world.get_entity(room_id)
+        exits = sorted(room.get_relationships(ExitTo), key=lambda item: str(item[1]))
+        for edge, target_id in exits:
+            if edge.locked or target_id in visited or not world.has_entity(target_id):
+                continue
+            visited.add(target_id)
+            next_path = (*path, target_id)
+            if target_id == destination_id:
+                return next_path
+            queue.append((target_id, next_path))
+    return None
+
+
+def _caravan_target_id(caravan: CaravanComponent) -> EntityId | None:
+    raw = (
+        caravan.origin_room_id
+        if caravan.phase is CaravanPhase.RETURNING
+        else caravan.destination_room_id
+    )
+    return parse_entity_id(raw)
+
+
+class CaravanTravelConsequence:
+    """Advance each active caravan one routed room hop per world consequence tick."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        query = world.query().with_all([CaravanComponent])
+        for caravan_entity in sorted(query.execute_entities(), key=lambda entity: str(entity.id)):
+            caravan = caravan_entity.get_component(CaravanComponent)
+            if caravan.returned or caravan.phase in (CaravanPhase.VISITING, CaravanPhase.COMPLETE):
+                continue
+            current_id = container_of(caravan_entity)
+            target_id = _caravan_target_id(caravan)
+            # Old persisted caravans have no endpoints. They remain readable and inert.
+            if current_id is None or target_id is None or not world.has_entity(target_id):
+                continue
+            route_ids = tuple(parse_entity_id(room_id) for room_id in caravan.route)
+            route_valid = (
+                bool(route_ids)
+                and all(room_id is not None and world.has_entity(room_id) for room_id in route_ids)
+                and caravan.progress < len(route_ids)
+                and route_ids[caravan.progress] == current_id
+            )
+            next_id = (
+                route_ids[caravan.progress + 1]
+                if route_valid and caravan.progress + 1 < len(route_ids)
+                else None
+            )
+            if next_id is not None:
+                current_room = world.get_entity(current_id)
+                linked = any(
+                    candidate_id == next_id and not edge.locked
+                    for edge, candidate_id in current_room.get_relationships(ExitTo)
+                )
+                route_valid = linked
+            if not route_valid or next_id is None:
+                replanned = _caravan_route(world, current_id, target_id)
+                if replanned is None:
+                    reason = "route is blocked"
+                    if caravan.pause_reason != reason:
+                        replace_component(caravan_entity, replace(caravan, pause_reason=reason))
+                        events.append(
+                            CaravanPausedEvent(
+                                **_event_base(
+                                    epoch,
+                                    visibility=EventVisibility.ROOM,
+                                    actor_id=str(caravan_entity.id),
+                                    room_id=str(current_id),
+                                    target_ids=(str(caravan_entity.id),),
+                                    caravan_id=str(caravan_entity.id),
+                                    reason=reason,
+                                )
+                            )
+                        )
+                    continue
+                caravan = replace(
+                    caravan,
+                    route=tuple(str(room_id) for room_id in replanned),
+                    progress=0,
+                    pause_reason=None,
+                )
+                next_id = replanned[1] if len(replanned) > 1 else None
+            if next_id is None:
+                self._arrive(world, caravan_entity, caravan, current_id, epoch, events)
+                continue
+            world.get_entity(current_id).remove_relationship(Contains, caravan_entity.id)
+            world.get_entity(next_id).add_relationship(
+                Contains(mode=ContainmentMode.ROOM_CONTENT), caravan_entity.id
+            )
+            for member_id, _edge in caravan_entity.get_incoming_relationships(MemberOfCaravan):
+                if not world.has_entity(member_id):
+                    continue
+                member = world.get_entity(member_id)
+                if container_of(member) != current_id:
+                    continue
+                world.get_entity(current_id).remove_relationship(Contains, member_id)
+                world.get_entity(next_id).add_relationship(
+                    Contains(mode=ContainmentMode.ROOM_CONTENT), member_id
+                )
+            advanced = replace(caravan, progress=caravan.progress + 1, pause_reason=None)
+            if next_id == target_id:
+                self._arrive(world, caravan_entity, advanced, next_id, epoch, events)
+            else:
+                replace_component(caravan_entity, advanced)
+        return events
+
+    @staticmethod
+    def _arrive(
+        world: World,
+        caravan_entity: Entity,
+        caravan: CaravanComponent,
+        location_id: EntityId,
+        epoch: int,
+        events: list[DomainEvent],
+    ) -> None:
+        if caravan.phase is CaravanPhase.OUTBOUND:
+            replace_component(
+                caravan_entity,
+                replace(
+                    caravan,
+                    phase=CaravanPhase.VISITING,
+                    arrived_at_epoch=epoch,
+                    pause_reason=None,
+                ),
+            )
+            events.append(
+                CaravanArrivedEvent(
+                    **_event_base(
+                        epoch,
+                        visibility=EventVisibility.ROOM,
+                        actor_id=str(caravan_entity.id),
+                        room_id=str(location_id),
+                        target_ids=(str(caravan_entity.id), str(location_id)),
+                        caravan_id=str(caravan_entity.id),
+                        location_id=str(location_id),
+                    )
+                )
+            )
+            return
+        replace_component(
+            caravan_entity,
+            replace(
+                caravan,
+                phase=CaravanPhase.COMPLETE,
+                returned=True,
+                returned_at_epoch=epoch,
+                pause_reason=None,
+            ),
+        )
+        for member_id, _edge in tuple(
+            caravan_entity.get_incoming_relationships(MemberOfCaravan)
+        ):
+            if world.has_entity(member_id):
+                world.get_entity(member_id).remove_relationship(MemberOfCaravan, caravan_entity.id)
+        events.append(
+            CaravanReturnedEvent(
+                **_event_base(
+                    epoch,
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(caravan_entity.id),
+                    room_id=str(location_id),
+                    target_ids=(str(caravan_entity.id), str(location_id)),
+                    caravan_id=str(caravan_entity.id),
+                    origin_id=str(location_id),
+                )
+            )
+        )
+
+
 def ensure_colonysim_marker(actor) -> ColonySimComponent:
     for entity in actor.world.query().with_all([ColonySimComponent]).execute_entities():
         return entity.get_component(ColonySimComponent)
@@ -830,6 +1087,7 @@ def install_colonysim(actor) -> None:
     actor.register_consequence(ColonyWealthConsequence())
     actor.register_consequence(MedicalRecoveryConsequence())
     actor.register_consequence(MentalStateConsequence())
+    actor.register_consequence(CaravanTravelConsequence())
 
 
 def _reservation_holder(entity: Entity) -> EntityId | None:
@@ -2299,6 +2557,8 @@ class FormCaravanHandler:
         character_id = parse_entity_id(command.character_id)
         if character_id is None:
             return rejected("invalid character id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         destination = str(command.payload.get("destination", "")).strip()
         if not destination:
             return rejected("destination is required")
@@ -2306,6 +2566,9 @@ class FormCaravanHandler:
         if not isinstance(raw_cargo, dict):
             return rejected("cargo must be a mapping")
         character = ctx.entity(character_id)
+        origin_id = container_of(character)
+        if origin_id is None or not ctx.world.has_entity(origin_id):
+            return rejected("character is not at a location")
         cargo = {str(key): int(value) for key, value in raw_cargo.items()}
         for resource_type, quantity in cargo.items():
             if quantity < 0:
@@ -2329,7 +2592,16 @@ class FormCaravanHandler:
             parsed = parse_entity_id(member_id)
             if parsed is None or not ctx.world.has_entity(parsed):
                 return rejected("caravan member does not exist")
+            if container_of(ctx.world.get_entity(parsed)) != origin_id:
+                return rejected("caravan members must be co-located")
             parsed_member_ids.append(parsed)
+        destination_id, destination_error = _resolve_caravan_destination(ctx.world, destination)
+        if destination_error is not None:
+            return rejected(destination_error)
+        assert destination_id is not None
+        route = _caravan_route(ctx.world, origin_id, destination_id)
+        if route is None:
+            return rejected("destination is unreachable")
         caravan = EntityReference()
         operations.append(
             AddEntity(
@@ -2339,10 +2611,16 @@ class FormCaravanHandler:
                         destination=destination,
                         cargo=cargo,
                         departed_at_epoch=ctx.epoch,
+                        origin_room_id=str(origin_id),
+                        destination_room_id=str(destination_id),
+                        route=tuple(str(room_id) for room_id in route),
                     ),
                 ),
                 reference=caravan,
             )
+        )
+        operations.append(
+            AddEdge(origin_id, caravan, Contains(mode=ContainmentMode.ROOM_CONTENT))
         )
         for member_id in parsed_member_ids:
             operations.append(AddEdge(member_id, caravan, MemberOfCaravan()))
@@ -2360,6 +2638,91 @@ class FormCaravanHandler:
             )
 
         return planned(MutationPlan(tuple(operations)), caravan_event)
+
+
+class VisitSettlementHandler:
+    command_type = "visit-settlement"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        caravan_id = parse_entity_id(command.payload.get("caravan_id"))
+        if character_id is None or caravan_id is None:
+            return rejected("invalid character or caravan id")
+        if not ctx.world.has_entity(character_id) or not ctx.world.has_entity(caravan_id):
+            return rejected("character or caravan does not exist")
+        character = ctx.entity(character_id)
+        caravan_entity = ctx.entity(caravan_id)
+        if not caravan_entity.has_component(CaravanComponent):
+            return rejected("target is not a caravan")
+        if not character.has_relationship(MemberOfCaravan, caravan_id):
+            return rejected("you are not a member of that caravan")
+        caravan = caravan_entity.get_component(CaravanComponent)
+        if caravan.phase is not CaravanPhase.VISITING:
+            return rejected("caravan has not arrived at a settlement")
+        location_id = parse_entity_id(caravan.destination_room_id)
+        if location_id is None or container_of(caravan_entity) != location_id:
+            return rejected("caravan is not at its destination")
+        if caravan.visited_at_epoch:
+            return rejected("settlement has already been visited")
+        return planned(
+            MutationPlan(
+                (SetComponent(caravan_id, replace(caravan, visited_at_epoch=ctx.epoch)),)
+            ),
+            SettlementVisitedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=str(location_id),
+                    target_ids=(str(caravan_id), str(location_id)),
+                    caravan_id=str(caravan_id),
+                    location_id=str(location_id),
+                )
+            ),
+        )
+
+
+class ReturnCaravanHandler:
+    command_type = "return-caravan"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        caravan_id = parse_entity_id(command.payload.get("caravan_id"))
+        if character_id is None or caravan_id is None:
+            return rejected("invalid character or caravan id")
+        if not ctx.world.has_entity(character_id) or not ctx.world.has_entity(caravan_id):
+            return rejected("character or caravan does not exist")
+        character = ctx.entity(character_id)
+        caravan_entity = ctx.entity(caravan_id)
+        if not caravan_entity.has_component(CaravanComponent):
+            return rejected("target is not a caravan")
+        if not character.has_relationship(MemberOfCaravan, caravan_id):
+            return rejected("you are not a member of that caravan")
+        caravan = caravan_entity.get_component(CaravanComponent)
+        if caravan.phase is not CaravanPhase.VISITING:
+            return rejected("caravan is not visiting a settlement")
+        current_id = container_of(caravan_entity)
+        origin_id = parse_entity_id(caravan.origin_room_id)
+        if current_id is None or origin_id is None or not ctx.world.has_entity(origin_id):
+            return rejected("caravan origin does not exist")
+        route = _caravan_route(ctx.world, current_id, origin_id)
+        if route is None:
+            return rejected("caravan origin is unreachable")
+        return planned(
+            MutationPlan(
+                (
+                    SetComponent(
+                        caravan_id,
+                        replace(
+                            caravan,
+                            phase=CaravanPhase.RETURNING,
+                            route=tuple(str(room_id) for room_id in route),
+                            progress=0,
+                            pause_reason=None,
+                        ),
+                    ),
+                )
+            )
+        )
 
 
 class PerformSurgeryHandler:
@@ -2607,9 +2970,13 @@ __all__ = [
     "BakeHandler",
     "BedRestComponent",
     "BodyPartHealthComponent",
+    "CaravanArrivedEvent",
     "CaravanComponent",
-    "MemberOfCaravan",
     "CaravanFormedEvent",
+    "CaravanPausedEvent",
+    "CaravanPhase",
+    "CaravanReturnedEvent",
+    "CaravanTravelConsequence",
     "CharacterRescuedEvent",
     "ClaimOwnershipHandler",
     "ColonySimComponent",
@@ -2641,6 +3008,7 @@ __all__ = [
     "MentalStateChangedEvent",
     "MentalStateComponent",
     "MentalStateConsequence",
+    "MemberOfCaravan",
     "MergeStackHandler",
     "Owns",
     "PawnProfileComponent",
@@ -2658,6 +3026,7 @@ __all__ = [
     "ResearchProgressedEvent",
     "ResearchProjectComponent",
     "ResearchProjectHandler",
+    "ReturnCaravanHandler",
     "ReserveHandler",
     "ReservedBy",
     "RescueToBedHandler",
@@ -2676,6 +3045,7 @@ __all__ = [
     "SplitStackHandler",
     "StockpileComponent",
     "StorageFilterComponent",
+    "SettlementVisitedEvent",
     "SurgeryBillComponent",
     "SurgeryPerformedEvent",
     "TendWoundHandler",
@@ -2684,10 +3054,12 @@ __all__ = [
     "TradeCompletedEvent",
     "TradeOfferComponent",
     "UpdatePawnProfileHandler",
+    "VisitSettlementHandler",
     "WorkCapabilityComponent",
     "WorkPriorityComponent",
     "WorkPrioritySetEvent",
     "WorkstationComponent",
+    "WorldMapLocationComponent",
     "WoundTendedEvent",
     "colonysim_fragments",
     "ensure_colonysim_marker",

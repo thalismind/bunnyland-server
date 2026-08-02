@@ -8,13 +8,32 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from math import ceil
 from random import Random
 from uuid import uuid4
 
 from pydantic.dataclasses import dataclass
-from relics import Component, EntityId, Frequency, System, World
+from relics import Component, Entity, EntityId, Frequency, System, World
 
 from bunnyland.foundation.policy.mechanics import BoundaryTag, PolicyGate
+from bunnyland.foundation.storyteller.mechanics import (
+    IncidentBudgetComponent,
+    IncidentComponent,
+    IncidentHistoryComponent,
+    IncidentSpawned,
+    RaidAttacker,
+    RaidAttackEvent,
+    RaidDefender,
+    RaidDefenseComponent,
+    RaidLifecycleComponent,
+    RaidOutcome,
+    RaidOutcomeEvent,
+    RaidPhase,
+    RaidPhaseChangedEvent,
+    RaidWarningEvent,
+    RaidWaveStartedEvent,
+    StorytellerComponent,
+)
 
 from ...core.commands import SubmittedCommand
 from ...core.components import (
@@ -61,6 +80,7 @@ from ...core.mutations import (
     RemoveComponent,
     RemoveEdge,
     SetComponent,
+    SetComponentFactory,
 )
 from ...prompts import ComponentPromptContext
 
@@ -84,6 +104,9 @@ WARLORD_DAMAGE = 9.0
 RAIDER_COST = 1
 OFFICER_COST = 3
 WARLORD_COST = 5
+RAID_WARNING_SECONDS = 300
+RAID_WAVE_INTERVAL_SECONDS = 30
+RAID_RECOVERY_SECONDS = 120
 
 _RAIDER_EPITHETS = (
     "ironjaw",
@@ -335,6 +358,11 @@ class PurgeWaveComponent(Component):
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         state = "active" if self.active else "quiet"
         return (f"Purge wave at {entity_name(ctx.entity)}: wave {self.wave}, {state}.",)
+
+
+@dataclass(frozen=True)
+class RaidLootComponent(Component):
+    value: int
 
 
 @dataclass(frozen=True)
@@ -1616,6 +1644,8 @@ class PrepareSiegeHandler:
 
 
 class StartPurgeWaveHandler:
+    """Deprecated compatibility alias for a Storyteller-budgeted phased raid."""
+
     command_type = "start-purge-wave"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
@@ -1631,35 +1661,100 @@ class StartPurgeWaveHandler:
         if base_id not in reachable_ids(ctx.world, character):
             return rejected("base is not reachable")
         base = ctx.entity(base_id)
-        current = (
-            base.get_component(PurgeWaveComponent)
-            if base.has_component(PurgeWaveComponent)
-            else PurgeWaveComponent()
-        )
-        intensity = float(command.payload.get("intensity", current.intensity))
+        intensity = float(command.payload.get("intensity", 1.0))
         if intensity <= 0:
             return rejected("purge intensity must be positive")
-        updated = replace(
-            current,
-            wave=current.wave + 1,
-            intensity=intensity,
-            active=True,
-            started_at_epoch=ctx.epoch,
+        room_id = base_id if base.has_component(RoomComponent) else container_of(base)
+        if room_id is None or not ctx.world.has_entity(room_id):
+            return rejected("base is not in a defended room")
+        if any(
+            entity.get_component(RaidLifecycleComponent).phase is not RaidPhase.COMPLETE
+            for entity in ctx.world.query().with_all([RaidLifecycleComponent]).execute_entities()
+            if container_of(entity) == room_id
+        ):
+            return rejected("a raid is already active here")
+        storytellers = sorted(
+            ctx.world.query()
+            .with_all([StorytellerComponent, IncidentBudgetComponent])
+            .execute_entities(),
+            key=lambda entity: str(entity.id),
         )
-        return planned(
-            MutationPlan((SetComponent(base_id, updated),)),
-            PurgeWaveStartedEvent(
+        if not storytellers:
+            return rejected("storyteller raid budget is unavailable")
+        storyteller_entity = storytellers[0]
+        budget = storyteller_entity.get_component(IncidentBudgetComponent)
+        raid_cost = 12.0
+        if budget.points < raid_cost:
+            return rejected("storyteller raid budget is unavailable")
+        storyteller = storyteller_entity.get_component(StorytellerComponent)
+        history = (
+            storyteller_entity.get_component(IncidentHistoryComponent)
+            if storyteller_entity.has_component(IncidentHistoryComponent)
+            else IncidentHistoryComponent()
+        )
+        room = ctx.world.get_entity(room_id)
+        maximum = max(25, ceil(raid_cost * 10))
+        defense = (
+            room.get_component(RaidDefenseComponent)
+            if room.has_component(RaidDefenseComponent)
+            else RaidDefenseComponent(current=maximum, maximum=maximum)
+        )
+        incident = EntityReference()
+        operations = (
+            AddEntity(
+                (
+                    IdentityComponent(name="barbarian raid", kind="incident"),
+                    IncidentComponent(
+                        kind="barbarian_raid",
+                        budget_spent=raid_cost,
+                        started_at_epoch=ctx.epoch,
+                    ),
+                    RaidLifecycleComponent(
+                        warning_until_epoch=ctx.epoch + RAID_WARNING_SECONDS,
+                        wave_interval_seconds=RAID_WAVE_INTERVAL_SECONDS,
+                        recovery_seconds=RAID_RECOVERY_SECONDS,
+                        total_waves=max(1, min(3, ceil(raid_cost / 8))),
+                    ),
+                ),
+                reference=incident,
+            ),
+            AddEdge(room_id, incident, Contains(mode=ContainmentMode.ROOM_CONTENT)),
+            SetComponent(room_id, defense),
+            SetComponent(
+                storyteller_entity.id,
+                replace(budget, points=budget.points - raid_cost, last_updated_epoch=ctx.epoch),
+            ),
+            SetComponent(
+                storyteller_entity.id,
+                replace(
+                    storyteller,
+                    next_incident_epoch=ctx.epoch + storyteller.interval_seconds,
+                ),
+            ),
+            SetComponentFactory(
+                storyteller_entity.id,
+                IncidentHistoryComponent,
+                lambda: IncidentHistoryComponent(
+                    incident_ids=(*history.incident_ids, str(incident.require()))[-10:]
+                ),
+            ),
+        )
+
+        def purge_event() -> DomainEvent:
+            incident_id = str(incident.require())
+            return PurgeWaveStartedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(actor_id),
-                    room_id=str(container_of(character)) if container_of(character) else None,
-                    target_ids=(str(base_id),),
+                    room_id=str(room_id),
+                    target_ids=(incident_id, str(base_id)),
                     base_id=str(base_id),
-                    wave=updated.wave,
-                    intensity=updated.intensity,
+                    wave=0,
+                    intensity=raid_cost,
                 )
-            ),
-        )
+            )
+
+        return planned(MutationPlan(operations), purge_event)
 
 
 class PerformRitualHandler:
@@ -2416,7 +2511,7 @@ def generate_raid_spawn_specs(
 
 
 class BarbarianRaidEnrichment:
-    """Barbarian-sim incident enrichment for generated storyteller raid swarms."""
+    """Attach a warning-first lifecycle to generated Storyteller raids."""
 
     def __init__(self, world: World):
         self.world = world
@@ -2429,8 +2524,6 @@ class BarbarianRaidEnrichment:
     def _on_incident(self, event) -> None:
         if event.kind != "barbarian_raid" and "raid-swarm" not in event.wants:
             return
-        from bunnyland.foundation.storyteller.mechanics import IncidentSpawned
-
         incident_id = parse_entity_id(event.incident_id)
         room_id = parse_entity_id(event.room_id)
         if (
@@ -2441,10 +2534,252 @@ class BarbarianRaidEnrichment:
         ):
             return
         incident = self.world.get_entity(incident_id)
-        if incident.get_relationships(IncidentSpawned):
+        if incident.has_component(RaidLifecycleComponent):
             return
         room = self.world.get_entity(room_id)
-        for spec in generate_raid_spawn_specs(event.budget_spent, event.seed):
+        _start_raid_lifecycle(self.world, incident, room, event.world_epoch, event.budget_spent)
+
+
+def _start_raid_lifecycle(
+    world: World,
+    incident: Entity,
+    room: Entity,
+    epoch: int,
+    budget_spent: float,
+    *,
+    warning_seconds: int = RAID_WARNING_SECONDS,
+    wave_interval_seconds: int = RAID_WAVE_INTERVAL_SECONDS,
+    recovery_seconds: int = RAID_RECOVERY_SECONDS,
+) -> None:
+    del world
+    wave_count = max(1, min(3, ceil(budget_spent / 8)))
+    incident.add_component(
+        RaidLifecycleComponent(
+            warning_until_epoch=epoch + warning_seconds,
+            wave_interval_seconds=wave_interval_seconds,
+            recovery_seconds=recovery_seconds,
+            total_waves=wave_count,
+        )
+    )
+    if not room.has_component(RaidDefenseComponent):
+        maximum = max(25, ceil(budget_spent * 10))
+        room.add_component(RaidDefenseComponent(current=maximum, maximum=maximum))
+
+
+def _raid_event_base(
+    epoch: int,
+    incident: Entity,
+    *,
+    target_ids: tuple[str, ...] = (),
+    actor_id: str | None = None,
+) -> dict[str, object]:
+    room_id = container_of(incident)
+    return _barbarian_event_base(
+        epoch,
+        visibility=EventVisibility.ROOM if room_id is not None else EventVisibility.SYSTEM,
+        actor_id=actor_id or str(incident.id),
+        room_id=str(room_id) if room_id is not None else None,
+        target_ids=target_ids or (str(incident.id),),
+    )
+
+
+def _raid_neutralized(entity: Entity) -> bool:
+    if entity.has_component(DeadComponent) or entity.has_component(SuspendedComponent):
+        return True
+    if entity.has_component(DownedComponent):
+        return True
+    return (
+        entity.has_component(HealthComponent)
+        and entity.get_component(HealthComponent).current <= 0
+    )
+
+
+class RaidLifecycleConsequence:
+    """Advance warning, sequential raid waves, combat, recovery, and completion."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        query = world.query().with_all([RaidLifecycleComponent])
+        for incident in sorted(query.execute_entities(), key=lambda entity: str(entity.id)):
+            if not incident.has_component(IncidentComponent):
+                continue
+            lifecycle = incident.get_component(RaidLifecycleComponent)
+            room_id = container_of(incident)
+            if room_id is None or not world.has_entity(room_id):
+                continue
+            room = world.get_entity(room_id)
+            if lifecycle.phase is RaidPhase.WARNING:
+                lifecycle = self._warning(incident, lifecycle, epoch, events)
+                if lifecycle.phase is RaidPhase.WARNING:
+                    continue
+            if lifecycle.phase is RaidPhase.ATTACK:
+                self._attack(world, incident, room, lifecycle, epoch, events)
+                continue
+            if lifecycle.phase is RaidPhase.RECOVERY and epoch >= lifecycle.recovery_until_epoch:
+                defense = room.get_component(RaidDefenseComponent)
+                floor = ceil(defense.maximum * 0.25)
+                if defense.current < floor:
+                    replace_component(room, replace(defense, current=floor))
+                replace_component(incident, replace(lifecycle, phase=RaidPhase.COMPLETE))
+                events.append(
+                    RaidPhaseChangedEvent(
+                        **_raid_event_base(epoch, incident),
+                        incident_id=str(incident.id),
+                        phase=RaidPhase.COMPLETE,
+                    )
+                )
+        return events
+
+    @staticmethod
+    def _warning(
+        incident: Entity,
+        lifecycle: RaidLifecycleComponent,
+        epoch: int,
+        events: list[DomainEvent],
+    ) -> RaidLifecycleComponent:
+        if not lifecycle.warning_announced:
+            lifecycle = replace(lifecycle, warning_announced=True)
+            replace_component(incident, lifecycle)
+            events.append(
+                RaidWarningEvent(
+                    **_raid_event_base(epoch, incident),
+                    incident_id=str(incident.id),
+                    warning_until_epoch=lifecycle.warning_until_epoch,
+                    total_waves=lifecycle.total_waves,
+                )
+            )
+        if epoch < lifecycle.warning_until_epoch:
+            return lifecycle
+        lifecycle = replace(lifecycle, phase=RaidPhase.ATTACK)
+        replace_component(incident, lifecycle)
+        events.append(
+            RaidPhaseChangedEvent(
+                **_raid_event_base(epoch, incident),
+                incident_id=str(incident.id),
+                phase=RaidPhase.ATTACK,
+            )
+        )
+        return lifecycle
+
+    def _attack(
+        self,
+        world: World,
+        incident: Entity,
+        room: Entity,
+        lifecycle: RaidLifecycleComponent,
+        epoch: int,
+        events: list[DomainEvent],
+    ) -> None:
+        self._enroll_defenders(world, incident, room, epoch)
+        attackers = self._wave_attackers(world, incident, lifecycle.current_wave)
+        blockers = [attacker for attacker in attackers if not _raid_neutralized(attacker)]
+        if not blockers:
+            if lifecycle.current_wave >= lifecycle.total_waves:
+                self._finish(world, incident, room, lifecycle, epoch, RaidOutcome.VICTORY, events)
+                return
+            if lifecycle.current_wave and lifecycle.next_wave_epoch == 0:
+                replace_component(
+                    incident,
+                    replace(lifecycle, next_wave_epoch=epoch + lifecycle.wave_interval_seconds),
+                )
+                return
+            if lifecycle.current_wave and epoch < lifecycle.next_wave_epoch:
+                return
+            lifecycle = self._spawn_wave(world, incident, room, lifecycle, epoch, events)
+            blockers = self._wave_attackers(world, incident, lifecycle.current_wave)
+
+        defenders = self._capable_defenders(world, incident)
+        if not defenders:
+            self._finish(world, incident, room, lifecycle, epoch, RaidOutcome.DEFEAT, events)
+            return
+        defense = room.get_component(RaidDefenseComponent)
+        raw_damage = sum(
+            attacker.get_component(WeaponComponent).damage
+            if attacker.has_component(WeaponComponent)
+            else UNARMED_DAMAGE
+            for attacker in blockers
+        )
+        targets: list[str] = []
+        combat_ctx = HandlerContext(world, epoch)
+        for index, attacker in enumerate(sorted(blockers, key=lambda entity: str(entity.id))):
+            defender = defenders[(epoch + index) % len(defenders)]
+            targets.append(str(defender.id))
+            weapon_damage = (
+                attacker.get_component(WeaponComponent).damage
+                if attacker.has_component(WeaponComponent)
+                else UNARMED_DAMAGE
+            )
+            armor = _armor_rating(combat_ctx, defender.id)
+            health = defender.get_component(HealthComponent)
+            replace_component(
+                defender,
+                replace(health, current=max(0.0, health.current - max(0.0, weapon_damage - armor))),
+            )
+        defense_damage = max(1, ceil(raw_damage * 0.25))
+        updated_defense = replace(defense, current=max(0, defense.current - defense_damage))
+        replace_component(room, updated_defense)
+        events.append(
+            RaidAttackEvent(
+                **_raid_event_base(epoch, incident),
+                incident_id=str(incident.id),
+                raider_ids=tuple(str(attacker.id) for attacker in blockers),
+                defender_ids=tuple(targets),
+                raw_damage=raw_damage,
+                defense_damage=defense_damage,
+            )
+        )
+        if updated_defense.current <= 0 or not self._capable_defenders(world, incident):
+            self._finish(world, incident, room, lifecycle, epoch, RaidOutcome.DEFEAT, events)
+
+    @staticmethod
+    def _enroll_defenders(world: World, incident: Entity, room: Entity, epoch: int) -> None:
+        enrolled = {target_id for _edge, target_id in incident.get_relationships(RaidDefender)}
+        raiders = {target_id for _edge, target_id in incident.get_relationships(RaidAttacker)}
+        room_contents = sorted(room.get_relationships(Contains), key=lambda item: str(item[1]))
+        for _edge, entity_id in room_contents:
+            if entity_id in enrolled or entity_id in raiders or not world.has_entity(entity_id):
+                continue
+            entity = world.get_entity(entity_id)
+            if not entity.has_component(CharacterComponent) or not entity.has_component(
+                HealthComponent
+            ):
+                continue
+            if entity.get_component(CharacterComponent).species == "raider":
+                continue
+            incident.add_relationship(RaidDefender(enrolled_at_epoch=epoch), entity_id)
+
+    @staticmethod
+    def _capable_defenders(world: World, incident: Entity) -> list[Entity]:
+        defenders: list[Entity] = []
+        for _edge, defender_id in incident.get_relationships(RaidDefender):
+            if not world.has_entity(defender_id):
+                continue
+            defender = world.get_entity(defender_id)
+            if not _raid_neutralized(defender):
+                defenders.append(defender)
+        return sorted(defenders, key=lambda entity: str(entity.id))
+
+    @staticmethod
+    def _wave_attackers(world: World, incident: Entity, wave: int) -> list[Entity]:
+        attackers: list[Entity] = []
+        for edge, attacker_id in incident.get_relationships(RaidAttacker):
+            if edge.wave == wave and world.has_entity(attacker_id):
+                attackers.append(world.get_entity(attacker_id))
+        return sorted(attackers, key=lambda entity: str(entity.id))
+
+    @staticmethod
+    def _spawn_wave(
+        world: World,
+        incident: Entity,
+        room: Entity,
+        lifecycle: RaidLifecycleComponent,
+        epoch: int,
+        events: list[DomainEvent],
+    ) -> RaidLifecycleComponent:
+        wave = lifecycle.current_wave + 1
+        budget = incident.get_component(IncidentComponent).budget_spent / lifecycle.total_waves
+        raider_ids = []
+        for spec in generate_raid_spawn_specs(budget, f"{incident.id}:{wave}"):
             components = [
                 IdentityComponent(
                     name=spec.name,
@@ -2462,9 +2797,81 @@ class BarbarianRaidEnrichment:
             ]
             if spec.armor > 0:
                 components.append(ArmorComponent(rating=spec.armor))
-            raider = spawn_entity(self.world, components)
+            raider = spawn_entity(world, components)
             room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), raider.id)
             incident.add_relationship(IncidentSpawned(kind="monster"), raider.id)
+            incident.add_relationship(RaidAttacker(wave=wave), raider.id)
+            raider_ids.append(str(raider.id))
+        updated = replace(lifecycle, current_wave=wave, next_wave_epoch=0)
+        replace_component(incident, updated)
+        events.append(
+            RaidWaveStartedEvent(
+                **_raid_event_base(epoch, incident),
+                incident_id=str(incident.id),
+                wave=wave,
+                raider_ids=tuple(raider_ids),
+            )
+        )
+        return updated
+
+    @staticmethod
+    def _finish(
+        world: World,
+        incident: Entity,
+        room: Entity,
+        lifecycle: RaidLifecycleComponent,
+        epoch: int,
+        outcome: RaidOutcome,
+        events: list[DomainEvent],
+    ) -> None:
+        loot_id: str | None = None
+        if outcome is RaidOutcome.VICTORY:
+            value = max(1, ceil(incident.get_component(IncidentComponent).budget_spent))
+            loot = spawn_entity(
+                world,
+                [
+                    IdentityComponent(
+                        name=f"raid loot {value}", kind="raid_loot", tags=("raid_loot",)
+                    ),
+                    PortableComponent(can_pick_up=True),
+                    RaidLootComponent(value=value),
+                ],
+            )
+            room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), loot.id)
+            loot_id = str(loot.id)
+        else:
+            for _edge, attacker_id in incident.get_relationships(RaidAttacker):
+                if not world.has_entity(attacker_id):
+                    continue
+                attacker = world.get_entity(attacker_id)
+                if not attacker.has_component(SuspendedComponent):
+                    attacker.add_component(
+                        SuspendedComponent(reason="raid defeat", suspended_at_epoch=epoch)
+                    )
+        replace_component(
+            incident,
+            replace(
+                lifecycle,
+                phase=RaidPhase.RECOVERY,
+                recovery_until_epoch=epoch + lifecycle.recovery_seconds,
+                outcome=outcome,
+            ),
+        )
+        events.extend(
+            (
+                RaidOutcomeEvent(
+                    **_raid_event_base(epoch, incident),
+                    incident_id=str(incident.id),
+                    outcome=outcome,
+                    loot_id=loot_id,
+                ),
+                RaidPhaseChangedEvent(
+                    **_raid_event_base(epoch, incident),
+                    incident_id=str(incident.id),
+                    phase=RaidPhase.RECOVERY,
+                ),
+            )
+        )
 
 
 def ensure_barbariansim_policy(actor) -> BarbarianSimPolicyComponent:
@@ -2527,6 +2934,7 @@ def install_barbariansim(actor) -> None:
     actor.world.register_system(StaminaRegenSystem())
     actor.register_consequence(TemperatureExposureConsequence())
     actor.register_consequence(PoisonConsequence())
+    actor.register_consequence(RaidLifecycleConsequence())
     actor.register_gate(PolicyGate((pvp_classifier, lethal_pvp_classifier, pickpocket_classifier)))
     ensure_barbariansim_policy(actor)
     BarbarianRaidEnrichment(actor.world).subscribe(actor.bus)
@@ -2594,6 +3002,8 @@ __all__ = [
     "PoisonProgressedEvent",
     "PoisonTreatedEvent",
     "RaidHandler",
+    "RaidLifecycleConsequence",
+    "RaidLootComponent",
     "RaiderSpawnSpec",
     "RecruitFollowerHandler",
     "ReleaseThrallHandler",

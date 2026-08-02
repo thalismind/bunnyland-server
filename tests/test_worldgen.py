@@ -3112,7 +3112,6 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         FortificationComponent,
         KeyComponent,
         PoisonComponent,
-        PurgeWaveComponent,
         RitualComponent,
         ShelterComponent,
         ShrineComponent,
@@ -3225,7 +3224,6 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
                     "bunnyland.barbariansim.survival-gap",
                     "bunnyland.barbariansim.building",
                     "bunnyland.barbariansim.siege-readiness",
-                    "bunnyland.barbariansim.purge-wave",
                     "bunnyland.barbariansim.danger-zone",
                     "bunnyland.barbariansim.boss",
                 ),
@@ -3411,7 +3409,6 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         SurvivalGapComponent,
         BuildingComponent,
         SiegeReadinessComponent,
-        PurgeWaveComponent,
         DangerZoneComponent,
         BossComponent,
     ):
@@ -4624,3 +4621,30 @@ def test_relationship_generation_requires_targets_and_emits_configured_access():
         )
     )
     assert unscoped_rumor.edges == ()
+
+
+def test_colonysim_generation_marks_settlement_rooms_as_world_map_locations():
+    from bunnyland.core import GenerationRequest, IdentityComponent, RoomComponent
+    from bunnyland.simpacks.colonysim.generation import ColonyGenerationEnricher
+    from bunnyland.simpacks.colonysim.mechanics import WorldMapLocationComponent
+
+    delta = ColonyGenerationEnricher().enrich(
+        GenerationRequest(
+            entity_kind="room",
+            source_key="hill-market",
+            description="a trading settlement",
+            context={
+                "base_components": (
+                    IdentityComponent(name="Hill Market", kind="room"),
+                    RoomComponent(title="Hill Market"),
+                )
+            },
+        )
+    )
+
+    location = next(
+        component
+        for component in delta.components
+        if isinstance(component, WorldMapLocationComponent)
+    )
+    assert location.name == "Hill Market"
