@@ -15,6 +15,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
+from ..character_chat_display import format_action_call
 from ..server.v1_models import CharacterProfileResource
 from ..terminal_chat import load_history, save_history
 from ..terminal_config import TerminalConfig
@@ -457,6 +458,11 @@ class ConversationScreen(ModalScreen[None]):
                 history=list(self.state.get("messages") or [])[:-1],
             )
             while self._job.pending:
+                action = self._job.action
+                if action.tool:
+                    action_view.update(
+                        f"{format_action_call(action.tool, action.parameters)}: {action.status}"
+                    )
                 if self._job.reply:
                     status.update(f"Pending action · {self._job.reply}")
                 await asyncio.sleep(0.25)
@@ -474,7 +480,10 @@ class ConversationScreen(ModalScreen[None]):
                     str(item.get("type") or item) for item in action.result_events
                 )
                 suffix = f" — {detail}" if detail else ""
-                action_view.update(f"{action.tool}: {action.status}{suffix}")
+                action_view.update(
+                    f"{format_action_call(action.tool, action.parameters)}: "
+                    f"{action.status}{suffix}"
+                )
             status.update("")
             self._render_transcript()
         except asyncio.CancelledError:

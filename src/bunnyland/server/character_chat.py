@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import OrderedDict
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Protocol
 
-from pydantic import JsonValue
-from relics import EntityId
+from pydantic import JsonValue, TypeAdapter
+from relics import Entity, EntityId
 
 from .. import telemetry
 from ..core import (
@@ -32,7 +33,7 @@ from ..llm_agents.agent import (
     ChatAgentReply,
     contains_text_tool_call,
 )
-from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
+from ..llm_agents.dispatch import did_you_mean, name_candidates, resolve_reference_args
 from ..llm_agents.tools import ToolCall, command_from_tool_call, reference_arg_keys
 from ..prompts.builder import PromptBuilder, render_prompt
 from ..prompts.filters import PromptFilterRuntime, apply_prompt_filters
@@ -69,6 +70,7 @@ CHAT_TRACE_TEXT_CHARS = 4096
 #: registered, so a small recent window is all either needs.
 PENDING_ACTION_CACHE_SIZE = 512
 COMPLETED_ACTION_CACHE_SIZE = 512
+CHAT_PARAMETERS_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
 class CharacterChatAgent(Protocol):
@@ -349,7 +351,11 @@ class CharacterChatService:
         for pending in self._pending.values():
             if pending.command_id != event.command_id:
                 continue
-            pending.action = self._action_from_event(event, pending.action.tool)
+            pending.action = self._action_from_event(
+                event,
+                pending.action.tool,
+                pending.action.parameters,
+            )
             matched = True
         if matched:
             return
@@ -363,7 +369,12 @@ class CharacterChatService:
     def _register_pending(self, pending: PendingChatAction) -> None:
         completed = self._completed_actions.pop(pending.command_id, None)
         if completed is not None:
-            pending.action = completed.model_copy(update={"tool": pending.action.tool})
+            pending.action = completed.model_copy(
+                update={
+                    "tool": pending.action.tool,
+                    "parameters": pending.action.parameters,
+                }
+            )
         key = (pending.client_id, pending.character_id, pending.command_id)
         self._pending[key] = pending
         self._pending.move_to_end(key)
@@ -372,17 +383,21 @@ class CharacterChatService:
 
     @staticmethod
     def _action_from_event(
-        event: CommandExecutedEvent | CommandRejectedEvent, tool: str | None
+        event: CommandExecutedEvent | CommandRejectedEvent,
+        tool: str | None,
+        parameters: dict[str, JsonValue] | None = None,
     ) -> CharacterChatActionResult:
         if isinstance(event, CommandRejectedEvent):
             return CharacterChatActionResult(
                 tool=tool,
+                parameters=parameters or {},
                 command_id=event.command_id,
                 status="rejected",
                 reason=event.reason,
             )
         return CharacterChatActionResult(
             tool=tool,
+            parameters=parameters or {},
             command_id=event.command_id,
             status="executed",
             result_events=[dict(item) for item in event.result_events],
@@ -574,23 +589,33 @@ class CharacterChatService:
         generation: int,
         call: ToolCall,
     ) -> CharacterChatActionResult:
+        parameters = CHAT_PARAMETERS_ADAPTER.validate_python(call.arguments)
         if call.name not in self._chat_safe_tool_names():
             return CharacterChatActionResult(
                 tool=call.name,
+                parameters=parameters,
                 status="rejected",
                 reason=f"tool {call.name!r} is not available in character chat",
             )
 
         character = self.actor.world.get_entity(character_id)
+        reference_keys = reference_arg_keys(self.actor.action_definitions())
         resolved, unresolved = resolve_reference_args(
             self.actor.world,
             character,
             call.arguments,
-            keys=reference_arg_keys(self.actor.action_definitions()),
+            keys=reference_keys,
+        )
+        parameters = self._display_parameters(
+            character,
+            call.arguments,
+            resolved,
+            reference_keys,
         )
         if unresolved:
             return CharacterChatActionResult(
                 tool=call.name,
+                parameters=parameters,
                 status="unresolved",
                 reason=did_you_mean(call.arguments, unresolved),
             )
@@ -606,6 +631,7 @@ class CharacterChatService:
         except ValueError as exc:
             return CharacterChatActionResult(
                 tool=call.name,
+                parameters=parameters,
                 status="rejected",
                 reason=str(exc),
             )
@@ -623,6 +649,7 @@ class CharacterChatService:
             if not outcome.accepted:
                 return CharacterChatActionResult(
                     tool=call.name,
+                    parameters=parameters,
                     command_id=outcome.command_id,
                     status="rejected",
                     reason=outcome.reason,
@@ -632,6 +659,7 @@ class CharacterChatService:
             except TimeoutError:
                 return CharacterChatActionResult(
                     tool=call.name,
+                    parameters=parameters,
                     command_id=command.command_id,
                     status="queued",
                 )
@@ -642,16 +670,36 @@ class CharacterChatService:
         if isinstance(event, CommandRejectedEvent):
             return CharacterChatActionResult(
                 tool=call.name,
+                parameters=parameters,
                 command_id=event.command_id,
                 status="rejected",
                 reason=event.reason,
             )
         return CharacterChatActionResult(
             tool=call.name,
+            parameters=parameters,
             command_id=event.command_id,
             status="executed",
             result_events=[dict(item) for item in event.result_events],
         )
+
+    def _display_parameters(
+        self,
+        character: Entity,
+        arguments: Mapping[str, object],
+        resolved: Mapping[str, object],
+        reference_keys: frozenset[str],
+    ) -> dict[str, JsonValue]:
+        candidate_names = {
+            str(entity_id): name
+            for name, entity_id in name_candidates(self.actor.world, character)
+        }
+        display = dict(arguments)
+        for key in reference_keys & display.keys():
+            value = resolved.get(key)
+            if isinstance(value, str) and value in candidate_names:
+                display[key] = candidate_names[value]
+        return CHAT_PARAMETERS_ADAPTER.validate_python(display)
 
     @staticmethod
     def _fallback_reply(action: CharacterChatActionResult) -> str:

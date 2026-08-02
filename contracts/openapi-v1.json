@@ -163,6 +163,11 @@
             ],
             "title": "Command Id"
           },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
           "reason": {
             "default": "",
             "title": "Reason",

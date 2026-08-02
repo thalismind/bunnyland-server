@@ -120,6 +120,7 @@ class CharacterChatRequest(BaseModel):
 
 class CharacterChatActionResult(BaseModel):
     tool: str | None = None
+    parameters: dict[str, JsonValue] = Field(default_factory=dict)
     command_id: str | None = None
     status: Literal["none", "queued", "executed", "rejected", "unresolved", "failed"] = "none"
     reason: str = ""

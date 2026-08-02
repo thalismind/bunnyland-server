@@ -16,6 +16,7 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, Static
 
+from .character_chat_display import format_action_call
 from .core.claim_timeout import normalize_claim_timeout
 from .terminal_chat import (
     HISTORY_LIMIT,
@@ -367,8 +368,12 @@ async def _run_cli(backend: Backend, wanted: str) -> int:
                 )
                 while job.pending:
                     if job.reply:
+                        action_label = format_action_call(
+                            job.action.tool or "action", job.action.parameters
+                        )
                         print(
-                            f"{character.name}: {job.reply} [pending {job.action.tool or 'action'}]"
+                            f"{character.name}: {job.reply} [pending "
+                            f"{action_label}]"
                         )
                     await asyncio.sleep(0.25)
                     job = await backend.poll_character_chat(job)
@@ -378,7 +383,12 @@ async def _run_cli(backend: Backend, wanted: str) -> int:
             if job.status == "failed":
                 print(f"{character.name}: {job.failure or 'Chat failed.'}")
                 continue
-            suffix = f" [{job.action.tool} {job.action.status}]" if job.action.tool else ""
+            suffix = (
+                f" [{format_action_call(job.action.tool, job.action.parameters)} "
+                f"{job.action.status}]"
+                if job.action.tool
+                else ""
+            )
             print(f"{character.name}: {job.reply}{suffix}")
             append_exchange(state, message, job.reply)
             save_history(backend.client_id, character.character_id, state)

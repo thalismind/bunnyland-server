@@ -317,7 +317,10 @@ async def test_conversation_screen_sends_pending_chat_and_renders_action(monkeyp
                 "running",
                 reply="I will look.",
                 action=CharacterChatActionResult(
-                    tool="look", command_id="command-1", status="queued"
+                    tool="look",
+                    parameters={"target_id": "red apple"},
+                    command_id="command-1",
+                    status="queued",
                 ),
             ),
             _job(
@@ -325,6 +328,7 @@ async def test_conversation_screen_sends_pending_chat_and_renders_action(monkeyp
                 reply="There is a lantern here.",
                 action=CharacterChatActionResult(
                     tool="look",
+                    parameters={"target_id": "red apple"},
                     command_id="command-1",
                     status="executed",
                     result_events=[{"type": "LookedEvent"}],
@@ -342,7 +346,9 @@ async def test_conversation_screen_sends_pending_chat_and_renders_action(monkeyp
         transcript = screen.query_one("#conversation-transcript", Static).render().plain
         assert "You: What do you see?" in transcript
         assert "Juniper: There is a lantern here." in transcript
-        assert "look: executed" in screen.query_one("#conversation-action", Static).render().plain
+        assert "look — target: red apple: executed" in screen.query_one(
+            "#conversation-action", Static
+        ).render().plain
         assert backend.submitted[0][2]["history"] == []
         await pilot.click("#conversation-sheet")
         assert any(isinstance(item, CharacterSheetScreen) for item in host.screen_stack)

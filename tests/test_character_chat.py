@@ -459,8 +459,33 @@ async def test_character_chat_inspect_resolves_reachable_target_and_executes():
     assert response.reply == "It is a small pebble."
     assert response.action.status == "executed"
     assert response.action.tool == "inspect"
+    assert response.action.parameters == {"target_id": "pebble"}
     assert response.action.result_events[0]["event_type"] == "EntityInspectedEvent"
     assert response.action.result_events[0]["target_ids"] == [str(pebble.id)]
+
+
+@pytest.mark.asyncio
+async def test_character_chat_displays_entity_names_for_id_parameters():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    apple = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="red apple", kind="item"), PortableComponent()],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), apple.id
+    )
+    service = chat_service(scenario, FakeChatAgent([]), timeout=0.0)
+
+    action = await service._submit_tool(
+        scenario.character,
+        str(scenario.controller),
+        scenario.generation,
+        ToolCall("inspect", {"target_id": str(apple.id)}),
+    )
+
+    assert action.status == "queued"
+    assert action.parameters == {"target_id": "red apple"}
 
 
 @pytest.mark.asyncio
@@ -498,6 +523,7 @@ async def test_character_chat_action_queues_without_immediate_tick():
 
     assert response.action.status == "queued"
     assert response.action.command_id
+    assert response.action.parameters == {"text": "soon"}
     assert response.reply == "I will try that when I can."
 
 
@@ -535,6 +561,7 @@ async def test_character_chat_queued_remember_result_is_wrapped_when_polled():
 
     assert wrapped.complete is True
     assert wrapped.action.status == "executed"
+    assert wrapped.action.parameters == {"query": "greenhouse vines"}
     assert wrapped.action.result_events[0]["event_type"] == "NotesSearchedEvent"
     assert wrapped.reply == "I remember the greenhouse vines are a hybrid."
     assert "human alien hybrid" in str(agent.calls[-1]["messages"])
