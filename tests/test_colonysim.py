@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from conftest import build_scenario, execute_handler
 
 from bunnyland.core import (
@@ -3110,6 +3112,201 @@ def test_form_caravan_skips_zero_quantity_cargo():
     assert wood.get_component(ResourceStackComponent).quantity == 3
 
 
+def test_caravan_location_and_active_route_prompt_fragments():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    ctx = ComponentPromptContext.for_entity(world, character)
+
+    assert WorldMapLocationComponent(name="crossroads").prompt_fragments(ctx) == (
+        "Settlement: crossroads.",
+    )
+    assert WorldMapLocationComponent(
+        name="hill market", faction_id="hill"
+    ).prompt_fragments(ctx) == ("Settlement: hill market (hill).",)
+    assert CaravanComponent(
+        destination="hill market",
+        origin_room_id=str(scenario.room_a),
+        destination_room_id=str(scenario.room_b),
+        pause_reason="route is blocked",
+    ).prompt_fragments(ctx) == (
+        "Caravan bound for hill market (outbound, paused: route is blocked).",
+    )
+
+
+def test_form_caravan_rejects_missing_character_location_and_named_destination():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    handler = FormCaravanHandler()
+
+    missing_character = execute_handler(
+        handler,
+        HandlerContext(world, 1),
+        _handler_cmd(
+            scenario,
+            "form-caravan",
+            character_id="entity_999",
+            destination="town",
+        ),
+    )
+    assert missing_character.ok is False
+    assert missing_character.reason == "character does not exist"
+
+    room = world.get_entity(scenario.room_a)
+    room.remove_relationship(Contains, scenario.character)
+    missing_location = execute_handler(
+        handler,
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "form-caravan", destination="town"),
+    )
+    assert missing_location.ok is False
+    assert missing_location.reason == "character is not at a location"
+
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), scenario.character)
+    missing_destination = execute_handler(
+        handler,
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "form-caravan", destination="unknown settlement"),
+    )
+    assert missing_destination.ok is False
+    assert missing_destination.reason == "destination does not exist"
+
+
+def test_visit_settlement_rejection_contract():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    location = world.get_entity(scenario.room_b)
+    caravan = spawn_entity(world, [CaravanComponent(destination="town")])
+    location.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), caravan.id)
+    handler = VisitSettlementHandler()
+
+    invalid = execute_handler(
+        handler,
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "visit-settlement", caravan_id="invalid"),
+    )
+    assert invalid.ok is False
+    assert invalid.reason == "invalid character or caravan id"
+
+    missing = execute_handler(
+        handler,
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "visit-settlement", caravan_id="entity_999"),
+    )
+    assert missing.ok is False
+    assert missing.reason == "character or caravan does not exist"
+
+    not_caravan = execute_handler(
+        handler,
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "visit-settlement", caravan_id=str(location.id)),
+    )
+    assert not_caravan.ok is False
+    assert not_caravan.reason == "target is not a caravan"
+
+    not_member = execute_handler(
+        handler,
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "visit-settlement", caravan_id=str(caravan.id)),
+    )
+    assert not_member.ok is False
+    assert not_member.reason == "you are not a member of that caravan"
+
+    character.add_relationship(MemberOfCaravan(), caravan.id)
+    not_arrived = execute_handler(
+        handler,
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "visit-settlement", caravan_id=str(caravan.id)),
+    )
+    assert not_arrived.ok is False
+    assert not_arrived.reason == "caravan has not arrived at a settlement"
+
+    visiting = replace(
+        caravan.get_component(CaravanComponent),
+        phase=CaravanPhase.VISITING,
+        destination_room_id=None,
+    )
+    replace_component(caravan, visiting)
+    wrong_location = execute_handler(
+        handler,
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "visit-settlement", caravan_id=str(caravan.id)),
+    )
+    assert wrong_location.ok is False
+    assert wrong_location.reason == "caravan is not at its destination"
+
+    replace_component(
+        caravan,
+        replace(visiting, destination_room_id=str(location.id), visited_at_epoch=1),
+    )
+    duplicate = execute_handler(
+        handler,
+        HandlerContext(world, 2),
+        _handler_cmd(scenario, "visit-settlement", caravan_id=str(caravan.id)),
+    )
+    assert duplicate.ok is False
+    assert duplicate.reason == "settlement has already been visited"
+
+
+def test_return_caravan_rejection_contract():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    location = world.get_entity(scenario.room_b)
+    caravan = spawn_entity(world, [CaravanComponent(destination="town")])
+    location.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), caravan.id)
+    handler = ReturnCaravanHandler()
+
+    cases = (
+        ("invalid", "invalid character or caravan id"),
+        ("entity_999", "character or caravan does not exist"),
+        (str(location.id), "target is not a caravan"),
+        (str(caravan.id), "you are not a member of that caravan"),
+    )
+    for caravan_id, reason in cases:
+        result = execute_handler(
+            handler,
+            HandlerContext(world, 1),
+            _handler_cmd(scenario, "return-caravan", caravan_id=caravan_id),
+        )
+        assert result.ok is False
+        assert result.reason == reason
+
+    character.add_relationship(MemberOfCaravan(), caravan.id)
+    not_visiting = execute_handler(
+        handler,
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "return-caravan", caravan_id=str(caravan.id)),
+    )
+    assert not_visiting.ok is False
+    assert not_visiting.reason == "caravan is not visiting a settlement"
+
+    visiting = replace(
+        caravan.get_component(CaravanComponent),
+        phase=CaravanPhase.VISITING,
+        origin_room_id=None,
+    )
+    replace_component(caravan, visiting)
+    missing_origin = execute_handler(
+        handler,
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "return-caravan", caravan_id=str(caravan.id)),
+    )
+    assert missing_origin.ok is False
+    assert missing_origin.reason == "caravan origin does not exist"
+
+    isolated = spawn_entity(world, [RoomComponent(title="isolated")])
+    replace_component(caravan, replace(visiting, origin_room_id=str(isolated.id)))
+    unreachable = execute_handler(
+        handler,
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "return-caravan", caravan_id=str(caravan.id)),
+    )
+    assert unreachable.ok is False
+    assert unreachable.reason == "caravan origin is unreachable"
+
+
 def test_caravan_travels_visits_and_returns_with_members():
     scenario = build_scenario()
     world = scenario.actor.world
@@ -3185,6 +3382,114 @@ def test_caravan_pauses_and_replans_when_route_breaks():
     assert container_of(caravan) == destination.id
     assert caravan.get_component(CaravanComponent).pause_reason is None
     assert isinstance(resumed[0], CaravanArrivedEvent)
+
+
+def test_caravan_legacy_and_completed_states_remain_inert():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    legacy = spawn_entity(world, [CaravanComponent(destination="old save")])
+    completed = spawn_entity(
+        world,
+        [
+            CaravanComponent(
+                destination="town",
+                origin_room_id=str(scenario.room_a),
+                destination_room_id=str(scenario.room_b),
+                phase=CaravanPhase.COMPLETE,
+            )
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), completed.id
+    )
+
+    assert CaravanTravelConsequence().process(world, 2) == []
+    assert container_of(legacy) is None
+    assert container_of(completed) == scenario.room_a
+
+
+def test_caravan_already_at_destination_arrives_without_moving():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    origin = world.get_entity(scenario.room_a)
+    origin.add_component(WorldMapLocationComponent(name="home market"))
+    formed = execute_handler(
+        FormCaravanHandler(),
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "form-caravan", destination="home market"),
+    )
+    assert formed.ok is True
+    caravan = next(world.query().with_all([CaravanComponent]).execute_entities())
+
+    events = CaravanTravelConsequence().process(world, 2)
+
+    assert container_of(caravan) == origin.id
+    assert caravan.get_component(CaravanComponent).phase is CaravanPhase.VISITING
+    assert [type(event) for event in events] == [CaravanArrivedEvent]
+
+
+def test_caravan_replans_invalid_route_and_leaves_separated_member_behind():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    origin = world.get_entity(scenario.room_a)
+    middle = world.get_entity(scenario.room_b)
+    destination = spawn_entity(
+        world,
+        [RoomComponent(title="market"), WorldMapLocationComponent(name="market")],
+    )
+    middle.add_relationship(ExitTo(), destination.id)
+    traveler = spawn_entity(world, [CharacterComponent()])
+    origin.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), traveler.id)
+    formed = execute_handler(
+        FormCaravanHandler(),
+        HandlerContext(world, 1),
+        _handler_cmd(
+            scenario,
+            "form-caravan",
+            destination="market",
+            member_ids=(str(traveler.id),),
+        ),
+    )
+    assert formed.ok is True
+    caravan = next(world.query().with_all([CaravanComponent]).execute_entities())
+    replace_component(
+        caravan,
+        replace(caravan.get_component(CaravanComponent), route=("invalid",)),
+    )
+    origin.remove_relationship(Contains, traveler.id)
+    destination.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), traveler.id)
+
+    first_leg = CaravanTravelConsequence().process(world, 2)
+
+    assert first_leg == []
+    assert container_of(caravan) == middle.id
+    assert container_of(traveler) == destination.id
+    assert caravan.get_component(CaravanComponent).progress == 1
+
+    final_leg = CaravanTravelConsequence().process(world, 3)
+    assert [type(event) for event in final_leg] == [CaravanArrivedEvent]
+    assert container_of(caravan) == destination.id
+
+
+def test_caravan_repeated_blocked_tick_emits_only_one_pause_event():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    origin = world.get_entity(scenario.room_a)
+    destination = world.get_entity(scenario.room_b)
+    destination.add_component(WorldMapLocationComponent(name="market"))
+    formed = execute_handler(
+        FormCaravanHandler(),
+        HandlerContext(world, 1),
+        _handler_cmd(scenario, "form-caravan", destination="market"),
+    )
+    assert formed.ok is True
+    origin.remove_relationship(ExitTo, destination.id)
+
+    first = CaravanTravelConsequence().process(world, 2)
+    second = CaravanTravelConsequence().process(world, 3)
+
+    assert [type(event) for event in first] == [CaravanPausedEvent]
+    assert second == []
 
 
 def test_form_caravan_validates_location_route_and_colocation():

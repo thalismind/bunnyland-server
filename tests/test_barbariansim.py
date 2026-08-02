@@ -158,6 +158,9 @@ from bunnyland.simpacks.barbariansim.mechanics import (
 from bunnyland.simpacks.barbariansim.mechanics import _ambient_celsius as ambient_celsius
 from bunnyland.simpacks.barbariansim.mechanics import _armor_rating as armor_rating
 from bunnyland.simpacks.barbariansim.mechanics import _damage_item as damage_item
+from bunnyland.simpacks.barbariansim.mechanics import (
+    _start_raid_lifecycle as start_raid_lifecycle,
+)
 from bunnyland.simpacks.colonysim.mechanics import install_colonysim
 
 HOUR = 3600.0
@@ -1926,6 +1929,165 @@ def test_phased_raid_warns_before_spawning_and_attacks_deterministically():
     assert incident.get_relationships(RaidDefender)[0][1] == character.id
 
 
+def test_legacy_purge_prompt_reports_quiet_and_active_states():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    ctx = ComponentPromptContext.for_entity(world, room)
+
+    assert PurgeWaveComponent(wave=2).prompt_fragments(ctx) == (
+        f"Purge wave at {room.id}: wave 2, quiet.",
+    )
+    assert PurgeWaveComponent(wave=3, active=True).prompt_fragments(ctx) == (
+        f"Purge wave at {room.id}: wave 3, active.",
+    )
+
+
+def test_start_raid_lifecycle_preserves_existing_defense():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    replace_component(room, RaidDefenseComponent(current=7, maximum=40))
+    incident = spawn_entity(
+        world,
+        [IncidentComponent(kind="barbarian_raid", budget_spent=16, started_at_epoch=0)],
+    )
+
+    start_raid_lifecycle(world, incident, room, 10, 16)
+
+    assert room.get_component(RaidDefenseComponent) == RaidDefenseComponent(
+        current=7, maximum=40
+    )
+    assert incident.get_component(RaidLifecycleComponent).total_waves == 2
+
+
+def test_raid_consequence_skips_invalid_incidents_and_pending_recovery():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    replace_component(room, RaidDefenseComponent(current=50, maximum=100))
+    spawn_entity(world, [RaidLifecycleComponent()])
+    spawn_entity(
+        world,
+        [
+            IncidentComponent(kind="barbarian_raid", budget_spent=8, started_at_epoch=0),
+            RaidLifecycleComponent(),
+        ],
+    )
+    recovering = spawn_entity(
+        world,
+        [
+            IncidentComponent(kind="barbarian_raid", budget_spent=8, started_at_epoch=0),
+            RaidLifecycleComponent(
+                phase=RaidPhase.RECOVERY,
+                recovery_until_epoch=2,
+                outcome=RaidOutcome.VICTORY,
+            ),
+        ],
+    )
+    completed = spawn_entity(
+        world,
+        [
+            IncidentComponent(kind="barbarian_raid", budget_spent=8, started_at_epoch=0),
+            RaidLifecycleComponent(phase=RaidPhase.COMPLETE),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), recovering.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), completed.id)
+    consequence = RaidLifecycleConsequence()
+
+    assert consequence.process(world, 1) == []
+    assert recovering.get_component(RaidLifecycleComponent).phase is RaidPhase.RECOVERY
+    events = consequence.process(world, 2)
+
+    assert [type(event) for event in events] == [RaidPhaseChangedEvent]
+    assert recovering.get_component(RaidLifecycleComponent).phase is RaidPhase.COMPLETE
+    assert room.get_component(RaidDefenseComponent).current == 50
+
+
+def test_raid_treats_dead_downed_suspended_and_depleted_attackers_as_neutralized():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    incident = _phased_raid(scenario)
+    replace_component(
+        incident,
+        replace(
+            incident.get_component(RaidLifecycleComponent),
+            phase=RaidPhase.ATTACK,
+            current_wave=1,
+        ),
+    )
+    attackers = (
+        spawn_entity(
+            world,
+            [HealthComponent(current=10, maximum=10), DeadComponent(0, "test")],
+        ),
+        spawn_entity(
+            world,
+            [HealthComponent(current=10, maximum=10), DownedComponent(0, "test")],
+        ),
+        spawn_entity(
+            world,
+            [HealthComponent(current=10, maximum=10), SuspendedComponent(reason="test")],
+        ),
+        spawn_entity(world, [HealthComponent(current=0, maximum=10)]),
+    )
+    for attacker in attackers:
+        incident.add_relationship(RaidAttacker(wave=1), attacker.id)
+
+    events = RaidLifecycleConsequence().process(world, 1)
+
+    outcome = next(event for event in events if isinstance(event, RaidOutcomeEvent))
+    assert outcome.outcome is RaidOutcome.VICTORY
+
+
+def test_raid_without_defenders_defeats_and_preserves_already_suspended_raider():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    room.remove_relationship(Contains, scenario.character)
+    incident = _phased_raid(scenario, total_waves=2)
+    replace_component(
+        incident,
+        replace(
+            incident.get_component(RaidLifecycleComponent),
+            phase=RaidPhase.ATTACK,
+            current_wave=1,
+        ),
+    )
+    raider_bystander = spawn_entity(
+        world,
+        [CharacterComponent(species="raider"), HealthComponent(current=10, maximum=10)],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), raider_bystander.id)
+    active = spawn_entity(world, [HealthComponent(current=10, maximum=10)])
+    suspended = spawn_entity(
+        world,
+        [HealthComponent(current=10, maximum=10), SuspendedComponent(reason="existing")],
+    )
+    neutral_defenders = (
+        spawn_entity(
+            world,
+            [HealthComponent(current=0, maximum=10), DownedComponent(0, "test")],
+        ),
+        spawn_entity(
+            world,
+            [HealthComponent(current=0, maximum=10), DownedComponent(0, "test")],
+        ),
+    )
+    incident.add_relationship(RaidAttacker(wave=1), active.id)
+    incident.add_relationship(RaidAttacker(wave=1), suspended.id)
+    for defender in neutral_defenders:
+        incident.add_relationship(RaidDefender(enrolled_at_epoch=0), defender.id)
+
+    events = RaidLifecycleConsequence().process(world, 1)
+
+    outcome = next(event for event in events if isinstance(event, RaidOutcomeEvent))
+    assert outcome.outcome is RaidOutcome.DEFEAT
+    assert active.has_component(SuspendedComponent)
+    assert suspended.get_component(SuspendedComponent).reason == "existing"
+
+
 def test_phased_raid_waits_between_waves_then_rewards_victory_and_resolves():
     scenario = build_scenario()
     world = scenario.actor.world
@@ -2822,6 +2984,26 @@ async def test_start_purge_wave_defaults_to_current_room():
     )
     assert duplicate.ok is False
     assert duplicate.reason == "a raid is already active here"
+
+
+def test_deprecated_purge_alias_rejects_base_without_defended_room():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
+
+    result = execute_handler(
+        StartPurgeWaveHandler(),
+        HandlerContext(world, scenario.actor.epoch),
+        _handler_cmd(
+            scenario,
+            "start-purge-wave",
+            base_id=str(scenario.character),
+            intensity=1.0,
+        ),
+    )
+
+    assert result.ok is False
+    assert result.reason == "base is not in a defended room"
 
 
 def test_deprecated_purge_alias_requires_storyteller_budget():

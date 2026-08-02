@@ -2737,7 +2737,9 @@ class RaidLifecycleConsequence:
         raiders = {target_id for _edge, target_id in incident.get_relationships(RaidAttacker)}
         room_contents = sorted(room.get_relationships(Contains), key=lambda item: str(item[1]))
         for _edge, entity_id in room_contents:
-            if entity_id in enrolled or entity_id in raiders or not world.has_entity(entity_id):
+            # Relics containment edges always point to live entities and are
+            # removed automatically when either endpoint is removed.
+            if entity_id in enrolled or entity_id in raiders:
                 continue
             entity = world.get_entity(entity_id)
             if not entity.has_component(CharacterComponent) or not entity.has_component(
@@ -2752,8 +2754,6 @@ class RaidLifecycleConsequence:
     def _capable_defenders(world: World, incident: Entity) -> list[Entity]:
         defenders: list[Entity] = []
         for _edge, defender_id in incident.get_relationships(RaidDefender):
-            if not world.has_entity(defender_id):
-                continue
             defender = world.get_entity(defender_id)
             if not _raid_neutralized(defender):
                 defenders.append(defender)
@@ -2763,7 +2763,7 @@ class RaidLifecycleConsequence:
     def _wave_attackers(world: World, incident: Entity, wave: int) -> list[Entity]:
         attackers: list[Entity] = []
         for edge, attacker_id in incident.get_relationships(RaidAttacker):
-            if edge.wave == wave and world.has_entity(attacker_id):
+            if edge.wave == wave:
                 attackers.append(world.get_entity(attacker_id))
         return sorted(attackers, key=lambda entity: str(entity.id))
 
@@ -2841,8 +2841,6 @@ class RaidLifecycleConsequence:
             loot_id = str(loot.id)
         else:
             for _edge, attacker_id in incident.get_relationships(RaidAttacker):
-                if not world.has_entity(attacker_id):
-                    continue
                 attacker = world.get_entity(attacker_id)
                 if not attacker.has_component(SuspendedComponent):
                     attacker.add_component(

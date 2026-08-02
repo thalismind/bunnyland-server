@@ -902,12 +902,12 @@ def _caravan_route(
     visited = {origin_id}
     while queue:
         room_id, path = queue.popleft()
-        if not world.has_entity(room_id):
-            continue
         room = world.get_entity(room_id)
         exits = sorted(room.get_relationships(ExitTo), key=lambda item: str(item[1]))
         for edge, target_id in exits:
-            if edge.locked or target_id in visited or not world.has_entity(target_id):
+            # Relics only permits relationships between live entities and removes
+            # both incoming and outgoing edges when either endpoint is removed.
+            if edge.locked or target_id in visited:
                 continue
             visited.add(target_id)
             next_path = (*path, target_id)
@@ -995,8 +995,6 @@ class CaravanTravelConsequence:
                 Contains(mode=ContainmentMode.ROOM_CONTENT), caravan_entity.id
             )
             for member_id, _edge in caravan_entity.get_incoming_relationships(MemberOfCaravan):
-                if not world.has_entity(member_id):
-                    continue
                 member = world.get_entity(member_id)
                 if container_of(member) != current_id:
                     continue
@@ -1057,8 +1055,7 @@ class CaravanTravelConsequence:
         for member_id, _edge in tuple(
             caravan_entity.get_incoming_relationships(MemberOfCaravan)
         ):
-            if world.has_entity(member_id):
-                world.get_entity(member_id).remove_relationship(MemberOfCaravan, caravan_entity.id)
+            world.get_entity(member_id).remove_relationship(MemberOfCaravan, caravan_entity.id)
         events.append(
             CaravanReturnedEvent(
                 **_event_base(
