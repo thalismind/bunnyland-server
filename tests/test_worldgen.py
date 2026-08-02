@@ -3547,6 +3547,12 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
     ):
         assert dragon_ruin.has_component(component_type)
     assert dragon_ruin.get_component(QuestComponent).quest_id == "dragon_ruin"
+    generated_word = dragon_ruin.get_component(WordOfPowerComponent)
+    assert generated_word.effect == "harm"
+    assert generated_word.magnitude == 4.0
+    assert generated_word.tags == ("voice",)
+    assert generated_word.target_mode == "room"
+    assert generated_word.cooldown_seconds == 30
 
     dragon_mage = actor.world.get_entity(result.characters["dragon_mage"])
     for component_type in (

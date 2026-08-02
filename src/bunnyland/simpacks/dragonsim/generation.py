@@ -190,7 +190,16 @@ class DragonGenerationEnricher:
             if generation_wants(ctx, "bunnyland.dragonsim.word-of-power") or generation_mentions(
                 ctx, "word of power"
             ):
-                add(WordOfPowerComponent(name=name))
+                add(
+                    WordOfPowerComponent(
+                        name=name,
+                        effect="harm",
+                        magnitude=4.0,
+                        tags=("voice",),
+                        target_mode="room",
+                        cooldown_seconds=30,
+                    )
+                )
             if generation_wants(
                 ctx, "bunnyland.dragonsim.lock-difficulty", "bunnyland.dragonsim.locked"
             ):

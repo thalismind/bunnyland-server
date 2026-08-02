@@ -18,6 +18,7 @@ from bunnyland.core import (
     ReadableComponent,
     SleepingComponent,
     StealthComponent,
+    WorldClockComponent,
     WritableComponent,
     build_submitted_command,
     container_of,
@@ -1749,7 +1750,19 @@ def _dead_beast(scenario, name="Ancient Wyrm"):
     return beast.id
 
 
-def _word(scenario, *, name="Unrelenting Force", min_souls=1, skill_name="", min_skill_level=0):
+def _word(
+    scenario,
+    *,
+    name="Unrelenting Force",
+    min_souls=1,
+    skill_name="",
+    min_skill_level=0,
+    effect="harm",
+    magnitude=1.0,
+    tags=("voice",),
+    target_mode="room",
+    cooldown_seconds=0,
+):
     return spawn_entity(
         scenario.actor.world,
         [
@@ -1759,6 +1772,11 @@ def _word(scenario, *, name="Unrelenting Force", min_souls=1, skill_name="", min
                 min_souls=min_souls,
                 skill_name=skill_name,
                 min_skill_level=min_skill_level,
+                effect=effect,
+                magnitude=magnitude,
+                tags=tags,
+                target_mode=target_mode,
+                cooldown_seconds=cooldown_seconds,
             ),
         ],
     ).id
@@ -1768,7 +1786,15 @@ async def test_absorb_great_soul_then_learn_and_speak_word():
     scenario = build_scenario(focus_current=12.0)
     _install(scenario.actor)
     beast = _dead_beast(scenario)
-    word = _word(scenario, skill_name="voice", min_skill_level=2)
+    word = _word(
+        scenario,
+        skill_name="voice",
+        min_skill_level=2,
+        effect="heal",
+        magnitude=2.0,
+        target_mode="self",
+        cooldown_seconds=30,
+    )
     _set_skill_level(scenario, "voice", 2)
     absorbed: list[GreatSoulAbsorbedEvent] = []
     learned: list[WordOfPowerLearnedEvent] = []
@@ -1789,13 +1815,275 @@ async def test_absorb_great_soul_then_learn_and_speak_word():
     assert character.has_relationship(KnowsWord, word)
     assert learned[0].word_name == "Unrelenting Force"
 
+    character.add_component(HealthComponent(current=4.0, maximum=10.0))
     await scenario.actor.submit(_cmd(scenario, "speak-word-of-power", word_id=str(word)))
     await scenario.actor.tick(HOUR)
     assert spoken[0].word_name == "Unrelenting Force"
+    assert spoken[0].effect_type == "heal"
+    assert spoken[0].target_ids == (str(scenario.character),)
+    assert spoken[0].target_before == (4.0,)
+    assert spoken[0].target_after == (6.0,)
+    assert spoken[0].ready_at_epoch > spoken[0].world_epoch
+    known_word = character.get_relationships(KnowsWord)[0][0]
+    assert known_word.ready_at_epoch == spoken[0].ready_at_epoch
 
     fragments = dragonsim_fragments(scenario.actor.world, character)
     assert any("Great souls absorbed: 1" in line for line in fragments)
-    assert any("Word of power known: Unrelenting Force" in line for line in fragments)
+    assert any("Word of power known: Unrelenting Force (" in line for line in fragments)
+
+
+def test_speak_word_applies_single_target_effect_and_per_word_cooldown():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=9.0, maximum=10.0))
+    target = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Bandit", kind="character"),
+            CharacterComponent(species="fox"),
+            HealthComponent(current=8.0, maximum=10.0),
+        ],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), target.id
+    )
+    word = _word(
+        scenario,
+        name="Sundering Voice",
+        magnitude=3.0,
+        tags=("voice", "force"),
+        target_mode="single",
+        cooldown_seconds=30,
+    )
+    character.add_relationship(KnowsWord(learned_at_epoch=7), word)
+    target.add_relationship(KnowsWord(learned_at_epoch=8), word)
+    handler = SpeakWordOfPowerHandler()
+    ctx = HandlerContext(scenario.actor.world, 10)
+
+    result = execute_handler(
+        handler,
+        ctx,
+        _handler_cmd(
+            scenario,
+            "speak-word-of-power",
+            word_id=str(word),
+            target_id=str(target.id),
+        ),
+    )
+
+    assert result.ok
+    assert target.get_component(HealthComponent).current == 5.0
+    edge = character.get_relationships(KnowsWord)[0][0]
+    assert edge == KnowsWord(learned_at_epoch=7, ready_at_epoch=40)
+    assert target.get_relationships(KnowsWord)[0][0] == KnowsWord(
+        learned_at_epoch=8, ready_at_epoch=0
+    )
+    event = result.events[0]
+    assert isinstance(event, WordOfPowerSpokenEvent)
+    assert event.effect_type == "harm"
+    assert event.magnitude == 3.0
+    assert event.tags == ("voice", "force")
+    assert event.target_mode == "single"
+    assert event.target_ids == (str(target.id),)
+    assert event.target_before == (8.0,)
+    assert event.target_after == (5.0,)
+    assert event.ready_at_epoch == 40
+
+    assert (
+        execute_handler(
+            handler,
+            ctx,
+            _handler_cmd(
+                scenario,
+                "speak-word-of-power",
+                word_id=str(word),
+                target_id=str(target.id),
+            ),
+        ).reason
+        == "word is on cooldown"
+    )
+
+    target.remove_component(HealthComponent)
+    assert (
+        execute_handler(
+            handler,
+            ctx,
+            _handler_cmd(
+                scenario,
+                "speak-word-of-power",
+                word_id=str(word),
+                target_id=str(target.id),
+            ),
+        ).reason
+        == "word target cannot receive this effect"
+    )
+
+
+def test_speak_word_validation_orders_unlock_reachability_support_and_health():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=5.0, maximum=10.0))
+    unreachable = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="Distant Fox", kind="character"),
+            CharacterComponent(species="fox"),
+            HealthComponent(current=5.0, maximum=10.0),
+        ],
+    )
+    unsupported = _word(
+        scenario,
+        name="Wind Voice",
+        effect="push",
+        target_mode="single",
+    )
+    handler = SpeakWordOfPowerHandler()
+    ctx = HandlerContext(scenario.actor.world, 10)
+
+    assert (
+        execute_handler(
+            handler,
+            ctx,
+            _handler_cmd(
+                scenario,
+                "speak-word-of-power",
+                word_id=str(unsupported),
+                target_id=str(unreachable.id),
+            ),
+        ).reason
+        == "you have not learned that word"
+    )
+    character.add_relationship(KnowsWord(ready_at_epoch=20), unsupported)
+    assert (
+        execute_handler(
+            handler,
+            ctx,
+            _handler_cmd(
+                scenario,
+                "speak-word-of-power",
+                word_id=str(unsupported),
+                target_id="not-an-id",
+            ),
+        ).reason
+        == "invalid word target id"
+    )
+    assert (
+        execute_handler(
+            handler,
+            ctx,
+            _handler_cmd(
+                scenario,
+                "speak-word-of-power",
+                word_id=str(unsupported),
+                target_id="entity_999",
+            ),
+        ).reason
+        == "word target does not exist"
+    )
+    assert (
+        execute_handler(
+            handler,
+            ctx,
+            _handler_cmd(
+                scenario,
+                "speak-word-of-power",
+                word_id=str(unsupported),
+                target_id=str(unreachable.id),
+            ),
+        ).reason
+        == "word target is not reachable"
+    )
+    assert (
+        execute_handler(
+            handler,
+            ctx,
+            _handler_cmd(
+                scenario,
+                "speak-word-of-power",
+                word_id=str(unsupported),
+                target_id=str(scenario.character),
+            ),
+        ).reason
+        == "word effect is not supported"
+    )
+
+
+def test_room_words_target_characters_in_id_order_with_heal_harm_caster_rules():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=4.0, maximum=10.0))
+    targets = []
+    for name, health in (("Fox", 8.0), ("Hare", 5.0)):
+        target = spawn_entity(
+            scenario.actor.world,
+            [
+                IdentityComponent(name=name, kind="character"),
+                CharacterComponent(species=name.lower()),
+                HealthComponent(current=health, maximum=10.0),
+            ],
+        )
+        scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+            Contains(mode=ContainmentMode.ROOM_CONTENT), target.id
+        )
+        targets.append(target)
+    healthless = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Shade", kind="character"), CharacterComponent(species="spirit")],
+    )
+    scenario.actor.world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), healthless.id
+    )
+    harm_word = _word(scenario, name="Storm Voice", magnitude=2.0, cooldown_seconds=0)
+    heal_word = _word(
+        scenario,
+        name="Kind Voice",
+        effect="heal",
+        magnitude=1.0,
+        target_mode="room",
+        cooldown_seconds=0,
+    )
+    character.add_relationship(KnowsWord(), harm_word)
+    character.add_relationship(KnowsWord(), heal_word)
+    handler = SpeakWordOfPowerHandler()
+    ctx = HandlerContext(scenario.actor.world, 0)
+
+    harmed = execute_handler(
+        handler,
+        ctx,
+        _handler_cmd(scenario, "speak-word-of-power", word_id=str(harm_word)),
+    )
+    expected_harm_ids = tuple(sorted(str(target.id) for target in targets))
+    assert harmed.events[0].target_ids == expected_harm_ids
+    assert character.get_component(HealthComponent).current == 4.0
+    assert [target.get_component(HealthComponent).current for target in targets] == [6.0, 3.0]
+
+    healed = execute_handler(
+        handler,
+        ctx,
+        _handler_cmd(scenario, "speak-word-of-power", word_id=str(heal_word)),
+    )
+    expected_heal_ids = tuple(
+        sorted((str(scenario.character), *(str(target.id) for target in targets)))
+    )
+    assert healed.events[0].target_ids == expected_heal_ids
+    assert character.get_component(HealthComponent).current == 5.0
+    assert [target.get_component(HealthComponent).current for target in targets] == [7.0, 4.0]
+
+
+def test_word_prompt_lists_each_known_word_using_world_clock():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    ready = _word(scenario, name="Ready Voice", target_mode="self")
+    cooling = _word(scenario, name="Cooling Voice", target_mode="self")
+    character.add_relationship(KnowsWord(ready_at_epoch=0), ready)
+    character.add_relationship(KnowsWord(ready_at_epoch=25), cooling)
+    clock = next(scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities())
+    replace_component(clock, WorldClockComponent(game_time_seconds=10))
+
+    fragments = dragonsim_fragments(scenario.actor.world, character)
+
+    assert "Word of power known: Ready Voice (ready)." in fragments
+    assert "Word of power known: Cooling Voice (ready in 15 seconds)." in fragments
 
 
 def test_soul_and_word_handlers_reject_invalid_directly():
@@ -1885,6 +2173,19 @@ def test_soul_and_word_handlers_reject_invalid_directly():
             speak, ctx, _handler_cmd(scenario, "speak-word-of-power", character_id="x", word_id="y")
         ).reason
         == "invalid character or word id"
+    )
+    assert (
+        execute_handler(
+            speak,
+            ctx,
+            _handler_cmd(
+                scenario,
+                "speak-word-of-power",
+                character_id="entity_999",
+                word_id=str(word),
+            ),
+        ).reason
+        == "character does not exist"
     )
     assert (
         execute_handler(

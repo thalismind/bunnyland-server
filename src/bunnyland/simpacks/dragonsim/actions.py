@@ -106,13 +106,14 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     define_action(
         "speak-word-of-power",
-        ("word_id",),
+        ("word_id", "target_id"),
         tool_name="speak_word_of_power",
         description=(
-            "Shout a word of power you have already learned, unleashing it aloud in your room. "
-            "You must have learned the word before you can speak it."
+            "Shout a learned word of power at yourself, a reachable target, or everyone its "
+            "room effect can reach. Each word changes health through its typed heal or harm "
+            "effect and has a separate per-character cooldown."
         ),
-        patterns=("speak word {word_id}",),
+        patterns=("speak word {word_id}", "speak word {word_id} at {target_id}"),
     ),
     define_action(
         "inscribe-voice-phrase",

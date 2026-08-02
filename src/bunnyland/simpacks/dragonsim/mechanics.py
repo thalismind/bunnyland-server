@@ -28,6 +28,7 @@ from ...core.components import (
     PortableComponent,
     ReadableComponent,
     SleepingComponent,
+    WorldClockComponent,
     WritableComponent,
 )
 from ...core.ecs import (
@@ -63,7 +64,14 @@ from ...core.mutations import (
 )
 from ...core.stealth import observer_can_see
 from ...prompts import ComponentPromptContext
-from .effects import EffectResolution, EffectSpec, effect_spec, resolve_effect
+from .effects import (
+    EffectResolution,
+    EffectSpec,
+    EffectTargetMode,
+    EffectType,
+    effect_spec,
+    resolve_effect,
+)
 
 
 def _payload_entity_id(command: SubmittedCommand, *keys: str):
@@ -295,6 +303,11 @@ class WordOfPowerComponent(Component):
     min_souls: int = 1
     skill_name: str = ""
     min_skill_level: int = 0
+    effect: str = "harm"
+    magnitude: float = 1.0
+    tags: tuple[str, ...] = ("voice",)
+    target_mode: EffectTargetMode = "room"
+    cooldown_seconds: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         if not ctx.can_view_private_state:
@@ -307,6 +320,7 @@ class KnowsWord(Edge):
     """character -> learned word-of-power entity."""
 
     learned_at_epoch: int = 0
+    ready_at_epoch: int = 0
 
 
 @dataclass(frozen=True)
@@ -597,6 +611,13 @@ class WordOfPowerLearnedEvent(DomainEvent):
 class WordOfPowerSpokenEvent(DomainEvent):
     word_id: str
     word_name: str
+    effect_type: EffectType
+    magnitude: float
+    tags: tuple[str, ...] = ()
+    target_mode: EffectTargetMode
+    target_before: tuple[float, ...]
+    target_after: tuple[float, ...]
+    ready_at_epoch: int
 
 
 class TheftCommittedEvent(DomainEvent):
@@ -1361,27 +1382,103 @@ class SpeakWordOfPowerHandler:
         word_id = parse_entity_id(command.payload.get("word_id"))
         if character_id is None or word_id is None:
             return rejected("invalid character or word id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         if not ctx.world.has_entity(word_id):
             return rejected("word does not exist")
         character = ctx.entity(character_id)
-        if not character.has_relationship(KnowsWord, word_id):
+        known_word = next(
+            (
+                edge
+                for edge, target_id in character.get_relationships(KnowsWord)
+                if target_id == word_id
+            ),
+            None,
+        )
+        if known_word is None:
             return rejected("you have not learned that word")
         word_entity = ctx.entity(word_id)
-        word_name = (
-            word_entity.get_component(WordOfPowerComponent).name
-            if word_entity.has_component(WordOfPowerComponent)
-            else _name(word_entity)
+        if not word_entity.has_component(WordOfPowerComponent):
+            return rejected("target is not a word of power")
+        word = word_entity.get_component(WordOfPowerComponent)
+
+        requested_target: EntityId | None = None
+        if command.payload.get("target_id") not in (None, ""):
+            requested_target = parse_entity_id(command.payload.get("target_id"))
+            if requested_target is None:
+                return rejected("invalid word target id")
+            if not ctx.world.has_entity(requested_target):
+                return rejected("word target does not exist")
+            if requested_target not in reachable_ids(ctx.world, character):
+                return rejected("word target is not reachable")
+
+        if word.target_mode == "self" and requested_target not in (None, character_id):
+            return rejected("word effect targets only its speaker")
+        if word.target_mode in ("self", "single"):
+            target_ids = (requested_target or character_id,)
+        else:
+            target_ids = tuple(
+                sorted(
+                    (
+                        target_id
+                        for target_id in reachable_ids(ctx.world, character)
+                        if ctx.world.get_entity(target_id).has_component(CharacterComponent)
+                        and not (word.effect == "harm" and target_id == character_id)
+                    ),
+                    key=str,
+                )
+            )
+
+        typed_effect = effect_spec(
+            word.effect,
+            word.magnitude,
+            tags=word.tags,
+            target_mode=word.target_mode,
+        )
+        if typed_effect is None:
+            return rejected("word effect is not supported")
+
+        resolutions: list[EffectResolution] = []
+        operations: list[MutationOperation] = []
+        for target_id in target_ids:
+            resolved = resolve_effect(ctx.world, ctx.entity(target_id), typed_effect)
+            if resolved is None:
+                if word.target_mode != "room":
+                    return rejected("word target cannot receive this effect")
+                continue
+            resolution, operation = resolved
+            resolutions.append(resolution)
+            operations.append(operation)
+        if not resolutions:
+            return rejected("word has no compatible targets")
+
+        if known_word.ready_at_epoch > ctx.epoch:
+            return rejected("word is on cooldown")
+        ready_at_epoch = ctx.epoch + max(0, word.cooldown_seconds)
+        operations.append(
+            AddEdge(
+                character_id,
+                word_id,
+                replace(known_word, ready_at_epoch=ready_at_epoch),
+            )
         )
         return planned(
-            MutationPlan(),
+            MutationPlan(tuple(operations)),
             WordOfPowerSpokenEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(word_id),),
+                    target_ids=tuple(resolution.target_id for resolution in resolutions),
                     word_id=str(word_id),
-                    word_name=word_name,
+                    word_name=word.name,
+                    effect_type=typed_effect.effect_type,
+                    magnitude=typed_effect.magnitude,
+                    tags=typed_effect.tags,
+                    target_mode=typed_effect.target_mode,
+                    target_before=tuple(resolution.before for resolution in resolutions),
+                    target_after=tuple(resolution.after for resolution in resolutions),
+                    ready_at_epoch=ready_at_epoch,
                 )
             ),
         )
@@ -2493,6 +2590,8 @@ class StudyVoiceInscriptionHandler:
 def dragonsim_pack_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     ctx = ComponentPromptContext.for_entity(world, character)
+    clocks = tuple(world.query().with_all([WorldClockComponent]).execute_entities())
+    world_epoch = clocks[0].get_component(WorldClockComponent).game_time_seconds if clocks else 0
     for quest in world.query().with_all([QuestComponent]).execute_entities():
         quest_ctx = ComponentPromptContext.for_entity(
             world, quest, perspective=ctx.perspective, target=character
@@ -2512,14 +2611,14 @@ def dragonsim_pack_fragments(world: World, character: Entity) -> list[str]:
 
     if character.has_component(GreatSoulComponent):
         lines.extend(character.get_component(GreatSoulComponent).prompt_fragments(ctx))
-    for _word_edge, word_id in character.get_relationships(KnowsWord):
+    for word_edge, word_id in character.get_relationships(KnowsWord):
         # Relics cascades inbound edge removal, so KnowsWord never points at a missing word.
         word = world.get_entity(word_id)
         if word.has_component(WordOfPowerComponent):
-            word_ctx = ComponentPromptContext.for_entity(
-                world, word, perspective=ctx.perspective, target=character
-            )
-            lines.extend(word.get_component(WordOfPowerComponent).prompt_fragments(word_ctx))
+            component = word.get_component(WordOfPowerComponent)
+            remaining = max(0, word_edge.ready_at_epoch - world_epoch)
+            status = "ready" if remaining == 0 else f"ready in {remaining} seconds"
+            lines.append(f"Word of power known: {component.name} ({status}).")
     for _spell_edge, spell_id in character.get_relationships(KnowsSpell):
         # Relics cascades inbound edge removal, so KnowsSpell never points at a missing spell.
         spell = world.get_entity(spell_id)

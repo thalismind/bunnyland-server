@@ -61,7 +61,9 @@ from bunnyland.simpacks.dragonsim.effects import EffectModifier, EffectSpec
 from bunnyland.simpacks.dragonsim.mechanics import (
     ArtifactComponent,
     ItemCurseComponent,
+    KnowsWord,
     SpiritVesselComponent,
+    WordOfPowerComponent,
 )
 from bunnyland.simpacks.toonsim.mechanics import ToonRoomComponent
 from bunnyland.worldgen import StubWorldBuilder, instantiate
@@ -1767,6 +1769,22 @@ def test_effect_artifact_and_curse_types_survive_persistence(tmp_path):
         ],
     )
     artifact.add_relationship(EffectModifier(tags=("restoration",), multiplier=0.5), source.id)
+    learner = spawn_entity(actor.world, [IdentityComponent(name="speaker", kind="character")])
+    word = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="mending voice", kind="word"),
+            WordOfPowerComponent(
+                name="mending voice",
+                effect="heal",
+                magnitude=4.0,
+                tags=("voice", "restoration"),
+                target_mode="single",
+                cooldown_seconds=45,
+            ),
+        ],
+    )
+    learner.add_relationship(KnowsWord(learned_at_epoch=3, ready_at_epoch=48), word.id)
     path = tmp_path / "typed-effects.json"
 
     save_world(actor, path, meta=WorldMeta(seed="effects"))
@@ -1779,6 +1797,18 @@ def test_effect_artifact_and_curse_types_survive_persistence(tmp_path):
     assert loaded_artifact.get_component(ItemCurseComponent).name == "thorn bite"
     assert loaded_artifact.get_component(SpiritVesselComponent).essence == 2
     assert loaded_artifact.get_relationships(EffectModifier)[0][0].multiplier == 0.5
+    loaded_word = loaded.world.get_entity(word.id).get_component(WordOfPowerComponent)
+    assert loaded_word == WordOfPowerComponent(
+        name="mending voice",
+        effect="heal",
+        magnitude=4.0,
+        tags=("voice", "restoration"),
+        target_mode="single",
+        cooldown_seconds=45,
+    )
+    assert loaded.world.get_entity(learner.id).get_relationships(KnowsWord) == [
+        (KnowsWord(learned_at_epoch=3, ready_at_epoch=48), word.id)
+    ]
 
 
 async def test_reloaded_world_keeps_playing(tmp_path):
