@@ -512,6 +512,7 @@ REFERENCE_ARG_KEYS: frozenset[str] = frozenset(
         "treasure_id",
         "tree_id",
         "weapon_id",
+        "vessel_id",
         "worker_id",
         "word_id",
         "zone_id",

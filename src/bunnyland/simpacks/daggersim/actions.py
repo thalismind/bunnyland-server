@@ -294,14 +294,23 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     define_action(
         "enchant-item",
-        ("item_id", "spell_id"),
+        ("item_id", "spell_id", "vessel_id"),
         tool_name="enchant_item",
         patterns=("enchant {item_id} with {spell_id}",),
         examples=("enchant moss charm with Mend Moss",),
         description=(
             "Enchant one of your items with a spell, binding its effect into the object for "
             "later use. Keep both the item and the source spell within reach; the item itself "
-            "cannot be a spell."
+            "cannot be a spell. A reachable charged spirit vessel supplies one essence."
+        ),
+    ),
+    define_action(
+        "purify-item",
+        ("item_id", "vessel_id"),
+        tool_name="purify_item",
+        description=(
+            "Remove a curse you have identified from a reachable item, consuming one essence "
+            "from a reachable charged spirit vessel."
         ),
     ),
     define_action(

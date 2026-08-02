@@ -152,10 +152,11 @@ Create and cast a spell:
 !cast-spell spell_id="Mend Moss"
 ```
 
-Enchant a carried item with a spell, then cast through the item:
+Enchant a carried item with a spell and one essence from a charged spirit vessel, then
+cast through the item:
 
 ```text
-!enchant-item item_id="moss charm" spell_id="Mend Moss"
+!enchant-item item_id="moss charm" spell_id="Mend Moss" vessel_id="charged spirit vessel"
 !cast-spell spell_id="moss charm"
 ```
 
@@ -165,9 +166,19 @@ the thing you cast from. Use `target_id` when you want to affect someone other t
 yourself:
 
 ```text
-!enchant-item item_id="silver needle" spell_id="mend sprout formula"
+!enchant-item item_id="silver needle" spell_id="mend sprout formula" vessel_id="charged spirit vessel"
 !cast-spell spell_id="silver needle" target_id="moon moth"
 ```
+
+Only typed `heal` and `harm` effects resolve; older free-form/world-generated effect names
+remain loadable but cannot be cast. A cursed enchanted item identifies its curse when used.
+Once identified, purify it with another essence:
+
+```text
+!purify-item item_id="silver needle" vessel_id="charged spirit vessel"
+```
+
+Invalid enchanting and purification attempts do not consume essence.
 
 Pacify a creature using a language your character knows:
 

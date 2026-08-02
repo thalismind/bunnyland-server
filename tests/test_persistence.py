@@ -56,6 +56,12 @@ from bunnyland.persistence import (
 )
 from bunnyland.plugins import PluginRegistry, apply_plugins, bunnyland_plugins
 from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.simpacks.dragonsim.effects import EffectModifier, EffectSpec
+from bunnyland.simpacks.dragonsim.mechanics import (
+    ArtifactComponent,
+    ItemCurseComponent,
+    SpiritVesselComponent,
+)
 from bunnyland.simpacks.toonsim.mechanics import ToonRoomComponent
 from bunnyland.worldgen import StubWorldBuilder, instantiate
 
@@ -1697,6 +1703,38 @@ async def test_save_reload_preserves_world(tmp_path):
     # Provenance is restored.
     assert (meta.seed, meta.prompt, meta.generator) == ("a quiet marsh", "p", "oneshot")
     assert meta.saved_at_epoch == before_epoch
+
+
+def test_effect_artifact_and_curse_types_survive_persistence(tmp_path):
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    source = spawn_entity(actor.world, [IdentityComponent(name="ward", kind="effect-source")])
+    artifact = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="thorn mirror", kind="artifact"),
+            ArtifactComponent(
+                name="thorn mirror",
+                effect="legacy flare",
+                typed_effect=EffectSpec("heal", 3.0, ("restoration",)),
+            ),
+            ItemCurseComponent(name="thorn bite"),
+            SpiritVesselComponent(essence=2),
+        ],
+    )
+    artifact.add_relationship(EffectModifier(tags=("restoration",), multiplier=0.5), source.id)
+    path = tmp_path / "typed-effects.json"
+
+    save_world(actor, path, meta=WorldMeta(seed="effects"))
+    loaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+
+    loaded_artifact = loaded.world.get_entity(artifact.id)
+    component = loaded_artifact.get_component(ArtifactComponent)
+    assert component.effect == "legacy flare"
+    assert component.typed_effect == EffectSpec("heal", 3.0, ("restoration",))
+    assert loaded_artifact.get_component(ItemCurseComponent).name == "thorn bite"
+    assert loaded_artifact.get_component(SpiritVesselComponent).essence == 2
+    assert loaded_artifact.get_relationships(EffectModifier)[0][0].multiplier == 0.5
 
 
 async def test_reloaded_world_keeps_playing(tmp_path):

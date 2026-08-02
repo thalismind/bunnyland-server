@@ -116,6 +116,7 @@ from bunnyland.simpacks.daggersim.mechanics import (
     InvestigateRumorHandler,
     IssueLetterOfCreditHandler,
     ItemEnchantedEvent,
+    ItemPurifiedEvent,
     JoinInstitutionHandler,
     LanguageSkillComponent,
     LawRegionComponent,
@@ -150,6 +151,7 @@ from bunnyland.simpacks.daggersim.mechanics import (
     PromoteInstitutionHandler,
     PropertyDeedComponent,
     PropertyPurchasedEvent,
+    PurifyItemHandler,
     RecallAnchorSetEvent,
     RecallUsedEvent,
     RechargeEnchantedItemHandler,
@@ -222,6 +224,7 @@ from bunnyland.simpacks.daggersim.mechanics import (
     install_daggersim,
 )
 from bunnyland.simpacks.dragonsim.mechanics import (
+    ItemCurseComponent,
     QuestAcceptedBy,
     QuestAcceptedEvent,
     QuestCompletedEvent,
@@ -230,6 +233,7 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     QuestProvenanceComponent,
     QuestRewardComponent,
     QuestStateComponent,
+    SpiritVesselComponent,
     dragonsim_fragments,
 )
 from bunnyland.simpacks.dragonsim.quests import (
@@ -2502,6 +2506,11 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
     _install(scenario.actor)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     character = scenario.actor.world.get_entity(scenario.character)
+    vessel_id = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="test vessel", kind="item"), SpiritVesselComponent(essence=10)],
+    ).id
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), vessel_id)
     wrong_kind_id = spawn_entity(
         scenario.actor.world,
         [IdentityComponent(name="notice board", kind="prop")],
@@ -2763,6 +2772,7 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
                 "enchant-item",
                 item_id=str(distant_item.id),
                 spell_id=str(custom_spell_id),
+                vessel_id=str(vessel_id),
             ),
             "item is not reachable",
         ),
@@ -2773,6 +2783,7 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
                 "enchant-item",
                 item_id=str(item_id),
                 spell_id=str(distant_spell.id),
+                vessel_id=str(vessel_id),
             ),
             "spell is not reachable",
         ),
@@ -2783,8 +2794,9 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
                 "enchant-item",
                 item_id=str(item_id),
                 spell_id="entity_999",
+                vessel_id=str(vessel_id),
             ),
-            "item or spell does not exist",
+            "item, spell, or vessel does not exist",
         ),
         (
             EnchantItemHandler(),
@@ -2793,6 +2805,7 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
                 "enchant-item",
                 item_id=str(wrong_kind_id),
                 spell_id=str(custom_spell_id),
+                vessel_id=str(vessel_id),
             ),
             "target is not an item",
         ),
@@ -2803,6 +2816,7 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
                 "enchant-item",
                 item_id=str(spell_template_id),
                 spell_id=str(custom_spell_id),
+                vessel_id=str(vessel_id),
             ),
             "target is not an item",
         ),
@@ -2813,6 +2827,7 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
                 "enchant-item",
                 item_id=str(spell_item_id),
                 spell_id=str(custom_spell_id),
+                vessel_id=str(vessel_id),
             ),
             "target item is a spell",
         ),
@@ -2823,6 +2838,7 @@ def test_daggersim_crime_magic_and_affliction_handlers_reject_bad_state_directly
                 "enchant-item",
                 item_id=str(item_id),
                 spell_id=str(wrong_kind_id),
+                vessel_id=str(vessel_id),
             ),
             "source is not a spell",
         ),
@@ -3066,6 +3082,11 @@ def test_enchant_item_can_use_spell_template_as_source():
     )
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), charm.id)
+    vessel = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="charged vessel", kind="item"), SpiritVesselComponent()],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), vessel.id)
 
     result = execute_handler(
         EnchantItemHandler(),
@@ -3075,6 +3096,7 @@ def test_enchant_item_can_use_spell_template_as_source():
             "enchant-item",
             item_id=str(charm.id),
             spell_id=str(spell_id),
+            vessel_id=str(vessel.id),
         ),
     )
 
@@ -3208,7 +3230,7 @@ def test_daggersim_handlers_reject_invalid_character_ids_directly():
             EnchantItemHandler(),
             "enchant-item",
             {"item_id": str(scenario.room_a), "spell_id": str(scenario.character)},
-            "invalid character, item, or spell id",
+            "invalid character, item, spell, or vessel id",
         ),
         (
             AttemptPacifyHandler(),
@@ -3737,6 +3759,11 @@ async def test_enchant_item_with_created_spell_and_cast_from_item():
         ],
     )
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), charm.id)
+    vessel = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="charged vessel", kind="item"), SpiritVesselComponent()],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), vessel.id)
     created: list[SpellCreatedEvent] = []
     enchanted: list[ItemEnchantedEvent] = []
     cast: list[SpellCastEvent] = []
@@ -3762,6 +3789,7 @@ async def test_enchant_item_with_created_spell_and_cast_from_item():
             "enchant-item",
             item_id=str(charm.id),
             spell_id=str(spell_id),
+            vessel_id=str(vessel.id),
         )
     )
     await scenario.actor.tick(HOUR)
@@ -3779,6 +3807,7 @@ async def test_enchant_item_with_created_spell_and_cast_from_item():
     enchantment = charm.get_component(EnchantedItemComponent)
     assert enchantment.spell_name == "Mend Moss"
     assert enchantment.source_spell_id == str(spell_id)
+    assert vessel.get_component(SpiritVesselComponent).essence == 0
     assert enchanted[0].item_id == str(charm.id)
     assert enchanted[0].spell_id == str(spell_id)
     assert character.get_component(HealthComponent).current == 5.0
@@ -3791,6 +3820,9 @@ async def test_enchant_item_rejects_non_item_targets():
     scenario = build_scenario()
     _install(scenario.actor)
     template_id = _spell_template(scenario)
+    character = scenario.actor.world.get_entity(scenario.character)
+    vessel = spawn_entity(scenario.actor.world, [SpiritVesselComponent()])
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), vessel.id)
     rejected_events: list[CommandRejectedEvent] = []
     scenario.actor.bus.subscribe(CommandRejectedEvent, rejected_events.append)
 
@@ -3800,6 +3832,7 @@ async def test_enchant_item_rejects_non_item_targets():
             "enchant-item",
             item_id=str(scenario.room_a),
             spell_id=str(template_id),
+            vessel_id=str(vessel.id),
         )
     )
     await scenario.actor.tick(HOUR)
@@ -5850,3 +5883,86 @@ def test_daggersim_fragments_skip_owned_property_when_entity_gone(monkeypatch):
     lines = daggersim_fragments(world, character)
     # The owned-property edge is skipped because the target reads as gone (4105->4104).
     assert not any("Property owned" in line for line in lines)
+
+
+def test_purify_item_requires_known_curse_and_consumes_essence_only_on_success():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    item = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="thorn charm", kind="item"),
+            PortableComponent(),
+            ItemCurseComponent(name="thorn bite"),
+        ],
+    )
+    vessel = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="charged vessel", kind="item"), SpiritVesselComponent()],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), vessel.id)
+    command = _handler_cmd(
+        scenario,
+        "purify-item",
+        item_id=str(item.id),
+        vessel_id=str(vessel.id),
+    )
+
+    rejected_result = execute_handler(PurifyItemHandler(), ctx, command)
+    assert rejected_result.reason == "item curse is not known"
+    assert vessel.get_component(SpiritVesselComponent).essence == 1
+
+    replace_component(
+        item,
+        ItemCurseComponent(
+            name="thorn bite",
+            identified_by=(str(scenario.character),),
+        ),
+    )
+    result = execute_handler(PurifyItemHandler(), ctx, command)
+
+    assert result.ok is True
+    assert isinstance(result.events[0], ItemPurifiedEvent)
+    assert not item.has_component(ItemCurseComponent)
+    assert vessel.get_component(SpiritVesselComponent).essence == 0
+
+
+def test_legacy_unknown_spell_effect_rejects_without_resolving():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=4.0, maximum=10.0))
+    spell = spawn_entity(
+        scenario.actor.world,
+        [CustomSpellComponent(spell_name="Old Glow", effect_type="worldgen", magnitude=9.0)],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), spell.id)
+    item = spawn_entity(scenario.actor.world, [PortableComponent()])
+    vessel = spawn_entity(scenario.actor.world, [SpiritVesselComponent()])
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), vessel.id)
+
+    result = execute_handler(
+        CastSpellHandler(),
+        ctx,
+        _handler_cmd(scenario, "cast-spell", spell_id=str(spell.id)),
+    )
+
+    assert result.reason == "spell effect is not supported"
+    assert character.get_component(HealthComponent).current == 4.0
+
+    enchant_result = execute_handler(
+        EnchantItemHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "enchant-item",
+            item_id=str(item.id),
+            spell_id=str(spell.id),
+            vessel_id=str(vessel.id),
+        ),
+    )
+    assert enchant_result.reason == "spell effect is not supported"
+    assert vessel.get_component(SpiritVesselComponent).essence == 1

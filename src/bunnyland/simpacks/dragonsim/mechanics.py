@@ -56,6 +56,7 @@ from ...core.mutations import (
     SetComponent,
 )
 from ...prompts import ComponentPromptContext
+from .effects import EffectResolution, EffectSpec, effect_spec, resolve_effect
 
 
 def _payload_entity_id(command: SubmittedCommand, *keys: str):
@@ -415,6 +416,7 @@ class SpellComponent(Component):
     min_skill_level: int = 0
     effect: str = ""
     magnitude: int = 1
+    typed_effect: EffectSpec | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         if ctx.target is not None:
@@ -460,6 +462,7 @@ class ArtifactComponent(Component):
     effect: str = ""
     charges: int = 1
     identified_by: tuple[str, ...] = ()
+    typed_effect: EffectSpec | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         identified = (
@@ -469,6 +472,32 @@ class ArtifactComponent(Component):
         )
         state = "identified" if identified else "unidentified"
         return (f"Artifact nearby: {self.name} ({self.charges} charges, {state}).",)
+
+
+@dataclass(frozen=True)
+class SpiritVesselComponent(Component):
+    essence: int = 1
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        del ctx
+        state = "charged" if self.essence > 0 else "empty"
+        return (f"Spirit vessel nearby: {self.essence} essence ({state}).",)
+
+
+@dataclass(frozen=True)
+class ItemCurseComponent(Component):
+    name: str
+    effect: EffectSpec = EffectSpec("harm", 1.0, ("curse",), "self")
+    identified_by: tuple[str, ...] = ()
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if (
+            ctx.target is None
+            or str(ctx.target.id) not in self.identified_by
+            or not ctx.can_view_private_state
+        ):
+            return ()
+        return (f"Known curse on {_name(ctx.entity)}: {self.name}.",)
 
 
 @dataclass(frozen=True)
@@ -643,6 +672,10 @@ class DragonSpellCastEvent(DomainEvent):
     spell_name: str
     school: str
     magic_spent: int
+    target_id: str | None = None
+    effect_type: str | None = None
+    target_before: float | None = None
+    target_after: float | None = None
 
 
 class PotionBrewedEvent(DomainEvent):
@@ -655,6 +688,18 @@ class ArtifactUsedEvent(DomainEvent):
     artifact_id: str
     artifact_name: str
     remaining_charges: int
+    target_id: str | None = None
+    effect_type: str | None = None
+    target_before: float | None = None
+    target_after: float | None = None
+
+
+class ItemCurseTriggeredEvent(DomainEvent):
+    item_id: str
+    curse_name: str
+    target_id: str
+    target_before: float | None = None
+    target_after: float | None = None
 
 
 class ArtifactIdentifiedEvent(DomainEvent):
@@ -1965,6 +2010,11 @@ class CastDragonSpellHandler:
             return rejected("invalid character or spell id")
         if not ctx.world.has_entity(spell_id):
             return rejected("spell does not exist")
+        target_id = parse_entity_id(command.payload.get("target_id")) or character_id
+        if target_id is None:
+            return rejected("invalid spell target id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("spell target does not exist")
         character = ctx.entity(character_id)
         if not character.has_relationship(KnowsSpell, spell_id):
             return rejected("spell is not learned")
@@ -1972,6 +2022,21 @@ class CastDragonSpellHandler:
         if not spell_entity.has_component(SpellComponent):
             return rejected("target is not a spell")
         spell = spell_entity.get_component(SpellComponent)
+        target = ctx.entity(target_id)
+        typed_effect = spell.typed_effect or effect_spec(spell.effect, spell.magnitude)
+        resolution: EffectResolution | None = None
+        effect_operation: MutationOperation | None = None
+        if typed_effect is not None:
+            if typed_effect.target_mode == "self" and target_id != character_id:
+                return rejected("spell effect targets only its caster")
+            if target_id not in reachable_ids(ctx.world, character):
+                return rejected("spell target is not reachable")
+            resolved = resolve_effect(ctx.world, target, typed_effect)
+            if resolved is None:
+                return rejected("spell target cannot receive this effect")
+            resolution, effect_operation = resolved
+        elif spell.effect:
+            return rejected("spell effect is not supported")
         if spell_entity.has_component(SpellCooldownComponent):
             cooldown = spell_entity.get_component(SpellCooldownComponent)
             if cooldown.ready_at_epoch > ctx.epoch:
@@ -1987,6 +2052,8 @@ class CastDragonSpellHandler:
         operations: list[MutationOperation] = [
             SetComponent(character_id, replace(magic, current=magic.current - spell.magic_cost))
         ]
+        if effect_operation is not None:
+            operations.append(effect_operation)
         if spell_entity.has_component(SpellCooldownComponent):
             cooldown = spell_entity.get_component(SpellCooldownComponent)
             operations.append(
@@ -2006,6 +2073,10 @@ class CastDragonSpellHandler:
                     spell_name=spell.name,
                     school=spell.school,
                     magic_spent=spell.magic_cost,
+                    target_id=str(target_id) if resolution is not None else None,
+                    effect_type=resolution.effect_type if resolution is not None else None,
+                    target_before=resolution.before if resolution is not None else None,
+                    target_after=resolution.after if resolution is not None else None,
                 )
             )
         ]
@@ -2130,21 +2201,90 @@ class UseArtifactHandler:
         artifact = artifact_entity.get_component(ArtifactComponent)
         if artifact.charges <= 0:
             return rejected("artifact has no charges")
+        requested_target = (
+            command.payload.get("target_id")
+            if "artifact_id" in command.payload or "item_id" in command.payload
+            else None
+        )
+        target_id = (
+            parse_entity_id(requested_target) if requested_target is not None else character_id
+        )
+        if target_id is None:
+            return rejected("invalid artifact target id")
+        if not ctx.world.has_entity(target_id):
+            return rejected("artifact target does not exist")
+        target = ctx.entity(target_id)
+        resolution: EffectResolution | None = None
+        operations: list[MutationOperation] = []
+        if artifact.typed_effect is not None:
+            if artifact.typed_effect.target_mode == "self" and target_id != character_id:
+                return rejected("artifact effect targets only its user")
+            if target_id not in reachable_ids(ctx.world, character):
+                return rejected("artifact target is not reachable")
+            resolved = resolve_effect(ctx.world, target, artifact.typed_effect)
+            if resolved is None:
+                return rejected("artifact target cannot receive this effect")
+            resolution, operation = resolved
+            operations.append(operation)
         identified_by = tuple(sorted((*artifact.identified_by, str(character_id))))
         updated = replace(artifact, charges=artifact.charges - 1, identified_by=identified_by)
-        return planned(
-            MutationPlan((SetComponent(artifact_id, updated),)),
+        operations.append(SetComponent(artifact_id, updated))
+        events: list[DomainEvent] = [
             ArtifactUsedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(artifact_id),),
+                    target_ids=(str(artifact_id), str(target_id)),
                     artifact_id=str(artifact_id),
                     artifact_name=artifact.name,
                     remaining_charges=updated.charges,
+                    target_id=str(target_id) if resolution is not None else None,
+                    effect_type=resolution.effect_type if resolution is not None else None,
+                    target_before=resolution.before if resolution is not None else None,
+                    target_after=resolution.after if resolution is not None else None,
                 )
-            ),
+            )
+        ]
+        if artifact_entity.has_component(ItemCurseComponent):
+            curse = artifact_entity.get_component(ItemCurseComponent)
+            curse_resolution = resolve_effect(
+                ctx.world,
+                character,
+                curse.effect,
+                current=(
+                    resolution.after
+                    if resolution is not None and target_id == character_id
+                    else None
+                ),
+            )
+            before: float | None = None
+            after: float | None = None
+            if curse_resolution is not None:
+                curse_result, curse_operation = curse_resolution
+                operations.append(curse_operation)
+                before = curse_result.before
+                after = curse_result.after
+            known_by = tuple(sorted(set((*curse.identified_by, str(character_id)))))
+            operations.append(SetComponent(artifact_id, replace(curse, identified_by=known_by)))
+            events.append(
+                ItemCurseTriggeredEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(artifact_id), str(character_id)),
+                        item_id=str(artifact_id),
+                        curse_name=curse.name,
+                        target_id=str(character_id),
+                        target_before=before,
+                        target_after=after,
+                    )
+                )
+            )
+        return planned(
+            MutationPlan(tuple(operations)),
+            *events,
         )
 
 

@@ -43,6 +43,12 @@ from ...core.mutations import (
     SetComponent,
 )
 from ...prompts import ComponentPromptContext
+from ..dragonsim.effects import EffectSpec, effect_spec, resolve_effect
+from ..dragonsim.mechanics import (
+    ItemCurseComponent,
+    ItemCurseTriggeredEvent,
+    SpiritVesselComponent,
+)
 
 
 def _payload_entity_id(command: SubmittedCommand, *keys: str):
@@ -491,6 +497,7 @@ class SpellTemplateComponent(Component):
     effect_type: str
     magnitude: float
     cost: int = 1
+    typed_effect: EffectSpec | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         del ctx
@@ -504,6 +511,7 @@ class CustomSpellComponent(Component):
     magnitude: float
     cost: int = 1
     creator_id: str | None = None
+    typed_effect: EffectSpec | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         if not ctx.can_view_private_state:
@@ -520,6 +528,7 @@ class EnchantedItemComponent(Component):
     source_spell_id: str | None = None
     enchanter_id: str | None = None
     enchanted_at_epoch: int = 0
+    typed_effect: EffectSpec | None = None
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         del ctx
@@ -1038,6 +1047,15 @@ class SpellCastEvent(DomainEvent):
     effect_type: str
     magnitude: float
     target_health: float | None = None
+    target_before: float | None = None
+    multiplier: float = 1.0
+
+
+class ItemPurifiedEvent(DomainEvent):
+    item_id: str
+    curse_name: str
+    vessel_id: str
+    remaining_essence: int
 
 
 class PacificationAttemptedEvent(DomainEvent):
@@ -2675,6 +2693,7 @@ class CreateSpellHandler:
             magnitude=template.magnitude,
             cost=template.cost,
             creator_id=str(character_id),
+            typed_effect=template.typed_effect,
         )
         spell_entity = EntityReference()
         plan = MutationPlan(
@@ -2719,17 +2738,63 @@ class CastSpellHandler:
             return rejected("spell or target does not exist")
 
         character = ctx.entity(character_id)
-        if spell_id not in reachable_ids(ctx.world, character):
+        reachable = reachable_ids(ctx.world, character)
+        if spell_id not in reachable:
             return rejected("spell is not reachable")
+        if target_id not in reachable:
+            return rejected("spell target is not reachable")
         spell_entity = ctx.entity(spell_id)
         spell = _spell_from_entity(spell_entity)
         if spell is None:
             return rejected("target is not a spell or enchanted item")
         target = ctx.entity(target_id)
-        target_health, operation = _spell_effect_operation(target, spell)
-        operations = (operation,) if operation is not None else ()
-        return planned(
-            MutationPlan(operations),
+        typed_effect = spell.typed_effect or effect_spec(spell.effect_type, spell.magnitude)
+        if typed_effect is None:
+            return rejected("spell effect is not supported")
+        if typed_effect.target_mode == "self" and target_id != character_id:
+            return rejected("spell effect targets only its caster")
+        resolved = resolve_effect(ctx.world, target, typed_effect)
+        if resolved is None:
+            return rejected("spell target cannot receive this effect")
+        resolution, operation = resolved
+        operations: list[MutationOperation] = [operation]
+        events: list[DomainEvent] = []
+        if spell_entity.has_component(ItemCurseComponent):
+            curse = spell_entity.get_component(ItemCurseComponent)
+            curse_resolution = resolve_effect(
+                ctx.world,
+                character,
+                curse.effect,
+                current=(
+                    resolution.after if target_id == character_id else None
+                ),
+            )
+            curse_before: float | None = None
+            curse_after: float | None = None
+            if curse_resolution is not None:
+                curse_result, curse_operation = curse_resolution
+                operations.append(curse_operation)
+                curse_before = curse_result.before
+                curse_after = curse_result.after
+            known_by = tuple(sorted(set((*curse.identified_by, str(character_id)))))
+            operations.append(SetComponent(spell_id, replace(curse, identified_by=known_by)))
+            events.append(
+                ItemCurseTriggeredEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(spell_id), str(character_id)),
+                        item_id=str(spell_id),
+                        curse_name=curse.name,
+                        target_id=str(character_id),
+                        target_before=curse_before,
+                        target_after=curse_after,
+                    )
+                )
+            )
+        events.insert(
+            0,
             SpellCastEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2739,11 +2804,17 @@ class CastSpellHandler:
                     spell_id=str(spell_id),
                     spell_name=spell.spell_name,
                     target_id=str(target_id),
-                    effect_type=spell.effect_type,
-                    magnitude=spell.magnitude,
-                    target_health=target_health,
+                    effect_type=resolution.effect_type,
+                    magnitude=resolution.magnitude,
+                    target_health=resolution.after,
+                    target_before=resolution.before,
+                    multiplier=resolution.multiplier,
                 )
             ),
+        )
+        return planned(
+            MutationPlan(tuple(operations)),
+            *events,
         )
 
 
@@ -2754,10 +2825,15 @@ class EnchantItemHandler:
         character_id = parse_entity_id(command.character_id)
         item_id = parse_entity_id(command.payload.get("item_id"))
         spell_id = parse_entity_id(command.payload.get("spell_id"))
-        if character_id is None or item_id is None or spell_id is None:
-            return rejected("invalid character, item, or spell id")
-        if not ctx.world.has_entity(item_id) or not ctx.world.has_entity(spell_id):
-            return rejected("item or spell does not exist")
+        vessel_id = parse_entity_id(command.payload.get("vessel_id"))
+        if character_id is None or item_id is None or spell_id is None or vessel_id is None:
+            return rejected("invalid character, item, spell, or vessel id")
+        if (
+            not ctx.world.has_entity(item_id)
+            or not ctx.world.has_entity(spell_id)
+            or not ctx.world.has_entity(vessel_id)
+        ):
+            return rejected("item, spell, or vessel does not exist")
 
         character = ctx.entity(character_id)
         reachable = reachable_ids(ctx.world, character)
@@ -2765,6 +2841,8 @@ class EnchantItemHandler:
             return rejected("item is not reachable")
         if spell_id not in reachable:
             return rejected("spell is not reachable")
+        if vessel_id not in reachable:
+            return rejected("spirit vessel is not reachable")
 
         item = ctx.entity(item_id)
         if not item.has_component(PortableComponent):
@@ -2782,9 +2860,19 @@ class EnchantItemHandler:
                 magnitude=template.magnitude,
                 cost=template.cost,
                 creator_id=None,
+                typed_effect=template.typed_effect,
             )
         if spell is None:
             return rejected("source is not a spell")
+        typed_effect = spell.typed_effect or effect_spec(spell.effect_type, spell.magnitude)
+        if typed_effect is None:
+            return rejected("spell effect is not supported")
+        vessel_entity = ctx.entity(vessel_id)
+        if not vessel_entity.has_component(SpiritVesselComponent):
+            return rejected("target is not a spirit vessel")
+        vessel = vessel_entity.get_component(SpiritVesselComponent)
+        if vessel.essence <= 0:
+            return rejected("spirit vessel has no essence")
 
         enchantment = EnchantedItemComponent(
             spell_name=spell.spell_name,
@@ -2794,9 +2882,15 @@ class EnchantItemHandler:
             source_spell_id=str(spell_id),
             enchanter_id=str(character_id),
             enchanted_at_epoch=ctx.epoch,
+            typed_effect=typed_effect,
         )
         return planned(
-            MutationPlan((SetComponent(item.id, enchantment),)),
+            MutationPlan(
+                (
+                    SetComponent(item.id, enchantment),
+                    SetComponent(vessel_id, replace(vessel, essence=vessel.essence - 1)),
+                )
+            ),
             ItemEnchantedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.ROOM,
@@ -2808,6 +2902,58 @@ class EnchantItemHandler:
                     spell_name=enchantment.spell_name,
                     effect_type=enchantment.effect_type,
                     magnitude=enchantment.magnitude,
+                )
+            ),
+        )
+
+
+class PurifyItemHandler:
+    command_type = "purify-item"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        item_id = parse_entity_id(command.payload.get("item_id"))
+        vessel_id = parse_entity_id(command.payload.get("vessel_id"))
+        if character_id is None or item_id is None or vessel_id is None:
+            return rejected("invalid character, item, or vessel id")
+        if not ctx.world.has_entity(item_id) or not ctx.world.has_entity(vessel_id):
+            return rejected("item or vessel does not exist")
+        character = ctx.entity(character_id)
+        reachable = reachable_ids(ctx.world, character)
+        if item_id not in reachable:
+            return rejected("item is not reachable")
+        if vessel_id not in reachable:
+            return rejected("spirit vessel is not reachable")
+        item = ctx.entity(item_id)
+        if not item.has_component(ItemCurseComponent):
+            return rejected("item is not cursed")
+        curse = item.get_component(ItemCurseComponent)
+        if str(character_id) not in curse.identified_by:
+            return rejected("item curse is not known")
+        vessel_entity = ctx.entity(vessel_id)
+        if not vessel_entity.has_component(SpiritVesselComponent):
+            return rejected("target is not a spirit vessel")
+        vessel = vessel_entity.get_component(SpiritVesselComponent)
+        if vessel.essence <= 0:
+            return rejected("spirit vessel has no essence")
+        remaining = vessel.essence - 1
+        return planned(
+            MutationPlan(
+                (
+                    RemoveComponent(item_id, ItemCurseComponent),
+                    SetComponent(vessel_id, replace(vessel, essence=remaining)),
+                )
+            ),
+            ItemPurifiedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.PRIVATE,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(item_id), str(vessel_id)),
+                    item_id=str(item_id),
+                    curse_name=curse.name,
+                    vessel_id=str(vessel_id),
+                    remaining_essence=remaining,
                 )
             ),
         )
