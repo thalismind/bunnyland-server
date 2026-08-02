@@ -2057,9 +2057,13 @@ class CastDragonSpellHandler:
             return rejected("invalid character or spell id")
         if not ctx.world.has_entity(spell_id):
             return rejected("spell does not exist")
-        target_id = parse_entity_id(command.payload.get("target_id")) or character_id
-        if target_id is None:
-            return rejected("invalid spell target id")
+        raw_target_id = command.payload.get("target_id")
+        if raw_target_id in (None, ""):
+            target_id = character_id
+        else:
+            target_id = parse_entity_id(raw_target_id)
+            if target_id is None:
+                return rejected("invalid spell target id")
         if not ctx.world.has_entity(target_id):
             return rejected("spell target does not exist")
         character = ctx.entity(character_id)

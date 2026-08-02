@@ -22,8 +22,6 @@ def stealth_fragments(world: World, character: Entity) -> list[str]:
         lines.append(f"You are hidden (hide attempt {since_epoch}).")
         detected_by = []
         for observer_id, _edge in character.get_incoming_relationships(DetectedStealth):
-            if not world.has_entity(observer_id):
-                continue
             observer = world.get_entity(observer_id)
             if observer_detects(world, observer, character):
                 detected_by.append(_name(observer))
@@ -32,8 +30,6 @@ def stealth_fragments(world: World, character: Entity) -> list[str]:
 
     detected: list[str] = []
     for _edge, target_id in character.get_relationships(DetectedStealth):
-        if not world.has_entity(target_id):
-            continue
         target = world.get_entity(target_id)
         if observer_detects(world, character, target):
             detected.append(_name(target))
