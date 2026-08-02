@@ -896,6 +896,11 @@ def _add_daggersim_magic_world(scenario):
         [dagger.SpellTemplateComponent(spell_name="Mend Sprout", effect_type="heal", magnitude=4)],
     )
     charm = _add_inventory_item(scenario, "moss charm")
+    _add_inventory_item(
+        scenario,
+        "charged spirit vessel",
+        components=(dagger.SpiritVesselComponent(essence=1),),
+    )
     creature = _room_content(
         scenario,
         "moon moth",

@@ -97,6 +97,7 @@ from bunnyland.simpacks.dinosim.mechanics import (
     FossilFragmentComponent,
     SpeciesIdentificationComponent,
 )
+from bunnyland.simpacks.dragonsim.mechanics import SpiritVesselComponent
 from bunnyland.simpacks.gardensim.mechanics import (
     CropComponent,
     CropHarvestedEvent,
@@ -1022,8 +1023,17 @@ async def test_scripted_agent_enchants_created_spell_onto_item_e2e():
             PortableComponent(can_pick_up=True),
         ],
     )
+    vessel = spawn_entity(
+        actor.world,
+        [
+            IdentityComponent(name="charged spirit vessel", kind="item"),
+            PortableComponent(can_pick_up=True),
+            SpiritVesselComponent(essence=1),
+        ],
+    )
     room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), formula.id)
     character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), charm.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), vessel.id)
 
     created: list[SpellCreatedEvent] = []
     enchanted: list[ItemEnchantedEvent] = []
@@ -1040,7 +1050,14 @@ async def test_scripted_agent_enchants_created_spell_onto_item_e2e():
                 "create_spell",
                 {"template_id": "mend sprout formula", "spell_name": "Mend Moss"},
             ),
-            ToolCall("enchant_item", {"item_id": "moss charm", "spell_id": "Mend Moss"}),
+            ToolCall(
+                "enchant_item",
+                {
+                    "item_id": "moss charm",
+                    "spell_id": "Mend Moss",
+                    "vessel_id": "charged spirit vessel",
+                },
+            ),
             ToolCall("cast_spell", {"spell_id": "moss charm"}),
         ]
     )
