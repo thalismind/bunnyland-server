@@ -14,12 +14,15 @@ from bunnyland.core import (
     CommandCost,
     Contains,
     ControllerOutboxMessageComponent,
+    DetectedStealth,
     DiscordControllerComponent,
     HandlerContext,
     HandlerResult,
     Lane,
     MemoryProfileComponent,
     MutationPlan,
+    StealthChangedEvent,
+    StealthDetectedEvent,
     SubmittedCommand,
     WorldActor,
     build_submitted_command,
@@ -330,6 +333,16 @@ def test_builtin_admin_and_storyteller_ecs_types_are_registered():
     assert AdminComponent in core_verbs_plugin().ecs.components
     assert IncidentSpawned in storyteller_plugin().ecs.edges
     assert SaveCheckpointComponent in checkpoints_plugin().ecs.components
+    core_verbs = core_verbs_plugin()
+    assert DetectedStealth in core_verbs.ecs.edges
+    assert {handler.command_type for handler in core_verbs.commands.action_handlers} >= {
+        "move",
+        "sneak",
+    }
+    assert {StealthChangedEvent, StealthDetectedEvent} <= set(core_verbs.commands.typed_events)
+    dragonsim = next(plugin for plugin in bunnyland_plugins() if plugin.id == DRAGONSIM)
+    assert "SneakingComponent" not in {component.__name__ for component in dragonsim.ecs.components}
+    assert "sneak" not in {handler.command_type for handler in dragonsim.commands.action_handlers}
     assert {
         definition.command_type for definition in checkpoints_plugin().commands.action_definitions
     } == {"save-checkpoint", "reload-checkpoint"}

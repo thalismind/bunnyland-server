@@ -6,7 +6,7 @@ from copy import deepcopy
 
 from pydantic import JsonValue
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 class WorldMigrationError(ValueError):
@@ -1631,8 +1631,60 @@ def _validate_v4(snapshot: dict[str, JsonValue]) -> None:
             )
 
 
+def _migrate_v4(snapshot: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    components = _table(snapshot, "components")
+    legacy = components.pop("SneakingComponent", {})
+    if not isinstance(legacy, dict):
+        raise WorldMigrationError("persisted type 'SneakingComponent' must contain a mapping")
+    stealth_value = components.get("StealthComponent", {})
+    if not isinstance(stealth_value, dict):
+        raise WorldMigrationError("persisted type 'StealthComponent' must contain a mapping")
+    stealth = stealth_value
+    for entity_id, fields in legacy.items():
+        if entity_id in stealth:
+            raise WorldMigrationError(
+                f"schema-v4 entity {entity_id!r} has both SneakingComponent and "
+                "StealthComponent"
+            )
+        if not isinstance(fields, dict):
+            raise WorldMigrationError(
+                f"SneakingComponent fields for {entity_id!r} must be a mapping"
+            )
+        sneaking = fields.get("sneaking", False)
+        since_epoch = fields.get("since_epoch", 0)
+        if not isinstance(sneaking, bool) or not isinstance(since_epoch, int):
+            raise WorldMigrationError(
+                f"SneakingComponent fields for {entity_id!r} require boolean sneaking "
+                "and integer since_epoch"
+            )
+        stealth[entity_id] = {
+            "visibility_level": 0.0 if sneaking else 1.0,
+            "hidden_threshold": 0.1,
+            "hiding": sneaking,
+            "since_epoch": since_epoch,
+        }
+    if stealth:
+        components["StealthComponent"] = stealth
+    for entity_id, fields in stealth.items():
+        if not isinstance(fields, dict):
+            raise WorldMigrationError(
+                f"StealthComponent fields for {entity_id!r} must be a mapping"
+            )
+        fields.setdefault("since_epoch", 0)
+    _table(snapshot, "bunnyland")["schema_version"] = 5
+    _validate_v5(snapshot)
+    return snapshot
+
+
+def _validate_v5(snapshot: dict[str, JsonValue]) -> None:
+    _validate_v4(snapshot)
+    components = _table(snapshot, "components")
+    if "SneakingComponent" in components:
+        raise WorldMigrationError("schema-v5 snapshots must not contain SneakingComponent")
+
+
 def migrate_snapshot(snapshot: object) -> dict[str, JsonValue]:
-    """Return a validated schema-v4 copy of a raw JSON/YAML snapshot."""
+    """Return a validated schema-v5 copy of a raw JSON/YAML snapshot."""
 
     if not isinstance(snapshot, dict):
         raise WorldMigrationError("world snapshot must be a mapping")
@@ -1655,10 +1707,13 @@ def migrate_snapshot(snapshot: object) -> dict[str, JsonValue]:
         migrated = _migrate_v2(migrated)
         version = 3
     if version == 3:
-        return _migrate_v3(migrated)
+        migrated = _migrate_v3(migrated)
+        version = 4
+    if version == 4:
+        return _migrate_v4(migrated)
     for section in ("entities", "components", "relationships"):
         _table(migrated, section)
-    _validate_v4(migrated)
+    _validate_v5(migrated)
     return migrated
 
 

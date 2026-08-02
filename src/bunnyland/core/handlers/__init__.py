@@ -39,6 +39,7 @@ from .speech import (
     TellHandler,
     infer_intent,
 )
+from .stealth import SneakHandler, stealth_change_operations, stealth_changed_event
 
 __all__ = [
     "CommandHandler",
@@ -58,6 +59,7 @@ __all__ = [
     "RemoveHandler",
     "SayHandler",
     "SleepHandler",
+    "SneakHandler",
     "StartConversationHandler",
     "TakeHandler",
     "TellHandler",
@@ -74,4 +76,6 @@ __all__ = [
     "require_character",
     "require_entity",
     "require_reachable_entity",
+    "stealth_change_operations",
+    "stealth_changed_event",
 ]

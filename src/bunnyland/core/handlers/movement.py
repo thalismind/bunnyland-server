@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
 
 from relics import EntityId
 
@@ -13,8 +12,13 @@ from ..components import NoiseComponent
 from ..ecs import container_of, parse_entity_id
 from ..edges import ContainmentMode, Contains, ExitTo
 from ..events import ActorMovedEvent
-from ..mutations import AddEdge, AddEntity, MutationPlan, RemoveEdge
+from ..mutations import AddEdge, AddEntity, MutationOperation, MutationPlan, RemoveEdge
+from ..stealth import is_hidden
 from .base import HandlerContext, HandlerResult, planned, rejected, require_character
+from .stealth import stealth_change_operations, stealth_changed_event
+
+QUIET_MOVEMENT_NOISE = 0.25
+LOUD_REVEAL_THRESHOLD = 1.0
 
 
 class MoveHandler:
@@ -27,7 +31,7 @@ class MoveHandler:
     command_type = "move"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        payload: Mapping[str, Any] = command.payload
+        payload: Mapping[str, object] = command.payload
         character_id, character, error = require_character(ctx, command.character_id)
         if error is not None:
             return error
@@ -56,31 +60,35 @@ class MoveHandler:
         if not ctx.world.has_entity(destination_id):
             return rejected("destination does not exist")
 
-        plan = MutationPlan(
-            (
-                RemoveEdge(current_room_id, character_id, Contains),
-                AddEdge(
-                    destination_id,
-                    character_id,
-                    Contains(mode=ContainmentMode.ROOM_CONTENT),
-                ),
-                AddEntity(
-                    (
-                        NoiseComponent(
-                            loudness=float(payload.get("noise", 1.0)),
-                            text="movement",
-                            source_entity_id=str(character_id),
-                            room_id=str(destination_id),
-                            created_at_epoch=ctx.epoch,
-                            expires_at_epoch=ctx.epoch + 60,
-                        ),
-                    )
-                ),
-            )
-        )
+        hidden = is_hidden(character)
+        explicit_noise = "noise" in payload
+        noise = float(payload.get("noise", QUIET_MOVEMENT_NOISE if hidden else 1.0))
+        reveals = hidden and explicit_noise and noise >= LOUD_REVEAL_THRESHOLD
+        operations: list[MutationOperation] = [
+            RemoveEdge(current_room_id, character_id, Contains),
+            AddEdge(
+                destination_id,
+                character_id,
+                Contains(mode=ContainmentMode.ROOM_CONTENT),
+            ),
+            AddEntity(
+                (
+                    NoiseComponent(
+                        loudness=noise,
+                        text="movement",
+                        source_entity_id=str(character_id),
+                        room_id=str(destination_id),
+                        created_at_epoch=ctx.epoch,
+                        expires_at_epoch=ctx.epoch + 60,
+                    ),
+                )
+            ),
+        ]
+        if reveals:
+            operations.extend(stealth_change_operations(character, epoch=ctx.epoch, hiding=False))
+        plan = MutationPlan(tuple(operations))
 
-        return planned(
-            plan,
+        events = [
             lambda: ActorMovedEvent(
                 **ctx.event_base(
                     actor_id=str(character_id),
@@ -90,8 +98,11 @@ class MoveHandler:
                     direction=chosen_direction,
                     arrival_summary=render_summary(build_room_facts(ctx.world, destination_id)),
                 )
-            ),
-        )
+            )
+        ]
+        if reveals:
+            events.append(lambda: stealth_changed_event(ctx, character_id, hiding=False))
+        return planned(plan, *events)
 
 
 __all__ = ["MoveHandler"]

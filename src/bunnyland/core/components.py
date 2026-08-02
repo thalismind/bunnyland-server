@@ -56,6 +56,7 @@ class ActionOverrideComponent(Component):
         if len(sources) != len(set(sources)):
             raise ValueError("action override source actions must be unique per entity")
 
+
 # --------------------------------------------------------------------------------------
 # Identity and lifecycle (spec 11.1)
 # --------------------------------------------------------------------------------------
@@ -283,6 +284,7 @@ class LightComponent(Component):
 @dataclass(frozen=True)
 class PerceptionComponent(Component):
     active: bool = True
+    detection_strength: float = 0.0
     visible_entities: frozenset[str] = frozenset()
     audible_entities: frozenset[str] = frozenset()
 
@@ -328,6 +330,7 @@ class StealthComponent(Component):
     visibility_level: float = 1.0
     hidden_threshold: float = 0.1
     hiding: bool = False
+    since_epoch: int = 0
 
 
 @dataclass(frozen=True)

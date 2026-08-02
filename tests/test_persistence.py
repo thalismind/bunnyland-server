@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -147,7 +148,7 @@ def test_schema_v1_quest_snapshot_migrates_to_canonical_graph_without_mutating_s
     migrated = migrate_snapshot(source)
 
     assert source["bunnyland"]["schema_version"] == 1
-    assert migrated["bunnyland"]["schema_version"] == 4
+    assert migrated["bunnyland"]["schema_version"] == 5
     assert (
         not {
             "GeneratedQuestComponent",
@@ -174,7 +175,7 @@ def test_schema_v1_quest_snapshot_migrates_to_canonical_graph_without_mutating_s
 
 def test_schema_migration_rejects_future_and_ambiguous_worlds():
     with pytest.raises(WorldMigrationError, match="newer than supported"):
-        migrate_snapshot({"bunnyland": {"schema_version": 5}})
+        migrate_snapshot({"bunnyland": {"schema_version": 6}})
 
     snapshot = _schema_v1_generated_quest_snapshot()
     snapshot["components"]["QuestComponent"] = {
@@ -207,12 +208,12 @@ def test_load_schema_v1_migrates_in_memory_and_next_save_is_v4(tmp_path):
     assert quest.has_relationship(QuestAcceptedBy, EntityId.parse("entity_2"))
     assert len(quest.get_relationships(QuestHasObjective)) == 1
     assert len(quest.get_relationships(QuestHasReward)) == 1
-    assert meta.schema_version == 4
+    assert meta.schema_version == 5
     assert json.loads(source.read_text())["bunnyland"]["schema_version"] == 1
 
     save_world(actor, dest, meta=meta)
 
-    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 4
+    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 5
 
 
 def test_schema_v4_load_drops_empty_relationship_bucket(tmp_path):
@@ -235,7 +236,7 @@ def test_schema_v4_load_drops_empty_relationship_bucket(tmp_path):
     loaded, meta = load_world(source, registry=PluginRegistry(bunnyland_plugins()))
 
     assert loaded.world.has_entity(enclosure.id)
-    assert meta.schema_version == 4
+    assert meta.schema_version == 5
 
 
 def test_jsonable_stringifies_non_json_boundary_values():
@@ -388,7 +389,7 @@ def test_lifesim_v1_and_v2_relationship_fields_migrate_sequentially_to_v4(versio
     migrated = migrate_snapshot(source)
 
     assert source["bunnyland"]["schema_version"] == version
-    assert migrated["bunnyland"]["schema_version"] == 4
+    assert migrated["bunnyland"]["schema_version"] == 5
     assert "HomeComponent" not in migrated["components"]
     assert "RoomClaimComponent" not in migrated["components"]
     assert migrated["components"]["PregnancyComponent"]["entity_1"] == {
@@ -494,7 +495,7 @@ def test_schema_v3_world_database_fields_migrate_to_v4_edges_without_mutating_so
     migrated = migrate_snapshot(source)
 
     assert source["bunnyland"]["schema_version"] == 3
-    assert migrated["bunnyland"]["schema_version"] == 4
+    assert migrated["bunnyland"]["schema_version"] == 5
     expected = {
         "SurveyedBy": ("entity_5", "entity_1"),
         "SampledFromFossil": ("entity_6", "entity_5"),
@@ -655,7 +656,7 @@ def test_schema_v3_world_database_migration_covers_legacy_shapes_and_semantic_ta
 
     no_sample_source = _world_database_v3_snapshot()
     no_sample_source["components"]["AncientSampleComponent"]["entity_6"].pop("source_fossil_id")
-    assert migrate_snapshot(no_sample_source)["bunnyland"]["schema_version"] == 4
+    assert migrate_snapshot(no_sample_source)["bunnyland"]["schema_version"] == 5
 
     optional_none = _world_database_v3_snapshot()
     optional_none["components"]["TamingComponent"]["entity_4"]["tamer_id"] = None
@@ -663,7 +664,7 @@ def test_schema_v3_world_database_migration_covers_legacy_shapes_and_semantic_ta
 
     unlocated_incident = _world_database_v3_snapshot()
     unlocated_incident["components"]["IncidentComponent"]["entity_9"].pop("room_id")
-    assert migrate_snapshot(unlocated_incident)["bunnyland"]["schema_version"] == 4
+    assert migrate_snapshot(unlocated_incident)["bunnyland"]["schema_version"] == 5
 
     existing_containment = _world_database_v3_snapshot()
     existing_containment["relationships"]["Contains"] = {
@@ -1087,9 +1088,14 @@ def test_schema_v1_dragon_stealth_name_migrates_without_mutating_source():
     migrated = migrate_snapshot(source)
 
     assert "StealthComponent" in source["components"]
-    assert "StealthComponent" not in migrated["components"]
-    assert migrated["components"]["SneakingComponent"] == {
-        "entity_2": {"sneaking": True, "since_epoch": 7}
+    assert "SneakingComponent" not in migrated["components"]
+    assert migrated["components"]["StealthComponent"] == {
+        "entity_2": {
+            "visibility_level": 0.0,
+            "hidden_threshold": 0.1,
+            "hiding": True,
+            "since_epoch": 7,
+        }
     }
 
     ambiguous = _schema_v1_generated_quest_snapshot()
@@ -1099,6 +1105,44 @@ def test_schema_v1_dragon_stealth_name_migrates_without_mutating_source():
     }
     with pytest.raises(WorldMigrationError, match="both StealthComponent and SneakingComponent"):
         migrate_snapshot(ambiguous)
+
+
+def test_schema_v4_unifies_dragon_sneaking_and_preserves_hidden_objects():
+    source = migrate_snapshot(_schema_v1_generated_quest_snapshot())
+    source["bunnyland"]["schema_version"] = 4
+    source["components"]["StealthComponent"] = {
+        "entity_1": {
+            "visibility_level": 0.05,
+            "hidden_threshold": 0.1,
+            "hiding": True,
+        }
+    }
+    source["components"]["SneakingComponent"] = {"entity_2": {"sneaking": True, "since_epoch": 9}}
+
+    migrated = migrate_snapshot(source)
+
+    assert migrated["components"]["StealthComponent"] == {
+        "entity_1": {
+            "visibility_level": 0.05,
+            "hidden_threshold": 0.1,
+            "hiding": True,
+            "since_epoch": 0,
+        },
+        "entity_2": {
+            "visibility_level": 0.0,
+            "hidden_threshold": 0.1,
+            "hiding": True,
+            "since_epoch": 9,
+        },
+    }
+    assert "SneakingComponent" not in migrated["components"]
+
+    collision = deepcopy(source)
+    collision["components"]["SneakingComponent"] = {
+        "entity_1": {"sneaking": True, "since_epoch": 9}
+    }
+    with pytest.raises(WorldMigrationError, match="entity_1.*both SneakingComponent"):
+        migrate_snapshot(collision)
 
 
 def test_schema_v1_cure_quest_hook_name_migrates_to_affliction_request():
@@ -1203,7 +1247,7 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v4(tmp_path, suffix)
     migrated = migrate_snapshot(raw)
 
     assert source.read_text() == before
-    assert migrated["bunnyland"]["schema_version"] == 4
+    assert migrated["bunnyland"]["schema_version"] == 5
     expected = {
         "AllowedIn": ("entity_1", "entity_2", {}),
         "MemberOfCaravan": ("entity_1", "entity_3", {}),
@@ -1254,7 +1298,7 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v4(tmp_path, suffix)
         else yaml.safe_load(destination.read_text())
     )
     metadata_key = "bunnyland" if suffix == "json" else "__bunnyland__"
-    assert saved[metadata_key]["schema_version"] == 4
+    assert saved[metadata_key]["schema_version"] == 5
 
 
 @pytest.mark.parametrize("suffix", ["json", "yaml"])

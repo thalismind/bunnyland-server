@@ -127,8 +127,9 @@ Studying a voice inscription teaches the linked word if you do not already know 
 
 ## Stealth, theft, and bounties
 
-Slip into stealth so witnesses cannot see your next move (toggle it off with the same
-command):
+Slip into stealth (toggle it off with the same command). Hidden movement is quiet by
+default, but perceptive observers can spot you and nearby listeners can detect noise from
+your current hide attempt:
 
 ```text
 !sneak
@@ -140,14 +141,15 @@ Steal an item another character is carrying in your room:
 !steal ruby ring from Mara
 ```
 
-If you are not sneaking and a faction member sees the theft, you pick up a bounty with
-that faction. Pay off a bounty to clear it:
+If a faction member sees the theft—including after detecting you while hidden—you pick up
+a bounty with that faction. Pay off a bounty to clear it:
 
 ```text
 !pay-bounty faction_id="Moss Wardens"
 ```
 
-Whether you are sneaking and any outstanding bounties show up in your character context.
+Your hidden state, hidden entities you have detected, and outstanding bounties show up in
+your private character context. Explicitly loud movement reveals you.
 When barbarian-sim is also enabled, the same world gives you its combat verbs to back up
 a life of crime.
 

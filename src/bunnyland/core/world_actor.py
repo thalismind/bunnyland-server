@@ -69,6 +69,7 @@ from .consequences import (
     HearingConsequence,
     InjuryConsequence,
     PerceptionConsequence,
+    StealthDetectionConsequence,
 )
 from .controllers import (
     BehaviorControllerComponent,
@@ -190,6 +191,7 @@ class WorldActor:
             EncumbranceConsequence(),
             InjuryConsequence(),
             HealthConsequence(),
+            StealthDetectionConsequence(),
             PerceptionConsequence(),
             HearingConsequence(),
             AttentionConsequence(),

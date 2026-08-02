@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from conftest import build_scenario, execute_handler
 
@@ -20,6 +22,7 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     DeadComponent,
+    DetectedStealth,
     DiscordControllerComponent,
     DownedComponent,
     EncumbranceComponent,
@@ -39,7 +42,9 @@ from bunnyland.core import (
     PainComponent,
     PerceptionComponent,
     SleepingComponent,
+    SneakHandler,
     StealthComponent,
+    StealthSense,
     StimulusComponent,
     SuspendedComponent,
     SuspendedControllerComponent,
@@ -57,6 +62,7 @@ from bunnyland.core.consequences import (
     AttentionConsequence,
     HearingConsequence,
     InjuryConsequence,
+    StealthDetectionConsequence,
 )
 from bunnyland.core.ecs import replace_component
 from bunnyland.core.edges import ControlledBy
@@ -73,8 +79,11 @@ from bunnyland.core.events import (
     GeneratedEntityEvent,
     InjuryAddedEvent,
     NoiseHeardEvent,
+    StealthChangedEvent,
+    StealthDetectedEvent,
 )
 from bunnyland.core.handlers.base import HandlerContext, require_reachable_entity
+from bunnyland.foundation.core_verbs.stealth import stealth_fragments
 from bunnyland.simpacks.barbariansim.mechanics import AttackHandler
 
 HOUR = 3600.0
@@ -826,6 +835,211 @@ async def test_room_perception_tracks_visible_entities_and_skips_hidden():
     assert str(visible_item.id) in perception.visible_entities
     assert str(hidden_item.id) not in perception.visible_entities
     assert any(event.entity_id == str(visible_item.id) for event in seen)
+
+
+async def test_core_sneak_toggles_one_private_stealth_state():
+    scenario = build_scenario()
+    scenario.actor.register_handler(SneakHandler())
+    changed = collect(scenario.actor, StealthChangedEvent)
+
+    await scenario.actor.submit(
+        build_submitted_command(
+            character_id=str(scenario.character),
+            controller_id=str(scenario.controller),
+            controller_generation=scenario.generation,
+            command_type="sneak",
+            cost=CommandCost(action=1),
+            lane=Lane.WORLD,
+            payload={},
+        )
+    )
+    await scenario.actor.tick(1)
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    stealth = character.get_component(StealthComponent)
+    assert stealth.hiding is True
+    assert stealth.visibility_level == 0.0
+    assert stealth.since_epoch == 1
+    assert changed[-1].visibility == "private"
+    assert changed[-1].hiding is True
+    assert changed[-1].sneaking is True
+    assert stealth_fragments(scenario.actor.world, character) == [
+        "You are hidden (hide attempt 1)."
+    ]
+
+
+async def test_stealth_detection_is_observer_relative_and_reports_visual_sense():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    target = world.get_entity(scenario.character)
+    target.add_component(StealthComponent(visibility_level=0.0, hiding=True, since_epoch=7))
+    weak = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Weak", kind="character"),
+            CharacterComponent(),
+            PerceptionComponent(detection_strength=0.5),
+        ],
+    )
+    sharp = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Sharp", kind="character"),
+            CharacterComponent(),
+            PerceptionComponent(detection_strength=1.0),
+        ],
+    )
+    room = world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), weak.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), sharp.id)
+    detected = collect(scenario.actor, StealthDetectedEvent)
+
+    await scenario.actor.tick(1)
+
+    assert not weak.get_relationships(DetectedStealth)
+    assert sharp.get_relationships(DetectedStealth) == [
+        (
+            DetectedStealth(target_since_epoch=7, sense=StealthSense.VISUAL),
+            target.id,
+        )
+    ]
+    assert str(target.id) not in weak.get_component(PerceptionComponent).visible_entities
+    assert str(target.id) in sharp.get_component(PerceptionComponent).visible_entities
+    assert [(event.observer_id, event.sense) for event in detected] == [(str(sharp.id), "visual")]
+    assert stealth_fragments(world, target) == [
+        "You are hidden (hide attempt 7).",
+        "Your hiding has been detected by: Sharp.",
+    ]
+    assert stealth_fragments(world, sharp) == ["You detect hidden nearby: Juniper."]
+
+
+def test_stealth_hearing_detection_and_invalid_edge_cleanup():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    target = world.get_entity(scenario.character)
+    target.add_component(StealthComponent(visibility_level=0.0, hiding=True, since_epoch=3))
+    listener = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Listener", kind="character"),
+            CharacterComponent(),
+            HearingComponent(sensitivity=0.2),
+        ],
+    )
+    room_a = world.get_entity(scenario.room_a)
+    room_a.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), listener.id)
+    spawn_entity(
+        world,
+        [
+            NoiseComponent(
+                loudness=0.25,
+                text="quiet movement",
+                source_entity_id=str(target.id),
+                room_id=str(scenario.room_a),
+                expires_at_epoch=10,
+            )
+        ],
+    )
+    consequence = StealthDetectionConsequence()
+
+    consequence.process(world, epoch=1)
+
+    assert listener.get_relationships(DetectedStealth) == [
+        (
+            DetectedStealth(target_since_epoch=3, sense=StealthSense.HEARING),
+            target.id,
+        )
+    ]
+
+    room_a.remove_relationship(Contains, listener.id)
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), listener.id
+    )
+    consequence.process(world, epoch=2)
+    assert not listener.get_relationships(DetectedStealth)
+
+    room_b = world.get_entity(scenario.room_b)
+    room_b.remove_relationship(Contains, listener.id)
+    room_a.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), listener.id)
+    replace_component(
+        listener,
+        PerceptionComponent(detection_strength=1.0),
+    )
+    replace_component(target, replace(target.get_component(StealthComponent), since_epoch=4))
+    consequence.process(world, epoch=3)
+    assert listener.get_relationships(DetectedStealth)[0][0].target_since_epoch == 4
+
+    replace_component(target, replace(target.get_component(StealthComponent), hiding=False))
+    consequence.process(world, epoch=4)
+    assert not listener.get_relationships(DetectedStealth)
+
+
+async def test_hidden_movement_is_quiet_unless_explicitly_loud_and_revealing():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.add_component(StealthComponent(visibility_level=0.0, hiding=True))
+    changed = collect(scenario.actor, StealthChangedEvent)
+
+    async def move(direction: str, **payload: object) -> None:
+        await scenario.actor.submit(
+            build_submitted_command(
+                character_id=str(scenario.character),
+                controller_id=str(scenario.controller),
+                controller_generation=scenario.generation,
+                command_type="move",
+                cost=CommandCost(action=1),
+                lane=Lane.WORLD,
+                payload={"direction": direction, **payload},
+            )
+        )
+        await scenario.actor.tick(1)
+
+    await move("north")
+    assert character.get_component(StealthComponent).hiding is True
+    first_noise = max(
+        world.query().with_all([NoiseComponent]).execute_entities(),
+        key=lambda entity: str(entity.id),
+    )
+    assert first_noise.get_component(NoiseComponent).loudness == 0.25
+
+    await move("south", noise=1.0)
+    assert character.get_component(StealthComponent).hiding is False
+    assert changed[-1].hiding is False
+
+
+def test_stealth_detection_queries_indexed_drivers_not_unrelated_world_entities(monkeypatch):
+    scenario = build_scenario()
+    world = scenario.actor.world
+    world.get_entity(scenario.character).add_component(
+        StealthComponent(visibility_level=0.0, hiding=True)
+    )
+    for index in range(500):
+        spawn_entity(world, [IdentityComponent(name=f"filler {index}", kind="prop")])
+
+    original_query = world.query
+    candidate_counts: list[tuple[tuple[type, ...], int]] = []
+
+    class CountingQuery:
+        def __init__(self):
+            self.inner = original_query()
+            self.required: tuple[type, ...] = ()
+
+        def with_all(self, component_types):
+            self.required = tuple(component_types)
+            self.inner = self.inner.with_all(component_types)
+            return self
+
+        def execute_entities(self):
+            entities = list(self.inner.execute_entities())
+            candidate_counts.append((self.required, len(entities)))
+            return entities
+
+    monkeypatch.setattr(world, "query", CountingQuery)
+
+    StealthDetectionConsequence().process(world, epoch=0)
+
+    assert candidate_counts == [((NoiseComponent,), 0), ((StealthComponent,), 1)]
 
 
 async def test_listener_hears_character_move_when_noise_meets_sensitivity():

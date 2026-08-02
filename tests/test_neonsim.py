@@ -20,6 +20,7 @@ from bunnyland.core import (
     MutationPlan,
     PortableComponent,
     RegionComponent,
+    StealthComponent,
     build_submitted_command,
     container_of,
     execute_mutation_plan,
@@ -807,6 +808,9 @@ async def test_sneak_through_calm_checkpoint_succeeds():
     await scenario.actor.tick(1.0)
 
     assert passed[0].method == "stealth"
+    stealth = scenario.actor.world.get_entity(scenario.character).get_component(StealthComponent)
+    assert stealth.hiding is True
+    assert stealth.visibility_level == 0.0
 
 
 # --- claim-safehouse -----------------------------------------------------------------

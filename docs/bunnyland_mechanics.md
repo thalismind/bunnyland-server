@@ -3493,7 +3493,9 @@ crime witnesses
 ### Components
 
 ```python
-SneakingComponent
+StealthComponent
+PerceptionComponent.detection_strength
+DetectedStealth (observer -> target, hide attempt and sense)
 VisibilityComponent
 LockpickComponent
 LockDifficultyComponent
@@ -7179,7 +7181,7 @@ audible events
 attention shifts
 stimuli
 overhearing, later
-stealth, later
+observer-relative visual and hearing stealth detection
 sleeping perception
 downed perception
 ```
@@ -7193,7 +7195,8 @@ VisibilityComponent
 StimulusComponent
 AttentionComponent
 NoiseComponent
-SneakingComponent
+StealthComponent
+DetectedStealth
 ```
 
 ### Systems

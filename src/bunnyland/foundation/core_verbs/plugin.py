@@ -6,7 +6,7 @@ from ...core.components import (
     HoldableComponent,
     WearableComponent,
 )
-from ...core.edges import ConversationParticipant, KnowsRoom
+from ...core.edges import ConversationParticipant, DetectedStealth, KnowsRoom
 from ...core.events import (
     ContainerClosedEvent,
     ContainerOpenedEvent,
@@ -23,6 +23,8 @@ from ...core.events import (
     ItemUnheldEvent,
     ItemWornEvent,
     RoomLookedEvent,
+    StealthChangedEvent,
+    StealthDetectedEvent,
 )
 from ...core.handlers import (
     CloseHandler,
@@ -39,6 +41,7 @@ from ...core.handlers import (
     RemoveHandler,
     SayHandler,
     SleepHandler,
+    SneakHandler,
     StartConversationHandler,
     TakeHandler,
     TellHandler,
@@ -54,12 +57,14 @@ from ...core.perspective import V1_PERSPECTIVE_QUERIES
 from ...plugins.ids import CORE_VERBS
 from ...plugins.model import (
     CommandContribution,
+    ContentContribution,
     EcsContribution,
     Plugin,
     PluginPlacement,
     RuntimeContribution,
 )
 from .actions import ACTION_DEFINITIONS
+from .stealth import stealth_fragments
 
 
 def _definition() -> Plugin:
@@ -73,7 +78,7 @@ def _definition() -> Plugin:
                 HoldableComponent,
                 WearableComponent,
             ),
-            edges=(ConversationParticipant, KnowsRoom),
+            edges=(ConversationParticipant, DetectedStealth, KnowsRoom),
         ),
         commands=CommandContribution(
             action_definitions=ACTION_DEFINITIONS,
@@ -98,6 +103,7 @@ def _definition() -> Plugin:
                 WakeHandler,
                 WaitHandler,
                 SayHandler,
+                SneakHandler,
                 TellHandler,
                 StartConversationHandler,
                 ConversationLineHandler,
@@ -119,9 +125,12 @@ def _definition() -> Plugin:
                 ItemUnheldEvent,
                 ItemWornEvent,
                 ItemRemovedEvent,
+                StealthChangedEvent,
+                StealthDetectedEvent,
             ),
         ),
         runtime=RuntimeContribution(perspective_queries=V1_PERSPECTIVE_QUERIES),
+        content=ContentContribution(prompt_fragments=(stealth_fragments,)),
     )
 
 

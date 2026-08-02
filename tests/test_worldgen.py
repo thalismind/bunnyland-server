@@ -31,6 +31,7 @@ from bunnyland.core import (
     MemoryProfileComponent,
     PortableComponent,
     RoomComponent,
+    StealthComponent,
     SuspendedComponent,
     TemperatureComponent,
     WorldActor,
@@ -3199,7 +3200,6 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         QuestProvenanceComponent,
         QuestRewardComponent,
         QuestStateComponent,
-        SneakingComponent,
         SpellComponent,
         SpellCooldownComponent,
         SurrenderComponent,
@@ -3551,7 +3551,7 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
     dragon_mage = actor.world.get_entity(result.characters["dragon_mage"])
     for component_type in (
         GreatSoulComponent,
-        SneakingComponent,
+        StealthComponent,
         MagicComponent,
         SpellCooldownComponent,
         PersuasionComponent,

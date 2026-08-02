@@ -13,9 +13,11 @@ from bunnyland.core import (
     HealthComponent,
     IdentityComponent,
     Lane,
+    PerceptionComponent,
     PortableComponent,
     ReadableComponent,
     SleepingComponent,
+    StealthComponent,
     WritableComponent,
     build_submitted_command,
     container_of,
@@ -115,7 +117,6 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     ReportCrimeHandler,
     ServeJailTimeHandler,
     SneakHandler,
-    SneakingComponent,
     SpeakWordOfPowerHandler,
     SpellComponent,
     SpellCooldownComponent,
@@ -2179,11 +2180,11 @@ async def test_sneak_toggles_stealth_state():
     await scenario.actor.submit(_cmd(scenario, "sneak"))
     await scenario.actor.tick(HOUR)
     character = scenario.actor.world.get_entity(scenario.character)
-    assert character.get_component(SneakingComponent).sneaking is True
+    assert character.get_component(StealthComponent).hiding is True
 
     await scenario.actor.submit(_cmd(scenario, "sneak"))
     await scenario.actor.tick(HOUR)
-    assert character.get_component(SneakingComponent).sneaking is False
+    assert character.get_component(StealthComponent).hiding is False
     assert [event.sneaking for event in changes] == [True, False]
 
 
@@ -2274,6 +2275,27 @@ async def test_sneaking_thief_is_not_witnessed():
     assert not world.get_entity(scenario.character).get_relationships(WantedByFaction)
 
 
+async def test_detected_hidden_thief_is_witnessed_by_that_observer():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    faction = _faction(scenario)
+    victim, item = _victim_with_item(scenario, faction_id=faction)
+    witness = scenario.actor.world.get_entity(victim)
+    witness.add_component(PerceptionComponent(detection_strength=1.0))
+    crimes: list[CrimeWitnessedEvent] = []
+    scenario.actor.bus.subscribe(CrimeWitnessedEvent, crimes.append)
+
+    await scenario.actor.submit(_cmd(scenario, "sneak"))
+    await scenario.actor.tick(HOUR)
+    await scenario.actor.submit(_cmd(scenario, "steal", target_id=str(victim), item_id=str(item)))
+    await scenario.actor.tick(HOUR)
+
+    assert crimes[-1].witness_ids == (str(victim),)
+    assert scenario.actor.world.get_entity(scenario.character).get_relationships(
+        WantedByFaction
+    ) == [(WantedByFaction(amount=10), faction)]
+
+
 async def test_pay_bounty_clears_a_faction_bounty():
     scenario = build_scenario()
     _install(scenario.actor)
@@ -2341,12 +2363,11 @@ def test_dragonsim_fragments_show_sneaking_and_bounty():
     _install(scenario.actor)
     faction = _faction(scenario)
     character = scenario.actor.world.get_entity(scenario.character)
-    character.add_component(SneakingComponent(sneaking=True))
+    character.add_component(StealthComponent(visibility_level=0.0, hiding=True))
     character.add_relationship(WantedByFaction(amount=25), faction)
     character.add_relationship(HasStandingWithFaction(score=3), faction)
 
     lines = dragonsim_fragments(scenario.actor.world, character)
-    assert any("sneaking" in line for line in lines)
     assert any("Bounty of 25" in line and "Moss Wardens" in line for line in lines)
     assert "Faction standing with Moss Wardens: 3." in lines
     assert (
