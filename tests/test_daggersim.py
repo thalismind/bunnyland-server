@@ -234,6 +234,7 @@ from bunnyland.simpacks.dragonsim.effects import EffectModifier, EffectSpec, res
 from bunnyland.simpacks.dragonsim.mechanics import (
     CompleteObjectiveHandler,
     ItemCurseComponent,
+    ItemCurseTriggeredEvent,
     QuestAcceptedBy,
     QuestAcceptedEvent,
     QuestCompletedEvent,
@@ -6527,6 +6528,278 @@ def test_purify_item_requires_known_curse_and_consumes_essence_only_on_success()
     assert isinstance(result.events[0], ItemPurifiedEvent)
     assert not item.has_component(ItemCurseComponent)
     assert vessel.get_component(SpiritVesselComponent).essence == 0
+
+
+def test_affliction_remedy_prompt_is_private_to_the_recipient():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    remedy = spawn_entity(world, [AfflictionRemedyComponent("moon-form")])
+    component = remedy.get_component(AfflictionRemedyComponent)
+
+    assert component.prompt_fragments(
+        ComponentPromptContext.for_entity(world, remedy)
+    ) == ()
+    assert component.prompt_fragments(
+        ComponentPromptContext.for_entity(world, remedy, target=character)
+    ) == ("Cure remedy for moon-form.",)
+
+    observer = spawn_entity(world, [CharacterComponent(species="hare")])
+    assert component.prompt_fragments(
+        ComponentPromptContext.for_entity(
+            world,
+            remedy,
+            perspective=PromptPerspective(viewer=observer),
+            target=character,
+        )
+    ) == ()
+
+
+def test_cast_spell_rejects_unreachable_restricted_and_incompatible_targets():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    spell = spawn_entity(
+        world,
+        [
+            CustomSpellComponent(
+                spell_name="Inward Mend",
+                effect_type="heal",
+                magnitude=2.0,
+                typed_effect=EffectSpec("heal", 2.0, target_mode="self"),
+            )
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), spell.id)
+    nearby_target = spawn_entity(world, [HealthComponent(current=2.0, maximum=5.0)])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), nearby_target.id
+    )
+    distant_target = spawn_entity(world, [HealthComponent(current=2.0, maximum=5.0)])
+
+    cases = (
+        (distant_target.id, "spell target is not reachable"),
+        (nearby_target.id, "spell effect targets only its caster"),
+    )
+    for target_id, reason in cases:
+        result = execute_handler(
+            CastSpellHandler(),
+            ctx,
+            _handler_cmd(
+                scenario,
+                "cast-spell",
+                spell_id=str(spell.id),
+                target_id=str(target_id),
+            ),
+        )
+        assert result.reason == reason
+        assert world.get_entity(target_id).get_component(HealthComponent).current == 2.0
+
+    incompatible_spell = spawn_entity(
+        world,
+        [CustomSpellComponent(spell_name="Mend", effect_type="heal", magnitude=1.0)],
+    )
+    character.add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), incompatible_spell.id
+    )
+    result = execute_handler(
+        CastSpellHandler(),
+        ctx,
+        _handler_cmd(scenario, "cast-spell", spell_id=str(incompatible_spell.id)),
+    )
+    assert result.reason == "spell target cannot receive this effect"
+
+
+def test_casting_cursed_spells_identifies_and_applies_the_curse():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=4.0, maximum=10.0))
+    spell = spawn_entity(
+        world,
+        [
+            CustomSpellComponent(spell_name="Tainted Mend", effect_type="heal", magnitude=3.0),
+            ItemCurseComponent(
+                name="blood price",
+                effect=EffectSpec("harm", 2.0, ("curse",), "self"),
+            ),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), spell.id)
+
+    result = execute_handler(
+        CastSpellHandler(),
+        ctx,
+        _handler_cmd(scenario, "cast-spell", spell_id=str(spell.id)),
+    )
+
+    assert result.ok is True
+    assert character.get_component(HealthComponent).current == 5.0
+    curse = spell.get_component(ItemCurseComponent)
+    assert curse.identified_by == (str(scenario.character),)
+    assert len(result.events) == 2
+    assert isinstance(result.events[0], SpellCastEvent)
+    curse_event = result.events[1]
+    assert isinstance(curse_event, ItemCurseTriggeredEvent)
+    assert curse_event.target_before == 7.0
+    assert curse_event.target_after == 5.0
+
+
+def test_casting_cursed_spell_records_curse_that_cannot_affect_caster():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    target = spawn_entity(world, [HealthComponent(current=4.0, maximum=10.0)])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), target.id
+    )
+    spell = spawn_entity(
+        world,
+        [
+            CustomSpellComponent(spell_name="Tainted Bolt", effect_type="harm", magnitude=1.0),
+            ItemCurseComponent(name="blood price"),
+        ],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), spell.id)
+
+    result = execute_handler(
+        CastSpellHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "cast-spell",
+            spell_id=str(spell.id),
+            target_id=str(target.id),
+        ),
+    )
+
+    assert result.ok is True
+    assert target.get_component(HealthComponent).current == 3.0
+    curse_event = result.events[1]
+    assert isinstance(curse_event, ItemCurseTriggeredEvent)
+    assert curse_event.target_before is None
+    assert curse_event.target_after is None
+    assert spell.get_component(ItemCurseComponent).identified_by == (
+        str(scenario.character),
+    )
+
+
+def test_enchant_item_validates_reachable_charged_spirit_vessel():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+    item = spawn_entity(world, [PortableComponent()])
+    spell = spawn_entity(
+        world,
+        [CustomSpellComponent(spell_name="Mend", effect_type="heal", magnitude=1.0)],
+    )
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), spell.id)
+    distant_vessel = spawn_entity(world, [SpiritVesselComponent()])
+    wrong_vessel = spawn_entity(world, [PortableComponent()])
+    empty_vessel = spawn_entity(world, [SpiritVesselComponent(essence=0)])
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), wrong_vessel.id)
+    character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), empty_vessel.id)
+
+    cases = (
+        (distant_vessel.id, "spirit vessel is not reachable"),
+        (wrong_vessel.id, "target is not a spirit vessel"),
+        (empty_vessel.id, "spirit vessel has no essence"),
+    )
+    for vessel_id, reason in cases:
+        result = execute_handler(
+            EnchantItemHandler(),
+            ctx,
+            _handler_cmd(
+                scenario,
+                "enchant-item",
+                item_id=str(item.id),
+                spell_id=str(spell.id),
+                vessel_id=str(vessel_id),
+            ),
+        )
+        assert result.reason == reason
+        assert not item.has_component(EnchantedItemComponent)
+
+
+def test_purify_item_rejects_invalid_unreachable_and_unusable_inputs():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    ctx = HandlerContext(world, scenario.actor.epoch)
+    character = world.get_entity(scenario.character)
+
+    def cursed_item(*, reachable: bool = True):
+        item = spawn_entity(
+            world,
+            [
+                PortableComponent(),
+                ItemCurseComponent(
+                    name="known thorn",
+                    identified_by=(str(scenario.character),),
+                ),
+            ],
+        )
+        if reachable:
+            character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), item.id)
+        return item
+
+    charged_vessel = spawn_entity(world, [SpiritVesselComponent()])
+    character.add_relationship(
+        Contains(mode=ContainmentMode.INVENTORY), charged_vessel.id
+    )
+    distant_item = cursed_item(reachable=False)
+    known_item = cursed_item()
+    distant_vessel = spawn_entity(world, [SpiritVesselComponent()])
+    plain_item = spawn_entity(world, [PortableComponent()])
+    wrong_vessel = spawn_entity(world, [PortableComponent()])
+    empty_vessel = spawn_entity(world, [SpiritVesselComponent(essence=0)])
+    for entity in (plain_item, wrong_vessel, empty_vessel):
+        character.add_relationship(Contains(mode=ContainmentMode.INVENTORY), entity.id)
+
+    cases = (
+        ({"item_id": str(known_item.id)}, "invalid character, item, or vessel id"),
+        (
+            {"item_id": "entity_999", "vessel_id": str(charged_vessel.id)},
+            "item or vessel does not exist",
+        ),
+        (
+            {"item_id": str(known_item.id), "vessel_id": "entity_999"},
+            "item or vessel does not exist",
+        ),
+        (
+            {"item_id": str(distant_item.id), "vessel_id": str(charged_vessel.id)},
+            "item is not reachable",
+        ),
+        (
+            {"item_id": str(known_item.id), "vessel_id": str(distant_vessel.id)},
+            "spirit vessel is not reachable",
+        ),
+        (
+            {"item_id": str(plain_item.id), "vessel_id": str(charged_vessel.id)},
+            "item is not cursed",
+        ),
+        (
+            {"item_id": str(known_item.id), "vessel_id": str(wrong_vessel.id)},
+            "target is not a spirit vessel",
+        ),
+        (
+            {"item_id": str(known_item.id), "vessel_id": str(empty_vessel.id)},
+            "spirit vessel has no essence",
+        ),
+    )
+    for payload, reason in cases:
+        result = execute_handler(
+            PurifyItemHandler(),
+            ctx,
+            _handler_cmd(scenario, "purify-item", **payload),
+        )
+        assert result.reason == reason
+        assert known_item.has_component(ItemCurseComponent)
+        assert charged_vessel.get_component(SpiritVesselComponent).essence == 1
 
 
 def test_legacy_unknown_spell_effect_rejects_without_resolving():
