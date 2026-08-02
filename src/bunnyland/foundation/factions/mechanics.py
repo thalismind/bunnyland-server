@@ -240,8 +240,7 @@ def faction_fragments(world: World, character: Entity) -> list[str]:
         if not perceived.is_character:
             continue
         target_id = parse_entity_id(perceived.id)
-        if target_id is None or not world.has_entity(target_id):
-            continue
+        assert target_id is not None
         stance = resolve_actor_stance(world, character, world.get_entity(target_id))
         lines.append(f"Nearby {perceived.name} is {stance.value}.")
     return sorted(lines)

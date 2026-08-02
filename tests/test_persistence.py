@@ -1161,6 +1161,44 @@ def test_schema_v4_unifies_dragon_sneaking_and_preserves_hidden_objects():
         migrate_snapshot(collision)
 
 
+@pytest.mark.parametrize(
+    ("stealth_records", "sneaking_records", "message"),
+    [
+        ({}, [], "'SneakingComponent' must contain a mapping"),
+        ([], {}, "'StealthComponent' must contain a mapping"),
+        ({}, {"entity_2": []}, "SneakingComponent fields for 'entity_2' must be a mapping"),
+        (
+            {},
+            {"entity_2": {"sneaking": "yes", "since_epoch": 0}},
+            "SneakingComponent fields for 'entity_2' require boolean sneaking",
+        ),
+        (
+            {"entity_2": []},
+            {},
+            "StealthComponent fields for 'entity_2' must be a mapping",
+        ),
+    ],
+)
+def test_schema_v4_rejects_malformed_stealth_records(
+    stealth_records: object, sneaking_records: object, message: str
+):
+    source = migrate_snapshot(_schema_v1_generated_quest_snapshot())
+    source["bunnyland"]["schema_version"] = 4
+    source["components"]["StealthComponent"] = stealth_records
+    source["components"]["SneakingComponent"] = sneaking_records
+
+    with pytest.raises(WorldMigrationError, match=message):
+        migrate_snapshot(source)
+
+
+def test_schema_v5_rejects_legacy_sneaking_records():
+    source = migrate_snapshot(_schema_v1_generated_quest_snapshot())
+    source["components"]["SneakingComponent"] = {}
+
+    with pytest.raises(WorldMigrationError, match="must not contain SneakingComponent"):
+        migrate_snapshot(source)
+
+
 def test_schema_v1_cure_quest_hook_name_migrates_to_affliction_request():
     source = _schema_v1_generated_quest_snapshot()
     source["components"]["CureQuestHookComponent"] = {

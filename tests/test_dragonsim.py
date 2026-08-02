@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from conftest import build_scenario, execute_handler
+from relics import Entity
 
 from bunnyland.core import (
     CharacterComponent,
@@ -10,6 +11,7 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     DeadComponent,
+    GenerationRequest,
     HealthComponent,
     IdentityComponent,
     Lane,
@@ -30,6 +32,7 @@ from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 from bunnyland.simpacks.dragonsim.effects import EffectModifier, EffectSpec, resolve_effect
+from bunnyland.simpacks.dragonsim.generation import DragonGenerationEnricher
 from bunnyland.simpacks.dragonsim.mechanics import (
     AbsorbGreatSoulHandler,
     AcceptQuestHandler,
@@ -3407,3 +3410,275 @@ def test_spirit_vessel_prompt_reports_charge_state():
     assert vessel.get_component(SpiritVesselComponent).prompt_fragments(ctx) == (
         "Spirit vessel nearby: 1 essence (charged).",
     )
+
+
+def test_dragon_generation_creates_charged_spirit_vessels():
+    delta = DragonGenerationEnricher().enrich(
+        GenerationRequest(
+            entity_kind="item",
+            description="polished gem",
+            capabilities=("bunnyland.dragonsim.spirit-vessel",),
+        )
+    )
+
+    vessel = next(
+        component for component in delta.components if isinstance(component, SpiritVesselComponent)
+    )
+    assert vessel.essence == 1
+
+
+def test_item_curse_prompt_requires_identification_and_private_access():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    observer = spawn_entity(world, [IdentityComponent(name="Observer", kind="character")])
+    artifact = spawn_entity(
+        world,
+        [IdentityComponent(name="Thorn Mirror", kind="artifact")],
+    )
+    curse = ItemCurseComponent(
+        name="thorn bite",
+        identified_by=(str(character.id),),
+    )
+
+    no_target = ComponentPromptContext.for_entity(world, artifact)
+    unidentified = ComponentPromptContext.for_entity(world, artifact, target=observer)
+    public = ComponentPromptContext.for_entity(
+        world,
+        artifact,
+        perspective=PromptPerspective(viewer=observer),
+        target=character,
+    )
+    private = ComponentPromptContext.for_entity(
+        world,
+        artifact,
+        perspective=PromptPerspective(viewer=character),
+        target=character,
+    )
+
+    assert curse.prompt_fragments(no_target) == ()
+    assert curse.prompt_fragments(unidentified) == ()
+    assert curse.prompt_fragments(public) == ()
+    assert curse.prompt_fragments(private) == ("Known curse on Thorn Mirror: thorn bite.",)
+
+
+def test_speak_word_rejects_wrong_kind_self_mismatch_and_empty_room():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    target = spawn_entity(
+        world,
+        [IdentityComponent(name="Listener", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), target.id
+    )
+    wrong_kind = spawn_entity(world, [IdentityComponent(name="scratch", kind="prop")])
+    self_word = _word(scenario, name="Mending Voice", effect="heal", target_mode="self")
+    empty_room_word = _word(scenario, name="Empty Storm", effect="harm", target_mode="room")
+    character.add_relationship(KnowsWord(), wrong_kind.id)
+    character.add_relationship(KnowsWord(), self_word)
+    character.add_relationship(KnowsWord(), empty_room_word)
+    handler = SpeakWordOfPowerHandler()
+    ctx = HandlerContext(world, 0)
+
+    wrong = execute_handler(
+        handler,
+        ctx,
+        _handler_cmd(scenario, "speak-word-of-power", word_id=str(wrong_kind.id)),
+    )
+    assert wrong.reason == "target is not a word of power"
+
+    mismatch = execute_handler(
+        handler,
+        ctx,
+        _handler_cmd(
+            scenario,
+            "speak-word-of-power",
+            word_id=str(self_word),
+            target_id=str(target.id),
+        ),
+    )
+    assert mismatch.reason == "word effect targets only its speaker"
+
+    world.get_entity(scenario.room_a).remove_relationship(Contains, target.id)
+    empty = execute_handler(
+        handler,
+        ctx,
+        _handler_cmd(scenario, "speak-word-of-power", word_id=str(empty_room_word)),
+    )
+    assert empty.reason == "word has no compatible targets"
+
+
+def test_typed_spell_validates_targets_and_applies_supported_effect():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.add_component(MagicComponent(current=20, maximum=20))
+    character.add_component(HealthComponent(current=4.0, maximum=10.0))
+    reachable = spawn_entity(
+        world,
+        [IdentityComponent(name="Wooden Doll", kind="character"), CharacterComponent()],
+    )
+    distant = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Distant Hare", kind="character"),
+            CharacterComponent(),
+            HealthComponent(current=5.0, maximum=10.0),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), reachable.id
+    )
+
+    def learned_spell(name: str, component: SpellComponent) -> Entity:
+        spell = spawn_entity(world, [IdentityComponent(name=name, kind="spell"), component])
+        character.add_relationship(KnowsSpell(), spell.id)
+        return spell
+
+    single = learned_spell(
+        "Needle",
+        SpellComponent(name="Needle", typed_effect=EffectSpec("harm", 1.0)),
+    )
+    self_only = learned_spell(
+        "Mend Self",
+        SpellComponent(
+            name="Mend Self",
+            typed_effect=EffectSpec("heal", 1.0, target_mode="self"),
+        ),
+    )
+    unsupported = learned_spell(
+        "Phase",
+        SpellComponent(name="Phase", effect="teleport"),
+    )
+    handler = CastDragonSpellHandler()
+    ctx = HandlerContext(world, 3)
+
+    cases = (
+        ({"spell_id": str(single.id), "target_id": "bad"}, "invalid spell target id"),
+        (
+            {"spell_id": str(single.id), "target_id": "entity_999999"},
+            "spell target does not exist",
+        ),
+        (
+            {"spell_id": str(self_only.id), "target_id": str(reachable.id)},
+            "spell effect targets only its caster",
+        ),
+        (
+            {"spell_id": str(single.id), "target_id": str(distant.id)},
+            "spell target is not reachable",
+        ),
+        (
+            {"spell_id": str(single.id), "target_id": str(reachable.id)},
+            "spell target cannot receive this effect",
+        ),
+        ({"spell_id": str(unsupported.id)}, "spell effect is not supported"),
+    )
+    for payload, reason in cases:
+        result = execute_handler(
+            handler,
+            ctx,
+            _handler_cmd(scenario, "cast-dragon-spell", **payload),
+        )
+        assert result.reason == reason
+
+    cast = execute_handler(
+        handler,
+        ctx,
+        _handler_cmd(scenario, "cast-dragon-spell", spell_id=str(single.id)),
+    )
+    assert cast.ok is True
+    assert character.get_component(HealthComponent).current == 3.0
+
+
+def test_typed_artifact_validates_targets_and_handles_incompatible_curse():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    reachable = spawn_entity(
+        world,
+        [IdentityComponent(name="Wooden Doll", kind="character"), CharacterComponent()],
+    )
+    distant = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Distant Hare", kind="character"),
+            CharacterComponent(),
+            HealthComponent(current=5.0, maximum=10.0),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), reachable.id
+    )
+
+    self_only = _dragon_room_entity(
+        scenario,
+        "self mirror",
+        "artifact",
+        [
+            ArtifactComponent(
+                name="self mirror",
+                charges=1,
+                typed_effect=EffectSpec("heal", 1.0, target_mode="self"),
+            )
+        ],
+    )
+    single = _dragon_room_entity(
+        scenario,
+        "needle mirror",
+        "artifact",
+        [
+            ArtifactComponent(
+                name="needle mirror",
+                charges=1,
+                typed_effect=EffectSpec("harm", 1.0),
+            )
+        ],
+    )
+    handler = UseArtifactHandler()
+    ctx = HandlerContext(world, 3)
+
+    cases = (
+        (
+            {"artifact_id": str(single.id), "target_id": "bad"},
+            "invalid artifact target id",
+        ),
+        (
+            {"artifact_id": str(single.id), "target_id": "entity_999999"},
+            "artifact target does not exist",
+        ),
+        (
+            {"artifact_id": str(self_only.id), "target_id": str(reachable.id)},
+            "artifact effect targets only its user",
+        ),
+        (
+            {"artifact_id": str(single.id), "target_id": str(distant.id)},
+            "artifact target is not reachable",
+        ),
+        (
+            {"artifact_id": str(single.id), "target_id": str(reachable.id)},
+            "artifact target cannot receive this effect",
+        ),
+    )
+    for payload, reason in cases:
+        result = execute_handler(handler, ctx, _handler_cmd(scenario, "use", **payload))
+        assert result.reason == reason
+
+    cursed = _dragon_room_entity(
+        scenario,
+        "hollow mirror",
+        "artifact",
+        [
+            ArtifactComponent(name="hollow mirror", charges=1),
+            ItemCurseComponent(name="hollow bite", effect=EffectSpec("harm", 1.0)),
+        ],
+    )
+    used = execute_handler(
+        handler,
+        ctx,
+        _handler_cmd(scenario, "use", artifact_id=str(cursed.id)),
+    )
+    assert used.ok is True
+    curse_event = next(event for event in used.events if isinstance(event, ItemCurseTriggeredEvent))
+    assert curse_event.target_before is None
+    assert curse_event.target_after is None

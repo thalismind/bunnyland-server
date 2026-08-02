@@ -393,8 +393,7 @@ class StealthDetectionConsequence:
                         )
                     )
             for observer_id in existing.keys() - valid_observers:
-                if world.has_entity(observer_id):
-                    world.get_entity(observer_id).remove_relationship(DetectedStealth, target.id)
+                world.get_entity(observer_id).remove_relationship(DetectedStealth, target.id)
         return events
 
     def _detection_sense(
@@ -429,8 +428,7 @@ class StealthDetectionConsequence:
     @staticmethod
     def _remove_detections(world: World, target_id, existing) -> None:
         for observer_id in existing:
-            if world.has_entity(observer_id):
-                world.get_entity(observer_id).remove_relationship(DetectedStealth, target_id)
+            world.get_entity(observer_id).remove_relationship(DetectedStealth, target_id)
 
 
 class HearingConsequence:

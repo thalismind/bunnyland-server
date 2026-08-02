@@ -25,7 +25,9 @@ from bunnyland.foundation.factions.mechanics import (
     MemberOfFaction,
     faction_fragments,
     resolve_actor_stance,
+    resolve_faction_stance,
 )
+from bunnyland.foundation.factions.plugin import bunnyland_plugins as faction_plugins
 
 
 def _faction(world, name: str, *, secret: bool = False):
@@ -120,6 +122,24 @@ def test_shared_and_explicitly_friendly_memberships_resolve_friendly():
     observer.add_relationship(MemberOfFaction(), waterhole.id)
     target.add_relationship(MemberOfFaction(), waterhole.id)
     assert resolve_actor_stance(world, observer, target) is FactionStance.FRIENDLY
+
+
+def test_faction_pair_with_missing_endpoint_is_neutral():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    existing = _faction(world, "Existing")
+    removed = _faction(world, "Removed")
+    removed_id = removed.id
+    world.remove(removed)
+
+    assert resolve_faction_stance(world, existing.id, removed_id) is FactionStance.NEUTRAL
+
+
+def test_factions_package_entrypoint_returns_foundation_plugin():
+    plugins = faction_plugins()
+
+    assert len(plugins) == 1
+    assert plugins[0].id == "bunnyland.factions"
 
 
 def test_secret_membership_is_private_but_nearby_stance_hides_faction_identity():

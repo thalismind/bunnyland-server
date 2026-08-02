@@ -83,6 +83,8 @@ from bunnyland.core.events import (
     StealthDetectedEvent,
 )
 from bunnyland.core.handlers.base import HandlerContext, require_reachable_entity
+from bunnyland.core.handlers.stealth import stealth_change_operations
+from bunnyland.core.stealth import containing_room, observer_detects
 from bunnyland.foundation.core_verbs.stealth import stealth_fragments
 from bunnyland.simpacks.barbariansim.mechanics import AttackHandler
 
@@ -865,6 +867,92 @@ async def test_core_sneak_toggles_one_private_stealth_state():
     assert changed[-1].sneaking is True
     assert stealth_fragments(scenario.actor.world, character) == [
         "You are hidden (hide attempt 1)."
+    ]
+
+
+def test_stealth_helpers_handle_noop_orphan_and_cross_room_detection():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    target = world.get_entity(scenario.character)
+    target.add_component(StealthComponent(visibility_level=0.0, hiding=True, since_epoch=4))
+
+    assert stealth_change_operations(target, epoch=9, hiding=True) == ()
+
+    orphan = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Orphan", kind="character"),
+            CharacterComponent(),
+            StealthComponent(visibility_level=0.0, hiding=True, since_epoch=5),
+        ],
+    )
+    assert containing_room(world, orphan) is None
+
+    carrier = spawn_entity(world, [IdentityComponent(name="Carrier", kind="container")])
+    nested = spawn_entity(world, [IdentityComponent(name="Nested", kind="item")])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), carrier.id
+    )
+    carrier.add_relationship(Contains(mode=ContainmentMode.CONTAINER), nested.id)
+    assert containing_room(world, nested) == scenario.room_a
+
+    observer = spawn_entity(
+        world,
+        [IdentityComponent(name="Far Eye", kind="character"), CharacterComponent()],
+    )
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), observer.id
+    )
+    observer.add_relationship(DetectedStealth(target_since_epoch=4), target.id)
+    assert observer_detects(world, observer, target) is False
+
+
+def test_stealth_detection_cleans_orphans_and_ignores_inactive_observers():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    observer = spawn_entity(
+        world,
+        [
+            CharacterComponent(),
+            PerceptionComponent(active=False, detection_strength=1.0),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), observer.id
+    )
+    target = world.get_entity(scenario.character)
+    target.add_component(StealthComponent(visibility_level=0.0, hiding=True, since_epoch=6))
+
+    assert StealthDetectionConsequence().process(world, epoch=1) == []
+    assert not observer.get_relationships(DetectedStealth)
+
+    orphan = spawn_entity(
+        world,
+        [CharacterComponent(), StealthComponent(visibility_level=0.0, hiding=True)],
+    )
+    observer.add_relationship(DetectedStealth(target_since_epoch=0), orphan.id)
+    StealthDetectionConsequence().process(world, epoch=2)
+    assert not observer.has_relationship(DetectedStealth, orphan.id)
+
+
+def test_stealth_fragments_name_unidentified_detector_and_ignore_stale_attempt():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    target = world.get_entity(scenario.character)
+    target.add_component(StealthComponent(visibility_level=0.0, hiding=True, since_epoch=8))
+    observer = spawn_entity(world, [CharacterComponent()])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), observer.id
+    )
+    observer.add_relationship(DetectedStealth(target_since_epoch=7), target.id)
+
+    assert stealth_fragments(world, target) == ["You are hidden (hide attempt 8)."]
+    assert stealth_fragments(world, observer) == []
+
+    observer.add_relationship(DetectedStealth(target_since_epoch=8), target.id)
+    assert stealth_fragments(world, target) == [
+        "You are hidden (hide attempt 8).",
+        f"Your hiding has been detected by: {observer.id}.",
     ]
 
 
