@@ -879,6 +879,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "BossComponent",
         "TreasureComponent",
         "ClimbingGateComponent",
+        "RaidLootComponent",
     } <= {component.__name__ for component in barbarian.ecs.components}
     assert {
         "claim-base",
@@ -913,6 +914,21 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "TreasureClaimedEvent",
         "ClimbingGatePassedEvent",
     } <= {event.__name__ for event in barbarian.commands.typed_events}
+
+    storyteller = plugins[STORYTELLER]
+    assert {"RaidLifecycleComponent", "RaidDefenseComponent"} <= {
+        component.__name__ for component in storyteller.ecs.components
+    }
+    assert {"RaidDefender", "RaidAttacker"} <= {
+        edge.__name__ for edge in storyteller.ecs.edges
+    }
+    assert {
+        "RaidWarningEvent",
+        "RaidPhaseChangedEvent",
+        "RaidWaveStartedEvent",
+        "RaidAttackEvent",
+        "RaidOutcomeEvent",
+    } <= {event.__name__ for event in storyteller.commands.typed_events}
 
     factions = plugins[FACTIONS]
     assert {"FactionComponent"} == {

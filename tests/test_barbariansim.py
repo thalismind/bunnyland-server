@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from conftest import build_scenario, execute_handler
@@ -22,6 +23,7 @@ from bunnyland.core import (
     Lane,
     PortableComponent,
     RoomComponent,
+    SuspendedComponent,
     TemperatureComponent,
     Wearing,
     build_submitted_command,
@@ -41,13 +43,26 @@ from bunnyland.core.events import (
 )
 from bunnyland.foundation.policy.mechanics import BoundaryTag, install_policy
 from bunnyland.foundation.storyteller.mechanics import (
+    IncidentAutoResolutionConsequence,
     IncidentBudgetComponent,
     IncidentComponent,
     IncidentGeneratedEvent,
     IncidentSpawned,
+    RaidAttacker,
+    RaidAttackEvent,
+    RaidDefender,
+    RaidDefenseComponent,
+    RaidLifecycleComponent,
+    RaidOutcome,
+    RaidOutcomeEvent,
+    RaidPhase,
+    RaidPhaseChangedEvent,
+    RaidWarningEvent,
+    RaidWaveStartedEvent,
     StorytellerComponent,
     StorytellerConsequence,
     default_incident_definitions,
+    storyteller_fragments,
 )
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 from bunnyland.simpacks.barbariansim.incidents import BARBARIAN_RAID
@@ -107,6 +122,8 @@ from bunnyland.simpacks.barbariansim.mechanics import (
     PurgeWaveComponent,
     RaiderSpawnSpec,
     RaidHandler,
+    RaidLifecycleConsequence,
+    RaidLootComponent,
     RecruitFollowerHandler,
     ReleaseThrallHandler,
     RepairItemHandler,
@@ -168,6 +185,16 @@ def _install(actor, *, enabled=frozenset({BoundaryTag.PVP})):
     actor.register_handler(RecruitFollowerHandler())
     actor.register_handler(CommandFollowerHandler())
     actor.register_handler(ReleaseThrallHandler())
+
+
+def _add_storyteller_budget(scenario, points: float = 20.0):
+    return spawn_entity(
+        scenario.actor.world,
+        [
+            StorytellerComponent(interval_seconds=int(HOUR)),
+            IncidentBudgetComponent(points=points, points_per_day=0.0),
+        ],
+    )
 
 
 def _target(scenario, *, health=20.0, armor=0.0):
@@ -260,6 +287,7 @@ def test_barbariansim_parity_handlers_mutate_reachable_state_directly():
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(ClimbingSkillComponent(level=2))
+    _add_storyteller_budget(scenario)
 
     gap = _room_entity(
         scenario,
@@ -370,7 +398,14 @@ def test_barbariansim_parity_handlers_mutate_reachable_state_directly():
     assert gap.get_component(SurvivalGapComponent).bridged_by == str(scenario.character)
     assert building.get_component(BuildingComponent).demolished is True
     assert base.get_component(SiegeReadinessComponent).score == 3
-    assert base.get_component(PurgeWaveComponent).active is True
+    raid = next(
+        entity
+        for entity in scenario.actor.world.query()
+        .with_all([RaidLifecycleComponent])
+        .execute_entities()
+    )
+    assert raid.get_component(RaidLifecycleComponent).phase is RaidPhase.WARNING
+    assert not base.has_component(PurgeWaveComponent)
     assert character.has_component(BlessingComponent)
     assert character.has_component(CurseComponent)
     assert boss.get_component(BossComponent).defeated is True
@@ -1816,17 +1851,190 @@ def test_barbarian_raid_enrichment_is_seeded_and_idempotent():
     assert incident.get_relationships(IncidentSpawned) == []
 
     enrichment._on_incident(event_for(world.get_entity(scenario.room_a)))
-    spawned = incident.get_relationships(IncidentSpawned)
-    raiders = [world.get_entity(target_id) for _edge, target_id in spawned]
-    assert len(raiders) == 6
-    assert all(edge.kind == "monster" for edge, _target_id in spawned)
-    assert all(raider.get_component(CharacterComponent).species == "raider" for raider in raiders)
-    assert all(raider.has_component(WeaponComponent) for raider in raiders)
-    assert {container_of(raider) for raider in raiders} == {scenario.room_a}
+    assert incident.has_component(RaidLifecycleComponent)
+    assert incident.get_component(RaidLifecycleComponent).phase is RaidPhase.WARNING
+    assert incident.get_component(RaidLifecycleComponent).total_waves == 2
+    assert incident.get_relationships(IncidentSpawned) == []
+    assert world.get_entity(scenario.room_a).has_component(RaidDefenseComponent)
 
-    # Re-running the enrichment does not double-spawn the swarm.
+    # Re-running the enrichment does not replace the lifecycle or spawn during warning.
+    lifecycle = incident.get_component(RaidLifecycleComponent)
     enrichment._on_incident(event_for(world.get_entity(scenario.room_a)))
-    assert incident.get_relationships(IncidentSpawned) == spawned
+    assert incident.get_component(RaidLifecycleComponent) == lifecycle
+    assert incident.get_relationships(IncidentSpawned) == []
+
+
+def _phased_raid(scenario, *, budget=8.0, defense=100, total_waves=1):
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    character = world.get_entity(scenario.character)
+    if not character.has_component(HealthComponent):
+        character.add_component(HealthComponent(current=100, maximum=100))
+    replace_component(room, RaidDefenseComponent(current=defense, maximum=100))
+    incident = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="test raid", kind="incident"),
+            IncidentComponent(kind="barbarian_raid", budget_spent=budget, started_at_epoch=0),
+            RaidLifecycleComponent(
+                warning_until_epoch=1,
+                wave_interval_seconds=2,
+                recovery_seconds=3,
+                total_waves=total_waves,
+            ),
+        ],
+    )
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), incident.id)
+    return incident
+
+
+def test_phased_raid_warns_before_spawning_and_attacks_deterministically():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    incident = _phased_raid(scenario, defense=100)
+    character = world.get_entity(scenario.character)
+    starting_health = character.get_component(HealthComponent).current
+    second_defender = spawn_entity(
+        world,
+        [CharacterComponent(), HealthComponent(current=100, maximum=100)],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), second_defender.id
+    )
+    consequence = RaidLifecycleConsequence()
+
+    warning = consequence.process(world, 0)
+    assert [type(event) for event in warning] == [RaidWarningEvent]
+    assert incident.get_relationships(IncidentSpawned) == []
+
+    attack = consequence.process(world, 1)
+    assert any(isinstance(event, RaidPhaseChangedEvent) for event in attack)
+    assert any(isinstance(event, RaidWaveStartedEvent) for event in attack)
+    attack_event = next(event for event in attack if isinstance(event, RaidAttackEvent))
+    attackers = incident.get_relationships(RaidAttacker)
+    assert attackers
+    assert attack_event.raw_damage == 19.0
+    assert attack_event.defense_damage == 5
+    assert character.get_component(HealthComponent).current == starting_health - 6.0
+    assert second_defender.get_component(HealthComponent).current == 87.0
+    assert attack_event.defender_ids == (
+        str(second_defender.id),
+        str(character.id),
+        str(second_defender.id),
+    )
+    assert world.get_entity(scenario.room_a).get_component(RaidDefenseComponent).current == 95
+    assert incident.get_relationships(RaidDefender)[0][1] == character.id
+
+
+def test_phased_raid_waits_between_waves_then_rewards_victory_and_resolves():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    incident = _phased_raid(scenario, budget=24.0, total_waves=3)
+    consequence = RaidLifecycleConsequence()
+    consequence.process(world, 1)
+    first_wave = tuple(incident.get_relationships(RaidAttacker))
+    assert {edge.wave for edge, _target_id in first_wave} == {1}
+
+    for _edge, attacker_id in first_wave:
+        attacker = world.get_entity(attacker_id)
+        health = attacker.get_component(HealthComponent)
+        replace_component(attacker, replace(health, current=0))
+    assert consequence.process(world, 2) == []
+    assert incident.get_component(RaidLifecycleComponent).next_wave_epoch == 4
+    assert consequence.process(world, 3) == []
+    second_events = consequence.process(world, 4)
+    assert any(
+        isinstance(event, RaidWaveStartedEvent) and event.wave == 2 for event in second_events
+    )
+    second_wave = [
+        (edge, target_id)
+        for edge, target_id in incident.get_relationships(RaidAttacker)
+        if edge.wave == 2
+    ]
+    for _edge, attacker_id in second_wave:
+        attacker = world.get_entity(attacker_id)
+        health = attacker.get_component(HealthComponent)
+        replace_component(attacker, replace(health, current=0))
+    consequence.process(world, 5)
+    third_events = consequence.process(world, 7)
+    assert any(
+        isinstance(event, RaidWaveStartedEvent) and event.wave == 3 for event in third_events
+    )
+    third_wave = [
+        (edge, target_id)
+        for edge, target_id in incident.get_relationships(RaidAttacker)
+        if edge.wave == 3
+    ]
+    assert len(first_wave) == len(second_wave) == len(third_wave)
+    for _edge, attacker_id in third_wave:
+        attacker = world.get_entity(attacker_id)
+        health = attacker.get_component(HealthComponent)
+        replace_component(attacker, replace(health, current=0))
+
+    outcome_events = consequence.process(world, 8)
+    outcome = next(event for event in outcome_events if isinstance(event, RaidOutcomeEvent))
+    assert outcome.outcome is RaidOutcome.VICTORY
+    assert outcome.loot_id is not None
+    loot_id = parse_entity_id(outcome.loot_id)
+    assert loot_id is not None
+    assert world.get_entity(loot_id).get_component(RaidLootComponent).value == 24
+    lifecycle = incident.get_component(RaidLifecycleComponent)
+    assert lifecycle.phase is RaidPhase.RECOVERY
+    assert IncidentAutoResolutionConsequence().process(world, 10) == []
+
+    completed = consequence.process(world, 11)
+    assert any(
+        isinstance(event, RaidPhaseChangedEvent) and event.phase is RaidPhase.COMPLETE
+        for event in completed
+    )
+    resolved = IncidentAutoResolutionConsequence().process(world, 11)
+    assert len(resolved) == 1
+
+
+def test_phased_raid_defeat_suspends_raiders_and_recovers_defense_floor():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    incident = _phased_raid(scenario, defense=1)
+    consequence = RaidLifecycleConsequence()
+
+    events = consequence.process(world, 1)
+    outcome = next(event for event in events if isinstance(event, RaidOutcomeEvent))
+    assert outcome.outcome is RaidOutcome.DEFEAT
+    assert outcome.loot_id is None
+    for _edge, attacker_id in incident.get_relationships(RaidAttacker):
+        assert world.get_entity(attacker_id).has_component(SuspendedComponent)
+    assert not list(world.query().with_all([RaidLootComponent]).execute_entities())
+
+    consequence.process(world, 4)
+    defense = world.get_entity(scenario.room_a).get_component(RaidDefenseComponent)
+    assert defense.current == 25
+    assert incident.get_component(RaidLifecycleComponent).phase is RaidPhase.COMPLETE
+
+
+def test_phased_raid_enrolls_new_arrivals_and_uses_indexed_driving_component():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    incident = _phased_raid(scenario)
+    consequence = RaidLifecycleConsequence()
+    for index in range(500):
+        spawn_entity(world, [IdentityComponent(name=f"decoy {index}", kind="prop")])
+    consequence.process(world, 1)
+    newcomer = spawn_entity(
+        world,
+        [CharacterComponent(), HealthComponent(current=100, maximum=100)],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), newcomer.id
+    )
+
+    events = consequence.process(world, 2)
+
+    assert any(isinstance(event, RaidAttackEvent) for event in events)
+    enrolled = {target_id for _edge, target_id in incident.get_relationships(RaidDefender)}
+    assert newcomer.id in enrolled
+    fragments = storyteller_fragments(world, world.get_entity(scenario.character))
+    assert any("Raid phase: attack" in line for line in fragments)
+    assert "Raid defense integrity: 90/100." in fragments
 
 
 async def test_storyteller_selects_barbarian_raid_only_when_colonysim_and_barbariansim_enabled():
@@ -1874,14 +2082,9 @@ async def test_storyteller_selects_barbarian_raid_only_when_colonysim_and_barbar
         entity for entity in world.query().with_all([IncidentComponent]).execute_entities()
     )
     assert incident.get_component(IncidentComponent).kind == "barbarian_raid"
-    spawned = incident.get_relationships(IncidentSpawned)
-    raiders = [world.get_entity(target_id) for _edge, target_id in spawned]
-    assert raiders
-    assert all(raider.get_component(CharacterComponent).species == "raider" for raider in raiders)
-    ranks = [raider.get_component(IdentityComponent).tags[-1] for raider in raiders]
-    assert "warlord" in ranks
-    assert ranks.count("raider") > ranks.count("warlord")
-    assert {container_of(raider) for raider in raiders} == {scenario.room_a}
+    assert incident.has_component(RaidLifecycleComponent)
+    assert incident.get_component(RaidLifecycleComponent).phase is RaidPhase.WARNING
+    assert incident.get_relationships(IncidentSpawned) == []
 
 
 def _downed_target(scenario, **kwargs):
@@ -2595,6 +2798,7 @@ async def test_prepare_siege_defaults_to_current_room():
 async def test_start_purge_wave_defaults_to_current_room():
     scenario = build_scenario()
     _install(scenario.actor, enabled=frozenset())
+    storyteller = _add_storyteller_budget(scenario)
     ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
 
     result = execute_handler(
@@ -2603,7 +2807,43 @@ async def test_start_purge_wave_defaults_to_current_room():
 
     assert result.ok, result.reason
     room = scenario.actor.world.get_entity(scenario.room_a)
-    assert room.get_component(PurgeWaveComponent).active is True
+    incident = next(
+        scenario.actor.world.query().with_all([RaidLifecycleComponent]).execute_entities()
+    )
+    assert container_of(incident) == room.id
+    assert incident.get_component(RaidLifecycleComponent).phase is RaidPhase.WARNING
+    assert not room.has_component(PurgeWaveComponent)
+    assert storyteller.get_component(IncidentBudgetComponent).points == 8.0
+
+    duplicate = execute_handler(
+        StartPurgeWaveHandler(),
+        ctx,
+        _handler_cmd(scenario, "start-purge-wave", intensity=2.0),
+    )
+    assert duplicate.ok is False
+    assert duplicate.reason == "a raid is already active here"
+
+
+def test_deprecated_purge_alias_requires_storyteller_budget():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+
+    missing = execute_handler(
+        StartPurgeWaveHandler(),
+        ctx,
+        _handler_cmd(scenario, "start-purge-wave", intensity=1.0),
+    )
+    assert missing.ok is False
+    assert missing.reason == "storyteller raid budget is unavailable"
+
+    _add_storyteller_budget(scenario, points=11.0)
+    insufficient = execute_handler(
+        StartPurgeWaveHandler(),
+        ctx,
+        _handler_cmd(scenario, "start-purge-wave", intensity=1.0),
+    )
+    assert insufficient.ok is False
+    assert insufficient.reason == "storyteller raid budget is unavailable"
 
 
 def test_unlock_treasure_without_key_requirement_needs_no_key():

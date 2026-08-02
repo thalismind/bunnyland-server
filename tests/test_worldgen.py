@@ -3112,7 +3112,6 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         FortificationComponent,
         KeyComponent,
         PoisonComponent,
-        PurgeWaveComponent,
         RitualComponent,
         ShelterComponent,
         ShrineComponent,
@@ -3225,7 +3224,6 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
                     "bunnyland.barbariansim.survival-gap",
                     "bunnyland.barbariansim.building",
                     "bunnyland.barbariansim.siege-readiness",
-                    "bunnyland.barbariansim.purge-wave",
                     "bunnyland.barbariansim.danger-zone",
                     "bunnyland.barbariansim.boss",
                 ),
@@ -3411,7 +3409,6 @@ async def test_builtin_generation_enrichers_cover_tier_2_sim_pack_wants():
         SurvivalGapComponent,
         BuildingComponent,
         SiegeReadinessComponent,
-        PurgeWaveComponent,
         DangerZoneComponent,
         BossComponent,
     ):

@@ -22,7 +22,6 @@ from .mechanics import (
     DurabilityComponent,
     FortificationComponent,
     PoisonComponent,
-    PurgeWaveComponent,
     RitualComponent,
     ShelterComponent,
     ShrineComponent,
@@ -52,7 +51,6 @@ CAPABILITIES = (
     "bunnyland.barbariansim.durable-fortification",
     "bunnyland.barbariansim.key",
     "bunnyland.barbariansim.poison",
-    "bunnyland.barbariansim.purge-wave",
     "bunnyland.barbariansim.ritual",
     "bunnyland.barbariansim.shelter",
     "bunnyland.barbariansim.shrine",
@@ -103,10 +101,6 @@ class BarbarianGenerationEnricher:
                 ctx, "bunnyland.barbariansim.siege-readiness"
             ) or generation_mentions(ctx, "siege"):
                 add(SiegeReadinessComponent(score=1.0))
-            if generation_wants(ctx, "bunnyland.barbariansim.purge-wave") or generation_mentions(
-                ctx, "purge wave"
-            ):
-                add(PurgeWaveComponent(wave=1, started_at_epoch=ctx.world_epoch))
             if generation_wants(ctx, "bunnyland.barbariansim.danger-zone") or generation_mentions(
                 ctx, "danger zone", "ruin"
             ):

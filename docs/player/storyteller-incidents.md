@@ -20,6 +20,16 @@ Active incident: resource drop.
 The incident may also create nearby objects. A resource drop can place a supply bundle in
 the room.
 
+A barbarian raid begins with a five-minute warning and spawns no enemies during that
+warning. Its prompt reports the warning, attack, recovery, and complete phases along with
+the defended room's integrity. The Storyteller budget determines one to three waves. A
+new wave waits until the previous wave is neutralized, with 30 seconds between waves.
+
+Raiders attack enrolled defenders in stable entity-id order and erode settlement defense
+integrity. Victory after the final wave creates budget-scaled raid loot. A breach or loss
+of every defender is defeat and creates no reward. Both outcomes enter a two-minute
+recovery period before the generic Storyteller incident resolves.
+
 ## Finish the incident
 
 Incidents resolve themselves when the work they created is done. For example, take a

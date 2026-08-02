@@ -2498,23 +2498,18 @@ PvP raid rules
 ### Components
 
 ```python
-PurgeMeterComponent
-RaidTargetComponent
-SiegeWeaponComponent
-DefenseRatingComponent
-WaveSpawnerComponent
-BaseWealthComponent
+RaidLifecycleComponent (WARNING, ATTACK, RECOVERY, COMPLETE)
+RaidDefenseComponent
+PurgeWaveComponent (legacy persistence only)
+RaidDefender relationship
+RaidAttacker relationship
 ```
 
 ### Systems
 
 ```text
-PurgeMeterSystem
-RaidSelectionSystem
-WaveSpawnSystem
-SiegeResolutionSystem
-DefenseRatingSystem
-LootRewardSystem
+StorytellerConsequence (sole budget, selection, and cooldown authority)
+RaidLifecycleConsequence (indexed lifecycle advancement and deterministic combat)
 ```
 
 ### Actions
@@ -2531,12 +2526,12 @@ counterattack
 ### Events
 
 ```text
-PurgeWarningEvent
-RaidStartedEvent
-RaidWaveSpawnedEvent
-SiegeWeaponFiredEvent
-RaidResolvedEvent
-BaseBreachedEvent
+RaidWarningEvent
+RaidPhaseChangedEvent
+RaidWaveStartedEvent
+RaidAttackEvent
+RaidOutcomeEvent
+IncidentResolvedEvent (after raid completion)
 ```
 
 ---

@@ -147,8 +147,8 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="start_purge_wave",
         cost=EPIC_ACTION_COST,
         description=(
-            "Launch the next purge wave against a reachable base, advancing the wave count "
-            "at the intensity you set. Defaults to your current location. A large, deliberate act."
+            "Deprecated compatibility alias that asks the Storyteller to spend its raid "
+            "budget on a warning-first phased raid at a reachable base."
         ),
     ),
     define_action(
