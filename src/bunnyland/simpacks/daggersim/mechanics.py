@@ -22,6 +22,7 @@ from ...core.ecs import (
     parse_entity_id,
     reachable_ids,
     replace_component,
+    spawn_entity,
 )
 from ...core.ecs import (
     entity_name as _name,
@@ -35,18 +36,30 @@ from ...core.handlers import HandlerContext, HandlerResult, planned, rejected, r
 from ...core.mutations import (
     AddEdge,
     AddEntity,
+    DeleteEntity,
     EntityReference,
     MutationOperation,
     MutationPlan,
     RemoveComponent,
     RemoveEdge,
     SetComponent,
+    SetComponentFactory,
 )
+from ...foundation.factions.mechanics import FactionComponent, MemberOfFaction
 from ...prompts import ComponentPromptContext
-from ..dragonsim.effects import EffectSpec, effect_spec, resolve_effect
+from ..dragonsim.effects import EffectModifier, EffectSpec, effect_spec, resolve_effect
 from ..dragonsim.mechanics import (
     ItemCurseComponent,
     ItemCurseTriggeredEvent,
+    QuestAcceptedBy,
+    QuestComponent,
+    QuestHasObjective,
+    QuestHasReward,
+    QuestObjectiveComponent,
+    QuestProvenanceComponent,
+    QuestRewardComponent,
+    QuestRewardGrants,
+    QuestStateComponent,
     SpiritVesselComponent,
 )
 
@@ -613,6 +626,18 @@ class SupernaturalAfflictionComponent(Component):
 
 
 @dataclass(frozen=True)
+class AfflictionFactionComponent(Component):
+    """Secret faction profile shared by every carrier of one affliction."""
+
+    affliction_type: str
+    form_name: str
+    power_name: str
+    power: EffectSpec
+    weakness_tags: tuple[str, ...] = ()
+    weakness_multiplier: float = 1.0
+
+
+@dataclass(frozen=True)
 class AfflictionStigmaComponent(Component):
     region_id: str = ""
     severity: int = 1
@@ -627,11 +652,22 @@ class AfflictionStigmaComponent(Component):
 class CureRequestComponent(Component):
     affliction_type: str
     quest_id: str | None = None
+    requested_at_epoch: int = 0
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         if not ctx.is_first_person:
             return ()
-        return (f"Cure quest hook: {self.affliction_type}.",)
+        return (f"Cure quest requested for {self.affliction_type}.",)
+
+
+@dataclass(frozen=True)
+class AfflictionRemedyComponent(Component):
+    affliction_type: str
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if ctx.target is None or not ctx.can_view_private_state:
+            return ()
+        return (f"Cure remedy for {self.affliction_type}.",)
 
 
 @dataclass(frozen=True)
@@ -1107,6 +1143,19 @@ class TransformationEndedEvent(DomainEvent):
 
 class AfflictionCuredEvent(DomainEvent):
     affliction_type: str
+    quest_id: str
+    remedy_id: str
+
+
+class AfflictionPowerUsedEvent(DomainEvent):
+    affliction_type: str
+    power_name: str
+    target_id: str
+    effect_type: str
+    magnitude: float
+    multiplier: float
+    target_before: float
+    target_after: float
 
 
 class DungeonRequestedEvent(DomainEvent):
@@ -3190,6 +3239,128 @@ class AttemptPacifyHandler:
         return planned(MutationPlan(tuple(operations)), *events)
 
 
+AFFLICTION_INCUBATION_SECONDS = 3600
+
+
+def _affliction_profile(affliction_type: str) -> AfflictionFactionComponent:
+    normalized = affliction_type.casefold()
+    if "vamp" in normalized or "nocturnal" in normalized:
+        return AfflictionFactionComponent(
+            affliction_type=affliction_type,
+            form_name="vampire",
+            power_name="blood drain",
+            power=EffectSpec("harm", 2.0, ("supernatural", "blood")),
+            weakness_tags=("holy", "sunlight"),
+            weakness_multiplier=2.0,
+        )
+    if any(token in normalized for token in ("lycan", "moon", "were")):
+        return AfflictionFactionComponent(
+            affliction_type=affliction_type,
+            form_name=affliction_type,
+            power_name="rending claws",
+            power=EffectSpec("harm", 2.0, ("supernatural", "claw")),
+            weakness_tags=("silver",),
+            weakness_multiplier=2.0,
+        )
+    if "ghost" in normalized:
+        return AfflictionFactionComponent(
+            affliction_type=affliction_type,
+            form_name="ghost",
+            power_name="spectral touch",
+            power=EffectSpec("harm", 2.0, ("supernatural", "spectral")),
+            weakness_tags=("radiant",),
+            weakness_multiplier=2.0,
+        )
+    return AfflictionFactionComponent(
+        affliction_type=affliction_type,
+        form_name=affliction_type,
+        power_name="afflicted strike",
+        power=EffectSpec("harm", 1.0, ("supernatural",)),
+        weakness_tags=("purification",),
+        weakness_multiplier=1.5,
+    )
+
+
+def _affliction_faction(
+    world: World, affliction_type: str
+) -> tuple[EntityId, Entity, AfflictionFactionComponent] | None:
+    matches = sorted(
+        (
+            entity
+            for entity in world.query().with_all([AfflictionFactionComponent]).execute_entities()
+            if entity.get_component(AfflictionFactionComponent).affliction_type == affliction_type
+        ),
+        key=lambda entity: str(entity.id),
+    )
+    if not matches:
+        return None
+    faction = matches[0]
+    return faction.id, faction, faction.get_component(AfflictionFactionComponent)
+
+
+def _affliction_quest(world: World, quest_key: str) -> tuple[EntityId, Entity] | None:
+    quest_id = parse_entity_id(quest_key)
+    if quest_id is not None and world.has_entity(quest_id):
+        return quest_id, world.get_entity(quest_id)
+    matches = sorted(
+        (
+            entity
+            for entity in world.query().with_all([QuestComponent]).execute_entities()
+            if entity.get_component(QuestComponent).quest_id == quest_key
+        ),
+        key=lambda entity: str(entity.id),
+    )
+    return (matches[0].id, matches[0]) if matches else None
+
+
+def _affliction_identity_operations(
+    world: World,
+    character: Entity,
+    affliction_type: str,
+    epoch: int,
+) -> tuple[list[MutationOperation], EntityId | EntityReference, AfflictionFactionComponent]:
+    existing = _affliction_faction(world, affliction_type)
+    operations: list[MutationOperation] = []
+    if existing is None:
+        profile = _affliction_profile(affliction_type)
+        faction_target: EntityId | EntityReference = EntityReference()
+        faction_name = f"{affliction_type.title()} Afflicted"
+        operations.append(
+            AddEntity(
+                (
+                    IdentityComponent(name=faction_name, kind="faction"),
+                    FactionComponent(
+                        name=faction_name,
+                        ideology=f"Those bound by {affliction_type}.",
+                        secret=True,
+                    ),
+                    profile,
+                ),
+                reference=faction_target,
+            )
+        )
+    else:
+        faction_target, _faction, profile = existing
+    operations.extend(
+        (
+            AddEdge(
+                character.id,
+                faction_target,
+                MemberOfFaction(rank="afflicted", since_epoch=epoch),
+            ),
+            AddEdge(
+                character.id,
+                faction_target,
+                EffectModifier(
+                    tags=profile.weakness_tags,
+                    multiplier=profile.weakness_multiplier,
+                ),
+            ),
+        )
+    )
+    return operations, faction_target, profile
+
+
 class ContractAfflictionHandler:
     command_type = "contract-affliction"
 
@@ -3202,6 +3373,9 @@ class ContractAfflictionHandler:
         if character.has_component(SupernaturalAfflictionComponent):
             return rejected("character already has a supernatural affliction")
 
+        identity_operations, _faction, _profile = _affliction_identity_operations(
+            ctx.world, character, affliction_type, ctx.epoch
+        )
         return planned(
             MutationPlan(
                 (
@@ -3210,9 +3384,11 @@ class ContractAfflictionHandler:
                         SupernaturalAfflictionComponent(
                             affliction_type=affliction_type,
                             contracted_at_epoch=ctx.epoch,
+                            incubation_ends_epoch=ctx.epoch + AFFLICTION_INCUBATION_SECONDS,
                         ),
                     ),
                     SetComponent(character_id, FeedingNeedComponent(last_updated_epoch=ctx.epoch)),
+                    *identity_operations,
                 )
             ),
             AfflictionContractedEvent(
@@ -3231,22 +3407,30 @@ class ProgressAfflictionIncubationHandler:
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
-        stage = str(command.payload.get("stage", "active")).strip() or "active"
         if character_id is None:
             return rejected("invalid character id")
         character = ctx.entity(character_id)
         if not character.has_component(SupernaturalAfflictionComponent):
             return rejected("character has no supernatural affliction")
         affliction = character.get_component(SupernaturalAfflictionComponent)
+        if affliction.stage != "incubating":
+            return rejected("affliction is not incubating")
+        incubation_ends = (
+            affliction.incubation_ends_epoch
+            if affliction.incubation_ends_epoch is not None
+            else affliction.contracted_at_epoch + AFFLICTION_INCUBATION_SECONDS
+        )
+        if ctx.epoch < incubation_ends:
+            return rejected("affliction incubation is not complete")
         return planned(
-            MutationPlan((SetComponent(character_id, replace(affliction, stage=stage)),)),
+            MutationPlan((SetComponent(character_id, replace(affliction, stage="active")),)),
             AfflictionIncubationProgressedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
                     affliction_type=affliction.affliction_type,
-                    stage=stage,
+                    stage="active",
                 )
             ),
         )
@@ -3257,17 +3441,29 @@ class MarkAfflictionStigmaHandler:
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
         character_id = parse_entity_id(command.character_id)
+        raw_target_id = command.payload.get("target_id")
+        target_id = character_id if raw_target_id is None else parse_entity_id(raw_target_id)
         region_id = str(command.payload.get("region_id", "")).strip()
         severity = int(command.payload.get("severity", 1))
         if character_id is None:
             return rejected("invalid character id")
+        if target_id is None:
+            return rejected("invalid stigma target")
         if severity <= 0:
             return rejected("stigma severity must be positive")
+        if not ctx.world.has_entity(target_id):
+            return rejected("stigma target does not exist")
+        character = ctx.entity(character_id)
+        if target_id not in reachable_ids(ctx.world, character):
+            return rejected("stigma target is not reachable")
+        target = ctx.entity(target_id)
+        if not target.has_component(SupernaturalAfflictionComponent):
+            return rejected("stigma target has no supernatural affliction")
         return planned(
             MutationPlan(
                 (
                     SetComponent(
-                        character_id,
+                        target_id,
                         AfflictionStigmaComponent(region_id=region_id, severity=severity),
                     ),
                 )
@@ -3277,6 +3473,7 @@ class MarkAfflictionStigmaHandler:
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target_id),),
                     region_id=region_id,
                     severity=severity,
                 )
@@ -3295,28 +3492,128 @@ class RequestCureHandler:
         character = ctx.entity(character_id)
         if not character.has_component(SupernaturalAfflictionComponent):
             return rejected("character has no supernatural affliction")
+        if character.has_component(CureRequestComponent):
+            return rejected("cure quest already requested")
         affliction = character.get_component(SupernaturalAfflictionComponent)
-        return planned(
-            MutationPlan(
-                (
-                    SetComponent(
-                        character_id,
-                        CureRequestComponent(
-                            affliction_type=affliction.affliction_type,
-                            quest_id=quest_id,
-                        ),
+        quest_key = quest_id or f"cure:{character_id}:{affliction.affliction_type}"
+        existing_quest = _affliction_quest(ctx.world, quest_key)
+        if existing_quest is not None:
+            existing_id, quest_entity = existing_quest
+            if not quest_entity.has_component(QuestComponent) or not quest_entity.has_component(
+                QuestStateComponent
+            ):
+                return rejected("target is not a quest")
+            operations: list[MutationOperation] = [
+                SetComponent(
+                    character_id,
+                    CureRequestComponent(
+                        affliction_type=affliction.affliction_type,
+                        quest_id=str(existing_id),
+                        requested_at_epoch=ctx.epoch,
                     ),
                 )
-            ),
-            CureRequestedEvent(
+            ]
+            if not quest_entity.has_relationship(QuestAcceptedBy, character_id):
+                operations.append(
+                    AddEdge(
+                        existing_id,
+                        character_id,
+                        QuestAcceptedBy(accepted_at_epoch=ctx.epoch),
+                    )
+                )
+            return planned(
+                MutationPlan(tuple(operations)),
+                CureRequestedEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(existing_id),),
+                        affliction_type=affliction.affliction_type,
+                        quest_id=str(existing_id),
+                    )
+                ),
+            )
+
+        quest = EntityReference()
+        objective = EntityReference()
+        reward = EntityReference()
+        remedy = EntityReference()
+        title = f"Cure {affliction.affliction_type}"
+        objective_text = f"Secure a remedy for {affliction.affliction_type}"
+
+        def requested_event() -> DomainEvent:
+            created_quest_id = str(quest.require())
+            return CureRequestedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
+                    target_ids=(created_quest_id,),
                     affliction_type=affliction.affliction_type,
-                    quest_id=quest_id,
+                    quest_id=created_quest_id,
+                )
+            )
+
+        return planned(
+            MutationPlan(
+                (
+                    AddEntity(
+                        (
+                            IdentityComponent(name=title, kind="quest"),
+                            QuestComponent(
+                                quest_id=quest_key,
+                                title=title,
+                                description=objective_text,
+                            ),
+                            QuestStateComponent(status="active", accepted_at_epoch=ctx.epoch),
+                            QuestProvenanceComponent(
+                                generator="bunnyland.daggersim.affliction-cure",
+                                source_id=str(character_id),
+                                generated_at_epoch=ctx.epoch,
+                            ),
+                        ),
+                        reference=quest,
+                    ),
+                    AddEntity(
+                        (QuestObjectiveComponent(description=objective_text),),
+                        reference=objective,
+                    ),
+                    AddEntity(
+                        (
+                            QuestRewardComponent(
+                                description=f"remedy for {affliction.affliction_type}"
+                            ),
+                        ),
+                        reference=reward,
+                    ),
+                    AddEntity(
+                        (
+                            IdentityComponent(
+                                name=f"remedy for {affliction.affliction_type}",
+                                kind="cure-remedy",
+                            ),
+                            PortableComponent(),
+                            AfflictionRemedyComponent(affliction.affliction_type),
+                        ),
+                        reference=remedy,
+                    ),
+                    AddEdge(quest, objective, QuestHasObjective()),
+                    AddEdge(quest, reward, QuestHasReward()),
+                    AddEdge(reward, remedy, QuestRewardGrants()),
+                    AddEdge(quest, character_id, QuestAcceptedBy(accepted_at_epoch=ctx.epoch)),
+                    SetComponentFactory(
+                        character_id,
+                        CureRequestComponent,
+                        lambda: CureRequestComponent(
+                            affliction_type=affliction.affliction_type,
+                            quest_id=str(quest.require()),
+                            requested_at_epoch=ctx.epoch,
+                        ),
+                    ),
                 )
             ),
+            requested_event,
         )
 
 
@@ -3334,7 +3631,17 @@ class TransformHandler:
             return rejected("character is already transformed")
 
         affliction = character.get_component(SupernaturalAfflictionComponent)
-        form_name = str(command.payload.get("form_name", affliction.affliction_type)).strip()
+        if affliction.stage == "incubating":
+            incubation_ends = (
+                affliction.incubation_ends_epoch
+                if affliction.incubation_ends_epoch is not None
+                else affliction.contracted_at_epoch + AFFLICTION_INCUBATION_SECONDS
+            )
+            if ctx.epoch < incubation_ends:
+                return rejected("affliction is still incubating")
+        identity = _affliction_faction(ctx.world, affliction.affliction_type)
+        default_form = identity[2].form_name if identity is not None else affliction.affliction_type
+        form_name = str(command.payload.get("form_name", default_form)).strip()
         return planned(
             MutationPlan(
                 (
@@ -3355,6 +3662,58 @@ class TransformHandler:
                     room_id=_room_id(ctx.world, character_id),
                     affliction_type=affliction.affliction_type,
                     form_name=form_name or affliction.affliction_type,
+                )
+            ),
+        )
+
+
+class UseAfflictionPowerHandler:
+    command_type = "use-affliction-power"
+
+    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
+        character_id = parse_entity_id(command.character_id)
+        if character_id is None:
+            return rejected("invalid character id")
+        character = ctx.entity(character_id)
+        if not character.has_component(SupernaturalAfflictionComponent):
+            return rejected("character has no supernatural affliction")
+        affliction = character.get_component(SupernaturalAfflictionComponent)
+        if affliction.stage == "incubating":
+            return rejected("affliction is still incubating")
+        identity = _affliction_faction(ctx.world, affliction.affliction_type)
+        if identity is None:
+            return rejected("affliction power is not available")
+        _faction_id, _faction, profile = identity
+
+        raw_target_id = command.payload.get("target_id")
+        target_id = character_id if raw_target_id is None else parse_entity_id(raw_target_id)
+        if target_id is None:
+            return rejected("invalid power target")
+        if not ctx.world.has_entity(target_id):
+            return rejected("power target does not exist")
+        if target_id not in reachable_ids(ctx.world, character):
+            return rejected("power target is not reachable")
+        target = ctx.entity(target_id)
+        resolved = resolve_effect(ctx.world, target, profile.power)
+        if resolved is None:
+            return rejected("power target has no compatible health state")
+        resolution, health_operation = resolved
+        return planned(
+            MutationPlan((health_operation,)),
+            AfflictionPowerUsedEvent(
+                **ctx.event_base(
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(character_id),
+                    room_id=_room_id(ctx.world, character_id),
+                    target_ids=(str(target_id),),
+                    affliction_type=affliction.affliction_type,
+                    power_name=profile.power_name,
+                    target_id=str(target_id),
+                    effect_type=resolution.effect_type,
+                    magnitude=resolution.magnitude,
+                    multiplier=resolution.multiplier,
+                    target_before=resolution.before,
+                    target_after=resolution.after,
                 )
             ),
         )
@@ -3446,13 +3805,68 @@ class CureAfflictionHandler:
             return rejected("character has no supernatural affliction")
 
         affliction_type = character.get_component(SupernaturalAfflictionComponent).affliction_type
+        if not character.has_component(CureRequestComponent):
+            return rejected("cure quest has not been requested")
+        request = character.get_component(CureRequestComponent)
+        if request.affliction_type != affliction_type:
+            return rejected("cure request does not match the affliction")
+        quest_id = parse_entity_id(request.quest_id)
+        if quest_id is None or not ctx.world.has_entity(quest_id):
+            return rejected("cure quest does not exist")
+        quest = ctx.entity(quest_id)
+        if not quest.has_component(QuestComponent) or not quest.has_component(QuestStateComponent):
+            return rejected("cure request target is not a quest")
+        if not quest.has_relationship(QuestAcceptedBy, character_id):
+            return rejected("cure quest is not accepted by character")
+        if quest.get_component(QuestStateComponent).status != "completed":
+            return rejected("cure quest is not complete")
+
+        raw_remedy_id = command.payload.get("remedy_id")
+        remedy_id = parse_entity_id(raw_remedy_id)
+        if raw_remedy_id is not None and remedy_id is None:
+            return rejected("invalid cure remedy id")
+        if remedy_id is None:
+            remedy_ids = sorted(
+                (
+                    entity_id
+                    for entity_id in reachable_ids(ctx.world, character)
+                    if ctx.world.get_entity(entity_id).has_component(AfflictionRemedyComponent)
+                    and ctx.world.get_entity(entity_id)
+                    .get_component(AfflictionRemedyComponent)
+                    .affliction_type
+                    == affliction_type
+                ),
+                key=str,
+            )
+            remedy_id = remedy_ids[0] if remedy_ids else None
+        if remedy_id is None or not ctx.world.has_entity(remedy_id):
+            return rejected("cure remedy does not exist")
+        if remedy_id not in reachable_ids(ctx.world, character):
+            return rejected("cure remedy is not reachable")
+        remedy = ctx.entity(remedy_id)
+        if not remedy.has_component(AfflictionRemedyComponent):
+            return rejected("target is not a cure remedy")
+        if remedy.get_component(AfflictionRemedyComponent).affliction_type != affliction_type:
+            return rejected("cure remedy does not match the affliction")
+
         operations: list[MutationOperation] = [
-            RemoveComponent(character_id, SupernaturalAfflictionComponent)
+            RemoveComponent(character_id, SupernaturalAfflictionComponent),
+            RemoveComponent(character_id, CureRequestComponent),
+            DeleteEntity(remedy_id),
         ]
         if character.has_component(FeedingNeedComponent):
             operations.append(RemoveComponent(character_id, FeedingNeedComponent))
         if character.has_component(WereformComponent):
             operations.append(RemoveComponent(character_id, WereformComponent))
+        if character.has_component(AfflictionStigmaComponent):
+            operations.append(RemoveComponent(character_id, AfflictionStigmaComponent))
+        identity = _affliction_faction(ctx.world, affliction_type)
+        if identity is not None:
+            faction_id, _faction, _profile = identity
+            if character.has_relationship(MemberOfFaction, faction_id):
+                operations.append(RemoveEdge(character_id, faction_id, MemberOfFaction))
+            if character.has_relationship(EffectModifier, faction_id):
+                operations.append(RemoveEdge(character_id, faction_id, EffectModifier))
         return planned(
             MutationPlan(tuple(operations)),
             AfflictionCuredEvent(
@@ -3461,16 +3875,82 @@ class CureAfflictionHandler:
                     actor_id=str(character_id),
                     room_id=_room_id(ctx.world, character_id),
                     affliction_type=affliction_type,
+                    quest_id=str(quest_id),
+                    remedy_id=str(remedy_id),
                 )
             ),
         )
 
 
-class FeedingNeedConsequence:
+class AfflictionLifecycleConsequence:
     def process(self, world: World, epoch: int) -> list[DomainEvent]:
         events: list[DomainEvent] = []
-        query = world.query().with_all([SupernaturalAfflictionComponent, FeedingNeedComponent])
-        for character in query.execute_entities():
+        profiles: dict[str, Entity] = {}
+        profile_query = world.query().with_all([AfflictionFactionComponent])
+        for entity in sorted(profile_query.execute_entities(), key=lambda item: str(item.id)):
+            profile = entity.get_component(AfflictionFactionComponent)
+            profiles.setdefault(profile.affliction_type, entity)
+        query = world.query().with_all([SupernaturalAfflictionComponent])
+        for character in sorted(query.execute_entities(), key=lambda entity: str(entity.id)):
+            affliction = character.get_component(SupernaturalAfflictionComponent)
+            incubation_ends = (
+                affliction.incubation_ends_epoch
+                if affliction.incubation_ends_epoch is not None
+                else affliction.contracted_at_epoch + AFFLICTION_INCUBATION_SECONDS
+            )
+            if affliction.stage == "incubating" and epoch >= incubation_ends:
+                affliction = replace(
+                    affliction,
+                    stage="active",
+                    incubation_ends_epoch=incubation_ends,
+                )
+                replace_component(character, affliction)
+                events.append(
+                    AfflictionIncubationProgressedEvent(
+                        **_travel_event_base(
+                            epoch,
+                            visibility=EventVisibility.PRIVATE,
+                            actor_id=str(character.id),
+                            affliction_type=affliction.affliction_type,
+                            stage="active",
+                        )
+                    )
+                )
+
+            faction = profiles.get(affliction.affliction_type)
+            if faction is None:
+                profile = _affliction_profile(affliction.affliction_type)
+                faction_name = f"{affliction.affliction_type.title()} Afflicted"
+                faction = spawn_entity(
+                    world,
+                    [
+                        IdentityComponent(name=faction_name, kind="faction"),
+                        FactionComponent(
+                            name=faction_name,
+                            ideology=f"Those bound by {affliction.affliction_type}.",
+                            secret=True,
+                        ),
+                        profile,
+                    ],
+                )
+                profiles[affliction.affliction_type] = faction
+            else:
+                profile = faction.get_component(AfflictionFactionComponent)
+            if not character.has_relationship(MemberOfFaction, faction.id):
+                character.add_relationship(
+                    MemberOfFaction(rank="afflicted", since_epoch=affliction.contracted_at_epoch),
+                    faction.id,
+                )
+            if not character.has_relationship(EffectModifier, faction.id):
+                character.add_relationship(
+                    EffectModifier(
+                        tags=profile.weakness_tags,
+                        multiplier=profile.weakness_multiplier,
+                    ),
+                    faction.id,
+                )
+            if not character.has_component(FeedingNeedComponent):
+                character.add_component(FeedingNeedComponent(last_updated_epoch=epoch))
             need = character.get_component(FeedingNeedComponent)
             elapsed = max(0, epoch - need.last_updated_epoch)
             if elapsed <= 0:
@@ -3492,6 +3972,10 @@ class FeedingNeedConsequence:
                 )
             )
         return events
+
+
+# Import compatibility for integrations that used the original partial lifecycle name.
+FeedingNeedConsequence = AfflictionLifecycleConsequence
 
 
 def _string_tuple(raw: object, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -4046,6 +4530,7 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
             PotionMakerComponent,
             RechargeServiceComponent,
             IngredientComponent,
+            AfflictionRemedyComponent,
             CreatureLanguageComponent,
             DungeonComponent,
             SecretDoorComponent,
@@ -4082,6 +4567,21 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
     ):
         if character.has_component(component_type):
             lines.extend(character.get_component(component_type).prompt_fragments(ctx))
+    if character.has_component(SupernaturalAfflictionComponent):
+        affliction = character.get_component(SupernaturalAfflictionComponent)
+        identity = _affliction_faction(world, affliction.affliction_type)
+        if identity is not None:
+            _faction_id, _faction, profile = identity
+            tags = ", ".join(sorted(profile.power.tags)) or "untagged"
+            lines.append(
+                f"Affliction power: {profile.power_name} "
+                f"({profile.power.effect_type} {profile.power.magnitude:.1f}; {tags})."
+            )
+            if profile.weakness_tags:
+                weaknesses = ", ".join(sorted(profile.weakness_tags))
+                lines.append(
+                    f"Affliction weakness: {weaknesses} x{profile.weakness_multiplier:.1f}."
+                )
     for edge_type in (AnchoredToRoom, TravelingToDestination):
         for edge, target_id in character.get_relationships(edge_type):
             edge_ctx = ComponentPromptContext.for_entity(
@@ -4199,7 +4699,7 @@ class SocialRegisterReactor:
 def install_daggersim(actor) -> None:
     actor.register_consequence(TravelCompletionConsequence())
     actor.register_consequence(LoanDueConsequence())
-    actor.register_consequence(FeedingNeedConsequence())
+    actor.register_consequence(AfflictionLifecycleConsequence())
     reactor = SocialRegisterReactor(actor.world)
     reactor.subscribe(actor.bus)
 
@@ -4209,7 +4709,11 @@ __all__ = [
     "AccountOpenedEvent",
     "AfflictionContractedEvent",
     "AfflictionCuredEvent",
+    "AfflictionFactionComponent",
     "AfflictionIncubationProgressedEvent",
+    "AfflictionLifecycleConsequence",
+    "AfflictionPowerUsedEvent",
+    "AfflictionRemedyComponent",
     "AfflictionStigmaComponent",
     "AfflictionStigmaMarkedEvent",
     "BankAccountComponent",
@@ -4347,6 +4851,7 @@ __all__ = [
     "TakeLoanHandler",
     "UnrealizedLocationComponent",
     "UseInstitutionServiceHandler",
+    "UseAfflictionPowerHandler",
     "WithdrawalMadeEvent",
     "WithdrawHandler",
     "WereformComponent",

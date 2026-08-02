@@ -455,7 +455,7 @@ def test_builtin_sim_dependencies_match_layering_contracts():
     assert plugins[BARBARIANSIM].dependencies.requires == (CORE_VERBS,)
     assert plugins[FACTIONS].dependencies.requires == (CORE_VERBS,)
     assert plugins[DRAGONSIM].dependencies.requires == (CORE_VERBS, LIFESIM, FACTIONS)
-    assert plugins[DAGGERSIM].dependencies.requires == (CORE_VERBS, DRAGONSIM)
+    assert plugins[DAGGERSIM].dependencies.requires == (CORE_VERBS, DRAGONSIM, FACTIONS)
     assert plugins[VOIDSIM].dependencies.requires == (
         CORE_VERBS,
         COLONYSIM,
@@ -1047,6 +1047,8 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "PotionMakerComponent",
         "IngredientComponent",
         "AfflictionStigmaComponent",
+        "AfflictionFactionComponent",
+        "AfflictionRemedyComponent",
         "CureRequestComponent",
     } <= {component.__name__ for component in dagger.ecs.components}
     assert {"OwnsProperty", "StoredIn", "HasAccessToService"} <= {
@@ -1071,6 +1073,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "progress-affliction-incubation",
         "mark-affliction-stigma",
         "request-cure-quest",
+        "use-affliction-power",
     } <= {handler.command_type for handler in dagger.commands.action_handlers}
     assert {
         "InstitutionReputationChangedEvent",
@@ -1089,6 +1092,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "AfflictionIncubationProgressedEvent",
         "AfflictionStigmaMarkedEvent",
         "CureRequestedEvent",
+        "AfflictionPowerUsedEvent",
     } <= {event.__name__ for event in dagger.commands.typed_events}
 
     void = plugins[VOIDSIM]

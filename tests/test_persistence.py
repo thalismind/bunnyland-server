@@ -57,6 +57,13 @@ from bunnyland.persistence import (
 )
 from bunnyland.plugins import PluginRegistry, apply_plugins, bunnyland_plugins
 from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.simpacks.daggersim.mechanics import (
+    AfflictionFactionComponent,
+    AfflictionRemedyComponent,
+    AfflictionStigmaComponent,
+    CureRequestComponent,
+    SupernaturalAfflictionComponent,
+)
 from bunnyland.simpacks.dragonsim.effects import EffectModifier, EffectSpec
 from bunnyland.simpacks.dragonsim.mechanics import (
     ArtifactComponent,
@@ -1809,6 +1816,72 @@ def test_effect_artifact_and_curse_types_survive_persistence(tmp_path):
     assert loaded.world.get_entity(learner.id).get_relationships(KnowsWord) == [
         (KnowsWord(learned_at_epoch=3, ready_at_epoch=48), word.id)
     ]
+
+
+def test_affliction_lifecycle_types_and_legacy_defaults_survive_persistence(tmp_path):
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    faction = spawn_entity(
+        actor.world,
+        [
+            AfflictionFactionComponent(
+                affliction_type="moon-form",
+                form_name="moon hare",
+                power_name="rending claws",
+                power=EffectSpec("harm", 2.0, ("supernatural", "claw")),
+                weakness_tags=("silver",),
+                weakness_multiplier=2.0,
+            )
+        ],
+    )
+    afflicted = spawn_entity(
+        actor.world,
+        [
+            SupernaturalAfflictionComponent(
+                affliction_type="moon-form",
+                contracted_at_epoch=10,
+                incubation_ends_epoch=3610,
+            ),
+            AfflictionStigmaComponent(region_id="moss-road", severity=2),
+            CureRequestComponent(
+                affliction_type="moon-form",
+                quest_id="entity_quest",
+                requested_at_epoch=20,
+            ),
+        ],
+    )
+    remedy = spawn_entity(actor.world, [AfflictionRemedyComponent("moon-form")])
+    afflicted.add_relationship(
+        EffectModifier(tags=("silver",), multiplier=2.0), faction.id
+    )
+    path = tmp_path / "affliction-lifecycle.json"
+
+    save_world(actor, path, meta=WorldMeta(seed="afflictions"))
+    loaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+
+    loaded_affliction = loaded.world.get_entity(afflicted.id)
+    assert loaded_affliction.get_component(SupernaturalAfflictionComponent) == (
+        SupernaturalAfflictionComponent(
+            affliction_type="moon-form",
+            contracted_at_epoch=10,
+            incubation_ends_epoch=3610,
+        )
+    )
+    assert loaded_affliction.get_component(CureRequestComponent).requested_at_epoch == 20
+    assert loaded.world.get_entity(faction.id).get_component(AfflictionFactionComponent).power == (
+        EffectSpec("harm", 2.0, ("supernatural", "claw"))
+    )
+    assert loaded.world.get_entity(remedy.id).get_component(AfflictionRemedyComponent) == (
+        AfflictionRemedyComponent("moon-form")
+    )
+
+    legacy = SupernaturalAfflictionComponent(
+        affliction_type="legacy curse",
+        contracted_at_epoch=0,
+    )
+    assert legacy.stage == "incubating"
+    assert legacy.incubation_ends_epoch is None
+    assert CureRequestComponent("legacy curse").requested_at_epoch == 0
 
 
 async def test_reloaded_world_keeps_playing(tmp_path):

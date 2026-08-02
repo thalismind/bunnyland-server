@@ -4689,56 +4689,62 @@ weaknesses
 
 ```python
 SupernaturalAfflictionComponent
-VampireComponent
-LycanthropeComponent
+AfflictionFactionComponent
 WereformComponent
-CurseIncubationComponent
 FeedingNeedComponent
-TransformationCooldownComponent
-SunlightVulnerabilityComponent
-MoonPhaseSensitivityComponent
-CureQuestComponent
-SecretLineageComponent
+CureRequestComponent
+AfflictionRemedyComponent
+AfflictionStigmaComponent
+FactionComponent(secret=True)
+MemberOfFaction
+EffectModifier
 ```
+
+`SupernaturalAfflictionComponent` retains additive legacy defaults for stage and incubation
+time. An `AfflictionFactionComponent` stores the affliction's shared form, typed
+`EffectSpec` power, and weakness tags on a secret `bunnyland.factions` faction. Carriers use
+the canonical `MemberOfFaction` edge and shared repeatable `EffectModifier` edges; there is
+no parallel faction, power-effect, weakness, or resistance model.
+
+Vampire- and lycanthrope-specific singleton components, transformation cooldowns, sunlight
+and moon-phase scheduling remain planned extensions. They are not implied by the generic
+lifecycle implemented here.
 
 ### Systems
 
 ```text
-AfflictionInfectionSystem
-CurseIncubationSystem
-TransformationSystem
-FeedingNeedSystem
-SunlightEffectSystem
-MoonPhaseSystem
-SupernaturalPowerSystem
-CureQuestSystem
-SocialStigmaSystem
-SecretFactionSystem
+AfflictionLifecycleConsequence (indexed by SupernaturalAfflictionComponent)
+shared typed effect resolution
+standard Dragonsim quest objective/reward lifecycle
+foundation faction stance and private membership prompts
 ```
 
 ### Actions
 
 ```text
-feed
-resist feeding
+contract-affliction
+progress-affliction-incubation (timer-respecting compatibility action)
+mark-affliction-stigma
 transform
-hide condition
-seek cure
-embrace curse
-use supernatural power
+use-affliction-power
+feed-on
+end-transformation
+request-cure-quest
+cure-affliction
 ```
 
 ### Events
 
 ```text
 AfflictionContractedEvent
-CurseIncubatedEvent
+AfflictionIncubationProgressedEvent
 TransformationStartedEvent
 TransformationEndedEvent
 FeedingNeedChangedEvent
-CureQuestStartedEvent
+CureRequestedEvent
+AfflictionPowerUsedEvent
+AfflictionStigmaMarkedEvent
 AfflictionCuredEvent
-SecretRevealedEvent
 ```
 
 ## 7.16 How `daggersim` uses worldgen
@@ -7932,7 +7938,9 @@ custom spells/typed heal-harm effects/enchantments/spirit vessels/curses/purific
 potions/recharge/ingredient identification
 etiquette/streetwise
 language skills/pacification
-supernatural afflictions/incubation/stigma/cure quest hooks
+supernatural affliction contraction/indexed incubation/transformation/feeding
+typed affliction powers and shared tagged weaknesses/resistances
+secret affliction factions/stigma/validated cure quest remedies
 ```
 
 ## Phase 8 — void sim

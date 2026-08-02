@@ -22,19 +22,25 @@ from bunnyland.core import (
     container_of,
     execute_mutation_plan,
     parse_entity_id,
+    reachable_ids,
     replace_component,
     spawn_entity,
 )
 from bunnyland.core.components import CharacterComponent, HealthComponent
 from bunnyland.core.events import CommandRejectedEvent, SpeechSaidEvent
 from bunnyland.core.handlers import HandlerContext, SayHandler, TellHandler
+from bunnyland.foundation.factions.mechanics import FactionComponent, MemberOfFaction
 from bunnyland.foundation.history.mechanics import DeedReputationComponent
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
 from bunnyland.simpacks.daggersim.mechanics import (
     AccountOpenedEvent,
     AfflictionContractedEvent,
     AfflictionCuredEvent,
+    AfflictionFactionComponent,
     AfflictionIncubationProgressedEvent,
+    AfflictionLifecycleConsequence,
+    AfflictionPowerUsedEvent,
+    AfflictionRemedyComponent,
     AfflictionStigmaComponent,
     AfflictionStigmaMarkedEvent,
     AnchoredToRoom,
@@ -204,6 +210,7 @@ from bunnyland.simpacks.daggersim.mechanics import (
     TravelStartedEvent,
     TravelSuppliesBoughtEvent,
     UnrealizedLocationComponent,
+    UseAfflictionPowerHandler,
     UseInstitutionServiceHandler,
     UseRecallHandler,
     ViewMapHandler,
@@ -223,12 +230,15 @@ from bunnyland.simpacks.daggersim.mechanics import (
     daggersim_fragments,
     install_daggersim,
 )
+from bunnyland.simpacks.dragonsim.effects import EffectModifier, EffectSpec, resolve_effect
 from bunnyland.simpacks.dragonsim.mechanics import (
+    CompleteObjectiveHandler,
     ItemCurseComponent,
     QuestAcceptedBy,
     QuestAcceptedEvent,
     QuestCompletedEvent,
     QuestComponent,
+    QuestHasObjective,
     QuestHasReward,
     QuestProvenanceComponent,
     QuestRewardComponent,
@@ -499,7 +509,7 @@ def test_daggersim_parity_handlers_mutate_state_directly():
     )
     character.add_component(
         SupernaturalAfflictionComponent(
-            affliction_type="moon-form", contracted_at_epoch=scenario.actor.epoch
+            affliction_type="moon-form", contracted_at_epoch=scenario.actor.epoch - HOUR
         )
     )
 
@@ -649,7 +659,10 @@ def test_daggersim_parity_handlers_mutate_state_directly():
     assert str(scenario.character) in ingredient.get_component(IngredientComponent).identified_by
     assert character.get_component(SupernaturalAfflictionComponent).stage == "active"
     assert character.get_component(AfflictionStigmaComponent).severity == 2
-    assert character.get_component(CureRequestComponent).quest_id == "moon cure"
+    cure_quest_id = parse_entity_id(character.get_component(CureRequestComponent).quest_id)
+    assert cure_quest_id is not None
+    cure_quest = scenario.actor.world.get_entity(cure_quest_id)
+    assert cure_quest.get_component(QuestComponent).quest_id == "moon cure"
     fragments = [
         *daggersim_fragments(scenario.actor.world, character),
         *dragonsim_fragments(scenario.actor.world, character),
@@ -666,7 +679,7 @@ def test_daggersim_parity_handlers_mutate_state_directly():
     assert "Ingredient nearby: moon sugar (identified)." in fragments
     assert "Affliction: moon-form (active)." in fragments
     assert "Affliction stigma: moss severity 2." in fragments
-    assert "Cure quest hook: moon-form." in fragments
+    assert "Cure quest requested for moon-form." in fragments
 
 
 def test_daggersim_parity_handlers_reject_invalid_targets_directly():
@@ -3892,6 +3905,506 @@ async def test_supernatural_affliction_transforms_and_grows_feeding_need():
     assert feeding[-1].current > 0
 
 
+def test_affliction_contraction_creates_secret_faction_membership_and_weakness():
+    scenario = build_scenario()
+    context = HandlerContext(scenario.actor.world, 12)
+
+    result = execute_handler(
+        ContractAfflictionHandler(),
+        context,
+        _handler_cmd(scenario, "contract-affliction", affliction_type="moon-form"),
+    )
+
+    assert result.ok, result.reason
+    character = scenario.actor.world.get_entity(scenario.character)
+    affliction = character.get_component(SupernaturalAfflictionComponent)
+    assert affliction.incubation_ends_epoch == 12 + HOUR
+    memberships = character.get_relationships(MemberOfFaction)
+    assert len(memberships) == 1
+    faction = scenario.actor.world.get_entity(memberships[0][1])
+    assert faction.get_component(FactionComponent).secret is True
+    profile = faction.get_component(AfflictionFactionComponent)
+    assert profile.affliction_type == "moon-form"
+    modifier = character.get_relationships(EffectModifier)[0][0]
+    assert modifier.tags == ("silver",)
+    assert modifier.multiplier == 2.0
+    character.add_component(HealthComponent(current=10.0, maximum=10.0))
+    resolved = resolve_effect(
+        scenario.actor.world,
+        character,
+        EffectSpec("harm", 2.0, ("silver",)),
+    )
+    assert resolved is not None
+    resolution, operation = resolved
+    execute_mutation_plan(scenario.actor.world, MutationPlan((operation,)))
+    assert resolution.multiplier == 2.0
+    assert character.get_component(HealthComponent).current == 6.0
+    fragments = daggersim_fragments(scenario.actor.world, character)
+    assert "Affliction power: rending claws (harm 2.0; claw, supernatural)." in fragments
+    assert "Affliction weakness: silver x2.0." in fragments
+
+
+def test_affliction_lifecycle_progresses_legacy_incubation_once_in_id_order():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(
+        SupernaturalAfflictionComponent(affliction_type="ghostbound", contracted_at_epoch=5)
+    )
+    consequence = AfflictionLifecycleConsequence()
+
+    assert consequence.process(scenario.actor.world, 5 + HOUR - 1) == []
+    events = consequence.process(scenario.actor.world, 5 + HOUR)
+    repeated = consequence.process(scenario.actor.world, 5 + HOUR)
+
+    assert character.get_component(SupernaturalAfflictionComponent).stage == "active"
+    assert character.has_component(FeedingNeedComponent)
+    assert character.get_relationships(MemberOfFaction)
+    assert character.get_relationships(EffectModifier)[0][0].tags == ("radiant",)
+    assert [type(event) for event in events] == [
+        AfflictionIncubationProgressedEvent,
+        FeedingNeedChangedEvent,
+    ]
+    assert repeated == []
+
+
+def test_affliction_power_uses_shared_typed_effect_modifiers():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    context = HandlerContext(world, HOUR)
+    contracted = execute_handler(
+        ContractAfflictionHandler(),
+        HandlerContext(world, 0),
+        _handler_cmd(scenario, "contract-affliction", affliction_type="vampire"),
+    )
+    assert contracted.ok, contracted.reason
+    AfflictionLifecycleConsequence().process(world, HOUR)
+    target = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Lantern Warden", kind="character"),
+            CharacterComponent(),
+            HealthComponent(current=10.0, maximum=10.0),
+        ],
+    )
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), target.id
+    )
+    ward = spawn_entity(world, [IdentityComponent(name="blood ward", kind="effect-source")])
+    target.add_relationship(EffectModifier(tags=("blood",), multiplier=0.5), ward.id)
+
+    result = execute_handler(
+        UseAfflictionPowerHandler(),
+        context,
+        _handler_cmd(scenario, "use-affliction-power", target_id=str(target.id)),
+    )
+
+    assert result.ok, result.reason
+    assert target.get_component(HealthComponent).current == 9.0
+    event = next(event for event in result.events if isinstance(event, AfflictionPowerUsedEvent))
+    assert event.power_name == "blood drain"
+    assert event.multiplier == 0.5
+    assert (event.target_before, event.target_after) == (10.0, 9.0)
+
+
+def test_cure_requires_completed_quest_and_preserves_unready_remedy():
+    scenario = build_scenario()
+    _afflicted(scenario)
+    context = HandlerContext(scenario.actor.world, 0)
+    requested = execute_handler(
+        RequestCureHandler(),
+        context,
+        _handler_cmd(scenario, "request-cure-quest"),
+    )
+    assert requested.ok, requested.reason
+    remedy = next(
+        entity
+        for entity in scenario.actor.world.query()
+        .with_all([AfflictionRemedyComponent])
+        .execute_entities()
+    )
+
+    result = execute_handler(
+        CureAfflictionHandler(),
+        context,
+        _handler_cmd(scenario, "cure-affliction", remedy_id=str(remedy.id)),
+    )
+
+    assert not result.ok
+    assert result.reason == "cure quest is not complete"
+    assert scenario.actor.world.has_entity(remedy.id)
+
+
+def test_affliction_lifecycle_query_scales_from_indexed_candidates(monkeypatch):
+    scenario = build_scenario()
+    world = scenario.actor.world
+    world.get_entity(scenario.character).add_component(
+        SupernaturalAfflictionComponent(affliction_type="moon-form", contracted_at_epoch=0)
+    )
+    for index in range(500):
+        spawn_entity(world, [IdentityComponent(name=f"filler {index}", kind="prop")])
+
+    original_query = world.query
+    candidate_counts: list[tuple[tuple[type, ...], int]] = []
+
+    class CountingQuery:
+        def __init__(self):
+            self.inner = original_query()
+            self.required: tuple[type, ...] = ()
+
+        def with_all(self, component_types):
+            self.required = tuple(component_types)
+            self.inner = self.inner.with_all(component_types)
+            return self
+
+        def execute_entities(self):
+            entities = list(self.inner.execute_entities())
+            candidate_counts.append((self.required, len(entities)))
+            return entities
+
+    monkeypatch.setattr(world, "query", CountingQuery)
+
+    AfflictionLifecycleConsequence().process(world, HOUR)
+
+    assert candidate_counts == [
+        ((AfflictionFactionComponent,), 0),
+        ((SupernaturalAfflictionComponent,), 1),
+    ]
+
+
+def test_affliction_handlers_cover_lifecycle_rejections():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    context = HandlerContext(world, 0)
+    character.add_component(
+        SupernaturalAfflictionComponent(affliction_type="moon-form", contracted_at_epoch=0)
+    )
+
+    progress_early = execute_handler(
+        ProgressAfflictionIncubationHandler(),
+        context,
+        _handler_cmd(scenario, "progress-affliction-incubation"),
+    )
+    assert progress_early.reason == "affliction incubation is not complete"
+    replace_component(
+        character,
+        SupernaturalAfflictionComponent(
+            affliction_type="moon-form", contracted_at_epoch=0, stage="active"
+        ),
+    )
+    progress_active = execute_handler(
+        ProgressAfflictionIncubationHandler(),
+        context,
+        _handler_cmd(scenario, "progress-affliction-incubation"),
+    )
+    assert progress_active.reason == "affliction is not incubating"
+
+    invalid_stigma = execute_handler(
+        MarkAfflictionStigmaHandler(),
+        context,
+        _handler_cmd(scenario, "mark-affliction-stigma", target_id="not-an-id"),
+    )
+    assert invalid_stigma.reason == "invalid stigma target"
+    missing_stigma = execute_handler(
+        MarkAfflictionStigmaHandler(),
+        context,
+        _handler_cmd(scenario, "mark-affliction-stigma", target_id="entity_999999"),
+    )
+    assert missing_stigma.reason == "stigma target does not exist"
+    distant = spawn_entity(world, [CharacterComponent()])
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), distant.id
+    )
+    unreachable_stigma = execute_handler(
+        MarkAfflictionStigmaHandler(),
+        context,
+        _handler_cmd(scenario, "mark-affliction-stigma", target_id=str(distant.id)),
+    )
+    assert unreachable_stigma.reason == "stigma target is not reachable"
+    nearby = spawn_entity(world, [CharacterComponent()])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), nearby.id
+    )
+    unaffected_stigma = execute_handler(
+        MarkAfflictionStigmaHandler(),
+        context,
+        _handler_cmd(scenario, "mark-affliction-stigma", target_id=str(nearby.id)),
+    )
+    assert unaffected_stigma.reason == "stigma target has no supernatural affliction"
+
+    transform_early = execute_handler(
+        TransformHandler(),
+        context,
+        _handler_cmd(scenario, "transform"),
+    )
+    assert transform_early.ok
+    character.remove_component(WereformComponent)
+    replace_component(
+        character,
+        SupernaturalAfflictionComponent(affliction_type="moon-form", contracted_at_epoch=0),
+    )
+    blocked_transform = execute_handler(
+        TransformHandler(),
+        context,
+        _handler_cmd(scenario, "transform"),
+    )
+    assert blocked_transform.reason == "affliction is still incubating"
+
+
+def test_affliction_reuses_faction_and_existing_cure_quest():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    first = execute_handler(
+        ContractAfflictionHandler(),
+        HandlerContext(world, 0),
+        _handler_cmd(scenario, "contract-affliction", affliction_type="ghoul"),
+    )
+    assert first.ok, first.reason
+    second = spawn_entity(world, [CharacterComponent()])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), second.id
+    )
+    second_command = replace(
+        _handler_cmd(scenario, "contract-affliction", affliction_type="ghoul"),
+        character_id=str(second.id),
+    )
+    second_result = execute_handler(
+        ContractAfflictionHandler(), HandlerContext(world, 0), second_command
+    )
+    assert second_result.ok, second_result.reason
+    factions = list(world.query().with_all([AfflictionFactionComponent]).execute_entities())
+    assert len(factions) == 1
+    assert factions[0].get_component(AfflictionFactionComponent).power_name == "afflicted strike"
+
+    quest = spawn_entity(
+        world,
+        [
+            QuestComponent(quest_id="existing-cure", title="Existing Cure"),
+            QuestStateComponent(status="active"),
+        ],
+    )
+    requested = execute_handler(
+        RequestCureHandler(),
+        HandlerContext(world, 0),
+        replace(
+            _handler_cmd(scenario, "request-cure-quest", quest_id=str(quest.id)),
+            character_id=str(second.id),
+        ),
+    )
+    assert requested.ok, requested.reason
+    assert quest.has_relationship(QuestAcceptedBy, second.id)
+    duplicate = execute_handler(
+        RequestCureHandler(),
+        HandlerContext(world, 0),
+        replace(
+            _handler_cmd(scenario, "request-cure-quest"),
+            character_id=str(second.id),
+        ),
+    )
+    assert duplicate.reason == "cure quest already requested"
+    second.remove_component(CureRequestComponent)
+    already_accepted = execute_handler(
+        RequestCureHandler(),
+        HandlerContext(world, 0),
+        replace(
+            _handler_cmd(scenario, "request-cure-quest", quest_id=str(quest.id)),
+            character_id=str(second.id),
+        ),
+    )
+    assert already_accepted.ok, already_accepted.reason
+    second.remove_component(CureRequestComponent)
+    not_a_quest = spawn_entity(world, [IdentityComponent(name="false lead", kind="prop")])
+    invalid_quest = execute_handler(
+        RequestCureHandler(),
+        HandlerContext(world, 0),
+        replace(
+            _handler_cmd(scenario, "request-cure-quest", quest_id=str(not_a_quest.id)),
+            character_id=str(second.id),
+        ),
+    )
+    assert invalid_quest.reason == "target is not a quest"
+
+
+def test_affliction_power_rejects_invalid_state_and_targets():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    context = HandlerContext(world, HOUR)
+    character = world.get_entity(scenario.character)
+    handler = UseAfflictionPowerHandler()
+
+    invalid = execute_handler(
+        handler,
+        context,
+        _handler_cmd(scenario, "use-affliction-power", character_id="not-an-id"),
+    )
+    assert invalid.reason == "invalid character id"
+    absent = execute_handler(handler, context, _handler_cmd(scenario, "use-affliction-power"))
+    assert absent.reason == "character has no supernatural affliction"
+    character.add_component(
+        SupernaturalAfflictionComponent(affliction_type="moon-form", contracted_at_epoch=0)
+    )
+    incubating = execute_handler(
+        handler, context, _handler_cmd(scenario, "use-affliction-power")
+    )
+    assert incubating.reason == "affliction is still incubating"
+    replace_component(
+        character,
+        SupernaturalAfflictionComponent(
+            affliction_type="moon-form", contracted_at_epoch=0, stage="active"
+        ),
+    )
+    unavailable = execute_handler(
+        handler, context, _handler_cmd(scenario, "use-affliction-power")
+    )
+    assert unavailable.reason == "affliction power is not available"
+    AfflictionLifecycleConsequence().process(world, HOUR)
+    invalid_target = execute_handler(
+        handler,
+        context,
+        _handler_cmd(scenario, "use-affliction-power", target_id="not-an-id"),
+    )
+    assert invalid_target.reason == "invalid power target"
+    missing = execute_handler(
+        handler,
+        context,
+        _handler_cmd(scenario, "use-affliction-power", target_id="entity_999999"),
+    )
+    assert missing.reason == "power target does not exist"
+    distant = spawn_entity(world, [CharacterComponent(), HealthComponent()])
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), distant.id
+    )
+    unreachable = execute_handler(
+        handler,
+        context,
+        _handler_cmd(scenario, "use-affliction-power", target_id=str(distant.id)),
+    )
+    assert unreachable.reason == "power target is not reachable"
+    nearby = spawn_entity(world, [CharacterComponent()])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), nearby.id
+    )
+    incompatible = execute_handler(
+        handler,
+        context,
+        _handler_cmd(scenario, "use-affliction-power", target_id=str(nearby.id)),
+    )
+    assert incompatible.reason == "power target has no compatible health state"
+
+
+def test_affliction_prompt_handles_profile_without_tags_or_weaknesses():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.add_component(
+        SupernaturalAfflictionComponent(
+            affliction_type="benign", contracted_at_epoch=0, stage="active"
+        )
+    )
+    spawn_entity(
+        world,
+        [
+            AfflictionFactionComponent(
+                affliction_type="benign",
+                form_name="self",
+                power_name="renew",
+                power=EffectSpec("heal", 1.0),
+            )
+        ],
+    )
+
+    fragments = daggersim_fragments(world, character)
+
+    assert "Affliction power: renew (heal 1.0; untagged)." in fragments
+    assert not any(line.startswith("Affliction weakness:") for line in fragments)
+
+
+def test_cure_affliction_rejects_invalid_quest_and_remedy_states():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    character = _afflicted(scenario)
+    context = HandlerContext(world, 0)
+    handler = CureAfflictionHandler()
+
+    no_request = execute_handler(handler, context, _handler_cmd(scenario, "cure-affliction"))
+    assert no_request.reason == "cure quest has not been requested"
+    character.add_component(CureRequestComponent("vampire", quest_id="not-an-id"))
+    missing_quest = execute_handler(
+        handler, context, _handler_cmd(scenario, "cure-affliction")
+    )
+    assert missing_quest.reason == "cure quest does not exist"
+    replace_component(character, CureRequestComponent("moon-form", quest_id="not-an-id"))
+    mismatch_request = execute_handler(
+        handler, context, _handler_cmd(scenario, "cure-affliction")
+    )
+    assert mismatch_request.reason == "cure request does not match the affliction"
+    false_quest = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="false cure", kind="prop"),
+            QuestStateComponent(status="completed"),
+        ],
+    )
+    replace_component(character, CureRequestComponent("vampire", quest_id=str(false_quest.id)))
+    wrong_quest = execute_handler(handler, context, _handler_cmd(scenario, "cure-affliction"))
+    assert wrong_quest.reason == "cure request target is not a quest"
+
+    quest = spawn_entity(
+        world,
+        [QuestComponent(quest_id="cure", title="Cure"), QuestStateComponent(status="completed")],
+    )
+    replace_component(character, CureRequestComponent("vampire", quest_id=str(quest.id)))
+    unaccepted = execute_handler(handler, context, _handler_cmd(scenario, "cure-affliction"))
+    assert unaccepted.reason == "cure quest is not accepted by character"
+    quest.add_relationship(QuestAcceptedBy(), scenario.character)
+    invalid_remedy = execute_handler(
+        handler,
+        context,
+        _handler_cmd(scenario, "cure-affliction", remedy_id="not-an-id"),
+    )
+    assert invalid_remedy.reason == "invalid cure remedy id"
+    implicit_missing = execute_handler(
+        handler, context, _handler_cmd(scenario, "cure-affliction")
+    )
+    assert implicit_missing.reason == "cure remedy does not exist"
+    missing_remedy = execute_handler(
+        handler,
+        context,
+        _handler_cmd(scenario, "cure-affliction", remedy_id="entity_999999"),
+    )
+    assert missing_remedy.reason == "cure remedy does not exist"
+    far_remedy = spawn_entity(world, [AfflictionRemedyComponent("vampire")])
+    world.get_entity(scenario.room_b).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), far_remedy.id
+    )
+    unreachable_remedy = execute_handler(
+        handler,
+        context,
+        _handler_cmd(scenario, "cure-affliction", remedy_id=str(far_remedy.id)),
+    )
+    assert unreachable_remedy.reason == "cure remedy is not reachable"
+    wrong_kind = spawn_entity(world, [IdentityComponent(name="tonic", kind="item")])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), wrong_kind.id
+    )
+    wrong_kind_result = execute_handler(
+        handler,
+        context,
+        _handler_cmd(scenario, "cure-affliction", remedy_id=str(wrong_kind.id)),
+    )
+    assert wrong_kind_result.reason == "target is not a cure remedy"
+    mismatch = spawn_entity(world, [AfflictionRemedyComponent("moon-form")])
+    world.get_entity(scenario.room_a).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), mismatch.id
+    )
+    mismatch_result = execute_handler(
+        handler,
+        context,
+        _handler_cmd(scenario, "cure-affliction", remedy_id=str(mismatch.id)),
+    )
+    assert mismatch_result.reason == "cure remedy does not match the affliction"
+
+
 def test_daggersim_fragments_show_nearby_unrealized_locations():
     scenario = build_scenario()
     _site(scenario)
@@ -4975,7 +5488,7 @@ def test_install_daggersim_registers_plugin_consequences():
     assert registered == {
         "TravelCompletionConsequence",
         "LoanDueConsequence",
-        "FeedingNeedConsequence",
+        "AfflictionLifecycleConsequence",
     }
 
 
@@ -5003,6 +5516,33 @@ def _victim(scenario, name="Wanderer"):
         Contains(mode=ContainmentMode.ROOM_CONTENT), victim.id
     )
     return victim.id
+
+
+def _complete_cure_quest(scenario):
+    context = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    requested = execute_handler(
+        RequestCureHandler(),
+        context,
+        _handler_cmd(scenario, "request-cure-quest", quest_id="affliction cure"),
+    )
+    assert requested.ok, requested.reason
+    character = scenario.actor.world.get_entity(scenario.character)
+    quest_id = parse_entity_id(character.get_component(CureRequestComponent).quest_id)
+    assert quest_id is not None
+    quest = scenario.actor.world.get_entity(quest_id)
+    objective_id = quest.get_relationships(QuestHasObjective)[0][1]
+    completed = execute_handler(
+        CompleteObjectiveHandler(),
+        context,
+        _handler_cmd(scenario, "complete-objective", objective_id=str(objective_id)),
+    )
+    assert completed.ok, completed.reason
+    remedy_id = next(
+        entity_id
+        for entity_id in reachable_ids(scenario.actor.world, character)
+        if scenario.actor.world.get_entity(entity_id).has_component(AfflictionRemedyComponent)
+    )
+    return quest_id, remedy_id
 
 
 async def test_feed_on_target_satisfies_feeding_need():
@@ -5040,18 +5580,40 @@ async def test_end_transformation_reverts_to_dormant():
 async def test_cure_affliction_removes_curse_and_feeding_need():
     scenario = build_scenario()
     _install(scenario.actor)
-    _afflicted(scenario, transformed=True)
+    contracted = execute_handler(
+        ContractAfflictionHandler(),
+        HandlerContext(scenario.actor.world, 0),
+        _handler_cmd(scenario, "contract-affliction", affliction_type="vampire"),
+    )
+    assert contracted.ok, contracted.reason
+    AfflictionLifecycleConsequence().process(scenario.actor.world, HOUR)
+    transformed = execute_handler(
+        TransformHandler(),
+        HandlerContext(scenario.actor.world, HOUR),
+        _handler_cmd(scenario, "transform"),
+    )
+    assert transformed.ok, transformed.reason
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        AfflictionStigmaComponent(region_id="moss-road", severity=2)
+    )
+    quest_id, remedy_id = _complete_cure_quest(scenario)
     cured: list[AfflictionCuredEvent] = []
     scenario.actor.bus.subscribe(AfflictionCuredEvent, cured.append)
 
-    await scenario.actor.submit(_cmd(scenario, "cure-affliction"))
+    await scenario.actor.submit(_cmd(scenario, "cure-affliction", remedy_id=str(remedy_id)))
     await scenario.actor.tick(HOUR)
 
     character = scenario.actor.world.get_entity(scenario.character)
     assert not character.has_component(SupernaturalAfflictionComponent)
     assert not character.has_component(FeedingNeedComponent)
     assert not character.has_component(WereformComponent)
+    assert not character.has_component(AfflictionStigmaComponent)
+    assert not character.has_component(CureRequestComponent)
+    assert character.get_relationships(MemberOfFaction) == []
+    assert character.get_relationships(EffectModifier) == []
+    assert not scenario.actor.world.has_entity(remedy_id)
     assert cured and cured[0].affliction_type == "vampire"
+    assert cured[0].quest_id == str(quest_id)
 
 
 def test_curse_handlers_reject_bad_state_directly():
@@ -5169,7 +5731,7 @@ def test_daggersim_first_person_only_fragments_hide_from_observers():
         ),
         (
             CureRequestComponent(affliction_type="vampire"),
-            "Cure quest hook: vampire.",
+            "Cure quest requested for vampire.",
         ),
         (
             FeedingNeedComponent(current=3.0, maximum=10.0),
@@ -5557,11 +6119,49 @@ def test_daggersim_cure_affliction_without_feeding_or_wereform():
     character.add_component(
         SupernaturalAfflictionComponent(affliction_type="ghoul", contracted_at_epoch=0)
     )
+    spawn_entity(
+        world,
+        [
+            AfflictionFactionComponent(
+                affliction_type="ghoul",
+                form_name="ghoul",
+                power_name="afflicted strike",
+                power=EffectSpec("harm", 1.0, ("supernatural",)),
+            )
+        ],
+    )
+    _quest_id, _remedy_id = _complete_cure_quest(scenario)
     result = execute_handler(
-        CureAfflictionHandler(), ctx, _handler_cmd(scenario, "cure-affliction")
+        CureAfflictionHandler(),
+        ctx,
+        _handler_cmd(scenario, "cure-affliction"),
     )
     assert result.ok
     assert not world.get_entity(scenario.character).has_component(SupernaturalAfflictionComponent)
+
+
+def test_daggersim_cure_affliction_without_affliction_profile():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    world = scenario.actor.world
+    character = world.get_entity(scenario.character)
+    character.add_component(
+        SupernaturalAfflictionComponent(
+            affliction_type="unprofiled curse",
+            contracted_at_epoch=0,
+            stage="active",
+        )
+    )
+    _quest_id, _remedy_id = _complete_cure_quest(scenario)
+
+    result = execute_handler(
+        CureAfflictionHandler(),
+        HandlerContext(world, 0),
+        _handler_cmd(scenario, "cure-affliction"),
+    )
+
+    assert result.ok, result.reason
+    assert not character.has_component(SupernaturalAfflictionComponent)
 
 
 def test_daggersim_rest_allows_low_risk_area():
