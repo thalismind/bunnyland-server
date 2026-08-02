@@ -108,11 +108,18 @@ sometimes, a minimum skill level. Learn one you qualify for:
 !learn-word-of-power word_id="Unrelenting Force"
 ```
 
-Then speak a word you have learned:
+Then speak a word you have learned. Self-targeting words need no target; single-target
+words can name any reachable character:
 
 ```text
 !speak-word-of-power word_id="Unrelenting Force"
+!speak-word-of-power word_id="Mending Breath" target_id="Juniper"
 ```
+
+Words carry typed healing or harming effects. Room-wide harmful words spare the speaker,
+while room-wide healing words include them. Each learned word keeps its own cooldown for
+your character, and your private character context lists every known word as ready or shows
+how many seconds remain. Another character learning the same word has a separate cooldown.
 
 Your absorbed great souls and known words show up in your character context.
 

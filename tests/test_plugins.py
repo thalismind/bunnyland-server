@@ -1027,6 +1027,13 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "QuestExtendedEvent",
         "QuestLieToldEvent",
     } <= {event.__name__ for event in dragon.commands.typed_events}
+    dragon_actions = {
+        definition.command_type: definition for definition in dragon.commands.action_definitions
+    }
+    speak_word = dragon_actions["speak-word-of-power"]
+    assert tuple(speak_word.arguments or ()) == ("word_id", "target_id")
+    assert speak_word.arguments is not None
+    assert speak_word.arguments["target_id"].required is False
     assert LIFESIM in dragon.dependencies.requires
 
     dagger = plugins[DAGGERSIM]

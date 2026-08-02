@@ -3633,47 +3633,42 @@ world events
 
 ```python
 AncientBeastComponent
-VoicePowerComponent
 WordOfPowerComponent
 VoiceInscriptionComponent
 CarvableComponent
-EssenceComponent
-VoicePowerCooldownComponent
 GreatSoulComponent
+KnowsWord
 ```
 
 ### Systems
 
 ```text
-AncientBeastEncounterSystem
-VoiceInscriptionSystem
-EssenceAbsorptionSystem
-VoicePowerUnlockSystem
-VoicePowerCooldownSystem
-AncientBeastThreatSystem
+typed heal/harm resolution through the shared effect resolver
+per-character, per-word cooldown state on KnowsWord
+deterministic self, single-target, and room-wide targeting
+private ready/remaining-cooldown prompt state
 ```
 
 ### Actions
 
 ```text
-inscribe voice phrase
-study voice inscription
-absorb essence
-use voice power
-fight ancient beast
-negotiate with ancient beast
-ride ancient beast, later
+inscribe-voice-phrase
+study-voice-inscription
+absorb-great-soul
+learn-word-of-power
+speak-word-of-power
+appease-ancient-beast
 ```
 
 ### Events
 
 ```text
-DragonAppearedEvent
-DragonDefeatedEvent
-EssenceAbsorbedEvent
-WordDiscoveredEvent
-VoicePowerUnlockedEvent
-VoicePowerUsedEvent
+GreatSoulAbsorbedEvent
+WordOfPowerLearnedEvent
+WordOfPowerSpokenEvent
+VoicePhraseInscribedEvent
+VoiceInscriptionStudiedEvent
+AncientBeastAppeasedEvent
 ```
 
 ---
