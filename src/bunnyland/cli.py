@@ -582,6 +582,20 @@ def _discord_filter_ids(
     return guild_filter_ids, channel_filter_ids, dm_user_filter_ids, allowed_bot_user_ids
 
 
+def _discord_moderator_ids(args) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    from .discord import parse_discord_id_list
+
+    user_ids = tuple(
+        args.discord_moderator_user_id
+        or parse_discord_id_list(os.environ.get("BUNNYLAND_DISCORD_MODERATOR_USER_IDS"))
+    )
+    role_ids = tuple(
+        args.discord_moderator_role_id
+        or parse_discord_id_list(os.environ.get("BUNNYLAND_DISCORD_MODERATOR_ROLE_IDS"))
+    )
+    return user_ids, role_ids
+
+
 def _setup_discord_bot(
     actor: WorldActor,
     loop: GameLoop,
@@ -596,9 +610,16 @@ def _setup_discord_bot(
         return None
 
     from .discord import DiscordBot, DiscordMessageFilters
+    from .moderation import ModerationService, ModerationStore
 
     guild_filter_ids, channel_filter_ids, dm_user_filter_ids, allowed_bot_user_ids = (
         _discord_filter_ids(args)
+    )
+    moderator_user_ids, moderator_role_ids = _discord_moderator_ids(args)
+    moderation_service = ModerationService(
+        actor,
+        ModerationStore(getattr(args, "token_db", "data/auth-tokens.sqlite3")),
+        claim_secrets,
     )
     discord_bot = DiscordBot(
         actor,
@@ -619,6 +640,10 @@ def _setup_discord_bot(
             0,
             _env_int("BUNNYLAND_DISCORD_COOLDOWN_SECONDS") or 0,
         ),
+        moderation_service=moderation_service,
+        moderator_user_ids=moderator_user_ids,
+        moderator_role_ids=moderator_role_ids,
+        close_moderation_store=True,
     )
     _maybe_assign_startup_discord_claim(actor, args, meta, claim_secrets)
     return discord_bot
@@ -750,6 +775,7 @@ async def _run_api_runtime(
                 character_chat=character_chat,
                 open_character_chat=getattr(args, "open_character_chat", True),
                 claim_secrets=claim_secrets,
+                moderation_service=getattr(discord_bot, "moderation_service", None),
                 max_ticks=max_ticks,
             ),
             loop,
@@ -835,6 +861,8 @@ _CONFIG_ARG_FLAGS: dict[str, tuple[str, ...]] = {
     "discord_allowed_channel_id": ("--discord-allowed-channel-id",),
     "discord_allowed_dm_user_id": ("--discord-allowed-dm-user-id",),
     "discord_allowed_bot_user_id": ("--discord-allowed-bot-user-id",),
+    "discord_moderator_user_id": ("--discord-moderator-user-id",),
+    "discord_moderator_role_id": ("--discord-moderator-role-id",),
     "mcp": ("--mcp",),
     "character_chat": ("--character-chat",),
     "allow_sleeping_character_chat": (
@@ -1038,6 +1066,22 @@ def main(argv: list[str] | None = None) -> int:
     auth_replace.add_argument("--db", required=True, help="private token SQLite database")
     auth_replace.add_argument("--token-id", required=True)
 
+    moderation = sub.add_parser(
+        "moderation", help="recover or inspect persistent moderation state"
+    )
+    moderation_sub = moderation.add_subparsers(dest="moderation_command", required=True)
+    moderation_lift = moderation_sub.add_parser(
+        "lift", help="lift a suspension or ban without starting the server"
+    )
+    moderation_lift.add_argument(
+        "--db", required=True, help="private moderation SQLite database"
+    )
+    moderation_lift.add_argument(
+        "--target", required=True, help="discord:, web:, or client: identity"
+    )
+    moderation_lift.add_argument("--reason", required=True)
+    moderation_lift.add_argument("--actor", default="client:cli-recovery")
+
     serve = sub.add_parser("serve", help="generate a world and run the game loop")
     serve.add_argument("--config", default=None, help="read server settings from YAML")
     serve.add_argument("--plugin", action="append", default=None, help="enable a plugin id")
@@ -1231,6 +1275,26 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "allow Discord commands from this bot user id; repeat for more "
             "(env: BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS)"
+        ),
+    )
+    serve.add_argument(
+        "--discord-moderator-user-id",
+        action="append",
+        type=int,
+        default=None,
+        help=(
+            "authorize this Discord user id for !mod commands; repeat for more "
+            "(env: BUNNYLAND_DISCORD_MODERATOR_USER_IDS)"
+        ),
+    )
+    serve.add_argument(
+        "--discord-moderator-role-id",
+        action="append",
+        type=int,
+        default=None,
+        help=(
+            "authorize this Discord guild role id for !mod commands; repeat for more "
+            "(env: BUNNYLAND_DISCORD_MODERATOR_ROLE_IDS)"
         ),
     )
     serve.add_argument(
@@ -1448,6 +1512,25 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         finally:
             token_store.close()
+
+    if args.command == "moderation":
+        from .moderation import ModerationActionKind, ModerationIdentity, ModerationStore
+
+        store = ModerationStore(args.db)
+        try:
+            try:
+                entry = store.apply(
+                    ModerationActionKind.LIFT,
+                    ModerationIdentity.parse(args.target),
+                    ModerationIdentity.parse(args.actor),
+                    args.reason,
+                )
+            except ValueError as exc:
+                parser.error(str(exc))
+            print(json.dumps({"audit_id": entry.id, "lifted": entry.target.canonical}))
+            return 0
+        finally:
+            store.close()
 
     if args.command == "config-wizard":
         from .config_wizard import main as config_wizard_main

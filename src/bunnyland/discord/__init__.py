@@ -7,6 +7,8 @@ from .bot import (
     discord_broadcast_channel_ids,
     parse_discord_action,
     parse_discord_id_list,
+    parse_moderation_duration,
+    parse_moderation_target,
     set_discord_claim_fallback,
     suspend_discord_character,
 )
@@ -37,6 +39,8 @@ __all__ = [
     "explain_rejection",
     "parse_discord_action",
     "parse_discord_id_list",
+    "parse_moderation_duration",
+    "parse_moderation_target",
     "release_discord_claim",
     "render_character_list",
     "render_action_result",

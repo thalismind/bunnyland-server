@@ -122,6 +122,49 @@ commands from integrations. To allow a specific bot actor, set
 keep the normal guild/channel allowlists restricted to the channels where bot-authored
 commands are expected.
 
+## Moderator configuration and commands
+
+Discord moderation affects Bunnyland identities and sessions only. It never kicks, times
+out, or bans anyone from a Discord guild. Authorize moderators by explicit Discord user ID,
+guild role ID, or both:
+
+```bash
+BUNNYLAND_DISCORD_MODERATOR_USER_IDS=123,456 \
+BUNNYLAND_DISCORD_MODERATOR_ROLE_IDS=789,987 \
+uv run --extra server --extra discord bunnyland serve --discord
+```
+
+The equivalent repeatable flags are `--discord-moderator-user-id` and
+`--discord-moderator-role-id`. In guild channels, either a configured user ID or one of the
+caller's configured roles authorizes `!mod`. In DMs, only a configured user ID authorizes
+moderation. Unauthorized calls and self-targeting are rejected before the target is acted
+on.
+
+```text
+!mod kick <target> <reason>
+!mod suspend <target> <duration> <reason>
+!mod ban <target> <reason>
+!mod lift <target> <reason>
+!mod status <target>
+!mod history <target>
+```
+
+Discord mentions and bare snowflakes select a Discord user. Explicit targets may use
+`discord:<snowflake>`, `web:<auth-subject>`, or `client:<client-id>`. Durations accept
+positive whole `s`, `m`, `h`, `d`, and `w` units, such as `30s`, `15m`, `2h`, `7d`, or
+`4w`; there is no configured product maximum. The existing player-owned `!suspend` command
+is separate and unchanged.
+
+Every action requires a reason and creates an append-only audit entry. Kick releases every
+current claim, applies each claim's fallback controller, clears queued work, revokes web
+sessions, and closes player sockets, but permits immediate sign-in. Suspend adds a finite
+UTC wall-clock restriction; ban has no expiration. Lift removes either restriction, but
+does not restore sessions or claims.
+
+Discord, web, and unauthenticated client identities are separate; Bunnyland does not link
+accounts. `client:` restrictions are only a best-effort embedding control because an
+unauthenticated caller can choose a new client ID.
+
 If you do not know the numeric user id yet, omit `BUNNYLAND_DISCORD_USER_ID` and claim from
 Discord instead:
 

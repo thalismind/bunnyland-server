@@ -24,8 +24,9 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from io import BytesIO
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
+from pydantic import JsonValue, TypeAdapter
 from relics import (
     OnComponentAdded,
     OnComponentRemoved,
@@ -78,6 +79,13 @@ from ..llm_agents.tools import (
     tool_for_command_type,
     tool_names,
 )
+from ..moderation import (
+    IdentityKind,
+    ModerationActionKind,
+    ModerationIdentity,
+    ModerationRestrictedError,
+    ModerationService,
+)
 from .claim import (
     assign_discord_controller,
     discord_controlled_character,
@@ -120,7 +128,7 @@ _CAMEL_WORD_RE = re.compile(r"(?<!^)(?=[A-Z])")
 @dataclass(frozen=True)
 class DiscordAction:
     command_type: str
-    payload: dict[str, Any]
+    payload: dict[str, JsonValue]
     tool: str | None = None
 
 
@@ -252,25 +260,25 @@ def parse_discord_id_list(value: str | None) -> tuple[int, ...]:
     return tuple(int(part.strip()) for part in value.split(",") if part.strip())
 
 
-def _parse_scalar(value: str) -> Any:
+def _parse_scalar(value: str) -> JsonValue:
     try:
-        return json.loads(value)
-    except json.JSONDecodeError:
+        return TypeAdapter(JsonValue).validate_python(json.loads(value))
+    except (json.JSONDecodeError, ValueError):
         return value
 
 
-def _parse_structured_payload(text: str) -> dict[str, Any] | None:
+def _parse_structured_payload(text: str) -> dict[str, JsonValue] | None:
     stripped = text.strip()
     if not stripped:
         return {}
     if stripped.startswith("{"):
-        parsed = json.loads(stripped)
+        parsed = TypeAdapter(JsonValue).validate_python(json.loads(stripped))
         if not isinstance(parsed, dict):
             raise ValueError("JSON command payload must be an object")
         return parsed
     words = _split(stripped)
     if words and all("=" in word for word in words):
-        payload: dict[str, Any] = {}
+        payload: dict[str, JsonValue] = {}
         for word in words:
             key, value = word.split("=", 1)
             payload[key] = (
@@ -282,13 +290,37 @@ def _parse_structured_payload(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _payload_from_text(text: str, arg_keys: tuple[str, ...]) -> dict[str, Any]:
+def _payload_from_text(text: str, arg_keys: tuple[str, ...]) -> dict[str, JsonValue]:
     structured = _parse_structured_payload(text)
     if structured is not None:
         return structured
     if not arg_keys:
         raise ValueError("Use key=value pairs or a JSON object for this verb")
     return {arg_keys[0]: text.strip()}
+
+
+_MODERATION_DURATION_RE = re.compile(r"^([1-9][0-9]*)([smhdw])$", re.IGNORECASE)
+
+
+def parse_moderation_target(value: str) -> ModerationIdentity:
+    """Parse Discord mentions/ids and explicit cross-platform identities."""
+
+    normalized = value.strip()
+    mention = re.fullmatch(r"<@!?(\d+)>", normalized)
+    if mention is not None:
+        return ModerationIdentity(IdentityKind.DISCORD, mention.group(1))
+    if normalized.isdecimal():
+        return ModerationIdentity(IdentityKind.DISCORD, normalized)
+    return ModerationIdentity.parse(normalized)
+
+
+def parse_moderation_duration(value: str) -> int:
+    match = _MODERATION_DURATION_RE.fullmatch(value.strip())
+    if match is None:
+        raise ValueError("duration must use s, m, h, d, or w, for example 30m")
+    amount = int(match.group(1))
+    multiplier = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[match.group(2).lower()]
+    return amount * multiplier
 
 
 def _with_discord_defaults(action: DiscordAction) -> DiscordAction:
@@ -473,6 +505,10 @@ class DiscordBot:
         imagegen: ImageGenService | None = None,
         claim_secrets: ClaimSecretRegistry | None = None,
         cooldown_seconds: float = 0,
+        moderation_service: ModerationService | None = None,
+        moderator_user_ids: tuple[int, ...] = (),
+        moderator_role_ids: tuple[int, ...] = (),
+        close_moderation_store: bool = False,
     ) -> None:
         discord, commands = _require_discord()
         self.actor = actor
@@ -484,6 +520,10 @@ class DiscordBot:
         self.imagegen = imagegen
         self.claim_secrets = claim_secrets
         self.command_cooldown = DiscordCommandCooldown(cooldown_seconds)
+        self.moderation_service = moderation_service
+        self.moderator_user_ids = frozenset(moderator_user_ids)
+        self.moderator_role_ids = frozenset(moderator_role_ids)
+        self._close_moderation_store = close_moderation_store
         self._pause_status = pause_status
         self._world_paused = pause_status() if pause_status is not None else False
         intents = discord.Intents.default()
@@ -491,9 +531,9 @@ class DiscordBot:
         intents.reactions = True  # required to receive the 📷 image-request reaction
         self.client = commands.Bot(command_prefix="!", intents=intents, help_command=None)
         self._pending: dict[str, asyncio.Future[CommandExecutedEvent | CommandRejectedEvent]] = {}
-        self._paused_reactions: dict[str, Any] = {}
+        self._paused_reactions: dict[str, object] = {}
         # record entity id -> the Discord message that requested an image for it.
-        self._image_messages: dict[str, Any] = {}
+        self._image_messages: dict[str, object] = {}
         self._room_feed_channels: dict[str, tuple[int, ...]] = {}
         self._actor_rooms: dict[str, str] = {}
         self._delivered_room_feed_events: set[tuple[str, int]] = set()
@@ -1160,6 +1200,115 @@ class DiscordBot:
                 replace(message, delivered_at_epoch=self.actor.epoch),
             )
 
+    def _moderator_authorized(self, ctx) -> bool:
+        author_id = getattr(getattr(ctx, "author", None), "id", None)
+        if author_id in self.moderator_user_ids:
+            return True
+        guild = getattr(ctx, "guild", None) or getattr(getattr(ctx, "message", None), "guild", None)
+        if guild is None:
+            return False
+        roles = getattr(getattr(ctx, "author", None), "roles", ())
+        return any(getattr(role, "id", None) in self.moderator_role_ids for role in roles)
+
+    async def _handle_moderation_command(self, ctx, text: str) -> None:
+        service = getattr(self, "moderation_service", None)
+        if service is None:
+            await self._reply(ctx, "Moderation is not configured.")
+            return
+        if not self._moderator_authorized(ctx):
+            await self._reply(ctx, "You are not authorized to moderate Bunnyland players.")
+            return
+        tokens = _split(text)
+        if len(tokens) < 2:
+            await self._reply(
+                ctx,
+                "Usage: !mod kick|suspend|ban|lift|status|history <target> ...",
+            )
+            return
+        verb = tokens[0].lower()
+        try:
+            target = parse_moderation_target(tokens[1])
+        except ValueError as exc:
+            await self._reply(ctx, str(exc))
+            return
+        administrator = ModerationIdentity(IdentityKind.DISCORD, str(ctx.author.id))
+        if target == administrator:
+            await self._reply(ctx, "Administrators cannot moderate their own identity.")
+            return
+        if verb == "status":
+            if len(tokens) != 2:
+                await self._reply(ctx, "Usage: !mod status <target>")
+                return
+            restriction = service.store.restriction(target)
+            if restriction is None:
+                await self._reply(ctx, f"{target.canonical} is not restricted.")
+                return
+            expiration = (
+                f" until {restriction.expires_at.isoformat()}"
+                if restriction.expires_at is not None
+                else " permanently"
+            )
+            await self._reply(
+                ctx,
+                f"{target.canonical} is {restriction.kind.value}{expiration}. "
+                f"Reason: {restriction.reason}",
+            )
+            return
+        if verb == "history":
+            if len(tokens) != 2:
+                await self._reply(ctx, "Usage: !mod history <target>")
+                return
+            entries = service.store.history(target=target, limit=10)
+            if not entries:
+                await self._reply(ctx, f"No moderation history for {target.canonical}.")
+                return
+            await self._reply(
+                ctx,
+                "\n".join(
+                    f"{entry.created_at.isoformat()} {entry.action.value} by "
+                    f"{entry.actor.canonical}: {entry.reason}"
+                    for entry in entries
+                ),
+            )
+            return
+        try:
+            action = ModerationActionKind(verb)
+        except ValueError:
+            await self._reply(
+                ctx,
+                "Moderation action must be kick, suspend, ban, lift, status, or history.",
+            )
+            return
+        duration_seconds = None
+        reason_index = 2
+        if action is ModerationActionKind.SUSPEND:
+            if len(tokens) < 4:
+                await self._reply(ctx, "Usage: !mod suspend <target> <duration> <reason>")
+                return
+            try:
+                duration_seconds = parse_moderation_duration(tokens[2])
+            except ValueError as exc:
+                await self._reply(ctx, str(exc))
+                return
+            reason_index = 3
+        reason = " ".join(tokens[reason_index:]).strip()
+        if not reason:
+            await self._reply(ctx, f"A reason is required to {action.value} a player.")
+            return
+        try:
+            entry = await service.execute(
+                action,
+                target,
+                administrator,
+                reason,
+                duration_seconds=duration_seconds,
+            )
+        except (PermissionError, ValueError) as exc:
+            await self._reply(ctx, str(exc))
+            return
+        expiration = f" until {entry.expires_at.isoformat()}" if entry.expires_at else ""
+        await self._reply(ctx, f"{action.value.title()} applied to {target.canonical}{expiration}.")
+
     async def handle_text_command(self, ctx, text: str) -> None:
         """Handle one Discord command body after the leading ``!`` has been removed."""
         with telemetry.span(
@@ -1184,6 +1333,32 @@ class DiscordBot:
             head, _, rest = stripped.partition(" ")
             head = head.lower()
             rest = rest.strip()
+            moderation_service = getattr(self, "moderation_service", None)
+            if moderation_service is not None:
+                try:
+                    moderation_service.require_allowed(
+                        ModerationIdentity(IdentityKind.DISCORD, str(ctx.author.id))
+                    )
+                except ModerationRestrictedError as exc:
+                    expiration = (
+                        f" until {exc.restriction.expires_at.isoformat()}"
+                        if exc.restriction.expires_at is not None
+                        else ""
+                    )
+                    await self._reply(
+                        ctx,
+                        f"Your Bunnyland account is {exc.restriction.kind.value}{expiration}. "
+                        f"Reason: {exc.restriction.reason}",
+                    )
+                    command_span.set_attribute("discord.command.outcome", "restricted")
+                    telemetry.mark_span_ok(command_span)
+                    return
+            if head == "mod":
+                await self._handle_moderation_command(ctx, rest)
+                command_span.set_attribute("discord.command.kind", "moderation")
+                command_span.set_attribute("discord.command.outcome", "handled")
+                telemetry.mark_span_ok(command_span)
+                return
             if head in META_COMMANDS and await self._handle_meta_command(ctx, head, rest):
                 command_span.set_attribute("discord.command.kind", "meta")
                 command_span.set_attribute("command.type", head)
@@ -1343,6 +1518,9 @@ class DiscordBot:
             self.actor.bus.unsubscribe(ImageGenerationCompletedEvent, self._deliver_image)
             self.actor.bus.unsubscribe(ImageGenerationFailedEvent, self._image_failed)
         await self.client.close()
+        moderation_service = getattr(self, "moderation_service", None)
+        if getattr(self, "_close_moderation_store", False) and moderation_service is not None:
+            moderation_service.store.close()
 
 
 __all__ = [
@@ -1356,6 +1534,8 @@ __all__ = [
     "render_room_feed_event",
     "parse_discord_action",
     "parse_discord_id_list",
+    "parse_moderation_duration",
+    "parse_moderation_target",
     "release_discord_claim",
     "set_discord_claim_fallback",
     "suspend_discord_character",

@@ -1,5 +1,8 @@
 # Admin & controllers
 
+Use the deployed web `moderation.html` tool for audited kick, suspend, ban, lift, identity
+status, and history workflows. It requires `world:admin`.
+
 For preview incidents, restore drills, provider failures, and reconnect storms, use the
 [controlled preview runbook](controlled-preview-runbook.md).
 The hosted sandbox's concise player rules, privacy/retention notice, model-provider

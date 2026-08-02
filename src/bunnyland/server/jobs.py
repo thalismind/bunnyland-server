@@ -146,6 +146,26 @@ class JobRegistry:
         self._expire(self._clock())
         return [record.job for record in self._records.values() if record.owner == owner]
 
+    def discard_matching(
+        self,
+        *,
+        owner: str | None = None,
+        attributes: Mapping[str, str | None] | None = None,
+    ) -> set[str]:
+        """Remove and return ids for records matching the supplied ownership fields."""
+
+        removed: set[str] = set()
+        for job_id, record in tuple(self._records.items()):
+            if owner is not None and record.owner != owner:
+                continue
+            if any(
+                record.attributes.get(key) != value for key, value in (attributes or {}).items()
+            ):
+                continue
+            del self._records[job_id]
+            removed.add(job_id)
+        return removed
+
 
 __all__ = [
     "JOB_TTL_SECONDS",

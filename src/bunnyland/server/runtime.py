@@ -10,6 +10,7 @@ from .. import telemetry
 from ..claims import ClaimSecretRegistry
 from ..core.world_actor import WorldActor
 from ..engine import GameLoop
+from ..moderation import ModerationService, ModerationStore
 from ..persistence import WorldMeta
 from .app import create_app
 from .auth import TokenStore, UserCredentialStore
@@ -42,6 +43,7 @@ async def run_loop_with_api(
     character_chat: CharacterChatService | None = None,
     open_character_chat: bool = True,
     claim_secrets: ClaimSecretRegistry | None = None,
+    moderation_service: ModerationService | None = None,
     max_ticks: int | None = None,
 ) -> int:
     """Run uvicorn and the game loop until either one stops."""
@@ -56,6 +58,13 @@ async def run_loop_with_api(
     user_credentials = UserCredentialStore(auth_users_path)
     user_credentials.validate()
     token_store = TokenStore(token_db_path)
+    claim_secrets = claim_secrets or ClaimSecretRegistry()
+    owns_moderation_store = moderation_service is None
+    if moderation_service is None:
+        moderation_store = ModerationStore(token_db_path)
+        moderation_service = ModerationService(actor, moderation_store, claim_secrets)
+    else:
+        moderation_store = moderation_service.store
     app = create_app(
         actor,
         meta,
@@ -66,6 +75,8 @@ async def run_loop_with_api(
         plugins=plugins,
         token_store=token_store,
         user_credentials=user_credentials,
+        moderation_store=moderation_store,
+        moderation_service=moderation_service,
         player_client_ids=player_client_ids,
         admin_client_ids=admin_client_ids,
         cors_origins=cors_origins,
@@ -97,12 +108,16 @@ async def run_loop_with_api(
         loop.stop()
         ticks = await game_task
         token_store.close()
+        if owns_moderation_store:
+            moderation_store.close()
         return ticks
 
     ticks = game_task.result()
     server.should_exit = True
     await server_task
     token_store.close()
+    if owns_moderation_store:
+        moderation_store.close()
     return ticks
 
 

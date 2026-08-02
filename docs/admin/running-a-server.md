@@ -152,7 +152,7 @@ uv run bunnyland serve --config bunnyland.yml
 | `--[no-]allow-sleeping-character-chat` | off | Allow character chat with sleeping characters; also configurable with `BUNNYLAND_ALLOW_SLEEPING_CHARACTER_CHAT`. |
 | `--[no-]reject-text-tool-calls` | on | Reject provider replies containing tagged tool-call text such as `<invoke>` or DSML, then retry once for a native structured call or clean prose. Applies to autonomous characters and character chat; also configurable with `BUNNYLAND_REJECT_TEXT_TOOL_CALLS`. |
 | `--auth-users-file` | `data/auth-users.yml` | Deployment-rendered Argon2 user credentials. |
-| `--token-db` | `data/auth-tokens.sqlite3` | Private SQLite opaque-token and revocation store. |
+| `--token-db` | `data/auth-tokens.sqlite3` | Private SQLite security database containing token and moderation tables. |
 | `--player-client-id` | env        | Allow one player `client_id`; repeat or pass comma-separated values. Defaults to `BUNNYLAND_PLAYER_CLIENT_IDS`; unset allows any player client ID. |
 | `--admin-client-id` | env         | Allow one admin `client_id`; repeat or pass comma-separated values. Defaults to `BUNNYLAND_ADMIN_CLIENT_IDS`; unset allows any client ID after `world:admin` authentication. |
 | `--cors-origin` | (none) | Permit one absolute browser origin; repeat as needed. Wildcard and `null` origins are invalid. |
@@ -187,6 +187,39 @@ client IDs, or repeat `--player-client-id` / `--admin-client-id`. When configure
 claims and claim-secret-backed player requests must match the player list. Admin HTTP,
 WebSocket, and MCP requests must match the admin list via `X-Bunnyland-Client-Id`.
 Client IDs are optional policy filters, never authentication credentials.
+
+## Player moderation
+
+The `world:admin`-gated `moderation.html` tool and Discord `!mod` commands share one
+server-authoritative SQLite store. Moderation is server-wide and targets stable platform
+identities rather than characters or controllers:
+
+- `web:<subject>` is the username/auth subject in the server credential file.
+- `discord:<snowflake>` is a Discord user ID and remains separate from web accounts.
+- `client:<id>` exists only for unauthenticated embedding mode and is bypassable by changing
+  the caller-chosen client ID.
+
+Kick terminates claims, queued commands, player jobs, bearer sessions, and live sockets but
+allows immediate login. Suspend performs the same teardown and blocks all player ingress
+until its UTC expiration. Ban blocks without an expiration. Lift removes the restriction;
+the player still signs in and claims again. Audit history retains the required reason,
+acting administrator, action time, target, and optional expiration after restrictions are
+lifted or expire.
+
+An administrator may moderate another administrator but cannot target the identity they are
+currently using. Because restrictions also cover admin HTTP and MCP access, recover an
+operator from the deployment shell when necessary:
+
+```bash
+uv run bunnyland moderation lift \
+  --db /data/auth-tokens.sqlite3 \
+  --target web:operator \
+  --reason "deployment-owner recovery"
+```
+
+The token and moderation repositories use independent tables in the same private SQLite
+security database, which must be included in encrypted backups. Moderation events are
+system-visible to admin event streams and never appear in player projections.
 
 Player commands and the MCP `send_command` tool reject the control
 verbs (`take-control`, `release-to-llm`, `suspend`, `resume`); controller changes go through

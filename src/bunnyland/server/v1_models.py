@@ -11,12 +11,13 @@ import json
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from ..content import ContentLibrary
 from ..core.commands import Lane, OnInsufficientPoints
 from ..core.events import EventVisibility
 from ..core.perspective import PerspectiveQueryRequest
+from ..moderation import IdentityKind, ModerationActionKind, RestrictionKind
 from .models import (
     IDENTIFIER_MAX_LENGTH,
     CharacterChatActionResult,
@@ -58,6 +59,72 @@ class ProblemDetails(BaseModel):
     detail: str = ""
     instance: str | None = None
     code: str
+    restriction_kind: RestrictionKind | None = None
+    restriction_expires_at: datetime | None = None
+    restriction_reason: str | None = None
+
+
+class ModerationIdentityResource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: IdentityKind
+    id: str = Field(min_length=1, max_length=IDENTIFIER_MAX_LENGTH)
+
+
+class ModerationRestrictionResource(BaseModel):
+    kind: RestrictionKind
+    reason: str
+    created_at: datetime
+    expires_at: datetime | None = None
+
+
+class ModerationClaimResource(BaseModel):
+    claim_id: str
+    character_id: str
+    character_name: str
+
+
+class ModerationPlayerResource(BaseModel):
+    identity: ModerationIdentityResource
+    admin: bool = False
+    claims: list[ModerationClaimResource] = Field(default_factory=list)
+    restriction: ModerationRestrictionResource | None = None
+
+
+class ModerationPlayerCollection(BaseModel):
+    players: list[ModerationPlayerResource] = Field(default_factory=list)
+
+
+class ModerationActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: ModerationActionKind
+    target: ModerationIdentityResource
+    reason: str = Field(min_length=1, max_length=2000)
+    duration_seconds: int | None = None
+
+    @model_validator(mode="after")
+    def _valid_duration(self) -> ModerationActionRequest:
+        if self.action is ModerationActionKind.SUSPEND:
+            if self.duration_seconds is None or self.duration_seconds <= 0:
+                raise ValueError("duration_seconds must be positive for suspension")
+        elif self.duration_seconds is not None:
+            raise ValueError("duration_seconds is only valid for suspension")
+        return self
+
+
+class ModerationActionResource(BaseModel):
+    id: str
+    action: ModerationActionKind
+    target: ModerationIdentityResource
+    administrator: ModerationIdentityResource
+    reason: str
+    created_at: datetime
+    expires_at: datetime | None = None
+
+
+class ModerationActionCollection(BaseModel):
+    actions: list[ModerationActionResource] = Field(default_factory=list)
 
 
 class WorldResource(BaseModel):
@@ -503,6 +570,14 @@ __all__ = [
     "JobResource",
     "JobResult",
     "MemoryDocumentUpdateRequest",
+    "ModerationActionCollection",
+    "ModerationActionRequest",
+    "ModerationActionResource",
+    "ModerationClaimResource",
+    "ModerationIdentityResource",
+    "ModerationPlayerCollection",
+    "ModerationPlayerResource",
+    "ModerationRestrictionResource",
     "PerspectiveQueryRequest",
     "ProblemDetails",
     "RoomGenerationJobResult",

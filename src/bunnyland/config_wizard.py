@@ -221,7 +221,9 @@ FIELD_HELP_TEXT = {
     "web-tag": "Container tag for bunnyland-web. Examples: main, v2026.07.05.",
     "configure-firewall": "Add ufw rules. Examples: configure on VPS, leave behind proxy.",
     "auth-users-file": "Deployment-rendered Argon2 user file. Examples: /data/auth-users.yml.",
-    "token-db": "Private opaque-token database. Examples: /data/auth-tokens.sqlite3.",
+    "token-db": (
+        "Private authentication and moderation database. Examples: /data/auth-tokens.sqlite3."
+    ),
     "player-auth-required": "Prompt browser players to log in before auto-connect.",
     "cors-origins": "Optional absolute browser CORS origins, comma-separated.",
     "forwarded-allow-ips": "Exact trusted reverse-proxy address. Examples: 172.28.0.2.",
@@ -283,6 +285,8 @@ FIELD_HELP_TEXT = {
     "discord-guild-ids": "Allowed Discord guild IDs, comma-separated. Examples: 111,222.",
     "discord-channel-ids": "Allowed Discord channel IDs, comma-separated. Examples: 333,444.",
     "discord-dm-user-ids": "Users allowed to DM the bot, comma-separated. Examples: 123,456.",
+    "discord-moderator-user-ids": "Discord users allowed to run !mod, comma-separated.",
+    "discord-moderator-role-ids": "Guild roles allowed to run !mod, comma-separated.",
     "plugin-search": "Filter the plugin checklist. Examples: memory, lifesim.",
     "plugin-suggestions": "Install addon packages to make their entry-point plugins available.",
     "mcp-enabled": "Enable HTTP MCP endpoint. Examples: enabled for admin agents.",
@@ -731,7 +735,7 @@ def build_textual_wizard_app(
                             value=initial.server.auth_users_file,
                             id="auth-users-file",
                         )
-                        yield field_label("Token database", "token-db", required=True)
+                        yield field_label("Security database", "token-db", required=True)
                         yield Input(
                             value=initial.server.token_db,
                             id="token-db",
@@ -1107,6 +1111,24 @@ def build_textual_wizard_app(
                             ),
                             id="discord-dm-user-ids",
                         )
+                        yield field_label(
+                            "Moderator user IDs", "discord-moderator-user-ids"
+                        )
+                        yield Input(
+                            value=", ".join(
+                                str(value) for value in initial.discord.moderator_user_ids
+                            ),
+                            id="discord-moderator-user-ids",
+                        )
+                        yield field_label(
+                            "Moderator role IDs", "discord-moderator-role-ids"
+                        )
+                        yield Input(
+                            value=", ".join(
+                                str(value) for value in initial.discord.moderator_role_ids
+                            ),
+                            id="discord-moderator-role-ids",
+                        )
                     with Vertical(id="page-plugins", classes="page"):
                         yield Label("Plugins", classes="page-title")
                         yield Static(
@@ -1363,7 +1385,7 @@ def build_textual_wizard_app(
                     self._fail("Domain and data directory are required.")
                     return None
                 if not self._input("#auth-users-file") or not self._input("#token-db"):
-                    self._fail("Authentication user file and token database are required.")
+                    self._fail("Authentication user file and security database are required.")
                     return None
                 if discord_url and not discord_url.startswith(("http://", "https://")):
                     self._fail("Discord URL must be http(s).")
@@ -1488,6 +1510,8 @@ def build_textual_wizard_app(
                     allowed_guild_ids=self._csv_int_input("#discord-guild-ids"),
                     allowed_channel_ids=self._csv_int_input("#discord-channel-ids"),
                     allowed_dm_user_ids=self._csv_int_input("#discord-dm-user-ids"),
+                    moderator_user_ids=self._csv_int_input("#discord-moderator-user-ids"),
+                    moderator_role_ids=self._csv_int_input("#discord-moderator-role-ids"),
                     public_url=discord_url,
                 )
                 server = ServerConfig(

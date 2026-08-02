@@ -120,7 +120,7 @@ generation with `--llm-provider openrouter`, `--worldgen-provider openrouter`, a
 
 The checked-in Compose files are deployment building blocks, not a credential generator.
 A private `compose.user.yml` must mount an Argon2 `auth-users.yml` file read-only and persist
-`/data/auth-tokens.sqlite3`; without that token store, protected HTTP and WebSocket routes
+`/data/auth-tokens.sqlite3`; without that token and moderation store, protected HTTP and WebSocket routes
 fail closed. The API is exposed only through the same-origin frontend proxy.
 
 Hosted VPS setup is managed by the `bunnyland-vps` Ansible playbook. The retired

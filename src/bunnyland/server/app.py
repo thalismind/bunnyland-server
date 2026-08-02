@@ -84,6 +84,16 @@ from ..llm_agents import (
 )
 from ..llm_agents.specs import BehaviorTreeSpec, ScriptSpec
 from ..mcp import MCP_MOUNT_PATH, create_bunnyland_mcp_app, mcp_enabled
+from ..moderation import (
+    IdentityKind,
+    ModerationActionKind,
+    ModerationAuditEntry,
+    ModerationIdentity,
+    ModerationRestrictedError,
+    ModerationRestriction,
+    ModerationService,
+    ModerationStore,
+)
 from ..persistence import WorldMeta
 from ..plugins import collect_persona_fragments, collect_prompt_fragments
 from ..worldgen import GenOptions, collect_generators
@@ -195,6 +205,14 @@ from .v1_models import (
     GeneratorCollection,
     JobResource,
     JobResult,
+    ModerationActionCollection,
+    ModerationActionRequest,
+    ModerationActionResource,
+    ModerationClaimResource,
+    ModerationIdentityResource,
+    ModerationPlayerCollection,
+    ModerationPlayerResource,
+    ModerationRestrictionResource,
     ProblemDetails,
     PublicWorldResource,
     RuntimePatchRequest,
@@ -518,6 +536,8 @@ def create_app(
     plugins: list[Plugin] | None = None,
     token_store: TokenStore | None = None,
     user_credentials: UserCredentialStore | None = None,
+    moderation_store: ModerationStore | None = None,
+    moderation_service: ModerationService | None = None,
     player_client_ids: str | list[str] | None = None,
     admin_client_ids: str | list[str] | None = None,
     imagegen: ImageGenService | None = None,
@@ -553,6 +573,7 @@ def create_app(
     mcp_session_manager = None
     mcp_event_bridge = None
     chat_tasks: set[asyncio.Task[None]] = set()
+    chat_tasks_by_job: dict[str, asyncio.Task[None]] = {}
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -605,6 +626,7 @@ def create_app(
         *,
         headers: dict[str, str] | None = None,
         code: str | None = None,
+        restriction: ModerationRestriction | None = None,
     ):
         titles = {
             400: "Bad Request",
@@ -638,26 +660,42 @@ def create_app(
             detail=detail if isinstance(detail, str) else str(detail),
             instance=request.url.path,
             code=problem_code,
+            restriction_kind=restriction.kind if restriction is not None else None,
+            restriction_expires_at=restriction.expires_at if restriction is not None else None,
+            restriction_reason=restriction.reason if restriction is not None else None,
         )
         return JSONResponse(
             status_code=status_code,
-            content=problem.model_dump(mode="json"),
+            content=problem.model_dump(mode="json", exclude_none=True),
             media_type="application/problem+json",
             headers=headers or {},
         )
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_problem(request: Request, exc: StarletteHTTPException):
+        headers = dict(getattr(exc, "headers", None) or {})
+        code = headers.pop("X-Bunnyland-Problem-Code", None)
         return _problem_response(
             request,
             exc.status_code,
             exc.detail,
-            headers=getattr(exc, "headers", None),
+            headers=headers,
+            code=code,
         )
 
     @app.exception_handler(RequestValidationError)
     async def _validation_problem(request: Request, exc: RequestValidationError):
         return _problem_response(request, 422, exc.errors(), code="validation_error")
+
+    @app.exception_handler(ModerationRestrictedError)
+    async def _moderation_problem(request: Request, exc: ModerationRestrictedError):
+        return _problem_response(
+            request,
+            403,
+            f"account is {exc.restriction.kind.value}",
+            code=f"account_{exc.restriction.kind.value}",
+            restriction=exc.restriction,
+        )
 
     app.add_middleware(
         CORSMiddleware,
@@ -734,6 +772,12 @@ def create_app(
     actor.event_stream = stream
     claim_secrets = claim_secrets or ClaimSecretRegistry()
     normalize_claimed_controllers_without_secrets(actor, claim_secrets)
+    moderation_store = moderation_store or ModerationStore(
+        token_store.path if token_store is not None else ":memory:"
+    )
+    moderation_service = moderation_service or ModerationService(
+        actor, moderation_store, claim_secrets, token_store=token_store
+    )
     allowed_player_client_ids = configured_client_id_allowlist(
         player_client_ids, PLAYER_CLIENT_IDS_ENV
     )
@@ -750,6 +794,25 @@ def create_app(
     # fetch another account's job by guessing its id and spoofing the client-id header.
     character_chat_job_registry = JobRegistry()
     generation_job_registry = JobRegistry()
+
+    async def _cancel_moderated_identity(identity: ModerationIdentity) -> None:
+        if identity.kind is IdentityKind.WEB:
+            removed = character_chat_job_registry.discard_matching(
+                attributes={"subject": identity.id}
+            )
+        elif identity.kind is IdentityKind.CLIENT:
+            removed = character_chat_job_registry.discard_matching(owner=identity.id)
+        else:
+            removed = set()
+        for job_id in removed:
+            task = chat_tasks_by_job.pop(job_id, None)
+            if task is not None:
+                task.cancel()
+
+    moderation_service.configure_runtime(
+        token_store=token_store,
+        cancel_identity=_cancel_moderated_identity,
+    )
     onboarding = OnboardingTracker(actor)
     memory_store = memory_store or getattr(actor, "memory_store", None)
     media_store = (
@@ -901,6 +964,7 @@ def create_app(
                 detail="invalid username or password",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        moderation_service.require_allowed(ModerationIdentity(IdentityKind.WEB, user.username))
         login_username_rate_limiter.reset(normalized_username)
         token, principal = token_store.issue(
             user.username,
@@ -1010,6 +1074,29 @@ def create_app(
                     required_scopes=(required_scope,) if required_scope else (),
                 )
             except HTTPException as exc:
+                raw_authorization = request.headers.get("Authorization", "")
+                raw_token = (
+                    raw_authorization.partition(" ")[2].strip()
+                    if raw_authorization.lower().startswith("bearer ")
+                    else request.cookies.get(AUTH_COOKIE_NAME, "")
+                )
+                restricted_subject = (
+                    token_store.subject_for_credential(raw_token)
+                    if token_store is not None and raw_token
+                    else None
+                )
+                if restricted_subject is not None:
+                    restriction = moderation_store.restriction(
+                        ModerationIdentity(IdentityKind.WEB, restricted_subject)
+                    )
+                    if restriction is not None:
+                        return _problem_response(
+                            request,
+                            403,
+                            f"account is {restriction.kind.value}",
+                            code=f"account_{restriction.kind.value}",
+                            restriction=restriction,
+                        )
                 allowed, retry_after = token_failure_rate_limiter.check(_client_host(request))
                 if not allowed:
                     return _problem_response(
@@ -1050,6 +1137,22 @@ def create_app(
                 exc.status_code,
                 exc.detail,
                 headers=exc.headers or {},
+            )
+        principal = getattr(request.state, "auth_principal", None)
+        identity = (
+            ModerationIdentity(IdentityKind.WEB, principal.subject)
+            if isinstance(principal, TokenPrincipal)
+            else ModerationIdentity(IdentityKind.CLIENT, client_id)
+        )
+        try:
+            moderation_service.require_allowed(identity)
+        except ModerationRestrictedError as exc:
+            return _problem_response(
+                request,
+                403,
+                f"account is {exc.restriction.kind.value}",
+                code=f"account_{exc.restriction.kind.value}",
+                restriction=exc.restriction,
             )
         return await call_next(request)
 
@@ -2372,7 +2475,13 @@ def create_app(
                     )
                 )
                 chat_tasks.add(task)
-                task.add_done_callback(chat_tasks.discard)
+                chat_tasks_by_job[job.id] = task
+
+                def _chat_task_done(done: asyncio.Task[None], *, job_id: str = job.id) -> None:
+                    chat_tasks.discard(done)
+                    chat_tasks_by_job.pop(job_id, None)
+
+                task.add_done_callback(_chat_task_done)
         elif controller_kind in {"discord", "mcp", "web"}:
             await actor.bus.publish(
                 CharacterChatRequestedEvent(
@@ -2983,6 +3092,151 @@ def create_app(
     async def v1_world_events() -> EventCollection:
         return EventCollection(**_world_fields(), events=stream.recent_messages())
 
+    def _moderation_identity_resource(
+        identity: ModerationIdentity,
+    ) -> ModerationIdentityResource:
+        return ModerationIdentityResource(kind=identity.kind, id=identity.id)
+
+    def _moderation_action_resource(
+        entry: ModerationAuditEntry,
+    ) -> ModerationActionResource:
+        return ModerationActionResource(
+            id=entry.id,
+            action=entry.action,
+            target=_moderation_identity_resource(entry.target),
+            administrator=_moderation_identity_resource(entry.actor),
+            reason=entry.reason,
+            created_at=entry.created_at,
+            expires_at=entry.expires_at,
+        )
+
+    def _moderation_actor(request: Request) -> ModerationIdentity:
+        principal = getattr(request.state, "auth_principal", None)
+        if isinstance(principal, TokenPrincipal):
+            return ModerationIdentity(IdentityKind.WEB, principal.subject)
+        client_id = _required_client_id(request.headers.get(CLIENT_ID_HEADER))
+        return ModerationIdentity(IdentityKind.CLIENT, client_id)
+
+    @admin_v1.get(
+        "/moderation/players",
+        response_model=ModerationPlayerCollection,
+    )
+    async def v1_moderation_players(search: str | None = None) -> ModerationPlayerCollection:
+        identities = (
+            moderation_store.known_identities() | moderation_service.known_claim_identities()
+        )
+        admin_subjects: set[str] = set()
+        if user_credentials is not None:
+            for user in user_credentials.current_users():
+                identities.add(ModerationIdentity(IdentityKind.WEB, user.username))
+                if scope_granted(user.scopes, WORLD_ADMIN_SCOPE):
+                    admin_subjects.add(user.username)
+        if token_store is not None:
+            for token in token_store.list_metadata():
+                identities.add(ModerationIdentity(IdentityKind.WEB, token["subject"]))
+        normalized_search = (search or "").strip().lower()
+        players: list[ModerationPlayerResource] = []
+        for identity in sorted(identities, key=lambda item: item.canonical.lower()):
+            claims: list[ModerationClaimResource] = []
+            for _controller, claim in moderation_service.claims_for(identity):
+                character_name = ""
+                parsed = parse_entity_id(claim.character_id)
+                if parsed is not None and actor.world.has_entity(parsed):
+                    character = actor.world.get_entity(parsed)
+                    if character.has_component(IdentityComponent):
+                        character_name = character.get_component(IdentityComponent).name
+                claims.append(
+                    ModerationClaimResource(
+                        claim_id=claim.claim_id,
+                        character_id=claim.character_id,
+                        character_name=character_name,
+                    )
+                )
+            restriction = moderation_store.restriction(identity)
+            searchable = " ".join(
+                [
+                    identity.canonical,
+                    *(claim.character_id for claim in claims),
+                    *(claim.character_name for claim in claims),
+                    restriction.kind.value if restriction is not None else "",
+                ]
+            ).lower()
+            if normalized_search and normalized_search not in searchable:
+                continue
+            players.append(
+                ModerationPlayerResource(
+                    identity=_moderation_identity_resource(identity),
+                    admin=(identity.kind is IdentityKind.WEB and identity.id in admin_subjects),
+                    claims=claims,
+                    restriction=(
+                        ModerationRestrictionResource(
+                            kind=restriction.kind,
+                            reason=restriction.reason,
+                            created_at=restriction.created_at,
+                            expires_at=restriction.expires_at,
+                        )
+                        if restriction is not None
+                        else None
+                    ),
+                )
+            )
+        return ModerationPlayerCollection(players=players)
+
+    @admin_v1.get(
+        "/moderation/actions",
+        response_model=ModerationActionCollection,
+    )
+    async def v1_moderation_actions(
+        target_kind: IdentityKind | None = None,
+        target_id: str | None = None,
+        action: ModerationActionKind | None = None,
+        limit: int = 200,
+    ) -> ModerationActionCollection:
+        if (target_kind is None) != (target_id is None):
+            raise HTTPException(
+                status_code=422,
+                detail="target_kind and target_id must be supplied together",
+            )
+        target = (
+            ModerationIdentity(target_kind, target_id)
+            if target_kind is not None and target_id is not None
+            else None
+        )
+        return ModerationActionCollection(
+            actions=[
+                _moderation_action_resource(entry)
+                for entry in moderation_store.history(target=target, action=action, limit=limit)
+            ]
+        )
+
+    @admin_v1.post(
+        "/moderation/actions",
+        response_model=ModerationActionResource,
+        status_code=201,
+    )
+    async def v1_create_moderation_action(
+        body: ModerationActionRequest,
+        request: Request,
+    ) -> ModerationActionResource:
+        try:
+            target = ModerationIdentity(body.target.kind, body.target.id)
+            entry = await moderation_service.execute(
+                body.action,
+                target,
+                _moderation_actor(request),
+                body.reason,
+                duration_seconds=body.duration_seconds,
+            )
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=str(exc),
+                headers={"X-Bunnyland-Problem-Code": "moderation_self_target"},
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return _moderation_action_resource(entry)
+
     @admin_v1.get("/characters/{character_id}")
     async def v1_admin_character(character_id: str) -> dict:
         try:
@@ -3255,12 +3509,26 @@ def create_app(
             except (HTTPException, TimeoutError, ValueError, TypeError, WebSocketDisconnect):
                 await websocket.close(code=1008)
                 return
-            identity = principal.subject if principal is not None else client_id
-            with websocket_identity_limiter.slot(identity) as identity_slot:
+            moderation_identity = (
+                ModerationIdentity(IdentityKind.WEB, principal.subject)
+                if principal is not None
+                else ModerationIdentity(IdentityKind.CLIENT, client_id)
+            )
+            try:
+                moderation_service.require_allowed(moderation_identity)
+            except ModerationRestrictedError:
+                await websocket.close(code=1008, reason="account restricted")
+                return
+            identity_key = principal.subject if principal is not None else client_id
+            with websocket_identity_limiter.slot(identity_key) as identity_slot:
                 if not identity_slot:
                     await websocket.close(code=WEBSOCKET_OVERLOADED_CLOSE_CODE)
                     return
-                await _stream_admin_updates(websocket, access_token)
+                moderation_service.connections.add(moderation_identity, websocket)
+                try:
+                    await _stream_admin_updates(websocket, access_token)
+                finally:
+                    moderation_service.connections.discard(moderation_identity, websocket)
 
     async def _stream_admin_updates(websocket: WebSocket, access_token: str | None) -> None:
         def _admin_still_authorized() -> bool:
@@ -3358,20 +3626,34 @@ def create_app(
             except HTTPException:
                 await websocket.close(code=1008)
                 return
-            identity = principal.subject if principal is not None else client_id
-            with websocket_identity_limiter.slot(identity) as identity_slot:
+            moderation_identity = (
+                ModerationIdentity(IdentityKind.WEB, principal.subject)
+                if principal is not None
+                else ModerationIdentity(IdentityKind.CLIENT, client_id)
+            )
+            try:
+                moderation_service.require_allowed(moderation_identity)
+            except ModerationRestrictedError:
+                await websocket.close(code=1008, reason="account restricted")
+                return
+            identity_key = principal.subject if principal is not None else client_id
+            with websocket_identity_limiter.slot(identity_key) as identity_slot:
                 if not identity_slot:
                     await websocket.close(code=WEBSOCKET_OVERLOADED_CLOSE_CODE)
                     return
-                await _stream_character_updates(
-                    websocket,
-                    claim_id=claim_id,
-                    claim_secret=claim_secret,
-                    client_id=client_id,
-                    owner=owner,
-                    access_token=access_token,
-                    character_id=str(claim_context[0].id),
-                )
+                moderation_service.connections.add(moderation_identity, websocket)
+                try:
+                    await _stream_character_updates(
+                        websocket,
+                        claim_id=claim_id,
+                        claim_secret=claim_secret,
+                        client_id=client_id,
+                        owner=owner,
+                        access_token=access_token,
+                        character_id=str(claim_context[0].id),
+                    )
+                finally:
+                    moderation_service.connections.discard(moderation_identity, websocket)
 
     async def _stream_character_updates(
         websocket: WebSocket,

@@ -15,13 +15,13 @@ from dataclasses import dataclass, replace
 from functools import lru_cache, wraps
 from pathlib import Path
 from threading import Lock
-from typing import Annotated, Literal, ParamSpec, TypeVar
+from typing import Annotated, Literal, ParamSpec, TypedDict, TypeVar
 from weakref import finalize
 
 import yaml
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyCookie, HTTPAuthorizationCredentials, HTTPBearer, SecurityScopes
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from .. import telemetry
 
@@ -47,6 +47,21 @@ _cookie_scheme = APIKeyCookie(name=AUTH_COOKIE_NAME, auto_error=False)
 LOG = logging.getLogger(__name__)
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+_SCOPES_ADAPTER = TypeAdapter(list[str])
+
+
+class TokenMetadata(TypedDict):
+    token_id: str
+    subject: str
+    scopes: list[str]
+    created_at: int
+    rotate_after: int | None
+    expires_at: int
+    automatic_rotation: bool
+    family_id: str
+    revoked_at: int | None
+    grace_until: int | None
+    replaced_by: str | None
 
 
 def _trace_token_mutation(
@@ -310,6 +325,12 @@ class UserCredentialStore:
 
         self._reload_if_changed()
         return self._users.get(username)
+
+    def current_users(self) -> tuple[UserCredential, ...]:
+        """Return the latest validated credential snapshot."""
+
+        self._reload_if_changed()
+        return tuple(self._users.values())
 
     def verify_password(self, username: str, password: str) -> UserCredential | None:
         """Verify one password. Blocking: Argon2 is deliberately expensive.
@@ -599,6 +620,21 @@ class TokenStore:
             return None
         return self._principal(row)
 
+    def subject_for_credential(self, token: str) -> str | None:
+        """Resolve a valid token digest even after revocation for restriction reporting."""
+
+        match = _TOKEN_RE.fullmatch(token)
+        if match is None:
+            return None
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT digest, subject FROM auth_tokens WHERE token_id = ?",
+                (match.group(1),),
+            ).fetchone()
+        if row is None or not secrets.compare_digest(row["digest"], self._digest(token)):
+            return None
+        return str(row["subject"])
+
     @_trace_token_mutation("rotate")
     def rotate(
         self,
@@ -736,7 +772,7 @@ class TokenStore:
         self._lock_permissions()
         return replacement, principal
 
-    def list_metadata(self) -> list[dict[str, object]]:
+    def list_metadata(self) -> list[TokenMetadata]:
         with self._lock:
             rows = self._connection.execute(
                 """
@@ -746,11 +782,19 @@ class TokenStore:
                 """
             ).fetchall()
         return [
-            {
-                **dict(row),
-                "scopes": json.loads(row["scopes"]),
-                "automatic_rotation": bool(row["automatic_rotation"]),
-            }
+            TokenMetadata(
+                token_id=row["token_id"],
+                subject=row["subject"],
+                scopes=_SCOPES_ADAPTER.validate_json(row["scopes"]),
+                created_at=row["created_at"],
+                rotate_after=row["rotate_after"],
+                expires_at=row["expires_at"],
+                automatic_rotation=bool(row["automatic_rotation"]),
+                family_id=row["family_id"],
+                revoked_at=row["revoked_at"],
+                grace_until=row["grace_until"],
+                replaced_by=row["replaced_by"],
+            )
             for row in rows
         ]
 

@@ -104,6 +104,8 @@ class DiscordConfig:
     allowed_bot_user_ids: tuple[int, ...] = ()
     public_url: str = ""
     cooldown_seconds: int = 0
+    moderator_user_ids: tuple[int, ...] = ()
+    moderator_role_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -308,6 +310,8 @@ class BunnylandConfig:
             "discord_allowed_channel_id": list(discord.allowed_channel_ids) or None,
             "discord_allowed_dm_user_id": list(discord.allowed_dm_user_ids) or None,
             "discord_allowed_bot_user_id": list(discord.allowed_bot_user_ids) or None,
+            "discord_moderator_user_id": list(discord.moderator_user_ids) or None,
+            "discord_moderator_role_id": list(discord.moderator_role_ids) or None,
             "mcp": self.mcp.enabled,
             "character_chat": server.character_chat,
             "open_character_chat": server.open_character_chat,
@@ -412,6 +416,8 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_DISCORD_ALLOWED_CHANNEL_IDS", _csv(discord.allowed_channel_ids))
         _set_if(env, "BUNNYLAND_DISCORD_ALLOWED_DM_USER_IDS", _csv(discord.allowed_dm_user_ids))
         _set_if(env, "BUNNYLAND_DISCORD_ALLOWED_BOT_USER_IDS", _csv(discord.allowed_bot_user_ids))
+        _set_if(env, "BUNNYLAND_DISCORD_MODERATOR_USER_IDS", _csv(discord.moderator_user_ids))
+        _set_if(env, "BUNNYLAND_DISCORD_MODERATOR_ROLE_IDS", _csv(discord.moderator_role_ids))
         _set_if(env, "BUNNYLAND_DISCORD_COOLDOWN_SECONDS", discord.cooldown_seconds)
         _set_if(env, "COMFYUI_SERVER_URL", imagegen.server_url)
         imagegen_enabled = (

@@ -15,6 +15,7 @@ from conftest import build_scenario
 
 import bunnyland.server.worldgen as server_worldgen
 from bunnyland.claims import (
+    ClaimOwner,
     ClaimSecretRegistry,
     add_claim,
     current_controller,
@@ -107,6 +108,13 @@ from bunnyland.imagegen.spec import ImagePurpose
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.llm_agents.specs import BehaviorNodeSpec, BehaviorTreeSpec, ScriptSpec, ToolCallSpec
 from bunnyland.memory import InMemoryStore, install_memory
+from bunnyland.moderation import (
+    IdentityKind,
+    ModerationActionKind,
+    ModerationIdentity,
+    ModerationService,
+    ModerationStore,
+)
 from bunnyland.persistence import WorldMeta, load_world
 from bunnyland.plugins import (
     HttpContribution,
@@ -3328,10 +3336,12 @@ def test_fastapi_save_endpoint_translates_save_errors(monkeypatch, scenario, tmp
     assert "disk full" not in response.text
 
 
+@pytest.mark.parametrize("shared_moderation", [False, True])
 async def test_run_loop_with_api_stops_server_when_game_loop_finishes(
     monkeypatch,
     scenario,
     tmp_path,
+    shared_moderation,
 ):
     monkeypatch.setattr("bunnyland.server.runtime.UserCredentialStore.validate", lambda _self: None)
     servers = []
@@ -3365,6 +3375,16 @@ async def test_run_loop_with_api_stops_server_when_game_loop_finishes(
         SimpleNamespace(Config=lambda app, **kwargs: {"app": app, **kwargs}, Server=FakeServer),
     )
     loop = FakeLoop()
+    moderation_store = (
+        ModerationStore(tmp_path / "tokens.sqlite3")
+        if shared_moderation
+        else None
+    )
+    moderation_service = None
+    if moderation_store is not None:
+        moderation_service = ModerationService(
+            scenario.actor, moderation_store, ClaimSecretRegistry()
+        )
 
     ticks = await run_loop_with_api(
         loop,
@@ -3373,6 +3393,7 @@ async def test_run_loop_with_api_stops_server_when_game_loop_finishes(
         host="127.0.0.1",
         port=8765,
         token_db_path=tmp_path / "tokens.sqlite3",
+        moderation_service=moderation_service,
         max_ticks=7,
     )
 
@@ -3381,9 +3402,15 @@ async def test_run_loop_with_api_stops_server_when_game_loop_finishes(
     assert servers[0].config["host"] == "127.0.0.1"
     assert servers[0].config["port"] == 8765
     assert servers[0].exited_after_signal is True
+    if moderation_store is not None:
+        assert moderation_store.history() == []
+        moderation_store.close()
 
 
-async def test_run_loop_with_api_stops_game_when_server_finishes(monkeypatch, scenario, tmp_path):
+@pytest.mark.parametrize("shared_moderation", [False, True])
+async def test_run_loop_with_api_stops_game_when_server_finishes(
+    monkeypatch, scenario, tmp_path, shared_moderation
+):
     monkeypatch.setattr("bunnyland.server.runtime.UserCredentialStore.validate", lambda _self: None)
 
     class FakeLoop:
@@ -3416,6 +3443,16 @@ async def test_run_loop_with_api_stops_game_when_server_finishes(monkeypatch, sc
         SimpleNamespace(Config=lambda app, **kwargs: {"app": app, **kwargs}, Server=FakeServer),
     )
     loop = FakeLoop()
+    moderation_store = (
+        ModerationStore(tmp_path / "tokens.sqlite3")
+        if shared_moderation
+        else None
+    )
+    moderation_service = None
+    if moderation_store is not None:
+        moderation_service = ModerationService(
+            scenario.actor, moderation_store, ClaimSecretRegistry()
+        )
 
     ticks = await run_loop_with_api(
         loop,
@@ -3424,10 +3461,14 @@ async def test_run_loop_with_api_stops_game_when_server_finishes(monkeypatch, sc
         host="127.0.0.1",
         port=8765,
         token_db_path=tmp_path / "tokens.sqlite3",
+        moderation_service=moderation_service,
     )
 
     assert ticks == 3
     assert loop.stopped is True
+    if moderation_store is not None:
+        assert moderation_store.history() == []
+        moderation_store.close()
 
 
 def test_web_controller_claim_replaces_llm_controller_and_reuses_client(
@@ -7094,6 +7135,78 @@ async def test_fastapi_world_updates_websocket_requires_admin_scope(scenario):
         "type": "websocket.close",
         "code": 1008,
         "reason": "",
+    }
+
+
+async def test_moderation_restrictions_close_admin_and_player_websockets(scenario):
+    token_store = TokenStore(":memory:")
+    admin_token, _admin = token_store.issue(
+        "operator",
+        (WORLD_ADMIN_SCOPE,),
+        automatic_rotation=False,
+    )
+    player_token, _player = token_store.issue(
+        "player",
+        (WORLD_PLAY_SCOPE,),
+        automatic_rotation=False,
+    )
+    registry = ClaimSecretRegistry()
+    claim = add_claim(
+        scenario.actor.world.get_entity(scenario.controller),
+        client_kind="web",
+        client_id="player-browser",
+        character_id=str(scenario.character),
+    )
+    secret = registry.issue(claim.claim_id, ClaimOwner("rest", "player"))
+    moderation_store = ModerationStore(":memory:")
+    actor = ModerationIdentity(IdentityKind.WEB, "recovery-admin")
+    moderation_store.apply(
+        ModerationActionKind.BAN,
+        ModerationIdentity(IdentityKind.WEB, "operator"),
+        actor,
+        "admin access removed",
+    )
+    moderation_store.apply(
+        ModerationActionKind.SUSPEND,
+        ModerationIdentity(IdentityKind.WEB, "player"),
+        actor,
+        "cool down",
+        duration_seconds=60,
+    )
+    app = _create_app(
+        scenario.actor,
+        token_store=token_store,
+        moderation_store=moderation_store,
+        claim_secrets=registry,
+    )
+
+    admin_outputs = await _websocket_outputs(
+        app,
+        "/v1/admin/world/stream",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        messages=[{"type": "authenticate", "data": {"client_id": "admin-browser"}}],
+    )
+    player_outputs = await _websocket_outputs(
+        app,
+        f"/v1/play/claims/{claim.claim_id}/stream",
+        headers={"Authorization": f"Bearer {player_token}"},
+        messages=[
+            {
+                "type": "authenticate",
+                "data": {"client_id": "player-browser", "claim_secret": secret},
+            }
+        ],
+    )
+
+    assert admin_outputs[-1] == {
+        "type": "websocket.close",
+        "code": 1008,
+        "reason": "account restricted",
+    }
+    assert player_outputs[-1] == {
+        "type": "websocket.close",
+        "code": 1008,
+        "reason": "account restricted",
     }
 
 
