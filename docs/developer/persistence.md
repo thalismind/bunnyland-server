@@ -77,7 +77,7 @@ different Chroma directory. The `in-memory` backend is still non-persistent. Plu
 `--plugin` selection, every discovered `default_enabled` plugin is applied; with an explicit
 selection, include every plugin id required by the save.
 
-## Schema v4 and sequential migration
+## Schema v5 and sequential migration
 
 Schema v2 introduced repeatable live relationships as typed edges. The holder is the edge source,
 the referenced entity is the target, and per-target values live on the edge. Examples include
@@ -97,9 +97,14 @@ lineage, care, ownership, behavior, provenance, and assignment links are typed e
 evidence uses `EvidenceSubject` and `RecordedByDevice`; and Void orbit/navigation targets use
 `OrbitsBody` and `NavigatesTo`.
 
-Saves migrate sequentially from v1 to v2 to v3 to v4, with v2 and v3 saves joining at the
+Schema v5 unifies Dragonsim's character-only `SneakingComponent` with core
+`StealthComponent`. The migration preserves existing hidden-object stealth records, converts
+character records to the core visibility shape, and rejects a same-entity collision rather
+than guessing which hide state wins.
+
+Saves migrate sequentially from v1 to v2 to v3 to v4 to v5, with older saves joining at the
 appropriate step before type deserialization; the source file is never modified. Migration
-covers moved quest records, `StealthComponent` to `SneakingComponent`, legacy relationship
+covers moved quest records, legacy stealth names, relationship
 fields/maps, and legacy 3D decoration roles. Every migrated live target is checked for
 existence and endpoint type. Missing targets, duplicate cardinality, or malformed records fail
 with the owning entity, persisted type, and field in the error rather than guessing.
@@ -107,10 +112,10 @@ with the owning entity, persisted type, and field in the error rather than guess
 Use the explicit converter when you want a separate migrated file:
 
 ```bash
-uv run bunnyland migrate-world worlds/marsh-v1.json worlds/marsh-v4.json
+uv run bunnyland migrate-world worlds/marsh-v1.json worlds/marsh-v5.json
 ```
 
-Loading v1, v2, or v3 yields an in-memory v4 world; the next normal save writes v4. JSON and
+Loading v1 through v4 yields an in-memory v5 world; the next normal save writes v5. JSON and
 YAML migration fixtures cover the same conversion contract.
 
 World history is normal ECS state (`WorldHistoryRecordComponent`, `HistoryActor`, and

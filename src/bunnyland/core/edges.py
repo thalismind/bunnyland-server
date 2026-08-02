@@ -62,6 +62,19 @@ class ControlledBy(Edge):
     since_epoch: int = 0
 
 
+class StealthSense(StrEnum):
+    VISUAL = "visual"
+    HEARING = "hearing"
+
+
+@dataclass(frozen=True)
+class DetectedStealth(Edge):
+    """observer -> hidden target, scoped to one hide attempt."""
+
+    target_since_epoch: int = 0
+    sense: StealthSense = StealthSense.VISUAL
+
+
 @dataclass(frozen=True)
 class KnowsRoom(Edge):
     """Character-owned durable map knowledge for one room."""
@@ -92,11 +105,13 @@ __all__ = [
     "ContainmentMode",
     "Contains",
     "ControlledBy",
+    "DetectedStealth",
     "ConversationParticipant",
     "ExitTo",
     "HasInjury",
     "HasThought",
     "Holding",
     "KnowsRoom",
+    "StealthSense",
     "Wearing",
 ]

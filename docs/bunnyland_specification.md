@@ -1462,12 +1462,24 @@ class NoiseComponent(Component):
 
 
 @dataclass(frozen=True)
-class SneakingComponent(Component):
-    sneaking: bool = False
+class StealthComponent(Component):
+    visibility_level: float = 1.0
+    hidden_threshold: float = 0.1
+    hiding: bool = False
     since_epoch: int = 0
+
+class PerceptionComponent(Component):
+    active: bool = True
+    detection_strength: float = 0.0
+
+class DetectedStealth(Edge):
+    target_since_epoch: int = 0
+    sense: Literal["visual", "hearing"] = "visual"
 ```
 
-MVP perception is simple; advanced stealth and overhearing can come later.
+Stealth detection is observer-relative and valid only for one hide attempt while observer
+and target share a room. Visual detection compares strength with concealment; hearing can
+detect active noise sourced by the hidden target.
 
 ### 11.15 Social components and relationships
 

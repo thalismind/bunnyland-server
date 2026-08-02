@@ -33,10 +33,16 @@ from ...core.ecs import (
     room_id_for as _room_id,
 )
 from ...core.edges import ContainmentMode, Contains
-from ...core.events import DomainEvent, EventVisibility
-from ...core.handlers import HandlerContext, HandlerResult, planned, rejected, require_entity
+from ...core.events import DomainEvent, EventVisibility, StealthChangedEvent
+from ...core.handlers import (
+    HandlerContext,
+    HandlerResult,
+    SneakHandler,
+    planned,
+    rejected,
+    require_entity,
+)
 from ...core.mutations import (
-    AddComponent,
     AddEdge,
     AddEntity,
     EntityReference,
@@ -45,6 +51,7 @@ from ...core.mutations import (
     RemoveEdge,
     SetComponent,
 )
+from ...core.stealth import observer_can_see
 from ...prompts import ComponentPromptContext
 
 
@@ -333,14 +340,6 @@ class KnowsWord(Edge):
 
 
 @dataclass(frozen=True)
-class SneakingComponent(Component):
-    """Whether a character is currently sneaking (unseen by witnesses)."""
-
-    sneaking: bool = False
-    since_epoch: int = 0
-
-
-@dataclass(frozen=True)
 class WantedByFaction(Edge):
     """character -> faction, carrying the outstanding bounty amount."""
 
@@ -611,11 +610,6 @@ class WordOfPowerLearnedEvent(DomainEvent):
 class WordOfPowerSpokenEvent(DomainEvent):
     word_id: str
     word_name: str
-
-
-class StealthChangedEvent(DomainEvent):
-    character_id: str
-    sneaking: bool
 
 
 class TheftCommittedEvent(DomainEvent):
@@ -1469,13 +1463,6 @@ class SpeakWordOfPowerHandler:
 DEFAULT_BOUNTY = 10
 
 
-def _is_sneaking(character: Entity) -> bool:
-    return (
-        character.has_component(SneakingComponent)
-        and character.get_component(SneakingComponent).sneaking
-    )
-
-
 def _faction_bounty(character: Entity, faction_id: EntityId) -> WantedByFaction | None:
     return next(
         (
@@ -1510,45 +1497,10 @@ def _awake_witnesses(world: World, room_id: EntityId, thief_id: EntityId) -> lis
             or entity.has_component(DeadComponent)
         ):
             continue
+        if not observer_can_see(world, entity, world.get_entity(thief_id)):
+            continue
         witnesses.append(entity_id)
     return witnesses
-
-
-class SneakHandler:
-    command_type = "sneak"
-
-    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        if character_id is None:
-            return rejected("invalid character id")
-        character = ctx.entity(character_id)
-        sneaking = not _is_sneaking(character)
-        if character.has_component(SneakingComponent):
-            operation: MutationOperation = SetComponent(
-                character_id,
-                replace(
-                    character.get_component(SneakingComponent),
-                    sneaking=sneaking,
-                    since_epoch=ctx.epoch,
-                ),
-            )
-        else:
-            operation = AddComponent(
-                character_id,
-                SneakingComponent(sneaking=sneaking, since_epoch=ctx.epoch),
-            )
-        return planned(
-            MutationPlan((operation,)),
-            StealthChangedEvent(
-                **ctx.event_base(
-                    visibility=EventVisibility.PRIVATE,
-                    actor_id=str(character_id),
-                    room_id=_room_id(ctx.world, character_id),
-                    character_id=str(character_id),
-                    sneaking=sneaking,
-                )
-            ),
-        )
 
 
 class StealHandler:
@@ -1601,8 +1553,6 @@ class StealHandler:
     def _witness_bounties(
         self, ctx: HandlerContext, thief: Entity, thief_id: EntityId, room_id: EntityId
     ) -> tuple[list[MutationOperation], list[DomainEvent]]:
-        if _is_sneaking(thief):
-            return [], []
         faction_witnesses: dict[EntityId, list[str]] = {}
         for witness_id in _awake_witnesses(ctx.world, room_id, thief_id):
             for _edge, faction_id in ctx.world.get_entity(witness_id).get_relationships(
@@ -2581,8 +2531,6 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
         )
         lines.extend(edge.prompt_fragments(edge_ctx))
 
-    if _is_sneaking(character):
-        lines.append("You are sneaking.")
     for edge, faction_id in character.get_relationships(WantedByFaction):
         faction = world.get_entity(faction_id)
         edge_ctx = ComponentPromptContext.for_entity(
@@ -2715,8 +2663,6 @@ __all__ = [
     "SurrenderHandler",
     "StealHandler",
     "StealthChangedEvent",
-    "SneakingComponent",
-    "SneakingComponent",
     "CarvableComponent",
     "InscribeVoicePhraseHandler",
     "StudyVoiceInscriptionHandler",

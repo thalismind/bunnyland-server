@@ -50,7 +50,14 @@ from ...core.ecs import (
 )
 from ...core.edges import ContainmentMode, Contains
 from ...core.events import DomainEvent, EventVisibility
-from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
+from ...core.handlers import (
+    HandlerContext,
+    HandlerResult,
+    planned,
+    rejected,
+    stealth_change_operations,
+    stealth_changed_event,
+)
 from ...core.mutations import (
     AddEdge,
     AddEntity,
@@ -620,8 +627,8 @@ class SneakCheckpointHandler:
         character = ctx.entity(character_id)
         if _has_clearance(character, gate.clearance_required, gate.zone_tag):
             return rejected("you can simply show credentials here")
-        return planned(
-            MutationPlan(),
+        stealth_operations = stealth_change_operations(character, epoch=ctx.epoch, hiding=True)
+        events: list[DomainEvent] = [
             CheckpointPassedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -632,7 +639,13 @@ class SneakCheckpointHandler:
                     checkpoint_id=str(checkpoint.id),
                     method="stealth",
                 )
-            ),
+            )
+        ]
+        if stealth_operations:
+            events.append(stealth_changed_event(ctx, character_id, hiding=True))
+        return planned(
+            MutationPlan(stealth_operations),
+            *events,
         )
 
 
@@ -3573,9 +3586,7 @@ def validate_neonsim_relationships(
         world.query().execute_entities()
         if entity_ids is None
         else (
-            world.get_entity(entity_id)
-            for entity_id in entity_ids
-            if world.has_entity(entity_id)
+            world.get_entity(entity_id) for entity_id in entity_ids if world.has_entity(entity_id)
         )
     )
     for evidence in evidence_entities:

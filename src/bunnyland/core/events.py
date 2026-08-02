@@ -21,6 +21,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from .components import GenerationIntentComponent
+from .edges import StealthSense
 
 
 class EventVisibility(StrEnum):
@@ -225,6 +226,24 @@ class NoiseHeardEvent(DomainEvent):
     noise_id: str
     source_entity_id: str | None = None
     text: str = ""
+
+
+class StealthChangedEvent(DomainEvent):
+    character_id: str
+    hiding: bool
+
+    @property
+    def sneaking(self) -> bool:
+        """Compatibility spelling for older Dragonsim event consumers."""
+
+        return self.hiding
+
+
+class StealthDetectedEvent(DomainEvent):
+    observer_id: str
+    hidden_entity_id: str
+    target_since_epoch: int
+    sense: StealthSense
 
 
 class AttentionShiftedEvent(DomainEvent):
@@ -965,6 +984,8 @@ __all__ = [
     "RoomLookedEvent",
     "SpeechSaidEvent",
     "SpeechToldEvent",
+    "StealthChangedEvent",
+    "StealthDetectedEvent",
     "WorldPauseStatusChangedEvent",
     "WorldGenerationCompletedEvent",
     "WorldGenerationFailedEvent",

@@ -38,8 +38,10 @@ which trips the zone alarm. At a manned checkpoint you have three options:
 !sneak target_id="skybridge checkpoint"
 ```
 
-Showing valid credentials or bribing the guard (with scrip) passes you openly; sneaking
-slips a calm checkpoint quietly but fails against an alerted guard.
+Showing valid credentials or bribing the guard (with scrip) passes you openly. Sneaking
+slips a calm checkpoint quietly but fails against an alerted guard. It uses the shared
+stealth state, so later perception, noise, and witness checks treat the checkpoint attempt
+like `!sneak` elsewhere. Explicitly loud movement reveals you.
 
 Claim a safehouse as your own base of operations:
 

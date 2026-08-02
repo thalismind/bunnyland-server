@@ -1,5 +1,6 @@
 """Declarative dragonsim generation contributions."""
 
+from ...core.components import StealthComponent
 from ...core.generation import GenerationDelta, GenerationEdge, GenerationRequest, GenerationTarget
 from ...worldgen.enrichment import (
     GenerationContext,
@@ -33,7 +34,6 @@ from .mechanics import (
     QuestProvenanceComponent,
     QuestRewardComponent,
     QuestStateComponent,
-    SneakingComponent,
     SpellComponent,
     SpellCooldownComponent,
     SurrenderComponent,
@@ -123,7 +123,13 @@ class DragonGenerationEnricher:
             if generation_wants(ctx, "bunnyland.dragonsim.stealth") or generation_mentions(
                 ctx, "sneak", "stealthy"
             ):
-                add(SneakingComponent(sneaking=True, since_epoch=ctx.world_epoch))
+                add(
+                    StealthComponent(
+                        visibility_level=0.0,
+                        hiding=True,
+                        since_epoch=ctx.world_epoch,
+                    )
+                )
             if generation_wants(ctx, "bunnyland.dragonsim.wanted", "bunnyland.dragonsim.bounty"):
                 faction_id = request.context.get("faction_id")
                 if faction_id:

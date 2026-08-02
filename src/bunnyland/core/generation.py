@@ -5,10 +5,13 @@ from __future__ import annotations
 import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import NAMESPACE_URL, uuid5
 
-from relics import Component, Edge
+from relics import Component, Edge, EntityId
+
+if TYPE_CHECKING:
+    from ..plugins.registry import PluginRegistry
 
 
 class GenerationError(RuntimeError):
@@ -27,13 +30,13 @@ class GenerationRequest:
     source_key: str = ""
     request_id: str = ""
     parent_request_id: str | None = None
-    context: Mapping[str, Any] = field(default_factory=dict)
+    context: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class GenerationEdge:
     edge: Edge
-    target_id: Any
+    target_id: EntityId | str | GenerationTarget
 
 
 @dataclass(frozen=True)
@@ -89,9 +92,13 @@ class CoreGenerationEnricher:
 
         text = " ".join((request.entity_kind, request.description, *request.tags)).casefold()
         wants_key = "bunnyland.core.key" in {value.casefold() for value in request.capabilities}
+        raw_base_components = request.context.get("base_components", ())
+        base_components = (
+            raw_base_components if isinstance(raw_base_components, (tuple, list)) else ()
+        )
         has_key = any(
             isinstance(component, KeyComponent)
-            for component in request.context.get("base_components", ())
+            for component in base_components
         )
         if not has_key and (wants_key or "key" in text.split()):
             return GenerationDelta(components=(KeyComponent(key_name=request.description),))
@@ -118,7 +125,7 @@ def _request_id(request: GenerationRequest, *, suffix: str = "") -> str:
 class GenerationPipeline:
     """Normalize intent and merge every applicable enabled-plugin enrichment."""
 
-    def __init__(self, registry: Any | None) -> None:
+    def __init__(self, registry: PluginRegistry | None) -> None:
         self.registry = registry
 
     def normalize(self, request: GenerationRequest) -> GenerationRequest:
@@ -147,7 +154,11 @@ class GenerationPipeline:
             raise GenerationError(
                 f"plugin {plugin_id!r} provides unregistered component {type(component).__name__!r}"
             )
-        if registered is not None and registered != (plugin_id, type(component)):
+        if (
+            registered is not None
+            and registered[0] != "bunnyland.core"
+            and registered != (plugin_id, type(component))
+        ):
             raise GenerationError(
                 f"plugin {plugin_id!r} cannot provide component {type(component).__name__!r}; "
                 f"it is owned by {registered[0]!r}"

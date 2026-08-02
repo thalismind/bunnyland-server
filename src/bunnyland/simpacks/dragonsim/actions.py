@@ -167,7 +167,8 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         tool_name="steal",
         description=(
             "Take an item another character in the room is carrying without paying. Awake "
-            "faction witnesses will raise a bounty on you unless you are sneaking."
+            "faction witnesses who can see you will raise a bounty, including observers "
+            "who detected your current hide attempt."
         ),
         patterns=("steal {item_id} from {target_id:word}",),
     ),

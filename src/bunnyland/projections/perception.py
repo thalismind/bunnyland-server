@@ -20,11 +20,11 @@ from ..core.components import (
     PerceptionComponent,
     RoomComponent,
     SleepingComponent,
-    StealthComponent,
     SuspendedComponent,
 )
 from ..core.ecs import container_of
 from ..core.edges import Contains, ExitTo, Holding
+from ..core.stealth import observer_can_see
 from .room_summary import RoomExit
 
 
@@ -60,18 +60,13 @@ def _reveals_contents(entity: Entity) -> bool:
     return container.open or container.transparent
 
 
-def _is_hidden(entity: Entity) -> bool:
-    if not entity.has_component(StealthComponent):
-        return False
-    stealth = entity.get_component(StealthComponent)
-    return stealth.hiding and stealth.visibility_level <= stealth.hidden_threshold
-
-
-def _held_items(world: World, character: Entity) -> tuple[PerceivedEntity, ...]:
+def _held_items(
+    world: World, character: Entity, observer: Entity
+) -> tuple[PerceivedEntity, ...]:
     perceived: list[PerceivedEntity] = []
     for _edge, item_id in character.get_relationships(Holding):
         item = world.get_entity(item_id)
-        if _is_hidden(item):
+        if not observer_can_see(world, observer, item):
             continue
         perceived.append(
             PerceivedEntity(
@@ -84,24 +79,24 @@ def _held_items(world: World, character: Entity) -> tuple[PerceivedEntity, ...]:
 
 
 def _visible_children(
-    world: World, entity: Entity, *, recurse: bool
+    world: World, entity: Entity, observer: Entity, *, recurse: bool
 ) -> tuple[PerceivedEntity, ...]:
     perceived: list[PerceivedEntity] = []
     for edge, child_id in entity.get_relationships(Contains):
         if not edge.visible:
             continue
         child = world.get_entity(child_id)
-        if _is_hidden(child):
+        if not observer_can_see(world, observer, child):
             continue
         nested: tuple[PerceivedEntity, ...] = ()
         if recurse and child.has_component(CharacterComponent):
             nested = (
-                _visible_children(world, child, recurse=False)
+                _visible_children(world, child, observer, recurse=False)
                 if child.has_component(DeadComponent)
-                else _held_items(world, child)
+                else _held_items(world, child, observer)
             )
         elif recurse and _reveals_contents(child):
-            nested = _visible_children(world, child, recurse=False)
+            nested = _visible_children(world, child, observer, recurse=False)
         perceived.append(
             PerceivedEntity(
                 id=str(child_id),
@@ -128,7 +123,11 @@ def perceive(world: World, character: Entity) -> Perception:
 
     room = world.get_entity(room_id)
     self_id = str(character.id)
-    entities = tuple(e for e in _visible_children(world, room, recurse=True) if e.id != self_id)
+    entities = tuple(
+        e
+        for e in _visible_children(world, room, character, recurse=True)
+        if e.id != self_id
+    )
     exits = tuple(
         sorted(
             (

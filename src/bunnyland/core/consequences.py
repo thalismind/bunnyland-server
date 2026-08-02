@@ -13,6 +13,7 @@ die (spec 8.3).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Protocol
 
@@ -32,12 +33,14 @@ from .components import (
     NoiseComponent,
     PainComponent,
     PerceptionComponent,
+    SleepingComponent,
+    StealthComponent,
     StimulusComponent,
     SuspendedComponent,
     WeightComponent,
 )
-from .ecs import container_of, replace_component
-from .edges import ContainmentMode, Contains, HasInjury
+from .ecs import container_of, contents, replace_component
+from .edges import ContainmentMode, Contains, DetectedStealth, HasInjury, StealthSense
 from .events import (
     AttentionShiftedEvent,
     BleedingChangedEvent,
@@ -49,11 +52,13 @@ from .events import (
     EntitySeenEvent,
     NoiseHeardEvent,
     PainChangedEvent,
+    StealthDetectedEvent,
 )
 from .events import EventVisibility as _Vis
 from .events import (
     event_base as _event_base,
 )
+from .stealth import containing_room
 
 DEFAULT_RECOVERY_CHECKS = 3
 
@@ -322,6 +327,112 @@ class PerceptionConsequence:
         return events
 
 
+class StealthDetectionConsequence:
+    """Maintain observer detections from the indexed set of stealth targets."""
+
+    _blocked = (SuspendedComponent, DeadComponent, SleepingComponent, DownedComponent)
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        noises_by_source: dict[str, list[NoiseComponent]] = {}
+        for noise_entity in world.query().with_all([NoiseComponent]).execute_entities():
+            noise = noise_entity.get_component(NoiseComponent)
+            if noise.source_entity_id is not None and _noise_active(noise, epoch):
+                noises_by_source.setdefault(noise.source_entity_id, []).append(noise)
+
+        for target in world.query().with_all([StealthComponent]).execute_entities():
+            stealth = target.get_component(StealthComponent)
+            existing = {
+                observer_id: edge
+                for observer_id, edge in target.get_incoming_relationships(DetectedStealth)
+            }
+            if not (stealth.hiding and stealth.visibility_level <= stealth.hidden_threshold):
+                self._remove_detections(world, target.id, existing)
+                continue
+
+            room_id = containing_room(world, target)
+            if room_id is None or not world.has_entity(room_id):
+                self._remove_detections(world, target.id, existing)
+                continue
+            room = world.get_entity(room_id)
+            valid_observers = set()
+            for observer_id in sorted(contents(room), key=str):
+                if observer_id == target.id or not world.has_entity(observer_id):
+                    continue
+                observer = world.get_entity(observer_id)
+                sense = self._detection_sense(
+                    observer,
+                    stealth,
+                    noises_by_source.get(str(target.id), ()),
+                )
+                if sense is None:
+                    continue
+                valid_observers.add(observer_id)
+                prior = existing.get(observer_id)
+                observer.add_relationship(
+                    DetectedStealth(
+                        target_since_epoch=stealth.since_epoch,
+                        sense=sense,
+                    ),
+                    target.id,
+                )
+                if prior is None or prior.target_since_epoch != stealth.since_epoch:
+                    events.append(
+                        StealthDetectedEvent(
+                            **_event_base(
+                                epoch,
+                                visibility=_Vis.PRIVATE,
+                                actor_id=str(observer_id),
+                                room_id=str(room_id),
+                                target_ids=(str(target.id),),
+                                observer_id=str(observer_id),
+                                hidden_entity_id=str(target.id),
+                                target_since_epoch=stealth.since_epoch,
+                                sense=sense,
+                            )
+                        )
+                    )
+            for observer_id in existing.keys() - valid_observers:
+                if world.has_entity(observer_id):
+                    world.get_entity(observer_id).remove_relationship(DetectedStealth, target.id)
+        return events
+
+    def _detection_sense(
+        self,
+        observer,
+        stealth: StealthComponent,
+        noises: Sequence[NoiseComponent],
+    ) -> StealthSense | None:
+        if not observer.has_component(CharacterComponent) or any(
+            observer.has_component(component) for component in self._blocked
+        ):
+            return None
+        perception = (
+            observer.get_component(PerceptionComponent)
+            if observer.has_component(PerceptionComponent)
+            else PerceptionComponent()
+        )
+        if not perception.active:
+            return None
+        concealment = max(0.0, 1.0 - stealth.visibility_level)
+        if perception.detection_strength >= concealment:
+            return StealthSense.VISUAL
+        hearing = (
+            observer.get_component(HearingComponent)
+            if observer.has_component(HearingComponent)
+            else HearingComponent()
+        )
+        if any(_can_hear(observer, noise, hearing) for noise in noises):
+            return StealthSense.HEARING
+        return None
+
+    @staticmethod
+    def _remove_detections(world: World, target_id, existing) -> None:
+        for observer_id in existing:
+            if world.has_entity(observer_id):
+                world.get_entity(observer_id).remove_relationship(DetectedStealth, target_id)
+
+
 class HearingConsequence:
     """Track audible noises for characters in the same room."""
 
@@ -498,4 +609,5 @@ __all__ = [
     "HealthConsequence",
     "InjuryConsequence",
     "PerceptionConsequence",
+    "StealthDetectionConsequence",
 ]
