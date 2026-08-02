@@ -190,24 +190,37 @@ Contract an affliction and transform:
 
 ```text
 !contract-affliction affliction_type="moon-form"
-!progress-affliction-incubation target_id=Mara
 !mark-affliction-stigma target_id=Mara region_id="Moss Coast" severity=2
 !request-cure-quest quest_id="moon cure lead"
 !transform form_name="moon hare"
 ```
 
-An affliction grows a feeding need over time. Feed on a reachable character to satisfy it,
-end your transformation to return to a dormant state, or seek a cure to lift the curse
-entirely:
+Incubation completes deterministically after one world hour. The compatibility action
+`!progress-affliction-incubation` may confirm that transition once its timer has elapsed;
+it cannot skip the timer. Each affliction grants a private membership in its secret
+affliction faction, a typed supernatural power, and tagged weaknesses that use the shared
+magic resistance system. Use the power on a reachable character with health:
 
 ```text
+!use-affliction-power target_id="Lantern Warden"
 !feed-on target_id="Wanderer"
 !end-transformation
-!cure-affliction
 ```
 
-Your affliction, its stage, your feeding need, and whether you are currently transformed
-all show in your character context.
+Requesting a cure creates and accepts a real quest. Complete its objective to receive the
+matching remedy, then consume that remedy to cure the condition. Validation failures do
+not consume the remedy:
+
+```text
+!request-cure-quest quest_id="moon cure lead"
+!complete-objective objective_id="Secure a remedy for moon-form"
+!cure-affliction remedy_id="remedy for moon-form"
+```
+
+The cure removes the affliction, feeding need, transformed form, tagged weakness, stigma,
+and secret faction membership. Your private character context shows the affliction stage,
+feeding need, transformation, stigma, cure request, remedy, and secret membership; nearby
+observers see only generic friend-or-foe behavior, never the hidden faction identity.
 
 ## Dungeons
 

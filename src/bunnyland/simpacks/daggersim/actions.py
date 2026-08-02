@@ -352,7 +352,6 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     define_action(
         "progress-affliction-incubation",
-        ("target_id",),
         tool_name="progress_affliction_incubation",
         description=(
             "Advance your supernatural affliction to its next stage as the curse takes hold. "
@@ -378,6 +377,15 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ),
     ),
     define_action(
+        "use-affliction-power",
+        ("target_id",),
+        tool_name="use_affliction_power",
+        description=(
+            "Use the typed supernatural power granted by your active affliction against a "
+            "reachable target. The target must have compatible health state."
+        ),
+    ),
+    define_action(
         "feed-on",
         ("target_id",),
         tool_name="feed_on",
@@ -396,10 +404,11 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     define_action(
         "cure-affliction",
+        ("remedy_id",),
         tool_name="cure_affliction",
         description=(
-            "Cure yourself of a supernatural affliction, shedding its curse, hunger, and any "
-            "transformed form."
+            "Consume the matching reachable remedy after completing your cure quest, shedding "
+            "the affliction, hunger, transformed form, weaknesses, and secret affiliation."
         ),
     ),
     define_action(
