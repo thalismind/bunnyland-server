@@ -36,6 +36,7 @@ from .mechanics import (
     SneakingComponent,
     SpellComponent,
     SpellCooldownComponent,
+    SpiritVesselComponent,
     SurrenderComponent,
     VoiceInscriptionComponent,
     WantedByFaction,
@@ -73,6 +74,7 @@ CAPABILITIES = (
     "bunnyland.dragonsim.quest-template",
     "bunnyland.dragonsim.quest-stage",
     "bunnyland.dragonsim.spell",
+    "bunnyland.dragonsim.spirit-vessel",
     "bunnyland.dragonsim.spell-cooldown",
     "bunnyland.dragonsim.stealth",
     "bunnyland.dragonsim.surrender",
@@ -213,6 +215,10 @@ class DragonGenerationEnricher:
                 ctx, "artifact"
             ):
                 add(ArtifactComponent(name=name, effect=ctx.intent or name))
+            if generation_wants(
+                ctx, "bunnyland.dragonsim.spirit-vessel"
+            ) or generation_mentions(ctx, "spirit vessel", "soul gem"):
+                add(SpiritVesselComponent(essence=1))
             if generation_wants(ctx, "bunnyland.dragonsim.carvable"):
                 add(CarvableComponent(remaining_space=24))
             if generation_wants(ctx, "bunnyland.dragonsim.voice-inscription"):

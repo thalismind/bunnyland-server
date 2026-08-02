@@ -234,11 +234,11 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
     define_action(
         "cast-dragon-spell",
-        ("spell_id",),
+        ("spell_id", "target_id"),
         tool_name="cast_dragon_spell",
         description=(
             "Cast a spell you have learned, spending magic and starting any cooldown. You need "
-            "enough magic and the spell must be off cooldown."
+            "enough magic and the spell must be off cooldown; effects default to yourself."
         ),
         requirement=ActionRequirement(character_edges=("KnowsSpell",)),
     ),

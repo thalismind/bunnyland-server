@@ -3539,7 +3539,8 @@ AlchemyIngredientComponent
 PotionComponent
 PoisonComponent
 ArtifactComponent
-SoulVesselComponent
+SpiritVesselComponent
+ItemCurseComponent
 ```
 
 ### Systems
@@ -3564,6 +3565,7 @@ apply poison
 enchant item
 identify artifact
 use artifact
+purify item
 ```
 
 ### Events
@@ -3574,6 +3576,8 @@ SpellLearnedEvent
 PotionBrewedEvent
 EnchantmentAppliedEvent
 ArtifactDiscoveredEvent
+ItemCurseTriggeredEvent
+ItemPurifiedEvent
 ```
 
 ---
@@ -7897,7 +7901,8 @@ civic law/courts/sentences
 travel logistics/lodging/camping/supplies/interruptions
 procedural dungeons
 custom classes
-custom spells/enchantments/potions/recharge/ingredient identification
+custom spells/typed heal-harm effects/enchantments/spirit vessels/curses/purification
+potions/recharge/ingredient identification
 etiquette/streetwise
 language skills/pacification
 supernatural afflictions/incubation/stigma/cure quest hooks

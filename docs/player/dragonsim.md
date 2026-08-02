@@ -181,7 +181,7 @@ artifact:
 
 ```text
 !learn-spell spell_id=Spark
-!cast-dragon-spell spell_id=Spark
+!cast-dragon-spell spell_id=Spark target_id="Moss Guard"
 !recover-magic amount=5
 !brew-potion recipe_id="blue tonic recipe"
 !identify target_id="star mirror"
@@ -189,6 +189,10 @@ artifact:
 ```
 
 Spells can have cooldowns, and magic recovery respects the character's magic state.
+Prepared spells and artifacts with typed `heal` or `harm` powers clamp health safely.
+Weaknesses and resistances matching an effect's tags modify its magnitude. Older
+free-form artifact and spell descriptions remain visible, but do not execute as powers
+until they have typed effect data. Using a cursed artifact reveals the curse to its user.
 
 ## Quest branches, persuasion, and surrender
 

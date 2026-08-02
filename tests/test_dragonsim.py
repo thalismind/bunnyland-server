@@ -10,6 +10,7 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     DeadComponent,
+    HealthComponent,
     IdentityComponent,
     Lane,
     PortableComponent,
@@ -25,6 +26,7 @@ from bunnyland.core import (
 from bunnyland.core.events import CommandRejectedEvent
 from bunnyland.core.handlers import HandlerContext
 from bunnyland.prompts import ComponentPromptContext, PromptPerspective
+from bunnyland.simpacks.dragonsim.effects import EffectModifier, EffectSpec, resolve_effect
 from bunnyland.simpacks.dragonsim.mechanics import (
     AbsorbGreatSoulHandler,
     AcceptQuestHandler,
@@ -62,6 +64,8 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     HasStandingWithFaction,
     IdentifyArtifactHandler,
     InscribeVoicePhraseHandler,
+    ItemCurseComponent,
+    ItemCurseTriggeredEvent,
     JailedByFaction,
     JailSentenceServedEvent,
     JoinFactionHandler,
@@ -116,6 +120,7 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     SpellComponent,
     SpellCooldownComponent,
     SpellLearnedEvent,
+    SpiritVesselComponent,
     StealHandler,
     StealthChangedEvent,
     StudyVoiceInscriptionHandler,
@@ -3011,3 +3016,72 @@ def test_fragments_skip_spell_component_for_already_known_nearby_spell():
     # The "known spell" fragment still appears, but the nearby SpellComponent is skipped.
     assert any("Spell learned: Familiar" in line for line in lines)
     assert not any("Learnable spell nearby: Familiar" in line for line in lines)
+
+
+def test_shared_effect_resolver_combines_matching_modifiers_and_clamps_health():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    target = world.get_entity(scenario.character)
+    target.add_component(HealthComponent(current=2.0, maximum=10.0))
+    weakness = spawn_entity(world, [IdentityComponent(name="fire weakness", kind="effect-source")])
+    resistance = spawn_entity(
+        world, [IdentityComponent(name="magic resistance", kind="effect-source")]
+    )
+    unrelated = spawn_entity(world, [IdentityComponent(name="frost ward", kind="effect-source")])
+    target.add_relationship(EffectModifier(tags=("fire",), multiplier=10.0), weakness.id)
+    target.add_relationship(EffectModifier(tags=("magic",), multiplier=0.5), resistance.id)
+    target.add_relationship(EffectModifier(tags=("frost",), multiplier=0.01), unrelated.id)
+
+    resolved = resolve_effect(
+        world,
+        target,
+        EffectSpec("harm", 3.0, tags=("fire", "magic"), target_mode="single"),
+    )
+
+    assert resolved is not None
+    result, _operation = resolved
+    assert result.multiplier == 4.0
+    assert result.before == 2.0
+    assert result.after == 0.0
+
+
+def test_typed_artifact_effect_and_curse_resolve_before_charge_is_spent():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, scenario.actor.epoch)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(HealthComponent(current=5.0, maximum=10.0))
+    artifact = _dragon_room_entity(
+        scenario,
+        "thorn mirror",
+        "artifact",
+        [
+            ArtifactComponent(
+                name="thorn mirror",
+                charges=1,
+                typed_effect=EffectSpec("heal", 3.0, tags=("restoration",)),
+            ),
+            ItemCurseComponent(name="thorn bite", effect=EffectSpec("harm", 2.0)),
+        ],
+    )
+
+    result = execute_handler(
+        UseArtifactHandler(),
+        ctx,
+        _handler_cmd(scenario, "use", artifact_id=str(artifact.id)),
+    )
+
+    assert result.ok is True
+    assert character.get_component(HealthComponent).current == 6.0
+    assert artifact.get_component(ArtifactComponent).charges == 0
+    curse = artifact.get_component(ItemCurseComponent)
+    assert curse.identified_by == (str(scenario.character),)
+    assert any(isinstance(event, ItemCurseTriggeredEvent) for event in result.events)
+
+
+def test_spirit_vessel_prompt_reports_charge_state():
+    scenario = build_scenario()
+    vessel = spawn_entity(scenario.actor.world, [SpiritVesselComponent(essence=1)])
+    ctx = ComponentPromptContext.for_entity(scenario.actor.world, vessel)
+    assert vessel.get_component(SpiritVesselComponent).prompt_fragments(ctx) == (
+        "Spirit vessel nearby: 1 essence (charged).",
+    )

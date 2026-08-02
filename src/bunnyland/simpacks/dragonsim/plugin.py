@@ -1,5 +1,6 @@
 """Canonical Dragon Sim plugin entrypoint."""
 
+from bunnyland.simpacks.dragonsim.effects import EffectModifier
 from bunnyland.simpacks.dragonsim.mechanics import (
     AbsorbGreatSoulHandler,
     AcceptQuestHandler,
@@ -38,6 +39,8 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     HasStandingWithFaction,
     IdentifyArtifactHandler,
     InscribeVoicePhraseHandler,
+    ItemCurseComponent,
+    ItemCurseTriggeredEvent,
     JailedByFaction,
     JailSentenceServedEvent,
     JoinFactionHandler,
@@ -94,6 +97,7 @@ from bunnyland.simpacks.dragonsim.mechanics import (
     SpellComponent,
     SpellCooldownComponent,
     SpellLearnedEvent,
+    SpiritVesselComponent,
     StealHandler,
     StealthChangedEvent,
     StudyVoiceInscriptionHandler,
@@ -197,6 +201,8 @@ def _definition() -> Plugin:
                 PotionRecipeComponent,
                 PotionComponent,
                 ArtifactComponent,
+                SpiritVesselComponent,
+                ItemCurseComponent,
             ),
             edges=(
                 MemberOfFaction,
@@ -214,6 +220,7 @@ def _definition() -> Plugin:
                 RequiresQuest,
                 QuestRewardGrants,
                 DependsOnIngredient,
+                EffectModifier,
             ),
         ),
         commands=CommandContribution(
@@ -303,6 +310,7 @@ def _definition() -> Plugin:
                 PotionBrewedEvent,
                 ArtifactIdentifiedEvent,
                 ArtifactUsedEvent,
+                ItemCurseTriggeredEvent,
                 AncientBeastAppeasedEvent,
             ),
         ),
