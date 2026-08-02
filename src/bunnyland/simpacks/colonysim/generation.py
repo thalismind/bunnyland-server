@@ -42,6 +42,7 @@ from .mechanics import (
     WorkCapabilityComponent,
     WorkPriorityComponent,
     WorkstationComponent,
+    WorldMapLocationComponent,
 )
 
 CAPABILITIES = (
@@ -79,6 +80,7 @@ CAPABILITIES = (
     "bunnyland.colonysim.work-capability",
     "bunnyland.colonysim.work-priority",
     "bunnyland.colonysim.workstation",
+    "bunnyland.colonysim.world-map-location",
 )
 
 
@@ -94,6 +96,10 @@ class ColonyGenerationEnricher:
             components[type(component)] = component
 
         if ctx.is_room:
+            if generation_wants(
+                ctx, "bunnyland.colonysim.world-map-location"
+            ) or generation_mentions(ctx, "settlement", "village", "town", "market"):
+                add(WorldMapLocationComponent(name=ctx.name))
             if generation_wants(ctx, "bunnyland.colonysim.stockpile") or generation_mentions(
                 ctx, "stockpile", "warehouse"
             ):

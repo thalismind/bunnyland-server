@@ -206,6 +206,24 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ),
     ),
     define_action(
+        "visit-settlement",
+        ("caravan_id",),
+        tool_name="visit_settlement",
+        description=(
+            "Mark an arrived caravan's destination as visited, opening settlement trade "
+            "and quest hooks. You must be enrolled in the caravan."
+        ),
+    ),
+    define_action(
+        "return-caravan",
+        ("caravan_id",),
+        tool_name="return_caravan",
+        description=(
+            "Send a visiting caravan back to its origin along the current live route. "
+            "The caravan and its co-located members travel together."
+        ),
+    ),
+    define_action(
         "perform-surgery",
         ("patient_id", "surgery_id"),
         tool_name="perform_surgery",

@@ -2065,7 +2065,7 @@ FactionRelationSystem
 TraderArrivalSystem
 TradeSystem
 CaravanAssemblySystem
-CaravanTravelSystem
+CaravanTravelConsequence (indexed by CaravanComponent; live deterministic ExitTo routes)
 DiplomacySystem
 WorldMapEventSystem
 ```
@@ -2075,9 +2075,9 @@ WorldMapEventSystem
 ```text
 trade
 gift item
-form caravan
-travel
-visit settlement
+form-caravan
+visit-settlement
+return-caravan
 attack settlement
 negotiate
 request aid

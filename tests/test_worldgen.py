@@ -4618,3 +4618,30 @@ def test_relationship_generation_requires_targets_and_emits_configured_access():
         )
     )
     assert unscoped_rumor.edges == ()
+
+
+def test_colonysim_generation_marks_settlement_rooms_as_world_map_locations():
+    from bunnyland.core import GenerationRequest, IdentityComponent, RoomComponent
+    from bunnyland.simpacks.colonysim.generation import ColonyGenerationEnricher
+    from bunnyland.simpacks.colonysim.mechanics import WorldMapLocationComponent
+
+    delta = ColonyGenerationEnricher().enrich(
+        GenerationRequest(
+            entity_kind="room",
+            source_key="hill-market",
+            description="a trading settlement",
+            context={
+                "base_components": (
+                    IdentityComponent(name="Hill Market", kind="room"),
+                    RoomComponent(title="Hill Market"),
+                )
+            },
+        )
+    )
+
+    location = next(
+        component
+        for component in delta.components
+        if isinstance(component, WorldMapLocationComponent)
+    )
+    assert location.name == "Hill Market"
