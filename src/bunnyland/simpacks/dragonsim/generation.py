@@ -14,10 +14,8 @@ from .mechanics import (
     CarvableComponent,
     DiscoveryComponent,
     EncounterZoneComponent,
-    FactionComponent,
     GreatSoulComponent,
     GuardsForFaction,
-    HasStandingWithFaction,
     JailedByFaction,
     LockDifficultyComponent,
     LoreBookComponent,
@@ -95,12 +93,6 @@ class DragonGenerationEnricher:
 
         if ctx.is_character:
             name = ctx.name
-            if generation_wants(ctx, "bunnyland.dragonsim.faction-reputation"):
-                faction_id = request.context.get("faction_id")
-                if faction_id:
-                    edges.append(
-                        GenerationEdge(HasStandingWithFaction(), GenerationTarget(str(faction_id)))
-                    )
             if generation_wants(ctx, "bunnyland.dragonsim.guard") or generation_mentions(
                 ctx, "guard"
             ):
@@ -160,10 +152,6 @@ class DragonGenerationEnricher:
                 ctx, "encounter zone"
             ):
                 add(EncounterZoneComponent(zone_type=ctx.entity_kind))
-            if generation_wants(ctx, "bunnyland.dragonsim.faction") or generation_mentions(
-                ctx, "faction", "guild", "clan"
-            ):
-                add(FactionComponent(name=name))
             if generation_wants(ctx, "bunnyland.dragonsim.quest"):
                 add(
                     QuestComponent(

@@ -69,30 +69,6 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         patterns=("complete objective {objective_id}",),
     ),
     define_action(
-        "join-faction",
-        ("faction_id", "rank"),
-        tool_name="join_faction",
-        description=(
-            "Join a faction at a chosen rank, gaining membership standing with it. The target "
-            "must be a faction you do not already belong to."
-        ),
-        lane=Lane.FOCUS,
-        cost=EXTENDED_FOCUS_COST,
-        patterns=("join faction {faction_id}",),
-    ),
-    define_action(
-        "leave-faction",
-        ("faction_id",),
-        tool_name="leave_faction",
-        description=(
-            "Resign your membership in a faction you currently belong to. Use this to drop a "
-            "rank before aligning with a rival group."
-        ),
-        lane=Lane.FOCUS,
-        cost=FOCUS_COST,
-        patterns=("leave faction {faction_id}",),
-    ),
-    define_action(
         "unlock-perk",
         ("perk_id",),
         tool_name="unlock_perk",

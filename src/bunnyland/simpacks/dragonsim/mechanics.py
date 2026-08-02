@@ -7,6 +7,16 @@ from dataclasses import replace
 from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, World
 
+from bunnyland.foundation.factions.mechanics import (
+    FactionComponent,
+    FactionJoinedEvent,
+    FactionLeftEvent,
+    HasStandingWithFaction,
+    JoinFactionHandler,
+    LeaveFactionHandler,
+    MemberOfFaction,
+    faction_fragments,
+)
 from bunnyland.simpacks.lifesim.mechanics import SkillSetComponent, _skill_xp_update
 
 from ...core.commands import SubmittedCommand
@@ -199,29 +209,6 @@ class QuestRewardGrants(Edge):
 
 
 @dataclass(frozen=True)
-class FactionComponent(Component):
-    name: str
-    ideology: str = ""
-
-
-@dataclass(frozen=True)
-class HasStandingWithFaction(Edge):
-    """character -> faction, carrying that faction's standing score."""
-
-    score: int = 0
-
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if not ctx.is_first_person or ctx.target is None:
-            return ()
-        faction_name = (
-            ctx.target.get_component(FactionComponent).name
-            if ctx.target.has_component(FactionComponent)
-            else _name(ctx.target)
-        )
-        return (f"Faction standing with {faction_name}: {self.score}.",)
-
-
-@dataclass(frozen=True)
 class GuardsForFaction(Edge):
     """guard -> faction, carrying the amount accepted as a bribe."""
 
@@ -258,24 +245,6 @@ class PerkComponent(Component):
         if not ctx.can_view_private_state:
             return ()
         return (f"Perk unlocked: {self.name}.",)
-
-
-@dataclass(frozen=True)
-class MemberOfFaction(Edge):
-    rank: str = "member"
-    since_epoch: int = 0
-
-    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
-        if not ctx.is_first_person:
-            return ()
-        if ctx.target is None:
-            return ()
-        faction_name = (
-            ctx.target.get_component(FactionComponent).name
-            if ctx.target.has_component(FactionComponent)
-            else _name(ctx.target)
-        )
-        return (f"You are a {self.rank} of {faction_name}.",)
 
 
 @dataclass(frozen=True)
@@ -578,17 +547,6 @@ class QuestDeclinedEvent(DomainEvent):
 class QuestBranchChosenEvent(DomainEvent):
     quest_id: str
     branch: str
-
-
-class FactionJoinedEvent(DomainEvent):
-    faction_id: str
-    faction_name: str
-    rank: str = "member"
-
-
-class FactionLeftEvent(DomainEvent):
-    faction_id: str
-    faction_name: str
 
 
 class PerkUnlockedEvent(DomainEvent):
@@ -1215,82 +1173,6 @@ class ChooseQuestBranchHandler:
                     target_ids=(str(quest_id),),
                     quest_id=str(quest_id),
                     branch=branch,
-                )
-            ),
-        )
-
-
-class JoinFactionHandler:
-    command_type = "join-faction"
-
-    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        faction_id = parse_entity_id(command.payload.get("faction_id"))
-        rank = str(command.payload.get("rank", "member")).strip() or "member"
-        if character_id is None or faction_id is None:
-            return rejected("invalid character or faction id")
-        if not ctx.world.has_entity(faction_id):
-            return rejected("faction does not exist")
-        character = ctx.entity(character_id)
-        faction = ctx.entity(faction_id)
-        if not faction.has_component(FactionComponent):
-            return rejected("target is not a faction")
-        if character.has_relationship(MemberOfFaction, faction_id):
-            return rejected("already a faction member")
-
-        faction_name = faction.get_component(FactionComponent).name
-        return planned(
-            MutationPlan(
-                (
-                    AddEdge(
-                        character_id,
-                        faction_id,
-                        MemberOfFaction(rank=rank, since_epoch=ctx.epoch),
-                    ),
-                )
-            ),
-            FactionJoinedEvent(
-                **ctx.event_base(
-                    visibility=EventVisibility.PRIVATE,
-                    actor_id=str(character_id),
-                    room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(faction_id),),
-                    faction_id=str(faction_id),
-                    faction_name=faction_name,
-                    rank=rank,
-                )
-            ),
-        )
-
-
-class LeaveFactionHandler:
-    command_type = "leave-faction"
-
-    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        faction_id = parse_entity_id(command.payload.get("faction_id"))
-        if character_id is None or faction_id is None:
-            return rejected("invalid character or faction id")
-        if not ctx.world.has_entity(faction_id):
-            return rejected("faction does not exist")
-        character = ctx.entity(character_id)
-        faction = ctx.entity(faction_id)
-        if not faction.has_component(FactionComponent):
-            return rejected("target is not a faction")
-        if not character.has_relationship(MemberOfFaction, faction_id):
-            return rejected("not a faction member")
-
-        faction_name = faction.get_component(FactionComponent).name
-        return planned(
-            MutationPlan((RemoveEdge(character_id, faction_id, MemberOfFaction),)),
-            FactionLeftEvent(
-                **ctx.event_base(
-                    visibility=EventVisibility.PRIVATE,
-                    actor_id=str(character_id),
-                    room_id=_room_id(ctx.world, character_id),
-                    target_ids=(str(faction_id),),
-                    faction_id=str(faction_id),
-                    faction_name=faction_name,
                 )
             ),
         )
@@ -2518,23 +2400,9 @@ class StudyVoiceInscriptionHandler:
         )
 
 
-def dragonsim_fragments(world: World, character: Entity) -> list[str]:
+def dragonsim_pack_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     ctx = ComponentPromptContext.for_entity(world, character)
-    for edge, faction_id in character.get_relationships(MemberOfFaction):
-        # Relics cascades inbound removal, so MemberOfFaction never points at a missing faction.
-        faction = world.get_entity(faction_id)
-        edge_ctx = ComponentPromptContext.for_entity(
-            world, character, perspective=ctx.perspective, target=faction
-        )
-        lines.extend(edge.prompt_fragments(edge_ctx))
-    for edge, faction_id in character.get_relationships(HasStandingWithFaction):
-        faction = world.get_entity(faction_id)
-        edge_ctx = ComponentPromptContext.for_entity(
-            world, character, perspective=ctx.perspective, target=faction
-        )
-        lines.extend(edge.prompt_fragments(edge_ctx))
-
     for quest in world.query().with_all([QuestComponent]).execute_entities():
         quest_ctx = ComponentPromptContext.for_entity(
             world, quest, perspective=ctx.perspective, target=character
@@ -2616,6 +2484,14 @@ def dragonsim_fragments(world: World, character: Entity) -> list[str]:
                     continue
                 lines.extend(entity.get_component(component_type).prompt_fragments(entity_ctx))
     return sorted(lines)
+
+
+def dragonsim_fragments(world: World, character: Entity) -> list[str]:
+    """Compatibility aggregate for callers that previously received faction facts here."""
+
+    return sorted(
+        (*faction_fragments(world, character), *dragonsim_pack_fragments(world, character))
+    )
 
 
 __all__ = [
@@ -2732,4 +2608,5 @@ __all__ = [
     "VoiceInscriptionStudiedEvent",
     "VoicePhraseInscribedEvent",
     "dragonsim_fragments",
+    "dragonsim_pack_fragments",
 ]

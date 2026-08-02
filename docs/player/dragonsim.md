@@ -74,8 +74,10 @@ Leave it later:
 !leave-faction Moss Wardens
 ```
 
-Faction membership is durable world state. It can affect prompts, reputation, available
-work, and server-side story rules.
+Faction membership is shared foundation state. Public factions can be joined and left here;
+secret affiliations cannot be changed through these public actions. Membership can affect
+prompts, reputation, available work, and server-side story rules. See
+[Factions and nearby stance](factions.md) for the shared visibility rules.
 
 ## Perks
 
