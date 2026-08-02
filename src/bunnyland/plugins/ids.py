@@ -1,6 +1,7 @@
 """Stable identifiers for bundled Bunnyland plugins."""
 
 CORE_VERBS = "bunnyland.core_verbs"
+FACTIONS = "bunnyland.factions"
 MEDIA = "bunnyland.media"
 LIFESIM = "bunnyland.lifesim"
 MEMORY = "bunnyland.memory"

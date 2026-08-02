@@ -196,6 +196,8 @@ metric/span reference and the Tempo setup.
   doors/buttons and handle fire.
 - **[Social play and boundaries](docs/player/social-and-boundaries.md)** — how speech,
   relationships, and policy boundaries affect play.
+- **[Factions and nearby stance](docs/player/factions.md)** — public membership, private
+  secret affiliations, standing, and friend/foe cues.
 - **[Storyteller incidents](docs/player/storyteller-incidents.md)** — how to notice and
   resolve active incidents.
 - **[Garden-sim farming](docs/player/gardensim.md)** — finding soil, planting seeds,
@@ -304,7 +306,8 @@ IDs and out-of-tree plugin notes in [`PLUGINS.md`](PLUGINS.md).
 | **Fortress Sim** | Planned, out of current parity scope | Dwarf Fortress   | Deep materials, world history, civilizations, artifacts, nobles, justice, institutions, tantrum spirals, and multi-site worlds |
 
 Foundational plugins back these up: **Environment** (time, weather, fire), **Mechanisms**
-(doors, buttons), **Social Bonds**, **Policy & Boundaries**, **Persona**, **Storyteller**
+(doors, buttons), **Factions** (affiliations and friend/foe stance), **Social Bonds**,
+**Policy & Boundaries**, **Persona**, **Storyteller**
 (paced incidents), **Memory** (private notes and recall), **Prompt Filters** (stackable
 post-render text transformations), and **World Generators**.
 

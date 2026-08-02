@@ -255,7 +255,7 @@ def test_all_440_bundled_handlers_use_the_pure_plan_contract():
 
 
 def test_live_memberships_and_aggregate_relationships_remain_edges():
-    root = Path(__file__).parents[1] / "src" / "bunnyland" / "simpacks"
+    root = Path(__file__).parents[1] / "src" / "bunnyland"
     forbidden_fields = {
         "AllowedAreaComponent": "room_ids",
         "CaravanComponent": "member_ids",

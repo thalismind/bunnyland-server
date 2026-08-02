@@ -4489,6 +4489,7 @@ async def test_enrichment_object_only_component_branches():
 
 def test_relationship_generation_requires_targets_and_emits_configured_access():
     from bunnyland.core import GenerationEdge, GenerationTarget
+    from bunnyland.foundation.factions.generation import FactionGenerationEnricher
     from bunnyland.simpacks.colonysim.generation import ColonyGenerationEnricher
     from bunnyland.simpacks.daggersim.generation import DaggerGenerationEnricher
     from bunnyland.simpacks.daggersim.mechanics import (
@@ -4568,6 +4569,17 @@ def test_relationship_generation_requires_targets_and_emits_configured_access():
     assert unscoped_door.components == (SecretDoorComponent(hint=""),)
     assert unscoped_door.edges == ()
 
+    faction_standing = FactionGenerationEnricher().enrich(
+        GenerationRequest(
+            entity_kind="character",
+            capabilities=("bunnyland.dragonsim.faction-reputation",),
+            context={"faction_id": "faction"},
+        )
+    )
+    assert faction_standing.edges == (
+        GenerationEdge(HasStandingWithFaction(), GenerationTarget("faction")),
+    )
+
     dragon_standing = DragonGenerationEnricher().enrich(
         GenerationRequest(
             entity_kind="character",
@@ -4581,8 +4593,7 @@ def test_relationship_generation_requires_targets_and_emits_configured_access():
         )
     )
     assert dragon_standing.edges == (
-        GenerationEdge(HasStandingWithFaction(), GenerationTarget("faction")),
-        GenerationEdge(GuardsForFaction(), GenerationTarget("faction")),
+            GenerationEdge(GuardsForFaction(), GenerationTarget("faction")),
         GenerationEdge(JailedByFaction(release_epoch=0), GenerationTarget("faction")),
         GenerationEdge(WantedByFaction(amount=10), GenerationTarget("faction")),
     )

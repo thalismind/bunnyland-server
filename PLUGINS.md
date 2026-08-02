@@ -19,6 +19,8 @@ bunnyland serve --module bunnyland_3d --module bunnyland_rl ...
   by default; enable explicitly and intentionally place checkpoint objects.
 - `bunnyland.worldgen`: deterministic demo generators plus recursive worldgen expansion.
 - `bunnyland.environment`: time of day, weather, light, fire, and environmental pressure.
+- `bunnyland.factions`: public and secret affiliations, standing, directed faction
+  dispositions, and observer-relative friend/foe prompts.
 - `bunnyland.mechanisms`: doors, buttons, switches, locks, and other interactive machinery.
 - `bunnyland.memory`: private notes and recall.
 - `bunnyland.history`: world history records for events and images.
@@ -42,7 +44,7 @@ bunnyland serve --module bunnyland_3d --module bunnyland_rl ...
   harvesting, trees, tapping, sap, and farm chores.
 - `bunnyland.barbariansim`: survival combat, stamina, exposure, gear durability,
   buildings, purges, rituals, danger zones, bosses, treasure, poison, and corruption.
-- `bunnyland.dragonsim`: radiant quests, objectives, factions, reputation,
+- `bunnyland.dragonsim`: radiant quests, objectives, faction law and reputation,
   persuasion, crime, artifacts, magic, shouts, beast threats, and map discovery.
 - `bunnyland.daggersim`: procedural RPG frontier expansion, rumors, travel logistics,
   guilds, institutions, services, banking, law, custom classes, spells, etiquette,
@@ -65,7 +67,8 @@ Starter packs provide coarse bundles:
 
 - `peaceful`: `bunnyland.core_verbs`, `bunnyland.worldgen`, `bunnyland.lifesim`,
   `bunnyland.colonysim`, and `bunnyland.gardensim`.
-- `fantastic`: `peaceful` plus `bunnyland.barbariansim` and `bunnyland.dragonsim`.
+- `fantastic`: `peaceful` plus `bunnyland.barbariansim`, `bunnyland.factions`, and
+  `bunnyland.dragonsim`.
 - `futuristic`: `peaceful` plus `bunnyland.barbariansim`, `bunnyland.voidsim`, and
   `bunnyland.nukesim`.
 

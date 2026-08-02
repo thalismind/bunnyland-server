@@ -59,6 +59,7 @@ from .plugins.ids import (
     COLONYSIM,
     CORE_VERBS,
     DRAGONSIM,
+    FACTIONS,
     GARDENSIM,
     LIFESIM,
     MCP,
@@ -87,6 +88,7 @@ STARTER_PACKS: dict[str, tuple[str, ...]] = {
         COLONYSIM,
         GARDENSIM,
         BARBARIANSIM,
+        FACTIONS,
         DRAGONSIM,
     ),
     "futuristic": (

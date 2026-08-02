@@ -59,6 +59,7 @@ from bunnyland.plugins.ids import (
     DISCORD,
     DRAGONSIM,
     ENVIRONMENT,
+    FACTIONS,
     GARDENSIM,
     HISTORY,
     IMAGEGEN,
@@ -91,6 +92,7 @@ def test_builtin_plugins_declared():
         MEMORY,
         WORLDGEN,
         ENVIRONMENT,
+        FACTIONS,
         MECHANISMS,
         HISTORY,
         SOCIAL,
@@ -117,7 +119,7 @@ def test_builtin_plugins_declared():
 
 def test_select_defaults_to_default_enabled():
     plugins = bunnyland_plugins()
-    assert len(select(plugins, None)) == 25
+    assert len(select(plugins, None)) == 26
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
     assert CHECKPOINTS not in {p.id for p in select(plugins, None)}
     assert [p.id for p in select(plugins, [CHECKPOINTS])] == [CHECKPOINTS]
@@ -414,6 +416,8 @@ def test_resolve_order_places_dependencies_first():
     ordered = resolve_order(bunnyland_plugins())
     ids = [p.id for p in ordered]
     assert ids.index(CORE_VERBS) < ids.index(LIFESIM)
+    assert ids.index(CORE_VERBS) < ids.index(FACTIONS)
+    assert ids.index(FACTIONS) < ids.index(DRAGONSIM)
     assert ids.index(LIFESIM) < ids.index(COLONYSIM)
     assert ids.index(COLONYSIM) < ids.index(GARDENSIM)
     assert ids.index(CORE_VERBS) < ids.index(BARBARIANSIM)
@@ -436,7 +440,8 @@ def test_builtin_sim_dependencies_match_layering_contracts():
         COLONYSIM,
     )
     assert plugins[BARBARIANSIM].dependencies.requires == (CORE_VERBS,)
-    assert plugins[DRAGONSIM].dependencies.requires == (CORE_VERBS, LIFESIM)
+    assert plugins[FACTIONS].dependencies.requires == (CORE_VERBS,)
+    assert plugins[DRAGONSIM].dependencies.requires == (CORE_VERBS, LIFESIM, FACTIONS)
     assert plugins[DAGGERSIM].dependencies.requires == (CORE_VERBS, DRAGONSIM)
     assert plugins[VOIDSIM].dependencies.requires == (
         CORE_VERBS,
@@ -895,6 +900,20 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "TreasureClaimedEvent",
         "ClimbingGatePassedEvent",
     } <= {event.__name__ for event in barbarian.commands.typed_events}
+
+    factions = plugins[FACTIONS]
+    assert {"FactionComponent"} == {
+        component.__name__ for component in factions.ecs.components
+    }
+    assert {"MemberOfFaction", "HasStandingWithFaction", "FactionDisposition"} == {
+        edge.__name__ for edge in factions.ecs.edges
+    }
+    assert {"join-faction", "leave-faction"} == {
+        handler.command_type for handler in factions.commands.action_handlers
+    }
+    assert {"FactionJoinedEvent", "FactionLeftEvent"} == {
+        event.__name__ for event in factions.commands.typed_events
+    }
 
     dragon = plugins[DRAGONSIM]
     assert {

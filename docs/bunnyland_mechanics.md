@@ -677,6 +677,35 @@ PluginDependencyFailedEvent
 
 ---
 
+## 1.10 Shared factions and stance
+
+The default-enabled `bunnyland.factions` foundation plugin owns faction identity,
+repeatable public or secret memberships, standing, and directed friendly/hostile
+dispositions. Actor stance is observer-relative: any hostile faction pair wins, otherwise
+shared membership or a friendly pair is friendly, and unmatched actors are neutral.
+
+Secret faction names appear only in the member's private prompt. Nearby observers receive
+generic friendly, hostile, or neutral cues without learning the hidden affiliation. Public
+`join-faction` and `leave-faction` actions reject secret factions.
+
+### Components and edges
+
+```python
+FactionComponent(secret=False)
+MemberOfFaction
+HasStandingWithFaction
+FactionDisposition(stance="friendly" | "hostile")
+```
+
+### Actions and events
+
+```text
+join-faction -> FactionJoinedEvent
+leave-faction -> FactionLeftEvent
+```
+
+---
+
 # 2. `lifesim` package — The Sims-inspired mechanics
 
 The Sims replay loop is character life: needs, emotions, whims, traits, skills, careers, relationships, homes, family, autonomy, aspirations, and emergent social drama. EA’s own materials describe emotions producing emotional whims, skills unlocking actions/rewards, careers using skills, and expansion systems around aspirations, hobbies, businesses, and life stages. ([Electronic Arts Inc.][1])
