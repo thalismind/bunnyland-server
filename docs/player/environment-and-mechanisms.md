@@ -62,3 +62,6 @@ coverage.
 Some rooms also carry explicit moisture and humidity state. A flooded room, pool, river,
 or sump can wet a character even when it is indoors: weather shelter does not prevent
 immersion or an intrinsically wet room.
+
+For exact wetness bands, accumulation rates, shelter stacking, and drying examples, see
+[Barbarian-sim combat and survival](barbariansim.md#wetness-and-shelter).

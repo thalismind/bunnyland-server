@@ -7,14 +7,68 @@ pickpocketing, those commands can be rejected.
 
 ## Wetness and shelter
 
-Survival prompts always report your private wetness state as `dry`, `damp`, `wet`, or
-`soaked`. Outdoor rain and storms increase wetness. Partial rain protection reduces that
-increase, while indoor rooms block weather wetting completely. Explicit room moisture
-still wets you indoors because shelter does not prevent immersion.
+Wetness is a private character meter from 0 to 100. Your survival prompt always summarizes
+it, but other characters do not see that private state.
 
-When neither rain nor room moisture is wetting you, you dry over game time. High room
-humidity slows drying. Wetness is informational in this version: it does not yet increase
-cold exposure or cause health damage.
+| Wetness | Prompt state |
+| ---: | --- |
+| 0–39 | `You are dry.` |
+| 40–69 | `You are damp.` |
+| 70–89 | `You are wet.` |
+| 90–100 | `You are soaked.` |
+
+Wetness changes according to elapsed game time, not real-world time. Each game hour:
+
+- Outdoor rain adds `20 × weather intensity` wetness before rain protection. Ordinary
+  generated rain has intensity `0.7`, so it adds 14 points without shelter.
+- Outdoor storms use the same calculation. Their generated intensity is `1.0`, so they
+  add 20 points without shelter.
+- An explicitly moist room adds up to 40 points at maximum room moisture. This source is
+  separate from weather and adds to rain or storm wetness when both apply.
+- The meter stops at 100 even if a long tick or multiple sources would push it higher.
+
+### What counts as shelter
+
+Environmental shelter can come from the room, your character, and valid worn gear. Their
+temperature buffers add together. Rain and wind protection also add together, with each
+final protection value limited to 100 percent.
+
+Indoor rooms always provide full rain and wind protection plus an implicit five-degree
+temperature buffer. Outdoor camps, lean-tos, cloaks, and similar gear can provide partial
+protection. Partial rain protection reduces weather wetness proportionally: 50 percent
+rain protection turns ordinary rain's 14 points per hour into 7.
+
+Shelter blocks weather, not immersion. A flooded room, river, pool, swamp, or sump can
+still wet you indoors. When both rain and room moisture are active, their remaining rates
+add together. If protection reduces rain wetting to zero, you can dry during the rain as
+long as the room itself is not wet.
+
+In worlds with Wildsim, wind protection also reduces its outdoor base chill, cold-weather
+chill, and night chill. Biome cold still applies, and carried pelts keep their separate
+insulation role.
+
+### Drying out
+
+When neither weather nor room moisture is wetting you, you dry by
+`10 × (1 - humidity)` points per game hour. Humidity is limited to the range from 0 to 1:
+
+- At humidity `0`, you dry by 10 points per hour.
+- At the normal humidity `0.5`, you dry by 5 points per hour.
+- At humidity `0.8`, you dry by 2 points per hour.
+- At humidity `1`, natural drying stops.
+
+Wetness stops at 0. There is no `seek-shelter` command; move to a protected or drier room
+and let game time pass. A simple player loop is:
+
+```text
+!look
+!move in
+!wait
+!look
+```
+
+Wetness is informational in this version. It does not increase cold exposure, change
+health, or cause structural weather damage. Those interactions remain future mechanics.
 
 In Discord, prefix these commands with `!`.
 
