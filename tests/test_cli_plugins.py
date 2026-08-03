@@ -50,6 +50,7 @@ from bunnyland.plugins.ids import (
     COLONYSIM,
     CORE_VERBS,
     DRAGONSIM,
+    ENVIRONMENT,
     GARDENSIM,
     LIFESIM,
     MCP,
@@ -371,6 +372,7 @@ def _serve_args(**overrides):
             {
                 CORE_VERBS,
                 WORLDGEN,
+                ENVIRONMENT,
                 LIFESIM,
                 COLONYSIM,
                 GARDENSIM,
@@ -383,6 +385,7 @@ def _serve_args(**overrides):
             {
                 CORE_VERBS,
                 WORLDGEN,
+                ENVIRONMENT,
                 LIFESIM,
                 COLONYSIM,
                 GARDENSIM,
@@ -681,6 +684,7 @@ def test_cli_starter_pack_can_come_from_environment(monkeypatch, tmp_path):
     assert meta.plugins == (
         CORE_VERBS,
         WORLDGEN,
+        ENVIRONMENT,
         LIFESIM,
         COLONYSIM,
         GARDENSIM,

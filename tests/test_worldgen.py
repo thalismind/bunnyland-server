@@ -108,6 +108,86 @@ from bunnyland.worldgen import (
 from bunnyland.worldgen.examples import APPLE_CROSSING_DEMO, BELL_GREEN_DEMO, CLOVER_CITY_DEMO
 from bunnyland.worldgen.ollama_builder import OllamaWorldBuilder, repair_world_proposal
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "capability",
+    ("bunnyland.environment.shelter", "bunnyland.barbariansim.shelter"),
+)
+async def test_canonical_and_deprecated_shelter_capabilities_generate_one_environment_component(
+    capability,
+):
+    from bunnyland.core.generation import GenerationPipeline
+    from bunnyland.foundation.environment.mechanics import ShelterComponent
+
+    registry = PluginRegistry(bunnyland_plugins())
+    pipeline = GenerationPipeline(registry)
+    room = RoomComponent(title="Weather camp")
+    plan = await pipeline.compile(
+        GenerationRequest(
+            entity_kind="room",
+            description="an exposed weather shelter",
+            capabilities=(capability,),
+            context={"base_components": (room,)},
+        ),
+        base_components=(room,),
+    )
+
+    shelters = [
+        component for component in plan.components if isinstance(component, ShelterComponent)
+    ]
+    assert len(shelters) == 1
+    assert shelters[0] == ShelterComponent(10.0, 1.0, 0.5)
+    assert plan.unmet_capabilities == ()
+    assert registry.components["ShelterComponent"][0] == "bunnyland.environment"
+
+
+@pytest.mark.asyncio
+async def test_environment_moisture_generation_is_room_specific_and_not_water_wording():
+    from bunnyland.core.generation import GenerationPipeline
+    from bunnyland.foundation.environment.mechanics import MoistureComponent
+
+    pipeline = GenerationPipeline(PluginRegistry(bunnyland_plugins()))
+    flooded_room = RoomComponent(title="Drowned sump")
+    room_plan = await pipeline.compile(
+        GenerationRequest(
+            entity_kind="room",
+            description="a flooded underground sump",
+            context={"base_components": (flooded_room,)},
+        ),
+        base_components=(flooded_room,),
+    )
+    water_item = IdentityComponent(name="water bottle", kind="item")
+    item_plan = await pipeline.compile(
+        GenerationRequest(
+            entity_kind="item",
+            description="a water bottle from the flooded sump",
+            context={"base_components": (water_item,)},
+        ),
+        base_components=(water_item,),
+    )
+
+    assert any(isinstance(component, MoistureComponent) for component in room_plan.components)
+    assert not any(isinstance(component, MoistureComponent) for component in item_plan.components)
+
+
+@pytest.mark.asyncio
+async def test_barbariansim_wetness_generation_uses_the_current_world_epoch():
+    from bunnyland.core.generation import GenerationPipeline
+    from bunnyland.simpacks.barbariansim.mechanics import WetnessComponent
+
+    character = CharacterComponent()
+    plan = await GenerationPipeline(PluginRegistry(bunnyland_plugins())).compile(
+        GenerationRequest(
+            entity_kind="character",
+            capabilities=("bunnyland.barbariansim.wetness",),
+            context={"base_components": (character,), "world_epoch": 123},
+        ),
+        base_components=(character,),
+    )
+
+    assert WetnessComponent(last_updated_epoch=123) in plan.components
+
 HOUR = 3600.0
 
 

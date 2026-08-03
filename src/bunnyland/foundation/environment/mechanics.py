@@ -14,7 +14,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 from pydantic.dataclasses import dataclass as pydantic_dataclass
-from relics import Component, World
+from relics import Component, EntityId, World
 
 from ...core.commands import SubmittedCommand
 from ...core.components import (
@@ -27,11 +27,12 @@ from ...core.components import (
     WorldClockComponent,
 )
 from ...core.ecs import container_of, parse_entity_id, reachable_ids, replace_component
-from ...core.edges import Contains
+from ...core.edges import Contains, Wearing
 from ...core.events import DomainEvent, EventVisibility, event_base
 from ...core.handlers import HandlerContext, HandlerResult, planned, rejected, require_character
 from ...core.mutations import MutationPlan, RemoveComponent, SetComponent
 from ...prompts import ComponentPromptContext
+from ..meters.mechanics import Meter
 
 if TYPE_CHECKING:
     from ...core.world_actor import WorldActor
@@ -98,6 +99,30 @@ class WeatherComponent(Component):
 
 
 @pydantic_dataclass(frozen=True)
+class ShelterComponent(Component):
+    """Singleton environmental protection supplied by a room, character, or worn item."""
+
+    temperature_buffer: float = 0.0
+    rain_protection: float = 0.0
+    wind_protection: float = 0.0
+
+
+@pydantic_dataclass(frozen=True)
+class MoistureComponent(Component):
+    """Room moisture and ambient humidity state."""
+
+    wetness: Meter = Meter()
+    humidity: float = 0.5
+
+
+@dataclass(frozen=True)
+class ShelterProtection:
+    temperature_buffer: float = 0.0
+    rain_protection: float = 0.0
+    wind_protection: float = 0.0
+
+
+@pydantic_dataclass(frozen=True)
 class FlammableComponent(Component):
     fuel: float = 4.0
 
@@ -148,6 +173,55 @@ class FireExtinguishedEvent(DomainEvent):
 
 
 # -- derivation -------------------------------------------------------------------------
+
+
+def resolve_shelter_protection(
+    world: World,
+    character_id: EntityId | None,
+    room_id: EntityId | None = None,
+) -> ShelterProtection:
+    """Aggregate environmental protection for a character, room, and worn gear."""
+
+    character = (
+        world.get_entity(character_id)
+        if character_id is not None and world.has_entity(character_id)
+        else None
+    )
+    if room_id is None and character is not None:
+        room_id = container_of(character)
+
+    temperature_buffer = 0.0
+    rain_protection = 0.0
+    wind_protection = 0.0
+    indoor = False
+
+    def add(entity) -> None:
+        nonlocal temperature_buffer, rain_protection, wind_protection
+        if not entity.has_component(ShelterComponent):
+            return
+        shelter = entity.get_component(ShelterComponent)
+        temperature_buffer += shelter.temperature_buffer
+        rain_protection += shelter.rain_protection
+        wind_protection += shelter.wind_protection
+
+    if room_id is not None and world.has_entity(room_id):
+        room = world.get_entity(room_id)
+        if room.has_component(RoomComponent) and room.get_component(RoomComponent).indoor:
+            temperature_buffer += 5.0
+            indoor = True
+        add(room)
+
+    if character is not None:
+        add(character)
+        for _edge, item_id in character.get_relationships(Wearing):
+            if world.has_entity(item_id):
+                add(world.get_entity(item_id))
+
+    return ShelterProtection(
+        temperature_buffer=temperature_buffer,
+        rain_protection=1.0 if indoor else max(0.0, min(1.0, rain_protection)),
+        wind_protection=1.0 if indoor else max(0.0, min(1.0, wind_protection)),
+    )
 
 
 def _phase_and_light(hour: int) -> tuple[str, float]:
@@ -458,6 +532,9 @@ __all__ = [
     "FireSpreadEvent",
     "FireStartedEvent",
     "FlammableComponent",
+    "MoistureComponent",
+    "ShelterComponent",
+    "ShelterProtection",
     "IgniteHandler",
     "TimeOfDayChangedEvent",
     "TimeOfDayComponent",
@@ -465,6 +542,7 @@ __all__ = [
     "WeatherComponent",
     "environment_fragments",
     "install_environment",
+    "resolve_shelter_protection",
     "time_of_day",
     "weather_for",
 ]

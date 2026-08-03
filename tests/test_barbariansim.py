@@ -22,6 +22,7 @@ from bunnyland.core import (
     Lane,
     PortableComponent,
     RoomComponent,
+    SuspendedComponent,
     TemperatureComponent,
     Wearing,
     build_submitted_command,
@@ -39,6 +40,14 @@ from bunnyland.core.events import (
     FortificationBuiltEvent,
     RaidStartedEvent,
 )
+from bunnyland.foundation.environment.mechanics import (
+    MoistureComponent,
+    WeatherComponent,
+)
+from bunnyland.foundation.environment.mechanics import (
+    ShelterComponent as EnvironmentShelterComponent,
+)
+from bunnyland.foundation.meters.mechanics import Meter
 from bunnyland.foundation.policy.mechanics import BoundaryTag, install_policy
 from bunnyland.foundation.storyteller.mechanics import (
     IncidentBudgetComponent,
@@ -133,10 +142,14 @@ from bunnyland.simpacks.barbariansim.mechanics import (
     UnlockTreasureHandler,
     UpgradeBuildingHandler,
     WeaponComponent,
+    WetnessChangedEvent,
+    WetnessComponent,
+    WetnessConsequence,
     barbariansim_fragments,
     ensure_barbariansim_policy,
     generate_raid_spawn_specs,
     install_barbariansim,
+    wetness_state,
 )
 from bunnyland.simpacks.barbariansim.mechanics import _ambient_celsius as ambient_celsius
 from bunnyland.simpacks.barbariansim.mechanics import _armor_rating as armor_rating
@@ -144,6 +157,188 @@ from bunnyland.simpacks.barbariansim.mechanics import _damage_item as damage_ite
 from bunnyland.simpacks.colonysim.mechanics import install_colonysim
 
 HOUR = 3600.0
+
+
+def _wetness_scenario(
+    *,
+    condition="clear",
+    intensity=0.0,
+    wetness=0.0,
+    humidity=0.5,
+    room_moisture=0.0,
+    indoor=False,
+):
+    scenario = build_scenario()
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    replace_component(room, RoomComponent(title="Weather field", indoor=indoor))
+    room.add_component(
+        MoistureComponent(wetness=Meter(value=room_moisture), humidity=humidity)
+    )
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(WetnessComponent(meter=Meter(value=wetness)))
+    spawn_entity(
+        scenario.actor.world,
+        [WeatherComponent(condition=condition, intensity=intensity)],
+    )
+    return scenario, room, character
+
+
+def test_wetness_state_and_private_prompt_cover_all_four_bands():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    observer = spawn_entity(scenario.actor.world, [CharacterComponent()])
+    first = ComponentPromptContext.for_entity(scenario.actor.world, character)
+    third = ComponentPromptContext.for_entity(
+        scenario.actor.world,
+        character,
+        perspective=PromptPerspective(viewer=observer),
+    )
+
+    expected = ((0.0, "dry"), (40.0, "damp"), (70.0, "wet"), (90.0, "soaked"))
+    for value, state in expected:
+        component = WetnessComponent(meter=Meter(value=value))
+        assert wetness_state(component.meter) == state
+        assert component.prompt_fragments(first) == (f"You are {state}.",)
+        assert component.prompt_fragments(third) == ()
+
+
+def test_rain_and_storm_accumulate_at_their_configured_relative_rates():
+    rain, _room, rain_character = _wetness_scenario(condition="rain", intensity=0.7)
+    storm, _room, storm_character = _wetness_scenario(condition="storm", intensity=1.0)
+
+    WetnessConsequence().process(rain.actor.world, int(HOUR))
+    WetnessConsequence().process(storm.actor.world, int(HOUR))
+
+    assert rain_character.get_component(WetnessComponent).meter.value == 14.0
+    assert storm_character.get_component(WetnessComponent).meter.value == 20.0
+
+
+def test_rain_to_clear_transition_changes_accumulation_to_humidity_limited_drying():
+    scenario, _room, character = _wetness_scenario(condition="rain", intensity=0.7)
+    consequence = WetnessConsequence()
+    consequence.process(scenario.actor.world, int(HOUR))
+    weather = next(
+        scenario.actor.world.query().with_all([WeatherComponent]).execute_entities()
+    )
+    replace_component(weather, WeatherComponent(condition="clear", intensity=0.0))
+
+    consequence.process(scenario.actor.world, int(2 * HOUR))
+
+    assert character.get_component(WetnessComponent).meter.value == 9.0
+
+
+def test_partial_shelter_reduces_rain_and_indoor_shelter_blocks_it():
+    partial, room, character = _wetness_scenario(condition="rain", intensity=0.7)
+    room.add_component(EnvironmentShelterComponent(rain_protection=0.5))
+    indoor, _indoor_room, indoor_character = _wetness_scenario(
+        condition="rain", intensity=0.7, indoor=True
+    )
+
+    WetnessConsequence().process(partial.actor.world, int(HOUR))
+    WetnessConsequence().process(indoor.actor.world, int(HOUR))
+
+    assert character.get_component(WetnessComponent).meter.value == 7.0
+    assert indoor_character.get_component(WetnessComponent).meter.value == 0.0
+
+
+def test_intrinsically_moist_indoor_room_still_wets_and_event_sources_are_sorted():
+    scenario, _room, character = _wetness_scenario(
+        condition="storm",
+        intensity=1.0,
+        room_moisture=50.0,
+        indoor=True,
+    )
+
+    events = WetnessConsequence().process(scenario.actor.world, int(HOUR))
+
+    assert character.get_component(WetnessComponent).meter.value == 20.0
+    assert len(events) == 1
+    assert isinstance(events[0], WetnessChangedEvent)
+    assert events[0].before == 0.0
+    assert events[0].after == 20.0
+    assert events[0].state == "dry"
+    assert events[0].sources == ("room moisture",)
+    assert events[0].visibility == "private"
+
+
+def test_wetness_sources_add_clamp_and_update_timestamp_at_meter_limits():
+    scenario, _room, character = _wetness_scenario(
+        condition="storm", intensity=1.0, wetness=95.0, room_moisture=100.0
+    )
+    consequence = WetnessConsequence()
+    events = consequence.process(scenario.actor.world, int(HOUR))
+
+    wetness = character.get_component(WetnessComponent)
+    assert wetness.meter.value == 100.0
+    assert wetness.last_updated_epoch == HOUR
+    assert events[0].sources == ("room moisture", "storm")
+
+    assert consequence.process(scenario.actor.world, int(2 * HOUR)) == []
+    assert character.get_component(WetnessComponent).last_updated_epoch == 2 * HOUR
+
+
+def test_humidity_clamps_and_slows_drying_while_future_timestamps_are_safe():
+    dry, _room, dry_character = _wetness_scenario(wetness=20.0, humidity=-1.0)
+    humid, _room, humid_character = _wetness_scenario(wetness=20.0, humidity=0.8)
+    future, _room, future_character = _wetness_scenario(wetness=20.0)
+    replace_component(
+        future_character,
+        WetnessComponent(meter=Meter(value=20.0), last_updated_epoch=int(2 * HOUR)),
+    )
+
+    WetnessConsequence().process(dry.actor.world, int(HOUR))
+    WetnessConsequence().process(humid.actor.world, int(HOUR))
+    assert WetnessConsequence().process(future.actor.world, int(HOUR)) == []
+
+    assert dry_character.get_component(WetnessComponent).meter.value == 10.0
+    assert humid_character.get_component(WetnessComponent).meter.value == 18.0
+    assert future_character.get_component(WetnessComponent).last_updated_epoch == HOUR
+
+    WetnessConsequence().process(dry.actor.world, int(4 * HOUR))
+    assert dry_character.get_component(WetnessComponent).meter.value == 0.0
+
+
+def test_zero_elapsed_wetness_is_a_no_op():
+    scenario, _room, character = _wetness_scenario(condition="storm", intensity=1.0)
+
+    assert WetnessConsequence().process(scenario.actor.world, 0) == []
+    assert character.get_component(WetnessComponent) == WetnessComponent()
+
+
+def test_dead_and_suspended_characters_do_not_change_wetness():
+    dead, _room, dead_character = _wetness_scenario(condition="storm", intensity=1.0)
+    suspended, _room, suspended_character = _wetness_scenario(condition="storm", intensity=1.0)
+    dead_character.add_component(DeadComponent(died_at_epoch=1, cause="test"))
+    suspended_character.add_component(SuspendedComponent())
+
+    assert WetnessConsequence().process(dead.actor.world, int(HOUR)) == []
+    assert WetnessConsequence().process(suspended.actor.world, int(HOUR)) == []
+    assert dead_character.get_component(WetnessComponent).last_updated_epoch == 0
+    assert suspended_character.get_component(WetnessComponent).last_updated_epoch == 0
+
+
+def test_wetness_processing_scales_with_wetness_candidates(monkeypatch):
+    import bunnyland.simpacks.barbariansim.mechanics as mechanics
+
+    scenario, room, _character = _wetness_scenario(condition="rain", intensity=0.7)
+    second = spawn_entity(scenario.actor.world, [CharacterComponent(), WetnessComponent()])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), second.id)
+    for index in range(200):
+        spawn_entity(
+            scenario.actor.world,
+            [IdentityComponent(name=f"unrelated {index}", kind="item")],
+        )
+    resolved: list[str] = []
+    original = mechanics.resolve_shelter_protection
+
+    def counted(world, character_id, room_id=None):
+        resolved.append(str(character_id))
+        return original(world, character_id, room_id)
+
+    monkeypatch.setattr(mechanics, "resolve_shelter_protection", counted)
+    WetnessConsequence().process(scenario.actor.world, int(HOUR))
+
+    assert sorted(resolved) == sorted((str(scenario.character), str(second.id)))
 
 
 def _install(actor, *, enabled=frozenset({BoundaryTag.PVP})):

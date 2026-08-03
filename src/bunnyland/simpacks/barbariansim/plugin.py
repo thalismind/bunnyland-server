@@ -69,7 +69,6 @@ from bunnyland.simpacks.barbariansim.mechanics import (
     RepairItemHandler,
     RitualComponent,
     RitualPerformedEvent,
-    ShelterComponent,
     ShrineComponent,
     SiegePreparedEvent,
     SiegeReadinessComponent,
@@ -95,6 +94,8 @@ from bunnyland.simpacks.barbariansim.mechanics import (
     UnlockTreasureHandler,
     UpgradeBuildingHandler,
     WeaponComponent,
+    WetnessChangedEvent,
+    WetnessComponent,
     barbariansim_fragments,
     install_barbariansim,
 )
@@ -102,6 +103,7 @@ from bunnyland.simpacks.barbariansim.mechanics import (
 from ...plugins.ids import (
     BARBARIANSIM,
     CORE_VERBS,
+    ENVIRONMENT,
 )
 from ...plugins.model import (
     CommandContribution,
@@ -114,7 +116,7 @@ from ...plugins.model import (
 )
 from .actions import ACTION_DEFINITIONS
 from .demos import BARBARIANSIM_DEMO
-from .generation import CAPABILITIES, GENERATION_ENRICHER
+from .generation import CAPABILITIES, GENERATION_ENRICHER, LEGACY_SHELTER_NORMALIZER
 from .incidents import BARBARIAN_RAID
 from .integration_3d import install_barbariansim_3d
 
@@ -124,7 +126,7 @@ def _definition() -> Plugin:
         id=BARBARIANSIM,
         name="Barbarian Sim",
         dependencies=DependencyContribution(
-            requires=(CORE_VERBS,),
+            requires=(CORE_VERBS, ENVIRONMENT),
             integrates_with=(
                 "bunnyland.colonysim",
                 "bunnyland.storyteller",
@@ -144,8 +146,8 @@ def _definition() -> Plugin:
                 TrapComponent,
                 StaminaComponent,
                 TemperatureResistanceComponent,
-                ShelterComponent,
                 TemperatureExposureComponent,
+                WetnessComponent,
                 ThrallComponent,
                 FollowerComponent,
                 BarbarianSimPolicyComponent,
@@ -205,6 +207,7 @@ def _definition() -> Plugin:
                 HeatstrokeStartedEvent,
                 FrostbiteStartedEvent,
                 ExposureDamageEvent,
+                WetnessChangedEvent,
                 ItemDamagedEvent,
                 ItemBrokenEvent,
                 ItemRepairedEvent,
@@ -243,6 +246,7 @@ def _definition() -> Plugin:
         content=ContentContribution(
             prompt_fragments=(barbariansim_fragments,),
             generation_capabilities=CAPABILITIES,
+            intent_normalizers=(LEGACY_SHELTER_NORMALIZER,),
             generation_enrichers=(GENERATION_ENRICHER,),
             world_generators=(BARBARIANSIM_DEMO,),
             incident_definitions=(BARBARIAN_RAID,),

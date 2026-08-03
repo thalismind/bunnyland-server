@@ -5,6 +5,8 @@ from ...worldgen.enrichment import GenerationContext, generation_mentions, gener
 from .mechanics import (
     FireComponent,
     FlammableComponent,
+    MoistureComponent,
+    ShelterComponent,
 )
 
 CAPABILITIES = (
@@ -12,6 +14,8 @@ CAPABILITIES = (
     "bunnyland.environment.fire",
     "bunnyland.environment.flammable",
     "bunnyland.environment.fuel",
+    "bunnyland.environment.moisture",
+    "bunnyland.environment.shelter",
 )
 
 
@@ -26,6 +30,32 @@ class EnvironmentGenerationEnricher:
             components[type(component)] = component
 
         if not ctx.is_character:
+            if ctx.is_room and (
+                generation_wants(ctx, "bunnyland.environment.shelter")
+                or generation_mentions(ctx, "shelter", "camp")
+            ):
+                add(
+                    ShelterComponent(
+                        temperature_buffer=10.0,
+                        rain_protection=1.0,
+                        wind_protection=0.5,
+                    )
+                )
+            if ctx.is_room and (
+                generation_wants(ctx, "bunnyland.environment.moisture")
+                or generation_mentions(
+                    ctx,
+                    "river",
+                    "pool",
+                    "flooded",
+                    "sump",
+                    "pond",
+                    "lake",
+                    "marsh",
+                    "swamp",
+                )
+            ):
+                add(MoistureComponent())
             if generation_wants(
                 ctx, "bunnyland.environment.flammable", "bunnyland.environment.fuel"
             ) or generation_mentions(

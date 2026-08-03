@@ -2073,6 +2073,16 @@ Conan Exiles contributes harsh survival, hunger/thirst, heat/cold, stamina, clim
 
 ## 4.1 Harsh survival
 
+**Implemented status:** Environment owns the single canonical `ShelterComponent` and its
+temperature, rain, and wind resolver. Barbariansim re-exports that exact type for source
+compatibility and implements private character wetness with dry, damp, wet, and soaked
+states. The generation capability `bunnyland.barbariansim.shelter` remains advertised but
+is deprecated and normalized to `bunnyland.environment.shelter`.
+
+Flooding/drainage, structural weather damage, weather-driven room temperatures, and
+wetness-driven cold penalties remain future work. There is no separate shelter marker,
+clothing system, or `seek-shelter` action.
+
 ### Mechanics
 
 ```text
@@ -2117,8 +2127,8 @@ StaminaRegenSystem
 TemperatureExposureSystem
 HeatStatusSystem
 ColdStatusSystem
-WetnessSystem
-ShelterProtectionSystem
+WetnessConsequence
+resolve_shelter_protection
 EncumbranceSystem
 CorruptionSystem
 PoisonSystem
@@ -2130,7 +2140,6 @@ PoisonSystem
 eat
 drink
 rest
-seek shelter
 light fire
 wear clothing
 remove clothing
@@ -2143,6 +2152,7 @@ cleanse corruption
 
 ```text
 ExposureChangedEvent
+WetnessChangedEvent
 HeatstrokeStartedEvent
 FrostbiteStartedEvent
 StaminaChangedEvent
@@ -7462,11 +7472,18 @@ AnimalNeedsSystem
 
 ## 13.8 Fire, fluids, weather hazards
 
+**Implemented foundation:** `WeatherComponent`, `ShelterComponent`,
+`MoistureComponent`, fire spread/damage, and canonical shelter resolution. Flooding,
+drainage, smoke, structural weather damage, and weather-driven temperatures remain in
+the backlog.
+
 ### Components
 
 ```python
 FireComponent
 FlammableComponent
+MoistureComponent
+ShelterComponent
 SmokeComponent
 WaterComponent
 FloodComponent

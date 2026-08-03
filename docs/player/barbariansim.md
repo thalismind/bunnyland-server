@@ -5,6 +5,17 @@ attacks, item durability, fortifications, raids, poison, corruption, and pickpoc
 Some actions are controlled by world policy; if a server has not enabled PvP or
 pickpocketing, those commands can be rejected.
 
+## Wetness and shelter
+
+Survival prompts always report your private wetness state as `dry`, `damp`, `wet`, or
+`soaked`. Outdoor rain and storms increase wetness. Partial rain protection reduces that
+increase, while indoor rooms block weather wetting completely. Explicit room moisture
+still wets you indoors because shelter does not prevent immersion.
+
+When neither rain nor room moisture is wetting you, you dry over game time. High room
+humidity slows drying. Wetness is informational in this version: it does not yet increase
+cold exposure or cause health damage.
+
 In Discord, prefix these commands with `!`.
 
 ## Challenges and sparring

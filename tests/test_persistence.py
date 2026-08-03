@@ -32,6 +32,8 @@ from bunnyland.core.components import IdentityComponent, MemoryProfileComponent
 from bunnyland.core.ecs import contents
 from bunnyland.discord.components import DiscordRoomFeedComponent
 from bunnyland.engine import GameLoop
+from bunnyland.foundation.environment.mechanics import MoistureComponent, ShelterComponent
+from bunnyland.foundation.meters.mechanics import Meter
 from bunnyland.foundation.needs.mechanics import HungerComponent
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent, ToolCall
 from bunnyland.migrations import WorldMigrationError, migrate_snapshot
@@ -56,6 +58,7 @@ from bunnyland.persistence import (
 )
 from bunnyland.plugins import PluginRegistry, apply_plugins, bunnyland_plugins
 from bunnyland.prompts.builder import PromptBuilder
+from bunnyland.simpacks.barbariansim.mechanics import WetnessComponent
 from bunnyland.simpacks.toonsim.mechanics import ToonRoomComponent
 from bunnyland.worldgen import StubWorldBuilder, instantiate
 
@@ -1697,6 +1700,48 @@ async def test_save_reload_preserves_world(tmp_path):
     # Provenance is restored.
     assert (meta.seed, meta.prompt, meta.generator) == ("a quiet marsh", "p", "oneshot")
     assert meta.saved_at_epoch == before_epoch
+
+
+def test_shelter_moisture_and_wetness_round_trip_with_legacy_shelter_defaults(tmp_path):
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    room = spawn_entity(
+        actor.world,
+        [
+            RoomComponent(title="Damp shelter"),
+            ShelterComponent(temperature_buffer=8.0, rain_protection=0.75, wind_protection=0.5),
+            MoistureComponent(wetness=Meter(value=30.0), humidity=0.8),
+        ],
+    )
+    character = spawn_entity(
+        actor.world,
+        [WetnessComponent(meter=Meter(value=45.0), last_updated_epoch=12)],
+    )
+    path = tmp_path / "environment.json"
+    save_world(actor, path, meta=WorldMeta(seed="wet shelter"))
+
+    loaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+    assert loaded.world.get_entity(room.id).get_component(ShelterComponent) == (
+        ShelterComponent(8.0, 0.75, 0.5)
+    )
+    assert loaded.world.get_entity(room.id).get_component(MoistureComponent) == (
+        MoistureComponent(wetness=Meter(value=30.0), humidity=0.8)
+    )
+    assert loaded.world.get_entity(character.id).get_component(WetnessComponent) == (
+        WetnessComponent(meter=Meter(value=45.0), last_updated_epoch=12)
+    )
+
+    snapshot = json.loads(path.read_text())
+    shelter_data = snapshot["components"]["ShelterComponent"][str(room.id)]
+    shelter_data.pop("rain_protection")
+    shelter_data.pop("wind_protection")
+    legacy_path = tmp_path / "legacy-environment.json"
+    legacy_path.write_text(json.dumps(snapshot))
+    legacy, _meta = load_world(legacy_path, registry=PluginRegistry(bunnyland_plugins()))
+
+    assert legacy.world.get_entity(room.id).get_component(ShelterComponent) == (
+        ShelterComponent(temperature_buffer=8.0)
+    )
 
 
 async def test_reloaded_world_keeps_playing(tmp_path):

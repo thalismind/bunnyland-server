@@ -50,3 +50,15 @@ or room context says there is a fire here, treat it as an immediate problem.
 Time and weather usually happen through ticks rather than direct player commands. They can
 change room light, prompt context, and how urgent nearby hazards feel. Use `!look` after
 waiting or moving to refresh what your character can see.
+
+## Shelter and room moisture
+
+Shelter is shared environmental protection. Indoor rooms block rain and wind completely
+and provide a small temperature buffer. Outdoor camps and lean-tos can provide partial
+wind protection, full or partial rain protection, and their own temperature buffer.
+Protective worn gear adds to the room and character protection, up to full rain and wind
+coverage.
+
+Some rooms also carry explicit moisture and humidity state. A flooded room, pool, river,
+or sump can wet a character even when it is indoors: weather shelter does not prevent
+immersion or an intrinsically wet room.

@@ -59,6 +59,7 @@ from .plugins.ids import (
     COLONYSIM,
     CORE_VERBS,
     DRAGONSIM,
+    ENVIRONMENT,
     GARDENSIM,
     LIFESIM,
     MCP,
@@ -83,6 +84,7 @@ STARTER_PACKS: dict[str, tuple[str, ...]] = {
     "fantastic": (
         CORE_VERBS,
         WORLDGEN,
+        ENVIRONMENT,
         LIFESIM,
         COLONYSIM,
         GARDENSIM,
@@ -92,6 +94,7 @@ STARTER_PACKS: dict[str, tuple[str, ...]] = {
     "futuristic": (
         CORE_VERBS,
         WORLDGEN,
+        ENVIRONMENT,
         LIFESIM,
         COLONYSIM,
         GARDENSIM,

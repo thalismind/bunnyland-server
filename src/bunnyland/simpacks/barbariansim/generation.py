@@ -1,5 +1,7 @@
 """Declarative barbariansim generation contributions."""
 
+from dataclasses import replace
+
 from ...core.generation import GenerationDelta, GenerationRequest
 from ...worldgen.enrichment import (
     GenerationContext,
@@ -24,7 +26,6 @@ from .mechanics import (
     PoisonComponent,
     PurgeWaveComponent,
     RitualComponent,
-    ShelterComponent,
     ShrineComponent,
     SiegeReadinessComponent,
     StaminaComponent,
@@ -34,7 +35,11 @@ from .mechanics import (
     TrapComponent,
     TreasureComponent,
     WeaponComponent,
+    WetnessComponent,
 )
+
+LEGACY_SHELTER_CAPABILITY = "bunnyland.barbariansim.shelter"
+ENVIRONMENT_SHELTER_CAPABILITY = "bunnyland.environment.shelter"
 
 CAPABILITIES = (
     "bunnyland.barbariansim.armor",
@@ -54,7 +59,7 @@ CAPABILITIES = (
     "bunnyland.barbariansim.poison",
     "bunnyland.barbariansim.purge-wave",
     "bunnyland.barbariansim.ritual",
-    "bunnyland.barbariansim.shelter",
+    LEGACY_SHELTER_CAPABILITY,
     "bunnyland.barbariansim.shrine",
     "bunnyland.barbariansim.siege-readiness",
     "bunnyland.barbariansim.stamina",
@@ -64,7 +69,19 @@ CAPABILITIES = (
     "bunnyland.barbariansim.trap",
     "bunnyland.barbariansim.treasure",
     "bunnyland.barbariansim.weapon",
+    "bunnyland.barbariansim.wetness",
 )
+
+
+class LegacyShelterCapabilityNormalizer:
+    """Map the deprecated Barbariansim request to Environment ownership."""
+
+    def normalize(self, request: GenerationRequest) -> GenerationRequest:
+        capabilities = tuple(
+            ENVIRONMENT_SHELTER_CAPABILITY if value == LEGACY_SHELTER_CAPABILITY else value
+            for value in request.capabilities
+        )
+        return replace(request, capabilities=tuple(dict.fromkeys(capabilities)))
 
 
 class BarbarianGenerationEnricher:
@@ -79,10 +96,6 @@ class BarbarianGenerationEnricher:
 
         if ctx.is_room:
             name = ctx.name
-            if generation_wants(ctx, "bunnyland.barbariansim.shelter") or generation_mentions(
-                ctx, "shelter", "camp"
-            ):
-                add(ShelterComponent(temperature_buffer=10.0))
             if generation_wants(ctx, "bunnyland.barbariansim.base-claim"):
                 add(
                     BaseClaimComponent(
@@ -121,6 +134,8 @@ class BarbarianGenerationEnricher:
                 add(TemperatureResistanceComponent(heat=5.0, cold=5.0))
             if generation_wants(ctx, "bunnyland.barbariansim.temperature-exposure"):
                 add(TemperatureExposureComponent(last_updated_epoch=ctx.world_epoch))
+            if generation_wants(ctx, "bunnyland.barbariansim.wetness"):
+                add(WetnessComponent(last_updated_epoch=ctx.world_epoch))
             if generation_wants(ctx, "bunnyland.barbariansim.poison") or generation_mentions(
                 ctx, "poisoned"
             ):
@@ -192,5 +207,11 @@ class BarbarianGenerationEnricher:
 
 
 GENERATION_ENRICHER = BarbarianGenerationEnricher()
+LEGACY_SHELTER_NORMALIZER = LegacyShelterCapabilityNormalizer()
 
-__all__ = ["GENERATION_ENRICHER", "BarbarianGenerationEnricher"]
+__all__ = [
+    "GENERATION_ENRICHER",
+    "LEGACY_SHELTER_NORMALIZER",
+    "BarbarianGenerationEnricher",
+    "LegacyShelterCapabilityNormalizer",
+]

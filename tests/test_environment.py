@@ -17,6 +17,7 @@ from bunnyland.core import (
     PortableComponent,
     RoomComponent,
     SuspendedComponent,
+    Wearing,
     WorldActor,
     build_submitted_command,
     parse_entity_id,
@@ -34,19 +35,88 @@ from bunnyland.foundation.environment.mechanics import (
     FireStartedEvent,
     FlammableComponent,
     IgniteHandler,
+    MoistureComponent,
+    ShelterComponent,
+    ShelterProtection,
     TimeOfDayChangedEvent,
     TimeOfDayComponent,
     WeatherChangedEvent,
     WeatherComponent,
     environment_fragments,
     install_environment,
+    resolve_shelter_protection,
     time_of_day,
     weather_for,
 )
+from bunnyland.foundation.meters.mechanics import Meter
 from bunnyland.prompts import ComponentPromptContext
 
 HOUR = 3600.0
 DAY = HOUR * 24
+
+
+def test_shelter_legacy_import_is_the_canonical_environment_class():
+    from bunnyland.simpacks.barbariansim.mechanics import ShelterComponent as LegacyShelter
+
+    assert LegacyShelter is ShelterComponent
+
+
+def test_shelter_protection_aggregates_room_character_and_worn_gear():
+    actor = _world()
+    room = spawn_entity(
+        actor.world,
+        [RoomComponent(title="Lean-to"), ShelterComponent(2.0, 0.2, -0.5)],
+    )
+    character = spawn_entity(
+        actor.world,
+        [CharacterComponent(), ShelterComponent(3.0, 0.3, 0.8)],
+    )
+    gear = spawn_entity(actor.world, [ShelterComponent(4.0, 0.8, 0.8)])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), character.id)
+    character.add_relationship(Wearing(slot="torso"), gear.id)
+
+    assert resolve_shelter_protection(actor.world, character.id) == ShelterProtection(
+        temperature_buffer=9.0,
+        rain_protection=1.0,
+        wind_protection=1.0,
+    )
+
+
+def test_indoor_shelter_is_full_weather_protection_and_missing_references_are_safe(
+    monkeypatch,
+):
+    actor = _world()
+    room = spawn_entity(
+        actor.world,
+        [RoomComponent(title="Cabin", indoor=True), ShelterComponent(2.0, -5.0, -5.0)],
+    )
+    character = spawn_entity(actor.world, [CharacterComponent()])
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), character.id)
+    missing_item = parse_entity_id("entity_9999")
+    assert missing_item is not None
+    original_relationships = type(character).get_relationships
+
+    def relationships(entity, edge_type):
+        found = original_relationships(entity, edge_type)
+        if entity.id == character.id and edge_type is Wearing:
+            return [*found, (Wearing(), missing_item)]
+        return found
+
+    monkeypatch.setattr(type(character), "get_relationships", relationships)
+
+    expected = ShelterProtection(
+        temperature_buffer=7.0,
+        rain_protection=1.0,
+        wind_protection=1.0,
+    )
+    assert resolve_shelter_protection(actor.world, character.id) == expected
+    missing_character = parse_entity_id("entity_9998")
+    assert missing_character is not None
+    assert resolve_shelter_protection(actor.world, missing_character, room.id) == expected
+
+
+def test_moisture_component_uses_room_seam_defaults():
+    assert MoistureComponent() == MoistureComponent(wetness=Meter(), humidity=0.5)
 
 
 def _world():

@@ -31,6 +31,7 @@ from bunnyland.discord.plugin import bunnyland_plugins as discord_plugins
 from bunnyland.foundation.checkpoints.mechanics import SaveCheckpointComponent
 from bunnyland.foundation.checkpoints.plugin import plugin as checkpoints_plugin
 from bunnyland.foundation.core_verbs.plugin import plugin as core_verbs_plugin
+from bunnyland.foundation.environment.mechanics import MoistureComponent, ShelterComponent
 from bunnyland.foundation.storyteller.mechanics import IncidentSpawned
 from bunnyland.foundation.storyteller.plugin import plugin as storyteller_plugin
 from bunnyland.llm_agents.tools import tool_schemas
@@ -435,7 +436,7 @@ def test_builtin_sim_dependencies_match_layering_contracts():
         LIFESIM,
         COLONYSIM,
     )
-    assert plugins[BARBARIANSIM].dependencies.requires == (CORE_VERBS,)
+    assert plugins[BARBARIANSIM].dependencies.requires == (CORE_VERBS, ENVIRONMENT)
     assert plugins[DRAGONSIM].dependencies.requires == (CORE_VERBS, LIFESIM)
     assert plugins[DAGGERSIM].dependencies.requires == (CORE_VERBS, DRAGONSIM)
     assert plugins[VOIDSIM].dependencies.requires == (
@@ -454,6 +455,19 @@ def test_builtin_sim_dependencies_match_layering_contracts():
 def test_selecting_later_sim_without_required_layers_fails_clearly():
     with pytest.raises(PluginError, match="depends on missing"):
         resolve_order([select(bunnyland_plugins(), [NUKESIM])[0]])
+
+
+def test_environment_solely_owns_canonical_shelter_and_room_moisture():
+    from bunnyland.simpacks.barbariansim.mechanics import ShelterComponent as LegacyShelter
+
+    plugins = {plugin.id: plugin for plugin in bunnyland_plugins()}
+    registry = PluginRegistry(plugins.values())
+
+    assert LegacyShelter is ShelterComponent
+    assert ShelterComponent in plugins[ENVIRONMENT].ecs.components
+    assert MoistureComponent in plugins[ENVIRONMENT].ecs.components
+    assert ShelterComponent not in plugins[BARBARIANSIM].ecs.components
+    assert registry.components["ShelterComponent"] == (ENVIRONMENT, ShelterComponent)
 
 
 def test_missing_dependency_raises():
@@ -861,6 +875,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "BossComponent",
         "TreasureComponent",
         "ClimbingGateComponent",
+        "WetnessComponent",
     } <= {component.__name__ for component in barbarian.ecs.components}
     assert {
         "claim-base",
@@ -894,6 +909,7 @@ def test_catalogue_parity_plugins_register_new_public_surfaces():
         "TreasureUnlockedEvent",
         "TreasureClaimedEvent",
         "ClimbingGatePassedEvent",
+        "WetnessChangedEvent",
     } <= {event.__name__ for event in barbarian.commands.typed_events}
 
     dragon = plugins[DRAGONSIM]

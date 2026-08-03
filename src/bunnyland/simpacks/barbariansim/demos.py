@@ -19,6 +19,7 @@ async def barbariansim_example(actor, seed: str, options: GenOptions) -> Instant
         StaminaComponent,
         TemperatureResistanceComponent,
         WeaponComponent,
+        WetnessComponent,
     )
 
     proposal = WorldProposal(
@@ -53,13 +54,22 @@ async def barbariansim_example(actor, seed: str, options: GenOptions) -> Instant
 
     async with actor._lock:
         ridge, cave = world.rooms["ridge"], world.rooms["cave"]
-        _augment(actor, cave, ShelterComponent(temperature_buffer=12.0))
+        _augment(
+            actor,
+            cave,
+            ShelterComponent(
+                temperature_buffer=12.0,
+                rain_protection=1.0,
+                wind_protection=0.6,
+            ),
+        )
         _augment(
             actor,
             world.characters["kell"],
             StaminaComponent(current=8.0, maximum=10.0),
             CorruptionComponent(amount=3.0),
             TemperatureResistanceComponent(cold=0.25),
+            WetnessComponent(last_updated_epoch=actor.epoch),
         )
         _add(
             actor,

@@ -14,6 +14,12 @@ from uuid import uuid4
 from pydantic.dataclasses import dataclass
 from relics import Component, EntityId, Frequency, System, World
 
+from bunnyland.foundation.environment.mechanics import (
+    MoistureComponent,
+    ShelterComponent,
+    WeatherComponent,
+    resolve_shelter_protection,
+)
 from bunnyland.foundation.policy.mechanics import BoundaryTag, PolicyGate
 
 from ...core.commands import SubmittedCommand
@@ -27,7 +33,6 @@ from ...core.components import (
     InjuryComponent,
     KeyComponent,
     PortableComponent,
-    RoomComponent,
     SuspendedComponent,
     TemperatureComponent,
 )
@@ -62,6 +67,7 @@ from ...core.mutations import (
     RemoveEdge,
     SetComponent,
 )
+from ...foundation.meters.mechanics import Meter, changed
 from ...prompts import ComponentPromptContext
 
 UNARMED_DAMAGE = 5.0
@@ -107,11 +113,6 @@ class TemperatureResistanceComponent(Component):
 
 
 @dataclass(frozen=True)
-class ShelterComponent(Component):
-    temperature_buffer: float = 0.0
-
-
-@dataclass(frozen=True)
 class TemperatureExposureComponent(Component):
     heat: float = 0.0
     cold: float = 0.0
@@ -130,6 +131,27 @@ class TemperatureExposureComponent(Component):
         if self.cold_danger:
             lines.append("You are suffering dangerous cold exposure.")
         return tuple(lines)
+
+
+@dataclass(frozen=True)
+class WetnessComponent(Component):
+    meter: Meter = Meter()
+    last_updated_epoch: int = 0
+
+    def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
+        if not ctx.is_first_person:
+            return ()
+        return (f"You are {wetness_state(self.meter)}.",)
+
+
+def wetness_state(meter: Meter) -> str:
+    if meter.value >= meter.crisis_at:
+        return "soaked"
+    if meter.value >= meter.urgent_at:
+        return "wet"
+    if meter.value >= meter.warning_at:
+        return "damp"
+    return "dry"
 
 
 @dataclass(frozen=True)
@@ -453,6 +475,14 @@ class ExposureChangedEvent(DomainEvent):
     cold: float
 
 
+class WetnessChangedEvent(DomainEvent):
+    character_id: str
+    before: float
+    after: float
+    state: str
+    sources: tuple[str, ...]
+
+
 class HeatstrokeStartedEvent(DomainEvent):
     character_id: str
     heat: float
@@ -717,20 +747,6 @@ def _body_part(target, requested: object) -> str:
     return "body"
 
 
-def _temperature_buffer(world: World, character_id: EntityId, room_id: EntityId | None) -> float:
-    character = world.get_entity(character_id)
-    buffer = 0.0
-    if character.has_component(ShelterComponent):
-        buffer += character.get_component(ShelterComponent).temperature_buffer
-    if room_id is not None and world.has_entity(room_id):
-        room = world.get_entity(room_id)
-        if room.has_component(RoomComponent) and room.get_component(RoomComponent).indoor:
-            buffer += 5.0
-        if room.has_component(ShelterComponent):
-            buffer += room.get_component(ShelterComponent).temperature_buffer
-    return buffer
-
-
 def _ambient_celsius(world: World, room_id: EntityId | None) -> float | None:
     if room_id is None or not world.has_entity(room_id):
         return None
@@ -852,7 +868,9 @@ class TemperatureExposureConsequence:
                 if character.has_component(TemperatureResistanceComponent)
                 else TemperatureResistanceComponent()
             )
-            buffer = _temperature_buffer(world, character.id, room_id)
+            buffer = resolve_shelter_protection(
+                world, character.id, room_id
+            ).temperature_buffer
             hours = elapsed / 3600.0
             heat = exposure.heat
             cold = exposure.cold
@@ -947,6 +965,97 @@ class TemperatureExposureConsequence:
                         )
                     )
                 )
+        return events
+
+
+class WetnessConsequence:
+    """Accumulate rain and room moisture, or dry characters between wetting sources."""
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        query = (
+            world.query()
+            .with_all([CharacterComponent, WetnessComponent])
+            .with_none([DeadComponent, SuspendedComponent])
+        )
+        weather_entities = list(
+            world.query().with_all([WeatherComponent]).execute_entities()
+        )
+        weather = (
+            weather_entities[0].get_component(WeatherComponent)
+            if weather_entities
+            else WeatherComponent()
+        )
+
+        for character in query.execute_entities():
+            wetness = character.get_component(WetnessComponent)
+            elapsed = max(0, epoch - wetness.last_updated_epoch)
+            if elapsed <= 0:
+                if wetness.last_updated_epoch != epoch:
+                    replace_component(character, replace(wetness, last_updated_epoch=epoch))
+                continue
+
+            room_id = container_of(character)
+            room = (
+                world.get_entity(room_id)
+                if room_id is not None and world.has_entity(room_id)
+                else None
+            )
+            moisture = (
+                room.get_component(MoistureComponent)
+                if room is not None and room.has_component(MoistureComponent)
+                else MoistureComponent()
+            )
+            protection = resolve_shelter_protection(world, character.id, room_id)
+            hours = elapsed / 3600.0
+            sources: list[str] = []
+            rate = 0.0
+
+            if weather.condition in {"rain", "storm"}:
+                rain_rate = (
+                    20.0
+                    * max(0.0, weather.intensity)
+                    * (1.0 - protection.rain_protection)
+                )
+                if rain_rate > 0.0:
+                    rate += rain_rate
+                    sources.append(weather.condition)
+
+            room_moisture = max(0.0, min(100.0, moisture.wetness.value))
+            moisture_rate = 40.0 * room_moisture / 100.0
+            if moisture_rate > 0.0 and room is not None:
+                rate += moisture_rate
+                sources.append("room moisture")
+
+            if rate > 0.0:
+                updated_meter = changed(wetness.meter, rate * hours)
+            else:
+                humidity = max(0.0, min(1.0, moisture.humidity))
+                updated_meter = changed(wetness.meter, -10.0 * (1.0 - humidity) * hours)
+
+            updated = replace(
+                wetness,
+                meter=updated_meter,
+                last_updated_epoch=epoch,
+            )
+            replace_component(character, updated)
+            if updated_meter.value == wetness.meter.value:
+                continue
+            events.append(
+                WetnessChangedEvent(
+                    **_barbarian_event_base(
+                        epoch,
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character.id),
+                        room_id=str(room_id) if room_id is not None else None,
+                        character_id=str(character.id),
+                        before=wetness.meter.value,
+                        after=updated_meter.value,
+                        state=wetness_state(updated_meter),
+                        sources=tuple(sorted(sources)),
+                    )
+                )
+            )
         return events
 
 
@@ -2480,6 +2589,7 @@ def barbariansim_fragments(world: World, character) -> list[str]:
     for component_type in (
         StaminaComponent,
         TemperatureExposureComponent,
+        WetnessComponent,
         PoisonComponent,
         CorruptionComponent,
         DefendingComponent,
@@ -2526,6 +2636,7 @@ def barbariansim_fragments(world: World, character) -> list[str]:
 def install_barbariansim(actor) -> None:
     actor.world.register_system(StaminaRegenSystem())
     actor.register_consequence(TemperatureExposureConsequence())
+    actor.register_consequence(WetnessConsequence())
     actor.register_consequence(PoisonConsequence())
     actor.register_gate(PolicyGate((pvp_classifier, lethal_pvp_classifier, pickpocket_classifier)))
     ensure_barbariansim_policy(actor)
@@ -2632,11 +2743,15 @@ __all__ = [
     "UnlockTreasureHandler",
     "UpgradeBuildingHandler",
     "WeaponComponent",
+    "WetnessChangedEvent",
+    "WetnessComponent",
+    "WetnessConsequence",
     "barbariansim_fragments",
     "ensure_barbariansim_policy",
     "generate_raid_spawn_specs",
     "install_barbariansim",
     "lethal_pvp_classifier",
     "pickpocket_classifier",
+    "wetness_state",
     "pvp_classifier",
 ]

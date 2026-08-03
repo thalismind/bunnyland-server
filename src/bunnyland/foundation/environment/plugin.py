@@ -10,6 +10,8 @@ from bunnyland.foundation.environment.mechanics import (
     FireStartedEvent,
     FlammableComponent,
     IgniteHandler,
+    MoistureComponent,
+    ShelterComponent,
     TimeOfDayComponent,
     WeatherComponent,
     environment_fragments,
@@ -42,6 +44,8 @@ def _definition() -> Plugin:
                 CalendarComponent,
                 TimeOfDayComponent,
                 WeatherComponent,
+                ShelterComponent,
+                MoistureComponent,
                 FlammableComponent,
                 FireComponent,
             )
