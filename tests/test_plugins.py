@@ -20,12 +20,19 @@ from bunnyland.core import (
     Lane,
     MemoryProfileComponent,
     MutationPlan,
+    RestingComponent,
     SubmittedCommand,
     WorldActor,
     build_submitted_command,
     spawn_entity,
 )
-from bunnyland.core.events import NoteTakenEvent
+from bunnyland.core.events import (
+    CharacterWokeEvent,
+    NoteTakenEvent,
+    RestEndedEvent,
+    RestStartedEvent,
+    SleepStartedEvent,
+)
 from bunnyland.core.handlers import planned
 from bunnyland.discord.plugin import bunnyland_plugins as discord_plugins
 from bunnyland.foundation.checkpoints.mechanics import SaveCheckpointComponent
@@ -327,6 +334,13 @@ def test_collect_ecs_types_preserves_plugin_order():
 
 def test_builtin_admin_and_storyteller_ecs_types_are_registered():
     assert AdminComponent in core_verbs_plugin().ecs.components
+    assert RestingComponent in core_verbs_plugin().ecs.components
+    assert {
+        RestStartedEvent,
+        RestEndedEvent,
+        SleepStartedEvent,
+        CharacterWokeEvent,
+    } <= set(core_verbs_plugin().commands.typed_events)
     assert IncidentSpawned in storyteller_plugin().ecs.edges
     assert SaveCheckpointComponent in checkpoints_plugin().ecs.components
     assert {
@@ -569,9 +583,24 @@ def test_core_and_memory_plugins_expose_native_agent_tools_with_examples():
         for schema in tool_schemas(actor.action_definitions())
     }
 
-    assert {"move", "wait", "take_note", "remember", "forget", "reflect"} <= schemas.keys()
+    assert {
+        "move",
+        "rest",
+        "sleep",
+        "wait",
+        "take_note",
+        "remember",
+        "forget",
+        "reflect",
+    } <= schemas.keys()
     assert set(schemas["move"]["parameters"]["properties"]) == {"direction", "exit_id"}
     assert schemas["wait"]["parameters"] == {"type": "object", "properties": {}}
+    assert schemas["rest"]["parameters"]["properties"]["duration_seconds"]["type"] == (
+        "number"
+    )
+    assert schemas["sleep"]["parameters"]["properties"]["duration_seconds"]["type"] == (
+        "number"
+    )
     assert "Example: go north." in schemas["move"]["description"]
     assert "Example: wait." in schemas["wait"]["description"]
     assert "Example: take note the north tunnel is flooded." in schemas["take_note"]["description"]
@@ -582,6 +611,8 @@ def test_builtin_action_catalogue_uses_reviewed_lanes_and_effort_tiers():
     apply_plugins(bunnyland_plugins(), actor)
     definitions = {definition.command_type: definition for definition in actor.action_definitions()}
 
+    assert actor.plugins is not None
+    assert actor.plugins.actions["rest"][0] == CORE_VERBS
     assert definitions["say"].cost == CommandCost()
     assert definitions["tell"].cost == CommandCost()
     assert definitions["inspect"].cost == CommandCost()

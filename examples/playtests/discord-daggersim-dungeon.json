@@ -11,7 +11,7 @@
     {"tick": 5, "content": "!mark-path", "expect": ["Mark path complete for Juniper in Vault Antechamber."]},
     {"tick": 6, "content": "!view-map", "expect": ["View map complete for Juniper in Vault Antechamber."]},
     {"tick": 7, "content": "!set-recall", "expect": ["Recall anchor set: Vault Antechamber."]},
-    {"tick": 8, "content": "!rest", "expect": ["Rest complete for Juniper in Vault Antechamber."]},
+    {"tick": 8, "content": "!rest", "expect": ["Rest started."]},
     {"tick": 9, "content": "!leave-dungeon dungeon_id=\"Carrot Vault\"", "expect": ["Dungeon exited."]}
   ]
 }

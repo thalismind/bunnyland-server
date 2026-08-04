@@ -88,16 +88,28 @@ creates a physical mark, creator signature, and shared world history, so later p
 cite who marked an object after a save and reload. Inspecting the object still shows the
 readable text.
 
-## Rest, wait, and talk
+## Rest, sleep, wait, and talk
 
-Sleep changes your character's state until they wake:
+Rest starts ordinary recovery in your current location. It ends when its optional
+duration expires, danger reaches you, or you successfully do something else:
+
+```text
+!rest
+!rest duration_seconds=1800
+```
+
+Sleep is deeper recovery. Wake explicitly, or give the sleep a duration so it ends
+automatically:
 
 ```text
 !sleep
+!sleep duration_seconds=28800
 !wake
 ```
 
-Wait yields a turn:
+`relax` is a Life Sim comfort action; it does not start rest or sleep. `wait` only yields
+a turn and creates no recovery state. Because waiting is still a successful action, it
+ends an active rest:
 
 ```text
 !wait

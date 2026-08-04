@@ -296,11 +296,24 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         patterns=("write {text} on {target_id}",),
     ),
     define_action(
+        "rest",
+        ("duration_seconds",),
+        tool_name="rest",
+        description=(
+            "Rest in place to recover fatigue, stamina, and stress. An optional positive "
+            "duration ends the rest automatically; danger or another successful action "
+            "ends it early."
+        ),
+        cost=FREE_COST,
+        patterns=(ActionPattern("rest", {}),),
+    ),
+    define_action(
         "sleep",
+        ("duration_seconds",),
         tool_name="sleep",
         description=(
-            "Sleep and recover energy. Find a safe spot first, since you "
-            "are vulnerable while resting."
+            "Sleep until explicitly woken or an optional positive duration expires. "
+            "Sleeping recovers fatigue, stamina, and stress but leaves you vulnerable."
         ),
         cost=FREE_COST,
         patterns=(ActionPattern("sleep", {}),),

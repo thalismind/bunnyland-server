@@ -131,7 +131,6 @@ from bunnyland.simpacks.daggersim.mechanics import (
     RequestCureHandler,
     RequestDungeonHandler,
     ResolveTravelInterruptionHandler,
-    RestHandler,
     RestRiskComponent,
     RetrieveSafeItemHandler,
     RumorBecameExpansionEvent,
@@ -346,7 +345,6 @@ def _definition() -> Plugin:
                 ViewMapHandler,
                 SetRecallHandler,
                 UseRecallHandler,
-                RestHandler,
                 LeaveDungeonHandler,
             ),
             typed_events=(

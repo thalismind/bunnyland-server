@@ -217,6 +217,12 @@ hours after waking (longer sleeps give a longer buff) and makes skills you `prac
 `study`, or are mentored in progress faster while it is active. Sleeping anywhere you do not
 own or claim grants no bonus.
 
+This home bonus is separate from shared recovery. `rest` provides lighter fatigue,
+stamina, and stress recovery but never grants well-rested; `relax` changes comfort only;
+and `wait` does not recover a need or create a lasting state. Sleep may be timed with
+`!sleep duration_seconds=3600`, but it must still last at least an hour in a claimed room
+to qualify for the home bonus.
+
 Not implemented yet:
 
 - automatic eviction or lease expiration;

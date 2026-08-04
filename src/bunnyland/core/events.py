@@ -171,6 +171,33 @@ class CharacterChatRequestedEvent(DomainEvent):
     message: str
 
 
+class RecoveryEndReason(StrEnum):
+    EXPLICIT = "explicit"
+    DURATION = "duration"
+    ACTION = "action"
+    DANGER = "danger"
+
+
+class RestStartedEvent(DomainEvent):
+    session_id: str
+    until_epoch: float | None = None
+
+
+class RestEndedEvent(DomainEvent):
+    session_id: str
+    reason: RecoveryEndReason
+
+
+class SleepStartedEvent(DomainEvent):
+    session_id: str
+    until_epoch: float | None = None
+
+
+class CharacterWokeEvent(DomainEvent):
+    session_id: str
+    reason: RecoveryEndReason
+
+
 class WorldPauseStatusChangedEvent(DomainEvent):
     paused: bool
     state: str

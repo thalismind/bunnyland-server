@@ -467,14 +467,6 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ),
     ),
     define_action(
-        "rest",
-        tool_name="rest",
-        description=(
-            "Rest in your current room to recover. Find somewhere safe first, since "
-            "dangerous and ambush-prone areas are too risky to rest in."
-        ),
-    ),
-    define_action(
         "leave-dungeon",
         ("dungeon_id",),
         tool_name="leave_dungeon",

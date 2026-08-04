@@ -4,6 +4,10 @@ Below is the first-pass **master mechanics catalogue** for bunnyland. This is in
 
 The peaceful starter pack now has playable v1 coverage for the core catalogue loops:
 
+- `core_verbs`: shared stateful rest and sleep recovery with optional durations, explicit
+  waking, action and danger interruption, typed lifecycle events, prompt state, bounded
+  stress relief thoughts, and `wait` as a state-free turn yield.
+
 - `lifesim`: hunger, thirst, fatigue, hygiene, comfort, fun, social contact, privacy,
   safety, eat/drink, self-care verbs, sleep fatigue recovery, social recovery through
   speech, affect, homes, claims, careers, business, bills, skills, routines,
@@ -761,6 +765,12 @@ BoundaryChangedEvent
 
 ## 2.2 Needs
 
+**Implemented status:** Core Verbs owns `RestingComponent`, timed sleep state, `rest`,
+`sleep`, `wake`, lifecycle events, and interruption. Lifesim integrates fatigue recovery
+at 4/hour while resting and 12/hour while sleeping. Both recovery states relieve stress;
+home sleep remains the only source of Lifesim's well-rested learning bonus. Hygiene,
+comfort, and the other daily needs keep their existing independent recovery actions.
+
 ### Mechanics
 
 Core life needs:
@@ -788,6 +798,7 @@ HungerComponent
 ThirstComponent
 SleepNeedComponent
 SleepingComponent
+RestingComponent
 HygieneComponent
 ComfortNeedComponent
 SocialNeedComponent
@@ -846,6 +857,9 @@ seek safety
 HungerChangedEvent
 ThirstChangedEvent
 SleepChangedEvent
+RestStartedEvent
+RestEndedEvent
+SleepStartedEvent
 CharacterFellAsleepEvent
 CharacterWokeEvent
 HygieneChangedEvent
@@ -2078,6 +2092,9 @@ temperature, rain, and wind resolver. Barbariansim re-exports that exact type fo
 compatibility and implements private character wetness with dry, damp, wet, and soaked
 states. The generation capability `bunnyland.barbariansim.shelter` remains advertised but
 is deprecated and normalized to `bunnyland.environment.shelter`.
+
+Barbariansim's stamina integration doubles normal regeneration while the shared Core
+Verbs rest or sleep state is active. It does not own a separate rest action.
 
 Flooding/drainage, structural weather damage, weather-driven room temperatures, and
 wetness-driven cold penalties remain future work. There is no separate shelter marker,
@@ -4320,6 +4337,10 @@ TravelDeadlineMissedEvent
 ```
 
 ## 7.10 Procedural dungeons
+
+**Implemented status:** Dagger Sim contributes room `RestRiskComponent` state and a gate
+over Core Verbs' shared `rest` action. Low-risk rooms permit rest; high-risk and ambush
+rooms reject it. Procedural rest ambush generation remains planned.
 
 ### Mechanics
 

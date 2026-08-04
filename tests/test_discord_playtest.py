@@ -27,6 +27,7 @@ from bunnyland.core import (
     PortableComponent,
     PutHandler,
     ReadableComponent,
+    RestHandler,
     RoomComponent,
     SayHandler,
     SleepHandler,
@@ -778,10 +779,11 @@ def _install_daggersim_playtest(actor) -> None:
         dagger.ViewMapHandler(),
         dagger.SetRecallHandler(),
         dagger.UseRecallHandler(),
-        dagger.RestHandler(),
+        RestHandler(),
         dagger.LeaveDungeonHandler(),
     ):
         actor.register_handler(handler)
+    actor.register_gate(dagger.daggersim_rest_gate)
     actor.register_consequence(dagger.TravelCompletionConsequence())
     actor.register_consequence(dragon_quests.QuestDeadlineConsequence())
     actor.register_consequence(dagger.LoanDueConsequence())

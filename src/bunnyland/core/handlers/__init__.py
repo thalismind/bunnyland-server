@@ -29,7 +29,7 @@ from .inventory import (
     UnholdHandler,
     WearHandler,
 )
-from .lifecycle import SleepHandler, WaitHandler, WakeHandler
+from .lifecycle import RestHandler, SleepHandler, WaitHandler, WakeHandler
 from .movement import MoveHandler
 from .speech import (
     ConversationLineHandler,
@@ -56,6 +56,7 @@ __all__ = [
     "OpenHandler",
     "PutHandler",
     "RemoveHandler",
+    "RestHandler",
     "SayHandler",
     "SleepHandler",
     "StartConversationHandler",

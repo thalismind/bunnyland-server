@@ -19,7 +19,12 @@ from relics import Component, Frequency, System
 from bunnyland.foundation.meters.mechanics import Meter, band, changed
 
 from ...core.commands import SubmittedCommand
-from ...core.components import DeadComponent, SleepingComponent, SuspendedComponent
+from ...core.components import (
+    DeadComponent,
+    RestingComponent,
+    SleepingComponent,
+    SuspendedComponent,
+)
 from ...core.ecs import container_of, parse_entity_id, replace_component
 from ...core.events import DomainEvent
 from ...core.handlers import (
@@ -34,6 +39,7 @@ from ...core.mutations import MutationPlan, SetComponent
 from ...prompts import ComponentPromptContext, PerspectivePhrase, PromptFact, PromptPerspective
 
 SECONDS_PER_HOUR = 3600.0
+REST_FATIGUE_RECOVERY_PER_HOUR = 4.0
 
 
 # --------------------------------------------------------------------------------------
@@ -231,7 +237,7 @@ class ThirstSystem(System):
 
 
 class FatigueSystem(System):
-    """Raise fatigue while awake and recover it while sleeping."""
+    """Raise fatigue while active and recover it during rest or sleep."""
 
     def query(self):
         return self.q.with_all([FatigueComponent]).with_none([SuspendedComponent, DeadComponent])
@@ -243,11 +249,12 @@ class FatigueSystem(System):
         hours = delta / SECONDS_PER_HOUR
         for entity in entities:
             fatigue = entity.get_component(FatigueComponent)
-            rate = (
-                -fatigue.recovery_rate
-                if entity.has_component(SleepingComponent)
-                else fatigue.fatigue_rate
-            )
+            if entity.has_component(SleepingComponent):
+                rate = -fatigue.recovery_rate
+            elif entity.has_component(RestingComponent):
+                rate = -REST_FATIGUE_RECOVERY_PER_HOUR
+            else:
+                rate = fatigue.fatigue_rate
             new_meter = changed(fatigue.meter, rate * hours)
             if new_meter.value != fatigue.meter.value:
                 replace_component(entity, replace(fatigue, meter=new_meter))

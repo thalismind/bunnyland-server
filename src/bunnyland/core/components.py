@@ -536,6 +536,20 @@ class SleepingComponent(Component):
     started_at_epoch: int = 0
     safe_sleep: bool = True
     wake_when_recharged: bool = False
+    until_epoch: float | None = None
+
+
+@dataclass(frozen=True)
+class RestingComponent(Component):
+    """One active ordinary-rest session for a character.
+
+    Rest is singleton participation state: a character can be in at most one recovery
+    session at a time. ``session_id`` links the state to its one bounded affect thought.
+    """
+
+    started_at_epoch: int = 0
+    until_epoch: float | None = None
+    session_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -593,6 +607,7 @@ __all__ = [
     "RegionComponent",
     "RoomComponent",
     "RoomSummaryComponent",
+    "RestingComponent",
     "SleepingComponent",
     "StealthComponent",
     "StimulusComponent",

@@ -39,12 +39,27 @@ Targets are optional for most self-care actions. Reachable objects or rooms with
 need affordances can improve recovery. For example, a bath basin can provide extra
 hygiene recovery, and a comfortable chair can improve relaxation.
 
-## Sleep and fatigue
+## Rest, sleep, and fatigue
 
-Fatigue rises while a character is awake and recovers while they are asleep. Life-sim
-homes still provide the well-rested skill bonus when a character sleeps long enough in
-their claimed home or room; fatigue recovery is separate and works for any sleeping
-character that has a fatigue need.
+Fatigue rises while a character is active. Ordinary `rest` recovers 4 fatigue per game
+hour; `sleep` recovers 12 per game hour. Both double normal stamina regeneration and
+gradually relieve stress, with a bounded recovery thought that lingers for two game hours
+after recovery ends.
+
+```text
+!rest duration_seconds=1800
+!sleep duration_seconds=28800
+!wake
+```
+
+A timed rest ends at its duration. A successful action ends rest early, while a rejected
+command leaves it intact. Damage, downing, death, or suspension ends rest and wakes a
+sleeping character. Sleep can always be ended explicitly with `wake`.
+
+Life-sim homes still provide the well-rested skill bonus when a character sleeps long
+enough in their claimed home or room. Ordinary rest, short sleep, and sleep away from
+home do not grant that learning bonus. `relax` recovers comfort only, while `wait` is a
+state-free turn yield.
 
 ## Social recovery
 

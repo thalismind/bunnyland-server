@@ -83,6 +83,7 @@ from ..core.components import (
     LightComponent,
     PainComponent,
     PortableComponent,
+    RestingComponent,
     RoomComponent,
     SleepingComponent,
     StealthComponent,
@@ -870,6 +871,8 @@ def _sheet_status(character) -> list[str]:
         status.append("downed" + (" (stable)" if downed.stable else ""))
     if character.has_component(SleepingComponent):
         status.append("sleeping")
+    if character.has_component(RestingComponent):
+        status.append("resting")
     if character.has_component(SuspendedComponent):
         status.append("suspended")
     if character.has_component(PregnancyComponent):
@@ -1294,6 +1297,7 @@ _EXAMINE_CONDITIONS: tuple[tuple[type, str], ...] = (
     (DeadComponent, "dead"),
     (DownedComponent, "downed"),
     (SleepingComponent, "asleep"),
+    (RestingComponent, "resting"),
     (SuspendedComponent, "suspended"),
 )
 

@@ -20,7 +20,9 @@ from bunnyland.core import (
     ExitTo,
     Lane,
     RegionComponent,
+    RestingComponent,
     RoomComponent,
+    SleepingComponent,
     WorldActor,
     WorldInfoComponent,
     build_submitted_command,
@@ -1742,6 +1744,39 @@ def test_shelter_moisture_and_wetness_round_trip_with_legacy_shelter_defaults(tm
     assert legacy.world.get_entity(room.id).get_component(ShelterComponent) == (
         ShelterComponent(temperature_buffer=8.0)
     )
+
+
+def test_recovery_state_round_trips_and_legacy_sleep_defaults_remain_compatible(tmp_path):
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    resting = spawn_entity(
+        actor.world,
+        [RestingComponent(started_at_epoch=10, until_epoch=20.5, session_id="rest-1")],
+    )
+    sleeping = spawn_entity(
+        actor.world,
+        [SleepingComponent(started_at_epoch=12, until_epoch=30.5)],
+    )
+    path = tmp_path / "recovery.json"
+    save_world(actor, path, meta=WorldMeta(seed="recovery"))
+
+    loaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+    assert loaded.world.get_entity(resting.id).get_component(RestingComponent) == (
+        RestingComponent(started_at_epoch=10, until_epoch=20.5, session_id="rest-1")
+    )
+    assert loaded.world.get_entity(sleeping.id).get_component(SleepingComponent) == (
+        SleepingComponent(started_at_epoch=12, until_epoch=30.5)
+    )
+
+    snapshot = json.loads(path.read_text())
+    snapshot["components"]["SleepingComponent"][str(sleeping.id)].pop("until_epoch")
+    legacy_path = tmp_path / "legacy-recovery.json"
+    legacy_path.write_text(json.dumps(snapshot))
+    legacy, _meta = load_world(
+        legacy_path,
+        registry=PluginRegistry(bunnyland_plugins()),
+    )
+    assert legacy.world.get_entity(sleeping.id).get_component(SleepingComponent).until_epoch is None
 
 
 async def test_reloaded_world_keeps_playing(tmp_path):

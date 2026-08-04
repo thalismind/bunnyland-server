@@ -22,6 +22,7 @@ from bunnyland.core import (
     MemoryProfileComponent,
     PortableComponent,
     ReadableComponent,
+    RestingComponent,
     RoomComponent,
     SleepingComponent,
     SuspendedComponent,
@@ -409,6 +410,10 @@ def test_status_helper_uses_condition_precedence(scenario):
     character = scenario.actor.world.get_entity(scenario.character)
 
     assert _status(character) == "active"
+
+    character.add_component(RestingComponent(session_id="rest"))
+    assert _status(character) == "resting"
+    character.remove_component(RestingComponent)
 
     character.add_component(SleepingComponent())
     assert _status(character) == "asleep"

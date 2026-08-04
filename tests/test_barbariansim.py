@@ -21,7 +21,9 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     PortableComponent,
+    RestingComponent,
     RoomComponent,
+    SleepingComponent,
     SuspendedComponent,
     TemperatureComponent,
     Wearing,
@@ -1135,6 +1137,35 @@ async def test_stamina_regenerates_before_attack_and_spends_on_combat():
     assert character.get_component(StaminaComponent).current == 2.0
     assert scenario.actor.world.get_entity(target).get_component(HealthComponent).current == 15.0
     assert changed[0].reason == "attack"
+
+
+async def test_stamina_regeneration_doubles_during_rest_and_sleep():
+    scenario = build_scenario()
+    _install(scenario.actor)
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(StaminaComponent(current=0.0, maximum=20.0, regen_per_hour=5.0))
+
+    await scenario.actor.tick(HOUR)
+    assert character.get_component(StaminaComponent).current == 5.0
+
+    replace_component(
+        character,
+        StaminaComponent(current=0.0, maximum=20.0, regen_per_hour=5.0),
+    )
+    character.add_component(
+        RestingComponent(started_at_epoch=scenario.actor.epoch, session_id="rest")
+    )
+    await scenario.actor.tick(HOUR)
+    assert character.get_component(StaminaComponent).current == 10.0
+
+    character.remove_component(RestingComponent)
+    replace_component(
+        character,
+        StaminaComponent(current=0.0, maximum=20.0, regen_per_hour=5.0),
+    )
+    character.add_component(SleepingComponent(started_at_epoch=scenario.actor.epoch))
+    await scenario.actor.tick(HOUR)
+    assert character.get_component(StaminaComponent).current == 10.0
 
 
 async def test_weapon_durability_decreases_breaks_and_repair_restores_use():

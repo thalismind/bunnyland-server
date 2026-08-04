@@ -24,6 +24,7 @@ from ..core.components import (
     IdentityComponent,
     MemoryProfileComponent,
     PortableComponent,
+    RestingComponent,
     SleepingComponent,
     SuspendedComponent,
 )
@@ -100,6 +101,8 @@ def _status(character: Entity) -> str:
         return "downed"
     if character.has_component(SleepingComponent):
         return "asleep"
+    if character.has_component(RestingComponent):
+        return "resting"
     return "active"
 
 

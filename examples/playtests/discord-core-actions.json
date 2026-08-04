@@ -22,8 +22,8 @@
     {"tick": 16, "content": "!open burrow door", "expect": ["Door opened: burrow door."]},
     {"tick": 17, "content": "!say text=\"thank you Hazel\" intent=praise", "expect": ["Speech said: text thank you Hazel; author intent praise; inferred intent praise; final interpretation praise."]},
     {"tick": 18, "content": "!tell target_id=Hazel text=\"please guard the basket\" intent=request", "expect": ["Speech told: text please guard the basket; author intent request; inferred intent request; final interpretation request."]},
-    {"tick": 19, "content": "!sleep", "expect": ["Sleep complete for Juniper in Mosslit Burrow."]},
-    {"tick": 20, "content": "!wake", "expect": ["Wake complete for Juniper in Mosslit Burrow."]},
+    {"tick": 19, "content": "!sleep", "expect": ["Sleep started."]},
+    {"tick": 20, "content": "!wake", "expect": ["Character woke: reason explicit."]},
     {"tick": 21, "content": "!wait", "expect": ["Wait complete for Juniper in Mosslit Burrow."]}
   ]
 }

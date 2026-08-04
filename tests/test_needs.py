@@ -12,6 +12,7 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     MutationPlan,
+    RestingComponent,
     SleepingComponent,
     build_submitted_command,
     container_of,
@@ -177,6 +178,23 @@ async def test_daily_needs_decay_and_fatigue_recovers_while_sleeping():
     await scenario.actor.tick(HOUR)
 
     assert char.get_component(FatigueComponent).meter.value < 22.0
+
+
+async def test_fatigue_uses_distinct_awake_rest_and_sleep_rates():
+    scenario = daily_needs_scenario()
+    char = scenario.actor.world.get_entity(scenario.character)
+
+    await scenario.actor.tick(HOUR)
+    assert char.get_component(FatigueComponent).meter.value == pytest.approx(22.0)
+
+    char.add_component(RestingComponent(started_at_epoch=scenario.actor.epoch, session_id="r1"))
+    await scenario.actor.tick(HOUR)
+    assert char.get_component(FatigueComponent).meter.value == pytest.approx(18.0)
+
+    char.remove_component(RestingComponent)
+    char.add_component(SleepingComponent(started_at_epoch=scenario.actor.epoch))
+    await scenario.actor.tick(HOUR)
+    assert char.get_component(FatigueComponent).meter.value == pytest.approx(6.0)
 
 
 async def test_daily_need_recovery_verbs_use_reachable_affordances_and_prompt_fragments():

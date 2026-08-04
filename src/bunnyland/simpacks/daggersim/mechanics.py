@@ -3819,23 +3819,23 @@ class UseRecallHandler:
         )
 
 
-class RestHandler:
-    command_type = "rest"
+def daggersim_rest_gate(world: World, command: SubmittedCommand) -> tuple[bool, str | None]:
+    """Keep Dagger Sim's room-risk rule on the shared Core Verbs rest action."""
 
-    def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        character_id = parse_entity_id(command.character_id)
-        if character_id is None:
-            return rejected("invalid character id")
-        character = ctx.entity(character_id)
-        room_id = container_of(character)
-        if room_id is None or not ctx.world.has_entity(room_id):
-            return rejected("character is not in a room")
-        room = ctx.entity(room_id)
-        if room.has_component(RestRiskComponent):
-            risk = room.get_component(RestRiskComponent)
-            if risk.band in ("high", "ambush"):
-                return rejected("this area is too dangerous to rest")
-        return planned(MutationPlan())
+    if command.command_type != "rest":
+        return True, None
+    character_id = parse_entity_id(command.character_id)
+    if character_id is None or not world.has_entity(character_id):
+        return True, None
+    room_id = container_of(world.get_entity(character_id))
+    if room_id is None or not world.has_entity(room_id):
+        return True, None
+    room = world.get_entity(room_id)
+    if room.has_component(RestRiskComponent):
+        risk = room.get_component(RestRiskComponent)
+        if risk.band in ("high", "ambush"):
+            return False, "this area is too dangerous to rest"
+    return True, None
 
 
 class LeaveDungeonHandler:
@@ -4054,6 +4054,7 @@ def install_daggersim(actor) -> None:
     actor.register_consequence(TravelCompletionConsequence())
     actor.register_consequence(LoanDueConsequence())
     actor.register_consequence(FeedingNeedConsequence())
+    actor.register_gate(daggersim_rest_gate)
     reactor = SocialRegisterReactor(actor.world)
     reactor.subscribe(actor.bus)
 
@@ -4232,7 +4233,6 @@ __all__ = [
     "ViewMapHandler",
     "SetRecallHandler",
     "UseRecallHandler",
-    "RestHandler",
     "LeaveDungeonHandler",
     "DialogueApproachComponent",
     "EtiquetteSkillComponent",
@@ -4242,5 +4242,6 @@ __all__ = [
     "SocialRegisterReactor",
     "DIALOGUE_APPROACHES",
     "daggersim_fragments",
+    "daggersim_rest_gate",
     "install_daggersim",
 ]

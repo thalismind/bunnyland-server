@@ -225,12 +225,13 @@ Set a recall anchor, rest, and leave:
 
 ```text
 !set-recall
-!rest
+!rest duration_seconds=1800
 !leave-dungeon dungeon_id="Carrot Vault"
 ```
 
 Dungeon exploration records discovered rooms, secret doors, objectives, map marks, and
-recall anchors.
+recall anchors. Dagger Sim uses the shared Core Verbs rest lifecycle, but rooms marked
+high-risk or ambush-prone reject it with `this area is too dangerous to rest`.
 
 ## Institutions, travel, and services
 

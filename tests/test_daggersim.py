@@ -17,6 +17,7 @@ from bunnyland.core import (
     Lane,
     MutationPlan,
     PortableComponent,
+    RestHandler,
     RoomComponent,
     build_submitted_command,
     container_of,
@@ -160,7 +161,6 @@ from bunnyland.simpacks.daggersim.mechanics import (
     RequestCureHandler,
     RequestDungeonHandler,
     ResolveTravelInterruptionHandler,
-    RestHandler,
     RestRiskComponent,
     RetrieveSafeItemHandler,
     RumorBecameExpansionEvent,
@@ -219,6 +219,7 @@ from bunnyland.simpacks.daggersim.mechanics import (
     _spell_effect_operation,
     _string_tuple,
     daggersim_fragments,
+    daggersim_rest_gate,
     install_daggersim,
 )
 from bunnyland.simpacks.dragonsim.mechanics import (
@@ -292,6 +293,7 @@ def _install(actor):
     actor.register_handler(UseRecallHandler())
     actor.register_handler(RestHandler())
     actor.register_handler(LeaveDungeonHandler())
+    actor.register_gate(daggersim_rest_gate)
     actor.register_consequence(TravelCompletionConsequence())
     actor.register_consequence(QuestDeadlineConsequence())
     actor.register_consequence(LoanDueConsequence())
@@ -4515,7 +4517,6 @@ def test_dungeon_utility_handlers_reject_missing_room_or_state_directly():
     for handler, command, reason in (
         (MarkPathHandler(), _handler_cmd(scenario, "mark-path"), "character is not in a room"),
         (SetRecallHandler(), _handler_cmd(scenario, "set-recall"), "character is not in a room"),
-        (RestHandler(), _handler_cmd(scenario, "rest"), "character is not in a room"),
     ):
         result = execute_handler(handler, ctx, command)
         assert result.ok is False
@@ -5535,12 +5536,33 @@ def test_daggersim_rest_allows_low_risk_area():
     scenario = build_scenario()
     _install(scenario.actor)
     world = scenario.actor.world
-    ctx = HandlerContext(world, scenario.actor.epoch)
     room = world.get_entity(scenario.room_a)
     room.add_component(RestRiskComponent(band="low"))
-    # Low-risk band is not high/ambush, so rest is allowed (3979->3981).
-    result = execute_handler(RestHandler(), ctx, _handler_cmd(scenario, "rest"))
-    assert result.ok
+    assert daggersim_rest_gate(world, _handler_cmd(scenario, "rest")) == (True, None)
+
+
+def test_daggersim_rest_gate_rejects_high_and_ambush_risk():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    command = _handler_cmd(scenario, "rest")
+
+    for band in ("high", "ambush"):
+        replace_component(room, RestRiskComponent(band=band))
+        assert daggersim_rest_gate(world, command) == (
+            False,
+            "this area is too dangerous to rest",
+        )
+
+
+def test_daggersim_rest_gate_defers_invalid_character_and_missing_room_to_core():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    invalid = _handler_cmd(scenario, "rest", character_id="not-an-id")
+    assert daggersim_rest_gate(world, invalid) == (True, None)
+
+    world.get_entity(scenario.room_a).remove_relationship(Contains, scenario.character)
+    assert daggersim_rest_gate(world, _handler_cmd(scenario, "rest")) == (True, None)
 
 
 def test_daggersim_withdraw_and_string_tuple_and_identify_can_handle():

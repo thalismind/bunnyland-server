@@ -33,6 +33,8 @@ from ...core.components import (
     InjuryComponent,
     KeyComponent,
     PortableComponent,
+    RestingComponent,
+    SleepingComponent,
     SuspendedComponent,
     TemperatureComponent,
 )
@@ -666,7 +668,13 @@ class StaminaRegenSystem(System):
         del components
         for entity in entities:
             stamina = entity.get_component(StaminaComponent)
-            gained = stamina.regen_per_hour * (delta / 3600.0)
+            recovery_multiplier = (
+                2.0
+                if entity.has_component(RestingComponent)
+                or entity.has_component(SleepingComponent)
+                else 1.0
+            )
+            gained = stamina.regen_per_hour * recovery_multiplier * (delta / 3600.0)
             current = min(stamina.maximum, stamina.current + gained)
             if current != stamina.current:
                 replace_component(entity, replace(stamina, current=current))

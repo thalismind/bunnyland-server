@@ -55,6 +55,7 @@ from .components import (
     DownedComponent,
     FocusPointsComponent,
     InitiativeComponent,
+    RestingComponent,
     RoomComponent,
     SleepingComponent,
     SuspendedComponent,
@@ -110,6 +111,7 @@ from .mutations import (
 )
 from .perspective import PerspectiveQueryRegistry
 from .queue import CommandQueues
+from .recovery import RecoveryEndReason, end_rest_operations, rest_ended_event
 from .systems import ActionRegenSystem, FocusRegenSystem, WorldClockSystem
 
 if TYPE_CHECKING:
@@ -1107,6 +1109,35 @@ class WorldActor:
                 )
             if result.ok:
                 assert result.plan is not None
+                if (
+                    character.has_component(RestingComponent)
+                    and command.command_type not in {"rest", "sleep", "wake"}
+                ):
+                    rest = character.get_component(RestingComponent)
+                    result = replace(
+                        result,
+                        events=(
+                            *result.events,
+                            rest_ended_event(
+                                self.epoch,
+                                character,
+                                rest,
+                                RecoveryEndReason.ACTION,
+                            ),
+                        ),
+                        plan=MutationPlan(
+                            operations=(
+                                *result.plan.operations,
+                                *end_rest_operations(
+                                    self.world,
+                                    character,
+                                    rest,
+                                    epoch=self.epoch,
+                                ),
+                            ),
+                            invariants=result.plan.invariants,
+                        ),
+                    )
                 combined = MutationPlan(
                     operations=(
                         *result.plan.operations,

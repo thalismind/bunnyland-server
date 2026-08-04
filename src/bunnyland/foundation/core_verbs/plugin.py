@@ -4,10 +4,12 @@ from ...core.components import (
     AdminComponent,
     ConversationComponent,
     HoldableComponent,
+    RestingComponent,
     WearableComponent,
 )
 from ...core.edges import ConversationParticipant, KnowsRoom
 from ...core.events import (
+    CharacterWokeEvent,
     ContainerClosedEvent,
     ContainerOpenedEvent,
     ConversationEndedEvent,
@@ -22,7 +24,10 @@ from ...core.events import (
     ItemRemovedEvent,
     ItemUnheldEvent,
     ItemWornEvent,
+    RestEndedEvent,
+    RestStartedEvent,
     RoomLookedEvent,
+    SleepStartedEvent,
 )
 from ...core.handlers import (
     CloseHandler,
@@ -37,6 +42,7 @@ from ...core.handlers import (
     OpenHandler,
     PutHandler,
     RemoveHandler,
+    RestHandler,
     SayHandler,
     SleepHandler,
     StartConversationHandler,
@@ -51,9 +57,11 @@ from ...core.handlers import (
     WriteHandler,
 )
 from ...core.perspective import V1_PERSPECTIVE_QUERIES
+from ...core.recovery import install_recovery, recovery_fragments
 from ...plugins.ids import CORE_VERBS
 from ...plugins.model import (
     CommandContribution,
+    ContentContribution,
     EcsContribution,
     Plugin,
     PluginPlacement,
@@ -71,6 +79,7 @@ def _definition() -> Plugin:
                 AdminComponent,
                 ConversationComponent,
                 HoldableComponent,
+                RestingComponent,
                 WearableComponent,
             ),
             edges=(ConversationParticipant, KnowsRoom),
@@ -94,6 +103,7 @@ def _definition() -> Plugin:
                 RemoveHandler,
                 UseHandler,
                 WriteHandler,
+                RestHandler,
                 SleepHandler,
                 WakeHandler,
                 WaitHandler,
@@ -119,9 +129,17 @@ def _definition() -> Plugin:
                 ItemUnheldEvent,
                 ItemWornEvent,
                 ItemRemovedEvent,
+                RestStartedEvent,
+                RestEndedEvent,
+                SleepStartedEvent,
+                CharacterWokeEvent,
             ),
         ),
-        runtime=RuntimeContribution(perspective_queries=V1_PERSPECTIVE_QUERIES),
+        runtime=RuntimeContribution(
+            integration_factories=(install_recovery,),
+            perspective_queries=V1_PERSPECTIVE_QUERIES,
+        ),
+        content=ContentContribution(prompt_fragments=(recovery_fragments,)),
     )
 
 
