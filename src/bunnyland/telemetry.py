@@ -18,6 +18,7 @@ operator has not set ``OTEL_SERVICE_NAME``.
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from collections import Counter
@@ -29,7 +30,7 @@ from socketserver import BaseServer
 from threading import Thread
 from typing import TYPE_CHECKING, Protocol
 
-from relics import Entity, World
+from relics import Entity, EntityId, World
 
 if TYPE_CHECKING:
     from .core.world_actor import WorldActor
@@ -140,6 +141,9 @@ _gauges_stream: EventStream | None = None
 _world_gauges_registered = False
 _runtime_gauges_registered = False
 _stream_gauges_registered = False
+_world_audit_enabled = False
+_orphan_grace_seconds = 300.0
+_orphan_candidates: dict[EntityId, float] = {}
 _prometheus_server: BaseServer | None = None
 _prometheus_thread: Thread | None = None
 
@@ -356,6 +360,25 @@ def _enabled_from_env() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _world_audit_config() -> tuple[bool, float]:
+    value = (os.environ.get("BUNNYLAND_OTEL_WORLD_AUDIT_ENABLED") or "").strip().lower()
+    audit_enabled = value in {"1", "true", "yes", "on"}
+    if not audit_enabled:
+        return False, 300.0
+    raw_grace = (os.environ.get("BUNNYLAND_OTEL_ORPHAN_GRACE_SECONDS") or "300").strip()
+    try:
+        grace = float(raw_grace)
+    except ValueError as exc:
+        raise ValueError(
+            "BUNNYLAND_OTEL_ORPHAN_GRACE_SECONDS must be a finite nonnegative number"
+        ) from exc
+    if not math.isfinite(grace) or grace < 0:
+        raise ValueError(
+            "BUNNYLAND_OTEL_ORPHAN_GRACE_SECONDS must be a finite nonnegative number"
+        )
+    return True, grace
+
+
 def init_telemetry(
     *, providers: tuple[_TracerProvider, _MeterProvider] | None = None
 ) -> bool:
@@ -365,11 +388,14 @@ def init_telemetry(
     exporters instead of the real OTLP exporters. Production passes ``None``.
     """
     global _ENABLED, _initialized, _tracer, _meter, _instruments
+    global _world_audit_enabled, _orphan_grace_seconds
     if _initialized:
         return _ENABLED
     _initialized = True
     if not _OTEL_AVAILABLE or not _enabled_from_env():
         return False
+
+    _world_audit_enabled, _orphan_grace_seconds = _world_audit_config()
 
     if providers is None:
         tracer_provider, meter_provider = _build_otlp_providers()
@@ -530,6 +556,8 @@ def register_world_gauges(actor: WorldActor) -> None:
     global _gauges_actor, _world_gauges_registered
     if not _ENABLED:
         return
+    if _gauges_actor is not actor:
+        _orphan_candidates.clear()
     _gauges_actor = actor
     if _world_gauges_registered:
         return
@@ -556,6 +584,12 @@ def register_world_gauges(actor: WorldActor) -> None:
         callbacks=[_observe_active_characters],
         description="Lifecycle-active characters grouped by their assigned controller kind.",
     )
+    if _world_audit_enabled:
+        meter.create_observable_gauge(
+            "bunnyland.world.entities.orphaned",
+            callbacks=[_observe_orphaned_entities],
+            description="Mature ECS entities with no components or live relationships.",
+        )
 
 
 def register_runtime_gauges(
@@ -639,6 +673,46 @@ def _observe_rooms(_options: object) -> Iterator[object]:
     yield from _observe(
         lambda world: len(list(world.query().with_all([RoomComponent]).execute_entities()))
     )
+
+
+def _entity_is_empty_and_disconnected(
+    world: World, entity_id: EntityId, live_ids: set[EntityId]
+) -> bool:
+    """Return whether a live entity has no state or live graph connections.
+
+    Relics does not currently expose relationship-type enumeration publicly. Keep the
+    private-index access isolated here, and inspect the nested edge dictionaries because
+    removal can leave empty type buckets behind.
+    """
+    if world._entities.get(entity_id):
+        return False
+    outgoing = world._relationships.get(entity_id, {})
+    if any(target_id in live_ids for edges in outgoing.values() for target_id in edges):
+        return False
+    incoming = world._incoming_relationships.get(entity_id, {})
+    return not any(source_id in live_ids for edges in incoming.values() for source_id in edges)
+
+
+def _orphaned_entity_count(world: World, *, now: float | None = None) -> int:
+    observed_at = time.monotonic() if now is None else now
+    live_ids = set(world._entities)
+    for entity_id in tuple(_orphan_candidates):
+        if entity_id not in live_ids:
+            del _orphan_candidates[entity_id]
+    mature = 0
+    for entity_id in live_ids:
+        if not _entity_is_empty_and_disconnected(world, entity_id, live_ids):
+            _orphan_candidates.pop(entity_id, None)
+            continue
+        first_observed = _orphan_candidates.setdefault(entity_id, observed_at)
+        if observed_at - first_observed >= _orphan_grace_seconds:
+            mature += 1
+    return mature
+
+
+def _observe_orphaned_entities(_options: object) -> Iterator[object]:
+    if _gauges_actor is not None:
+        yield _observation(_orphaned_entity_count(_gauges_actor.world))
 
 
 def _observe(count_fn: Callable[[World], int]) -> Iterator[object]:
@@ -1116,6 +1190,7 @@ def reset_for_tests() -> None:
     global _ENABLED, _initialized, _tracer, _meter, _instruments
     global _gauges_actor, _gauges_dispatch, _gauges_loop, _gauges_stream
     global _world_gauges_registered, _runtime_gauges_registered, _stream_gauges_registered
+    global _world_audit_enabled, _orphan_grace_seconds
     global _prometheus_server, _prometheus_thread
     if _prometheus_server is not None:
         _prometheus_server.shutdown()
@@ -1132,6 +1207,9 @@ def reset_for_tests() -> None:
     _world_gauges_registered = False
     _runtime_gauges_registered = False
     _stream_gauges_registered = False
+    _world_audit_enabled = False
+    _orphan_grace_seconds = 300.0
+    _orphan_candidates.clear()
     _prometheus_server = None
     _prometheus_thread = None
 
