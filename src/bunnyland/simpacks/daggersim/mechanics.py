@@ -35,6 +35,7 @@ from ...core.handlers import HandlerContext, HandlerResult, planned, rejected, r
 from ...core.mutations import (
     AddEdge,
     AddEntity,
+    DeleteEntity,
     EntityReference,
     MutationOperation,
     MutationPlan,
@@ -444,6 +445,26 @@ class TravelSupplyComponent(Component):
         return (f"Travel supplies: {self.quantity}.",)
 
 
+def _inventory_travel_supply_stacks(world: World, character: Entity) -> tuple[Entity, ...]:
+    """Return direct inventory supply stacks in deterministic canonical order."""
+
+    stacks = (
+        world.get_entity(item_id)
+        for edge, item_id in character.get_relationships(Contains)
+        if edge.mode == ContainmentMode.INVENTORY and world.has_entity(item_id)
+    )
+    return tuple(
+        sorted(
+            (item for item in stacks if item.has_component(TravelSupplyComponent)),
+            key=lambda item: str(item.id),
+        )
+    )
+
+
+def _travel_supply_total(stacks: tuple[Entity, ...]) -> int:
+    return sum(stack.get_component(TravelSupplyComponent).quantity for stack in stacks)
+
+
 @dataclass(frozen=True)
 class TravelInterruptionComponent(Component):
     reason: str = "weather"
@@ -849,6 +870,7 @@ class TravelStartedEvent(DomainEvent):
     destination_id: str
     arrive_at_epoch: int
     mode: str
+    supplies_consumed: int = 1
 
 
 class TravelCompletedEvent(DomainEvent):
@@ -1396,6 +1418,8 @@ class PlanTravelHandler:
         destination_id = parse_entity_id(command.payload.get("destination_id"))
         if character_id is None or destination_id is None:
             return rejected("invalid character or destination id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         if not ctx.world.has_entity(destination_id):
             return rejected("destination does not exist")
 
@@ -1422,9 +1446,27 @@ class PlanTravelHandler:
         )
         travel_seconds = max(1, int(route.travel_seconds / max(0.1, mode.speed_multiplier)))
         arrive_at = ctx.epoch + travel_seconds
+        supply_stacks = _inventory_travel_supply_stacks(ctx.world, character)
+        supply_quantity = _travel_supply_total(supply_stacks)
+        if supply_quantity <= 0:
+            return rejected("travel supplies are required")
+        remaining_supplies = supply_quantity - 1
+        supply_operations: list[MutationOperation] = []
+        if remaining_supplies > 0:
+            supply_operations.append(
+                SetComponent(
+                    supply_stacks[0].id,
+                    TravelSupplyComponent(quantity=remaining_supplies),
+                )
+            )
+            duplicate_stacks = supply_stacks[1:]
+        else:
+            duplicate_stacks = supply_stacks
+        supply_operations.extend(DeleteEntity(stack.id) for stack in duplicate_stacks)
         return planned(
             MutationPlan(
                 (
+                    *supply_operations,
                     AddEdge(
                         character_id,
                         destination_id,
@@ -1446,6 +1488,7 @@ class PlanTravelHandler:
                     destination_id=str(destination_id),
                     arrive_at_epoch=arrive_at,
                     mode=mode.mode,
+                    supplies_consumed=1,
                 )
             ),
         )
@@ -2468,8 +2511,38 @@ class BuyTravelSuppliesHandler:
         quantity = int(command.payload.get("quantity", 1))
         if character_id is None:
             return rejected("invalid character id")
+        if not ctx.world.has_entity(character_id):
+            return rejected("character does not exist")
         if quantity <= 0:
             return rejected("supply quantity must be positive")
+        character = ctx.entity(character_id)
+        supply_stacks = _inventory_travel_supply_stacks(ctx.world, character)
+        if supply_stacks:
+            canonical_supply = supply_stacks[0]
+            plan = MutationPlan(
+                (
+                    SetComponent(
+                        canonical_supply.id,
+                        TravelSupplyComponent(
+                            quantity=_travel_supply_total(supply_stacks) + quantity
+                        ),
+                    ),
+                    *(DeleteEntity(stack.id) for stack in supply_stacks[1:]),
+                )
+            )
+            return planned(
+                plan,
+                TravelSuppliesBoughtEvent(
+                    **ctx.event_base(
+                        visibility=EventVisibility.PRIVATE,
+                        actor_id=str(character_id),
+                        room_id=_room_id(ctx.world, character_id),
+                        target_ids=(str(canonical_supply.id),),
+                        supply_id=str(canonical_supply.id),
+                        quantity=quantity,
+                    )
+                ),
+            )
         supply = EntityReference()
         plan = MutationPlan(
             (
@@ -3872,6 +3945,10 @@ class LeaveDungeonHandler:
 def daggersim_fragments(world: World, character: Entity) -> list[str]:
     lines: list[str] = []
     ctx = ComponentPromptContext.for_entity(world, character)
+    supply_stacks = _inventory_travel_supply_stacks(world, character)
+    inventory_supply_ids = {stack.id for stack in supply_stacks}
+    if supply_stacks:
+        lines.append(f"Travel supplies available: {_travel_supply_total(supply_stacks)}.")
     for entity_id in reachable_ids(world, character):
         entity = world.get_entity(entity_id)
         entity_ctx = ComponentPromptContext.for_entity(
@@ -3907,6 +3984,8 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
             SocialRegisterComponent,
             ConversationToneComponent,
         ):
+            if component_type is TravelSupplyComponent and entity.id in inventory_supply_ids:
+                continue
             if entity.has_component(component_type):
                 lines.extend(entity.get_component(component_type).prompt_fragments(entity_ctx))
     current_room_id = container_of(character)

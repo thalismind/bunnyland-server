@@ -201,6 +201,7 @@ from bunnyland.simpacks.daggersim.mechanics import (
     TravelRoute,
     TravelStartedEvent,
     TravelSuppliesBoughtEvent,
+    TravelSupplyComponent,
     UnrealizedLocationComponent,
     UseInstitutionServiceHandler,
     UseRecallHandler,
@@ -1326,6 +1327,31 @@ def _travel_route(scenario, *, travel_seconds=2 * HOUR):
         TravelRoute(travel_seconds=travel_seconds, label="moss road"),
         scenario.room_b,
     )
+
+
+def _travel_supplies(scenario, quantity, *, holder_id=None, mode=ContainmentMode.INVENTORY):
+    supply = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="travel supplies", kind="travel-supplies"),
+            PortableComponent(can_pick_up=True),
+            TravelSupplyComponent(quantity=quantity),
+        ],
+    )
+    holder = scenario.actor.world.get_entity(holder_id or scenario.character)
+    holder.add_relationship(Contains(mode=mode), supply.id)
+    return supply
+
+
+def _inventory_travel_supplies(scenario):
+    character = scenario.actor.world.get_entity(scenario.character)
+    return [
+        scenario.actor.world.get_entity(item_id)
+        for edge, item_id in character.get_relationships(Contains)
+        if edge.mode == ContainmentMode.INVENTORY
+        and scenario.actor.world.has_entity(item_id)
+        and scenario.actor.world.get_entity(item_id).has_component(TravelSupplyComponent)
+    ]
 
 
 def _institution(
@@ -3289,6 +3315,8 @@ async def test_plan_travel_moves_character_after_route_time():
     scenario = build_scenario()
     _install(scenario.actor)
     _travel_route(scenario)
+    first_supply = _travel_supplies(scenario, 2)
+    second_supply = _travel_supplies(scenario, 1)
     started: list[TravelStartedEvent] = []
     completed: list[TravelCompletedEvent] = []
     scenario.actor.bus.subscribe(TravelStartedEvent, started.append)
@@ -3301,6 +3329,13 @@ async def test_plan_travel_moves_character_after_route_time():
     assert scenario.character_room() == scenario.room_a
     assert character.get_relationships(TravelingToDestination)
     assert started[0].destination_id == str(scenario.room_b)
+    assert started[0].supplies_consumed == 1
+    remaining_stacks = _inventory_travel_supplies(scenario)
+    assert len(remaining_stacks) == 1
+    assert remaining_stacks[0].get_component(TravelSupplyComponent).quantity == 2
+    assert scenario.actor.world.has_entity(first_supply.id) != scenario.actor.world.has_entity(
+        second_supply.id
+    )
 
     await scenario.actor.tick(HOUR)
     assert scenario.character_room() == scenario.room_a
@@ -3315,6 +3350,7 @@ async def test_travel_mode_speed_shortens_route_time():
     scenario = build_scenario()
     _install(scenario.actor)
     _travel_route(scenario)
+    supply = _travel_supplies(scenario, 1)
     character = scenario.actor.world.get_entity(scenario.character)
     character.add_component(TravelModeComponent(mode="cart", speed_multiplier=2.0))
 
@@ -3322,10 +3358,93 @@ async def test_travel_mode_speed_shortens_route_time():
     await scenario.actor.tick(HOUR)
 
     assert scenario.character_room() == scenario.room_a
+    assert not scenario.actor.world.has_entity(supply.id)
     await scenario.actor.tick(HOUR)
 
     assert scenario.character_room() == scenario.room_b
     assert not character.get_relationships(TravelingToDestination)
+
+
+def test_plan_travel_requires_direct_inventory_supplies_and_preserves_them_on_rejection():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, epoch=100)
+    origin = scenario.actor.world.get_entity(scenario.room_a)
+    destination = scenario.actor.world.get_entity(scenario.room_b)
+    origin.add_component(TravelHubComponent(name="Mosslit Burrow", region_id="moss-road"))
+    destination.add_component(TravelHubComponent(name="North Tunnel", region_id="moss-road"))
+    floor_supply = _travel_supplies(
+        scenario,
+        3,
+        holder_id=scenario.room_a,
+        mode=ContainmentMode.ROOM_CONTENT,
+    )
+
+    missing_character = execute_handler(
+        PlanTravelHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "plan-travel",
+            character_id="entity_999999",
+            destination_id=str(scenario.room_b),
+        ),
+    )
+    assert missing_character.ok is False
+    assert missing_character.reason == "character does not exist"
+
+    no_route = execute_handler(
+        PlanTravelHandler(),
+        ctx,
+        _handler_cmd(scenario, "plan-travel", destination_id=str(scenario.room_b)),
+    )
+    assert no_route.ok is False
+    assert no_route.reason == "no travel route to destination"
+    assert floor_supply.get_component(TravelSupplyComponent).quantity == 3
+
+    origin.add_relationship(TravelRoute(travel_seconds=HOUR), scenario.room_b)
+    no_inventory_supply = execute_handler(
+        PlanTravelHandler(),
+        ctx,
+        _handler_cmd(scenario, "plan-travel", destination_id=str(scenario.room_b)),
+    )
+    assert no_inventory_supply.ok is False
+    assert no_inventory_supply.reason == "travel supplies are required"
+    assert floor_supply.get_component(TravelSupplyComponent).quantity == 3
+
+
+def test_buy_travel_supplies_stacks_and_normalizes_legacy_entities():
+    scenario = build_scenario()
+    ctx = HandlerContext(scenario.actor.world, epoch=100)
+    first_supply = _travel_supplies(scenario, 2)
+    second_supply = _travel_supplies(scenario, 3)
+    canonical_id = min((first_supply.id, second_supply.id), key=str)
+
+    missing_character = execute_handler(
+        BuyTravelSuppliesHandler(),
+        ctx,
+        _handler_cmd(
+            scenario,
+            "buy-travel-supplies",
+            character_id="entity_999999",
+            quantity=1,
+        ),
+    )
+    assert missing_character.ok is False
+    assert missing_character.reason == "character does not exist"
+
+    result = execute_handler(
+        BuyTravelSuppliesHandler(),
+        ctx,
+        _handler_cmd(scenario, "buy-travel-supplies", quantity=4),
+    )
+
+    assert result.ok is True
+    stacks = _inventory_travel_supplies(scenario)
+    assert [stack.id for stack in stacks] == [canonical_id]
+    assert stacks[0].get_component(TravelSupplyComponent).quantity == 9
+    event = next(event for event in result.events if isinstance(event, TravelSuppliesBoughtEvent))
+    assert event.supply_id == str(canonical_id)
+    assert event.quantity == 4
 
 
 async def test_join_institution_and_use_member_service_grants_output_item():
@@ -3902,6 +4021,19 @@ def test_daggersim_fragments_show_travel_plan():
     assert any("Traveling by foot" in line for line in fragments)
 
 
+def test_daggersim_fragments_aggregate_inventory_travel_supply_stacks():
+    scenario = build_scenario()
+    _travel_supplies(scenario, 2)
+    _travel_supplies(scenario, 3)
+
+    fragments = daggersim_fragments(
+        scenario.actor.world, scenario.actor.world.get_entity(scenario.character)
+    )
+
+    assert fragments.count("Travel supplies available: 5.") == 1
+    assert not any(line.startswith("Travel supplies:") for line in fragments)
+
+
 def test_daggersim_component_prompt_fragments_use_target_and_self_context():
     scenario = build_scenario()
     world = scenario.actor.world
@@ -3946,6 +4078,9 @@ def test_daggersim_component_prompt_fragments_use_target_and_self_context():
     assert institution.get_component(InstitutionDuesComponent).prompt_fragments(
         institution_ctx
     ) == ("Institution dues: 12 (paid).",)
+    assert TravelSupplyComponent(quantity=2).prompt_fragments(self_ctx) == (
+        "Travel supplies: 2.",
+    )
     assert (
         institution.get_component(InstitutionDuesComponent).prompt_fragments(
             observer_institution_ctx

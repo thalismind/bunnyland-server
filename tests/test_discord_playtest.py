@@ -751,6 +751,7 @@ def _install_daggersim_playtest(actor) -> None:
         dagger.ExpandSiteHandler(),
         dagger.AskRumorHandler(),
         dagger.InvestigateRumorHandler(),
+        dagger.BuyTravelSuppliesHandler(),
         dagger.PlanTravelHandler(),
         dagger.JoinInstitutionHandler(),
         dagger.UseInstitutionServiceHandler(),
@@ -1945,8 +1946,8 @@ async def test_discord_playtest_daggersim_rumor_travel_loop(scenario):
     site = scenario.actor.world.get_entity(site_id)
     rumor = scenario.actor.world.get_entity(rumor_id)
     assert rejected == []
-    assert result.ticks == 7
-    assert len(result.inputs) == 5
+    assert result.ticks == 8
+    assert len(result.inputs) == 6
     assert rumor.get_component(dagger.RumorComponent).state == "verified"
     assert site.get_component(dagger.ProceduralSiteComponent).generated is True
     assert site.get_component(dagger.UnrealizedLocationComponent).detail_level == "instantiated"
