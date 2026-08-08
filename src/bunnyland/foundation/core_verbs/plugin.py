@@ -7,7 +7,7 @@ from ...core.components import (
     RestingComponent,
     WearableComponent,
 )
-from ...core.edges import ConversationParticipant, KnowsRoom
+from ...core.edges import ConversationParticipant, KnowsRoom, StudiedBy
 from ...core.events import (
     CharacterWokeEvent,
     ContainerClosedEvent,
@@ -82,7 +82,7 @@ def _definition() -> Plugin:
                 RestingComponent,
                 WearableComponent,
             ),
-            edges=(ConversationParticipant, KnowsRoom),
+            edges=(ConversationParticipant, KnowsRoom, StudiedBy),
         ),
         commands=CommandContribution(
             action_definitions=ACTION_DEFINITIONS,

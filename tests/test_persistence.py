@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -146,7 +147,7 @@ def test_schema_v1_quest_snapshot_migrates_to_canonical_graph_without_mutating_s
     migrated = migrate_snapshot(source)
 
     assert source["bunnyland"]["schema_version"] == 1
-    assert migrated["bunnyland"]["schema_version"] == 4
+    assert migrated["bunnyland"]["schema_version"] == 5
     assert (
         not {
             "GeneratedQuestComponent",
@@ -173,7 +174,7 @@ def test_schema_v1_quest_snapshot_migrates_to_canonical_graph_without_mutating_s
 
 def test_schema_migration_rejects_future_and_ambiguous_worlds():
     with pytest.raises(WorldMigrationError, match="newer than supported"):
-        migrate_snapshot({"bunnyland": {"schema_version": 5}})
+        migrate_snapshot({"bunnyland": {"schema_version": 6}})
 
     snapshot = _schema_v1_generated_quest_snapshot()
     snapshot["components"]["QuestComponent"] = {
@@ -184,9 +185,9 @@ def test_schema_migration_rejects_future_and_ambiguous_worlds():
         migrate_snapshot(snapshot)
 
 
-def test_load_schema_v1_migrates_in_memory_and_next_save_is_v4(tmp_path):
+def test_load_schema_v1_migrates_in_memory_and_next_save_is_v5(tmp_path):
     source = tmp_path / "world-v1.json"
-    dest = tmp_path / "world-v4.json"
+    dest = tmp_path / "world-v5.json"
     snapshot = _schema_v1_generated_quest_snapshot()
     source.write_text(json.dumps(snapshot))
 
@@ -206,12 +207,12 @@ def test_load_schema_v1_migrates_in_memory_and_next_save_is_v4(tmp_path):
     assert quest.has_relationship(QuestAcceptedBy, EntityId.parse("entity_2"))
     assert len(quest.get_relationships(QuestHasObjective)) == 1
     assert len(quest.get_relationships(QuestHasReward)) == 1
-    assert meta.schema_version == 4
+    assert meta.schema_version == 5
     assert json.loads(source.read_text())["bunnyland"]["schema_version"] == 1
 
     save_world(actor, dest, meta=meta)
 
-    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 4
+    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 5
 
 
 def test_schema_v4_load_drops_empty_relationship_bucket(tmp_path):
@@ -234,7 +235,639 @@ def test_schema_v4_load_drops_empty_relationship_bucket(tmp_path):
     loaded, meta = load_world(source, registry=PluginRegistry(bunnyland_plugins()))
 
     assert loaded.world.has_entity(enclosure.id)
-    assert meta.schema_version == 4
+    assert meta.schema_version == 5
+
+
+def _schema_v4_travel_snapshot():
+    return {
+        "bunnyland": {"schema_version": 4},
+        "entities": {
+            "entity_1": {"prefab": "entity", "created_epoch": 0},
+            "entity_2": {"prefab": "entity", "created_epoch": 0},
+        },
+        "components": {
+            "TravelHubComponent": {"entity_2": {"name": "Moss Gate", "region_id": "moss"}}
+        },
+        "relationships": {
+            "TravelingToDestination": {
+                "entity_1": [
+                    {
+                        "target": "entity_2",
+                        "edge": {
+                            "started_at_epoch": 10,
+                            "arrive_at_epoch": 20,
+                            "mode": "cart",
+                            "route_label": "moss road",
+                        },
+                    }
+                ]
+            }
+        },
+    }
+
+
+def test_schema_v4_travel_state_migrates_to_indexed_component_without_mutating_source():
+    source = _schema_v4_travel_snapshot()
+
+    migrated = migrate_snapshot(source)
+
+    assert source["bunnyland"]["schema_version"] == 4
+    assert source["relationships"]["TravelingToDestination"]["entity_1"][0]["edge"]
+    assert migrated["bunnyland"]["schema_version"] == 5
+    assert migrated["components"]["TravelingComponent"]["entity_1"] == {
+        "started_at_epoch": 10,
+        "arrive_at_epoch": 20,
+        "mode": "cart",
+        "route_label": "moss road",
+    }
+    assert migrated["relationships"]["TravelingToDestination"]["entity_1"] == [
+        {"target": "entity_2", "edge": {}}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda value: value["components"].__setitem__(
+                "TravelingComponent", {"entity_1": {}}
+            ),
+            "already contains TravelingComponent",
+        ),
+        (
+            lambda value: value["relationships"]["TravelingToDestination"].__setitem__(
+                "missing",
+                value["relationships"]["TravelingToDestination"].pop("entity_1"),
+            ),
+            "source 'missing' does not exist",
+        ),
+        (
+            lambda value: value["relationships"]["TravelingToDestination"]["entity_1"].append(
+                value["relationships"]["TravelingToDestination"]["entity_1"][0]
+            ),
+            "requires one destination",
+        ),
+        (
+            lambda value: value["relationships"]["TravelingToDestination"][
+                "entity_1"
+            ].__setitem__(0, []),
+            "edge for 'entity_1' must be a mapping",
+        ),
+        (
+            lambda value: value["relationships"]["TravelingToDestination"]["entity_1"][0].update(
+                {"target": "missing"}
+            ),
+            "refers to missing target 'missing'",
+        ),
+        (
+            lambda value: value["components"]["TravelHubComponent"].clear(),
+            "is not a travel hub",
+        ),
+        (
+            lambda value: value["relationships"]["TravelingToDestination"]["entity_1"][0][
+                "edge"
+            ].update({"arrive_at_epoch": True}),
+            "arrive_at_epoch.*must be an integer",
+        ),
+        (
+            lambda value: value["relationships"]["TravelingToDestination"]["entity_1"][0][
+                "edge"
+            ].update({"mode": 7}),
+            "text fields.*must be strings",
+        ),
+    ],
+)
+def test_schema_v4_travel_migration_rejects_ambiguous_or_malformed_state(mutate, message):
+    source = _schema_v4_travel_snapshot()
+    mutate(source)
+
+    with pytest.raises(WorldMigrationError, match=message):
+        migrate_snapshot(source)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda value: value["components"]["TravelingComponent"].__setitem__(
+                "missing", dict(value["components"]["TravelingComponent"]["entity_1"])
+            ),
+            "owner 'missing' does not exist",
+        ),
+        (
+            lambda value: value["components"]["TravelingComponent"].__setitem__(
+                "entity_1", []
+            ),
+            "TravelingComponent fields.*must be a mapping",
+        ),
+        (
+            lambda value: value["components"]["TravelingComponent"]["entity_1"].pop(
+                "route_label"
+            ),
+            "TravelingComponent fields.*are invalid",
+        ),
+        (
+            lambda value: value["components"]["TravelingComponent"]["entity_1"].update(
+                {"arrive_at_epoch": True}
+            ),
+            "arrive_at_epoch.*must be an integer",
+        ),
+        (
+            lambda value: value["components"]["TravelingComponent"]["entity_1"].update(
+                {"mode": 7}
+            ),
+            "TravelingComponent text fields.*must be strings",
+        ),
+        (
+            lambda value: value["components"]["TravelingComponent"].clear(),
+            "lacks TravelingComponent",
+        ),
+        (
+            lambda value: value["relationships"]["TravelingToDestination"].__setitem__(
+                "entity_1", {}
+            ),
+            "source 'entity_1' requires one destination",
+        ),
+        (
+            lambda value: value["relationships"]["TravelingToDestination"][
+                "entity_1"
+            ].__setitem__(0, []),
+            "edge for 'entity_1' must be a mapping",
+        ),
+        (
+            lambda value: value["relationships"]["TravelingToDestination"].clear(),
+            "requires one TravelingToDestination edge",
+        ),
+        (
+            lambda value: value["relationships"]["TravelingToDestination"]["entity_1"][0][
+                "edge"
+            ].update({"mode": "cart"}),
+            "must not contain properties",
+        ),
+        (
+            lambda value: value["relationships"]["TravelingToDestination"]["entity_1"][0].update(
+                {"target": "missing"}
+            ),
+            "refers to missing target 'missing'",
+        ),
+        (
+            lambda value: value["components"]["TravelHubComponent"].clear(),
+            "target 'entity_2' is not a travel hub",
+        ),
+    ],
+)
+def test_schema_v5_travel_state_requires_one_propertyless_destination(mutate, message):
+    snapshot = migrate_snapshot(_schema_v4_travel_snapshot())
+    mutate(snapshot)
+
+    with pytest.raises(WorldMigrationError, match=message):
+        migrate_snapshot(snapshot)
+
+
+def _schema_v4_live_relationship_snapshot():
+    entity = {"prefab": "entity", "created_epoch": 0}
+    return {
+        "bunnyland": {"schema_version": 4},
+        "entities": {f"entity_{index}": dict(entity) for index in range(1, 9)},
+        "components": {
+            "CharacterComponent": {"entity_1": {}},
+            "RoomComponent": {"entity_2": {"title": "Archive"}},
+            "WorldHistoryRecordComponent": {
+                "entity_3": {
+                    "summary": "A deed.",
+                    "source_event_id": "event-1",
+                    "event_type": "TestEvent",
+                    "created_at_epoch": 10,
+                    "location_id": "entity_2",
+                    "tags": ["test"],
+                    "salience": 0.7,
+                }
+            },
+            "PhysicalMarkComponent": {
+                "entity_4": {
+                    "text": "A mark.",
+                    "mark_type": "writing",
+                    "author_id": "entity_1",
+                    "source_event_id": "event-1",
+                    "created_at_epoch": 10,
+                }
+            },
+            "CreatorSignatureComponent": {
+                "entity_4": {
+                    "creator_id": "entity_1",
+                    "source_event_id": "event-1",
+                    "created_at_epoch": 10,
+                    "circumstance": "writing on archive",
+                },
+                "entity_5": {
+                    "creator_id": "entity_1",
+                    "source_event_id": "event-2",
+                    "created_at_epoch": 11,
+                    "circumstance": "crafting",
+                },
+            },
+            "DeedReputationComponent": {
+                "entity_1": {
+                    "scores": {"test": 0.7},
+                    "deed_ids": ["entity_3"],
+                    "known_for": ["A deed."],
+                }
+            },
+            "SampleComponent": {
+                "entity_6": {
+                    "sample_type": "moss",
+                    "studied_by": ["entity_1"],
+                }
+            },
+            "DeathConsequenceComponent": {
+                "entity_7": {
+                    "character_id": "entity_1",
+                    "cause": "testing",
+                    "source_event_id": "event-3",
+                    "created_at_epoch": 12,
+                    "location_id": "entity_2",
+                    "summary": "A test death.",
+                }
+            },
+            "DecorationSource3DComponent": {
+                "entity_8": {
+                    "room_id": "entity_2",
+                    "recipe_key": "bunnyland.3d/meadow",
+                    "role": "bunnyland.3d/flora",
+                    "recipe_version": 2,
+                }
+            },
+        },
+        "relationships": {
+            "CreatedBy": {
+                "entity_4": [
+                    {
+                        "target": "entity_1",
+                        "edge": {
+                            "source_event_id": "event-1",
+                            "created_at_epoch": 10,
+                            "circumstance": "writing on archive",
+                        },
+                    }
+                ],
+                "entity_5": [
+                    {
+                        "target": "entity_1",
+                        "edge": {
+                            "source_event_id": "event-2",
+                            "created_at_epoch": 11,
+                            "circumstance": "crafting",
+                        },
+                    }
+                ],
+            },
+            "HasDecoration3D": {
+                "entity_2": [
+                    {
+                        "target": "entity_8",
+                        "edge": {"role": "bunnyland.3d/flora"},
+                    }
+                ]
+            },
+        },
+    }
+
+
+def test_schema_v4_live_component_references_migrate_to_edges():
+    source = _schema_v4_live_relationship_snapshot()
+
+    migrated = migrate_snapshot(source)
+
+    assert source["components"]["PhysicalMarkComponent"]["entity_4"]["author_id"] == (
+        "entity_1"
+    )
+    assert "entity_4" not in migrated["components"]["CreatorSignatureComponent"]
+    assert "author_id" not in migrated["components"]["PhysicalMarkComponent"]["entity_4"]
+    assert "creator_id" not in migrated["components"]["CreatorSignatureComponent"]["entity_5"]
+    assert "location_id" not in migrated["components"]["WorldHistoryRecordComponent"]["entity_3"]
+    assert "deed_ids" not in migrated["components"]["DeedReputationComponent"]["entity_1"]
+    assert "studied_by" not in migrated["components"]["SampleComponent"]["entity_6"]
+    assert "character_id" not in migrated["components"]["DeathConsequenceComponent"]["entity_7"]
+    assert "location_id" not in migrated["components"]["DeathConsequenceComponent"]["entity_7"]
+    assert "room_id" not in migrated["components"]["DecorationSource3DComponent"]["entity_8"]
+    assert migrated["relationships"]["HistoryLocation"]["entity_3"] == [
+        {"target": "entity_2", "edge": {}}
+    ]
+    assert migrated["relationships"]["CreditedDeed"]["entity_1"] == [
+        {"target": "entity_3", "edge": {"score": 0.7}}
+    ]
+    assert migrated["relationships"]["StudiedBy"]["entity_6"] == [
+        {"target": "entity_1", "edge": {}}
+    ]
+    assert migrated["relationships"]["DeathOf"]["entity_7"] == [
+        {"target": "entity_1", "edge": {}}
+    ]
+    assert migrated["relationships"]["DeathAt"]["entity_7"] == [
+        {"target": "entity_2", "edge": {}}
+    ]
+
+
+def test_schema_v5_rejects_legacy_live_reference_fields():
+    snapshot = migrate_snapshot(_schema_v4_live_relationship_snapshot())
+    snapshot["components"]["SampleComponent"]["entity_6"]["studied_by"] = ["entity_1"]
+
+    with pytest.raises(WorldMigrationError, match="legacy SampleComponent.studied_by"):
+        migrate_snapshot(snapshot)
+
+
+@pytest.mark.parametrize(
+    ("component_name", "entity_id"),
+    [
+        ("WorldHistoryRecordComponent", "entity_3"),
+        ("PhysicalMarkComponent", "entity_4"),
+        ("CreatorSignatureComponent", "entity_5"),
+        ("DeedReputationComponent", "entity_1"),
+        ("DeathConsequenceComponent", "entity_7"),
+        ("SampleComponent", "entity_6"),
+        ("DecorationSource3DComponent", "entity_8"),
+    ],
+)
+def test_schema_v4_live_reference_migration_requires_component_mappings(
+    component_name, entity_id
+):
+    snapshot = _schema_v4_live_relationship_snapshot()
+    snapshot["components"][component_name][entity_id] = []
+
+    with pytest.raises(WorldMigrationError, match=f"{component_name} fields"):
+        migrate_snapshot(snapshot)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value", "message"),
+    [
+        ("source_event_id", 1, "source_event_id.*must be a string"),
+        ("created_at_epoch", True, "created_at_epoch.*must be an integer"),
+    ],
+)
+def test_schema_v4_creator_provenance_requires_typed_fields(field_name, value, message):
+    snapshot = _schema_v4_live_relationship_snapshot()
+    snapshot["components"]["CreatorSignatureComponent"]["entity_5"][field_name] = value
+
+    with pytest.raises(WorldMigrationError, match=message):
+        migrate_snapshot(snapshot)
+
+
+@pytest.mark.parametrize(
+    ("component_name", "entity_id", "field_name"),
+    [
+        ("DeedReputationComponent", "entity_1", "deed_ids"),
+        ("SampleComponent", "entity_6", "studied_by"),
+    ],
+)
+def test_schema_v4_repeatable_live_references_require_sequences(
+    component_name, entity_id, field_name
+):
+    snapshot = _schema_v4_live_relationship_snapshot()
+    snapshot["components"][component_name][entity_id][field_name] = "entity_1"
+
+    with pytest.raises(WorldMigrationError, match=f"{component_name}.{field_name}.*sequence"):
+        migrate_snapshot(snapshot)
+
+
+def test_schema_v4_live_reference_migration_discards_stale_optional_targets():
+    snapshot = _schema_v4_live_relationship_snapshot()
+    snapshot["components"]["PhysicalMarkComponent"]["entity_4"]["author_id"] = "entity_99"
+    del snapshot["components"]["CreatorSignatureComponent"]["entity_4"]
+    snapshot["components"]["CreatorSignatureComponent"]["entity_5"]["creator_id"] = "entity_99"
+    snapshot["components"]["DeedReputationComponent"]["entity_1"]["deed_ids"] = [
+        "entity_99"
+    ]
+    snapshot["components"]["WorldHistoryRecordComponent"]["entity_3"][
+        "location_id"
+    ] = "entity_99"
+    snapshot["components"]["DeathConsequenceComponent"]["entity_7"].update(
+        {"character_id": "entity_99", "location_id": "entity_99"}
+    )
+    snapshot["components"]["SampleComponent"]["entity_6"]["studied_by"] = ["entity_99"]
+
+    migrated = migrate_snapshot(snapshot)
+
+    assert "entity_4" not in migrated["relationships"]["CreatedBy"]
+    assert "entity_5" not in migrated["relationships"]["CreatedBy"]
+    assert "entity_1" not in migrated["relationships"]["CreditedDeed"]
+    assert "entity_7" not in migrated["relationships"]["DeathOf"]
+    assert "entity_7" not in migrated["relationships"]["DeathAt"]
+    assert "entity_6" not in migrated["relationships"]["StudiedBy"]
+    assert "entity_3" not in migrated["relationships"]["HistoryLocation"]
+
+
+def test_schema_v4_decoration_owner_backfills_and_rejects_conflicts():
+    snapshot = _schema_v4_live_relationship_snapshot()
+    snapshot["relationships"]["HasDecoration3D"].clear()
+    snapshot["relationships"]["HasDecoration3D"]["entity_1"] = [
+        {"target": "entity_3", "edge": {"role": "bunnyland.3d/detail"}}
+    ]
+
+    migrated = migrate_snapshot(snapshot)
+
+    assert migrated["relationships"]["HasDecoration3D"]["entity_2"] == [
+        {"target": "entity_8", "edge": {"role": "bunnyland.3d/flora"}}
+    ]
+
+    malformed_signature = _schema_v4_live_relationship_snapshot()
+    malformed_signature["components"]["CreatorSignatureComponent"]["entity_4"] = []
+    with pytest.raises(WorldMigrationError, match="CreatorSignatureComponent fields"):
+        migrate_snapshot(malformed_signature)
+
+    malformed = _schema_v4_live_relationship_snapshot()
+    malformed["relationships"]["HasDecoration3D"]["entity_2"] = {}
+    with pytest.raises(WorldMigrationError, match="HasDecoration3D edges.*must be a list"):
+        migrate_snapshot(malformed)
+
+    conflict = _schema_v4_live_relationship_snapshot()
+    conflict["entities"]["entity_9"] = {"prefab": "entity", "created_epoch": 0}
+    conflict["components"]["RoomComponent"]["entity_9"] = {"title": "Other"}
+    conflict["relationships"]["HasDecoration3D"]["entity_9"] = conflict["relationships"][
+        "HasDecoration3D"
+    ].pop("entity_2")
+    with pytest.raises(WorldMigrationError, match="conflicts with HasDecoration3D"):
+        migrate_snapshot(conflict)
+
+
+def _append_relationship(snapshot, edge_name, source_id, target_id, edge=None):
+    snapshot["relationships"].setdefault(edge_name, {}).setdefault(source_id, []).append(
+        {"target": target_id, "edge": edge or {}}
+    )
+
+
+def test_schema_v5_relationship_validation_rejects_malformed_records():
+    base = migrate_snapshot(_schema_v4_live_relationship_snapshot())
+
+    missing_source = deepcopy(base)
+    missing_source["relationships"]["CreatedBy"]["entity_99"] = missing_source[
+        "relationships"
+    ]["CreatedBy"].pop("entity_5")
+    with pytest.raises(WorldMigrationError, match="CreatedBy source.*does not exist"):
+        migrate_snapshot(missing_source)
+
+    non_list = deepcopy(base)
+    non_list["relationships"]["CreatedBy"]["entity_5"] = {}
+    with pytest.raises(WorldMigrationError, match="CreatedBy edges.*must be a list"):
+        migrate_snapshot(non_list)
+
+    non_mapping = deepcopy(base)
+    non_mapping["relationships"]["CreatedBy"]["entity_5"] = [[]]
+    with pytest.raises(WorldMigrationError, match="CreatedBy edge.*must be a mapping"):
+        migrate_snapshot(non_mapping)
+
+    missing_target = deepcopy(base)
+    missing_target["relationships"]["CreatedBy"]["entity_5"][0]["target"] = "entity_99"
+    with pytest.raises(WorldMigrationError, match="refers to missing target"):
+        migrate_snapshot(missing_target)
+
+    duplicate = deepcopy(base)
+    duplicate["relationships"]["CreatedBy"]["entity_5"].append(
+        deepcopy(duplicate["relationships"]["CreatedBy"]["entity_5"][0])
+    )
+    with pytest.raises(WorldMigrationError, match="duplicate CreatedBy edge"):
+        migrate_snapshot(duplicate)
+
+
+def test_schema_v5_created_by_validation_enforces_provenance_contract():
+    base = migrate_snapshot(_schema_v4_live_relationship_snapshot())
+
+    wrong_source = deepcopy(base)
+    wrong_source["relationships"]["CreatedBy"]["entity_2"] = wrong_source[
+        "relationships"
+    ]["CreatedBy"].pop("entity_5")
+    with pytest.raises(WorldMigrationError, match="lacks creator provenance"):
+        migrate_snapshot(wrong_source)
+
+    multiple = deepcopy(base)
+    multiple["entities"]["entity_9"] = {"prefab": "entity", "created_epoch": 0}
+    multiple["components"]["CharacterComponent"]["entity_9"] = {}
+    _append_relationship(
+        multiple,
+        "CreatedBy",
+        "entity_5",
+        "entity_9",
+        {
+            "source_event_id": "event-2",
+            "created_at_epoch": 11,
+            "circumstance": "crafting",
+        },
+    )
+    with pytest.raises(WorldMigrationError, match="multiple CreatedBy targets"):
+        migrate_snapshot(multiple)
+
+    wrong_target = deepcopy(base)
+    wrong_target["relationships"]["CreatedBy"]["entity_5"][0]["target"] = "entity_2"
+    with pytest.raises(WorldMigrationError, match="CreatedBy target.*not a character"):
+        migrate_snapshot(wrong_target)
+
+    wrong_fields = deepcopy(base)
+    del wrong_fields["relationships"]["CreatedBy"]["entity_5"][0]["edge"]["circumstance"]
+    with pytest.raises(WorldMigrationError, match="CreatedBy fields.*invalid"):
+        migrate_snapshot(wrong_fields)
+
+    wrong_types = deepcopy(base)
+    wrong_types["relationships"]["CreatedBy"]["entity_5"][0]["edge"][
+        "created_at_epoch"
+    ] = True
+    with pytest.raises(WorldMigrationError, match="CreatedBy fields.*invalid types"):
+        migrate_snapshot(wrong_types)
+
+
+def test_schema_v5_history_location_and_credit_validation_enforces_graph_contracts():
+    base = migrate_snapshot(_schema_v4_live_relationship_snapshot())
+
+    wrong_location_source = deepcopy(base)
+    wrong_location_source["relationships"]["HistoryLocation"]["entity_5"] = (
+        wrong_location_source["relationships"]["HistoryLocation"].pop("entity_3")
+    )
+    with pytest.raises(WorldMigrationError, match="HistoryLocation source.*lacks"):
+        migrate_snapshot(wrong_location_source)
+
+    multiple_locations = deepcopy(base)
+    _append_relationship(multiple_locations, "HistoryLocation", "entity_3", "entity_1")
+    with pytest.raises(WorldMigrationError, match="multiple HistoryLocation targets"):
+        migrate_snapshot(multiple_locations)
+
+    wrong_location_target = deepcopy(base)
+    wrong_location_target["relationships"]["HistoryLocation"]["entity_3"][0][
+        "target"
+    ] = "entity_1"
+    with pytest.raises(WorldMigrationError, match="HistoryLocation target.*not a room"):
+        migrate_snapshot(wrong_location_target)
+
+    location_properties = deepcopy(base)
+    location_properties["relationships"]["HistoryLocation"]["entity_3"][0]["edge"] = {
+        "old": True
+    }
+    with pytest.raises(WorldMigrationError, match="HistoryLocation edge.*properties"):
+        migrate_snapshot(location_properties)
+
+    wrong_credit_source = deepcopy(base)
+    wrong_credit_source["relationships"]["CreditedDeed"]["entity_2"] = wrong_credit_source[
+        "relationships"
+    ]["CreditedDeed"].pop("entity_1")
+    with pytest.raises(WorldMigrationError, match="lacks character reputation"):
+        migrate_snapshot(wrong_credit_source)
+
+    wrong_credit_target = deepcopy(base)
+    wrong_credit_target["relationships"]["CreditedDeed"]["entity_1"][0][
+        "target"
+    ] = "entity_2"
+    with pytest.raises(WorldMigrationError, match="not a history record"):
+        migrate_snapshot(wrong_credit_target)
+
+    wrong_score = deepcopy(base)
+    wrong_score["relationships"]["CreditedDeed"]["entity_1"][0]["edge"]["score"] = True
+    with pytest.raises(WorldMigrationError, match="score.*must be numeric"):
+        migrate_snapshot(wrong_score)
+
+
+@pytest.mark.parametrize(
+    ("edge_name", "wrong_target", "expected"),
+    [("DeathOf", "entity_2", "character"), ("DeathAt", "entity_1", "room")],
+)
+def test_schema_v5_death_relationship_validation(edge_name, wrong_target, expected):
+    base = migrate_snapshot(_schema_v4_live_relationship_snapshot())
+
+    wrong_source = deepcopy(base)
+    wrong_source["relationships"][edge_name]["entity_5"] = wrong_source["relationships"][
+        edge_name
+    ].pop("entity_7")
+    with pytest.raises(WorldMigrationError, match=f"{edge_name} source.*lacks"):
+        migrate_snapshot(wrong_source)
+
+    multiple = deepcopy(base)
+    _append_relationship(multiple, edge_name, "entity_7", wrong_target)
+    with pytest.raises(WorldMigrationError, match=f"multiple {edge_name} targets"):
+        migrate_snapshot(multiple)
+
+    wrong_type = deepcopy(base)
+    wrong_type["relationships"][edge_name]["entity_7"][0]["target"] = wrong_target
+    with pytest.raises(WorldMigrationError, match=f"not a {expected}"):
+        migrate_snapshot(wrong_type)
+
+    properties = deepcopy(base)
+    properties["relationships"][edge_name]["entity_7"][0]["edge"] = {"old": True}
+    with pytest.raises(WorldMigrationError, match=f"{edge_name} edge.*properties"):
+        migrate_snapshot(properties)
+
+
+def test_schema_v5_rejects_duplicate_signature_state_and_non_mapping_legacy_component():
+    base = migrate_snapshot(_schema_v4_live_relationship_snapshot())
+
+    duplicate_signature = deepcopy(base)
+    duplicate_signature["components"]["CreatorSignatureComponent"]["entity_4"] = {
+        "source_event_id": "event-1",
+        "created_at_epoch": 10,
+        "circumstance": "writing",
+    }
+    with pytest.raises(WorldMigrationError, match="physical mark.*CreatorSignatureComponent"):
+        migrate_snapshot(duplicate_signature)
+
+    non_mapping = deepcopy(base)
+    non_mapping["components"]["SampleComponent"]["entity_6"] = []
+    with pytest.raises(WorldMigrationError, match="SampleComponent fields.*must be a mapping"):
+        migrate_snapshot(non_mapping)
 
 
 def test_jsonable_stringifies_non_json_boundary_values():
@@ -381,13 +1014,13 @@ def _lifesim_v2_snapshot(version: int = 2):
 
 
 @pytest.mark.parametrize("version", [1, 2])
-def test_lifesim_v1_and_v2_relationship_fields_migrate_sequentially_to_v4(version):
+def test_lifesim_v1_and_v2_relationship_fields_migrate_sequentially_to_v5(version):
     source = _lifesim_v2_snapshot(version)
 
     migrated = migrate_snapshot(source)
 
     assert source["bunnyland"]["schema_version"] == version
-    assert migrated["bunnyland"]["schema_version"] == 4
+    assert migrated["bunnyland"]["schema_version"] == 5
     assert "HomeComponent" not in migrated["components"]
     assert "RoomClaimComponent" not in migrated["components"]
     assert migrated["components"]["PregnancyComponent"]["entity_1"] == {
@@ -487,13 +1120,13 @@ def _world_database_v3_snapshot():
     }
 
 
-def test_schema_v3_world_database_fields_migrate_to_v4_edges_without_mutating_source():
+def test_schema_v3_world_database_fields_migrate_to_v5_edges_without_mutating_source():
     source = _world_database_v3_snapshot()
 
     migrated = migrate_snapshot(source)
 
     assert source["bunnyland"]["schema_version"] == 3
-    assert migrated["bunnyland"]["schema_version"] == 4
+    assert migrated["bunnyland"]["schema_version"] == 5
     expected = {
         "SurveyedBy": ("entity_5", "entity_1"),
         "SampledFromFossil": ("entity_6", "entity_5"),
@@ -654,7 +1287,7 @@ def test_schema_v3_world_database_migration_covers_legacy_shapes_and_semantic_ta
 
     no_sample_source = _world_database_v3_snapshot()
     no_sample_source["components"]["AncientSampleComponent"]["entity_6"].pop("source_fossil_id")
-    assert migrate_snapshot(no_sample_source)["bunnyland"]["schema_version"] == 4
+    assert migrate_snapshot(no_sample_source)["bunnyland"]["schema_version"] == 5
 
     optional_none = _world_database_v3_snapshot()
     optional_none["components"]["TamingComponent"]["entity_4"]["tamer_id"] = None
@@ -662,7 +1295,7 @@ def test_schema_v3_world_database_migration_covers_legacy_shapes_and_semantic_ta
 
     unlocated_incident = _world_database_v3_snapshot()
     unlocated_incident["components"]["IncidentComponent"]["entity_9"].pop("room_id")
-    assert migrate_snapshot(unlocated_incident)["bunnyland"]["schema_version"] == 4
+    assert migrate_snapshot(unlocated_incident)["bunnyland"]["schema_version"] == 5
 
     existing_containment = _world_database_v3_snapshot()
     existing_containment["relationships"]["Contains"] = {
@@ -1192,7 +1825,7 @@ def test_schema_v1_egg_parents_migrate_to_ordered_edges():
 
 
 @pytest.mark.parametrize("suffix", ["json", "yaml"])
-def test_schema_v1_relationship_fixtures_load_and_resave_as_v4(tmp_path, suffix):
+def test_schema_v1_relationship_fixtures_load_and_resave_as_v5(tmp_path, suffix):
     import yaml
 
     source = Path(__file__).parent / "fixtures" / "migrations" / f"relationships-v1.{suffix}"
@@ -1202,7 +1835,7 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v4(tmp_path, suffix)
     migrated = migrate_snapshot(raw)
 
     assert source.read_text() == before
-    assert migrated["bunnyland"]["schema_version"] == 4
+    assert migrated["bunnyland"]["schema_version"] == 5
     expected = {
         "AllowedIn": ("entity_1", "entity_2", {}),
         "MemberOfCaravan": ("entity_1", "entity_3", {}),
@@ -1229,12 +1862,7 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v4(tmp_path, suffix)
         "TravelingToDestination": (
             "entity_1",
             "entity_2",
-            {
-                "started_at_epoch": 2,
-                "arrive_at_epoch": 8,
-                "mode": "cart",
-                "route_label": "road",
-            },
+            {},
         ),
         "AnchoredToRoom": ("entity_1", "entity_2", {}),
         "OpensIntoRoom": ("entity_4", "entity_2", {}),
@@ -1243,6 +1871,12 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v4(tmp_path, suffix)
     for edge_name, (source_id, target_id, edge) in expected.items():
         record = migrated["relationships"][edge_name][source_id][0]
         assert record == {"target": target_id, "edge": edge}
+    assert migrated["components"]["TravelingComponent"]["entity_1"] == {
+        "started_at_epoch": 2,
+        "arrive_at_epoch": 8,
+        "mode": "cart",
+        "route_label": "road",
+    }
 
     actor, meta = load_world(source, registry=PluginRegistry(bunnyland_plugins()))
     destination = tmp_path / f"relationships-v4.{suffix}"
@@ -1253,7 +1887,7 @@ def test_schema_v1_relationship_fixtures_load_and_resave_as_v4(tmp_path, suffix)
         else yaml.safe_load(destination.read_text())
     )
     metadata_key = "bunnyland" if suffix == "json" else "__bunnyland__"
-    assert saved[metadata_key]["schema_version"] == 4
+    assert saved[metadata_key]["schema_version"] == 5
 
 
 @pytest.mark.parametrize("suffix", ["json", "yaml"])

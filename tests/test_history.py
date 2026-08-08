@@ -5,6 +5,7 @@ from __future__ import annotations
 from conftest import build_scenario
 
 from bunnyland.core import (
+    CharacterComponent,
     CommandCost,
     ContainmentMode,
     Contains,
@@ -27,10 +28,13 @@ from bunnyland.core.events import (
 from bunnyland.foundation.history.mechanics import (
     CreatedBy,
     CreatorSignatureComponent,
+    CreditedDeed,
+    DeathAt,
     DeathConsequenceComponent,
     DeathOf,
     DeedReputationComponent,
     HistoryActor,
+    HistoryLocation,
     HistoryTarget,
     MarkOn,
     PhysicalMarkComponent,
@@ -118,19 +122,16 @@ async def test_physical_writing_creates_persisted_world_history_prompt(tmp_path)
     assert len(records) == 1
     record_entity, record = records[0]
     assert record.tags == ("authored", "writing", "artifact")
-    assert record.location_id == str(scenario.room_a)
+    assert record_entity.has_relationship(HistoryLocation, scenario.room_a)
     assert "Juniper wrote on watch sign" in record.summary
     assert record_entity.get_relationships(HistoryActor)[0][1] == scenario.character
     assert record_entity.get_relationships(HistoryTarget)[0][1] == paper.id
     mark_entity, mark = marks_on(world, paper.id)[0]
     assert mark.text == "Juniper kept watch through the storm."
-    assert mark.author_id == str(scenario.character)
     assert mark_entity.get_component(PhysicalMarkComponent) == mark
     assert mark_entity.get_relationships(MarkOn)[0][1] == paper.id
     assert physical_mark_for_event(world, mark.source_event_id) == mark_entity
-    signature = mark_entity.get_component(CreatorSignatureComponent)
-    assert signature.creator_id == str(scenario.character)
-    assert signature.circumstance == "writing on watch sign"
+    assert not mark_entity.has_component(CreatorSignatureComponent)
     assert mark_entity.get_relationships(CreatedBy)[0][1] == scenario.character
     deed_reputation = world.get_entity(scenario.character).get_component(DeedReputationComponent)
     assert deed_reputation.scores["writing"] == 0.7
@@ -153,7 +154,7 @@ async def test_physical_writing_creates_persisted_world_history_prompt(tmp_path)
     loaded_marks = marks_on(loaded.world, paper.id)
     assert len(loaded_marks) == 1
     assert loaded_marks[0][1].text == "Juniper kept watch through the storm."
-    assert loaded_marks[0][0].get_component(CreatorSignatureComponent).circumstance == (
+    assert loaded_marks[0][0].get_relationships(CreatedBy)[0][0].circumstance == (
         "writing on watch sign"
     )
     loaded_ctx = PromptBuilder(
@@ -190,7 +191,7 @@ async def test_character_death_event_becomes_history_and_visible_consequence(tmp
     assert consequence_entity is not None
     consequence = consequence_entity.get_component(DeathConsequenceComponent)
     assert consequence.summary == "Juniper died from a cave-in."
-    assert consequence.location_id == str(scenario.room_a)
+    assert consequence_entity.has_relationship(DeathAt, scenario.room_a)
     assert consequence_entity.get_relationships(DeathOf)[0][1] == scenario.character
 
     record_entity, record = world_history_records(scenario.actor.world)[0]
@@ -259,7 +260,6 @@ async def test_history_reactor_handles_craft_fallback_and_non_notable_events():
     ]
     first_output = world.get_entity(parse_entity_id(outputs[0]))
     signature = first_output.get_component(CreatorSignatureComponent)
-    assert signature.creator_id == str(scenario.character)
     assert signature.circumstance == "crafting recipe camp-kit"
     assert first_output.get_relationships(CreatedBy)[0][1] == scenario.character
     signed = creator_signature_for_event(world, signature.source_event_id)
@@ -293,8 +293,8 @@ async def test_history_reactor_resolves_location_from_target_when_actor_is_missi
         )
     )
 
-    _record_entity, record = world_history_records(world)[0]
-    assert record.location_id == str(scenario.room_a)
+    record_entity, record = world_history_records(world)[0]
+    assert record_entity.has_relationship(HistoryLocation, scenario.room_a)
     assert record.summary.startswith('someone wrote on long sign: "word word')
     assert record.summary.endswith('..."')
 
@@ -351,8 +351,8 @@ async def test_history_reactor_leaves_location_blank_when_nothing_is_roomed():
         )
     )
 
-    _entity, record = world_history_records(world)[0]
-    assert record.location_id == ""
+    entity, record = world_history_records(world)[0]
+    assert entity.get_relationships(HistoryLocation) == []
     assert record.summary == "Juniper died from the void."
 
 
@@ -593,6 +593,22 @@ def test_record_death_consequence_skips_invalid_empty_and_duplicate_sources():
 def test_apply_deed_reputation_accumulates_tags_and_skips_duplicates():
     scenario = build_scenario()
     world = scenario.actor.world
+    deed_a = record_world_history(
+        world,
+        summary="crafted a camp kit",
+        source_event_id="deed-a",
+        event_type="test",
+        created_at_epoch=1,
+    )
+    deed_b = record_world_history(
+        world,
+        summary="crafted a bridge brace",
+        source_event_id="deed-b",
+        event_type="test",
+        created_at_epoch=2,
+    )
+    assert deed_a is not None
+    assert deed_b is not None
 
     assert (
         apply_deed_reputation(
@@ -619,7 +635,7 @@ def test_apply_deed_reputation_accumulates_tags_and_skips_duplicates():
     first = apply_deed_reputation(
         world,
         actor_id=str(scenario.character),
-        deed_id="deed-a",
+        deed_id=str(deed_a.id),
         summary="crafted a camp kit",
         tags=("crafted", "artifact", ""),
         score=0.8,
@@ -627,7 +643,7 @@ def test_apply_deed_reputation_accumulates_tags_and_skips_duplicates():
     duplicate = apply_deed_reputation(
         world,
         actor_id=str(scenario.character),
-        deed_id="deed-a",
+        deed_id=str(deed_a.id),
         summary="crafted a camp kit again",
         tags=("crafted",),
         score=0.8,
@@ -635,7 +651,7 @@ def test_apply_deed_reputation_accumulates_tags_and_skips_duplicates():
     second = apply_deed_reputation(
         world,
         actor_id=str(scenario.character),
-        deed_id="deed-b",
+        deed_id=str(deed_b.id),
         summary="crafted a bridge brace",
         tags=("crafted",),
         score=0.4,
@@ -646,7 +662,9 @@ def test_apply_deed_reputation_accumulates_tags_and_skips_duplicates():
     assert second is True
     reputation = world.get_entity(scenario.character).get_component(DeedReputationComponent)
     assert reputation.scores == {"crafted": 1.2, "artifact": 0.8}
-    assert reputation.deed_ids == ("deed-a", "deed-b")
+    character = world.get_entity(scenario.character)
+    assert character.has_relationship(CreditedDeed, deed_a.id)
+    assert character.has_relationship(CreditedDeed, deed_b.id)
     assert deed_reputation_fragments(world, world.get_entity(scenario.character)) == [
         "Deed reputation artifact: 0.8.",
         "Deed reputation crafted: 1.2.",
@@ -880,7 +898,10 @@ def test_death_consequence_fragments_show_relevant_deaths_with_limit():
             created_at_epoch=index,
             location_id=str(scenario.room_a),
         )
-    far_character = spawn_entity(world, [IdentityComponent(name="Farley", kind="character")])
+    far_character = spawn_entity(
+        world,
+        [IdentityComponent(name="Farley", kind="character"), CharacterComponent()],
+    )
     world.get_entity(scenario.room_b).add_relationship(
         Contains(mode=ContainmentMode.ROOM_CONTENT), far_character.id
     )

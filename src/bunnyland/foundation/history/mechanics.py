@@ -10,7 +10,7 @@ from __future__ import annotations
 from pydantic.dataclasses import dataclass
 from relics import Component, Edge, Entity, EntityId, World
 
-from ...core.components import IdentityComponent
+from ...core.components import CharacterComponent, IdentityComponent, RoomComponent
 from ...core.ecs import (
     container_of,
     entity_name,
@@ -42,7 +42,6 @@ class WorldHistoryRecordComponent(Component):
     source_event_id: str
     event_type: str
     created_at_epoch: int
-    location_id: str = ""
     tags: tuple[str, ...] = ()
     salience: float = 1.0
 
@@ -53,7 +52,6 @@ class PhysicalMarkComponent(Component):
 
     text: str
     mark_type: str = "writing"
-    author_id: str = ""
     source_event_id: str = ""
     created_at_epoch: int = 0
 
@@ -62,7 +60,6 @@ class PhysicalMarkComponent(Component):
 class CreatorSignatureComponent(Component):
     """Creator metadata for a crafted or authored artifact."""
 
-    creator_id: str = ""
     source_event_id: str = ""
     created_at_epoch: int = 0
     circumstance: str = ""
@@ -73,7 +70,6 @@ class DeedReputationComponent(Component):
     """Explicit reputation derived from durable deeds."""
 
     scores: dict[str, float]
-    deed_ids: tuple[str, ...] = ()
     known_for: tuple[str, ...] = ()
 
 
@@ -81,11 +77,9 @@ class DeedReputationComponent(Component):
 class DeathConsequenceComponent(Component):
     """Durable presentation/query state for a character death."""
 
-    character_id: str
     cause: str
     source_event_id: str
     created_at_epoch: int
-    location_id: str = ""
     summary: str = ""
 
 
@@ -101,6 +95,11 @@ class HistoryTarget(Edge):
     """history record -> target or artifact involved in the deed."""
 
     role: str = "target"
+
+
+@dataclass(frozen=True)
+class HistoryLocation(Edge):
+    """history record -> room where the deed occurred."""
 
 
 @dataclass(frozen=True)
@@ -120,10 +119,20 @@ class CreatedBy(Edge):
 
 
 @dataclass(frozen=True)
+class CreditedDeed(Edge):
+    """character -> history record contributing to deed reputation."""
+
+    score: float = 0.0
+
+
+@dataclass(frozen=True)
 class DeathOf(Edge):
     """death consequence -> dead character."""
 
-    cause: str = ""
+
+@dataclass(frozen=True)
+class DeathAt(Edge):
+    """death consequence -> room where the death occurred."""
 
 
 def install_history(actor) -> None:
@@ -242,7 +251,6 @@ def record_world_history(
                 source_event_id=source_event_id,
                 event_type=event_type,
                 created_at_epoch=created_at_epoch,
-                location_id=location_id,
                 tags=tuple(dict.fromkeys(tag for tag in tags if tag)),
                 salience=max(0.0, salience),
             ),
@@ -256,6 +264,13 @@ def record_world_history(
         parsed = parse_entity_id(target_id)
         if parsed is not None and world.has_entity(parsed):
             record.add_relationship(HistoryTarget(), parsed)
+    parsed_location = parse_entity_id(location_id)
+    if (
+        parsed_location is not None
+        and world.has_entity(parsed_location)
+        and world.get_entity(parsed_location).has_component(RoomComponent)
+    ):
+        record.add_relationship(HistoryLocation(), parsed_location)
     return record
 
 
@@ -294,13 +309,26 @@ def record_physical_mark(
             PhysicalMarkComponent(
                 text=_truncate(clean_text, _SUMMARY_LIMIT),
                 mark_type=mark_type,
-                author_id=author_id,
                 source_event_id=source_event_id,
                 created_at_epoch=created_at_epoch,
             ),
         ],
     )
     mark.add_relationship(MarkOn(), parsed_target)
+    parsed_author = parse_entity_id(author_id)
+    if (
+        parsed_author is not None
+        and world.has_entity(parsed_author)
+        and world.get_entity(parsed_author).has_component(CharacterComponent)
+    ):
+        mark.add_relationship(
+            CreatedBy(
+                source_event_id=source_event_id,
+                created_at_epoch=created_at_epoch,
+                circumstance=f"writing on {target_name}",
+            ),
+            parsed_author,
+        )
     return mark
 
 
@@ -327,14 +355,19 @@ def record_creator_signature(
     if current is not None and current.source_event_id == source_event_id:
         return False
     signature = CreatorSignatureComponent(
-        creator_id=creator_id,
         source_event_id=source_event_id,
         created_at_epoch=created_at_epoch,
         circumstance=_clean(circumstance),
     )
     replace_component(artifact, signature)
+    for _edge, existing_creator_id in artifact.get_relationships(CreatedBy):
+        artifact.remove_relationship(CreatedBy, existing_creator_id)
     parsed_creator = parse_entity_id(creator_id)
-    if parsed_creator is not None and world.has_entity(parsed_creator):
+    if (
+        parsed_creator is not None
+        and world.has_entity(parsed_creator)
+        and world.get_entity(parsed_creator).has_component(CharacterComponent)
+    ):
         artifact.add_relationship(
             CreatedBy(
                 source_event_id=source_event_id,
@@ -358,7 +391,12 @@ def apply_deed_reputation(
     """Project a history record onto an actor's explicit deed reputation."""
 
     parsed_actor = parse_entity_id(actor_id)
-    if parsed_actor is None or not world.has_entity(parsed_actor) or not deed_id:
+    if (
+        parsed_actor is None
+        or not world.has_entity(parsed_actor)
+        or not world.get_entity(parsed_actor).has_component(CharacterComponent)
+        or not deed_id
+    ):
         return False
     actor = world.get_entity(parsed_actor)
     current = (
@@ -366,7 +404,13 @@ def apply_deed_reputation(
         if actor.has_component(DeedReputationComponent)
         else DeedReputationComponent(scores={})
     )
-    if deed_id in current.deed_ids:
+    parsed_deed = parse_entity_id(deed_id)
+    if (
+        parsed_deed is None
+        or not world.has_entity(parsed_deed)
+        or not world.get_entity(parsed_deed).has_component(WorldHistoryRecordComponent)
+        or actor.has_relationship(CreditedDeed, parsed_deed)
+    ):
         return False
     scores = dict(current.scores)
     for tag in tags:
@@ -377,10 +421,10 @@ def apply_deed_reputation(
         actor,
         DeedReputationComponent(
             scores=scores,
-            deed_ids=tuple(dict.fromkeys((*current.deed_ids, deed_id))),
             known_for=known_for,
         ),
     )
+    actor.add_relationship(CreditedDeed(score=score), parsed_deed)
     return True
 
 
@@ -397,7 +441,12 @@ def record_death_consequence(
 
     parsed_character = parse_entity_id(character_id)
     clean_cause = _clean(cause) or "unknown causes"
-    if parsed_character is None or not world.has_entity(parsed_character) or not source_event_id:
+    if (
+        parsed_character is None
+        or not world.has_entity(parsed_character)
+        or not world.get_entity(parsed_character).has_component(CharacterComponent)
+        or not source_event_id
+    ):
         return None
     if death_consequence_for_event(world, source_event_id) is not None:
         return None
@@ -409,16 +458,21 @@ def record_death_consequence(
         [
             IdentityComponent(name=f"Death of {character_name}", kind="death-consequence"),
             DeathConsequenceComponent(
-                character_id=character_id,
                 cause=_truncate(clean_cause, _SUMMARY_LIMIT),
                 source_event_id=source_event_id,
                 created_at_epoch=created_at_epoch,
-                location_id=location_id,
                 summary=_truncate(summary, _SUMMARY_LIMIT),
             ),
         ],
     )
-    consequence.add_relationship(DeathOf(cause=clean_cause), parsed_character)
+    consequence.add_relationship(DeathOf(), parsed_character)
+    parsed_location = parse_entity_id(location_id)
+    if (
+        parsed_location is not None
+        and world.has_entity(parsed_location)
+        and world.get_entity(parsed_location).has_component(RoomComponent)
+    ):
+        consequence.add_relationship(DeathAt(), parsed_location)
     return consequence
 
 
@@ -463,7 +517,7 @@ def death_consequence_fragments(world: World, character: Entity) -> list[str]:
     visible = reachable_ids(world, character)
     fragments: list[str] = []
     for entity, consequence in _death_consequences(world):
-        if not _death_consequence_relevant(consequence, character.id, room_id, visible):
+        if not _death_consequence_relevant(entity, consequence, character.id, room_id, visible):
             continue
         fragments.append(
             f"Death consequence: {consequence.summary} "
@@ -484,7 +538,8 @@ def creator_fragments(world: World, character: Entity) -> list[str]:
         if not artifact.has_component(CreatorSignatureComponent):
             continue
         signature = artifact.get_component(CreatorSignatureComponent)
-        creator = _name(world, signature.creator_id) if signature.creator_id else "someone"
+        creator_id = _single_relationship_target(artifact, CreatedBy)
+        creator = _name(world, str(creator_id)) if creator_id is not None else "someone"
         artifact_name = entity_name(artifact)
         circumstance = f" while {signature.circumstance}" if signature.circumstance else ""
         fragments.append(
@@ -504,7 +559,8 @@ def mark_fragments(world: World, character: Entity) -> list[str]:
         # reachable_ids only returns live ids, so the entity is always present here.
         target_name = entity_name(world.get_entity(target_id))
         for mark_entity, mark in marks_on(world, target_id):
-            author = _name(world, mark.author_id) if mark.author_id else "someone"
+            author_id = _single_relationship_target(mark_entity, CreatedBy)
+            author = _name(world, str(author_id)) if author_id is not None else "someone"
             fragments.append(
                 f"{target_name} bears {mark.mark_type} by {author}: {mark.text} "
                 f"[mark:{mark_entity.id} source:{mark.source_event_id}]"
@@ -525,7 +581,7 @@ class WorldHistoryReactor:
 
     def _on_event(self, event: DomainEvent) -> None:
         if isinstance(event, PhysicalWriteEvent):
-            mark = record_physical_mark(
+            record_physical_mark(
                 self.world,
                 target_id=event.item_id,
                 text=event.text,
@@ -533,15 +589,6 @@ class WorldHistoryReactor:
                 created_at_epoch=event.world_epoch,
                 author_id=event.actor_id or "",
             )
-            if mark is not None:
-                record_creator_signature(
-                    self.world,
-                    artifact_id=str(mark.id),
-                    creator_id=event.actor_id or "",
-                    source_event_id=event.event_id,
-                    created_at_epoch=event.world_epoch,
-                    circumstance=f"writing on {_name(self.world, event.item_id)}",
-                )
         elif isinstance(event, ItemCraftedEvent):
             for output_id in event.output_ids:
                 record_creator_signature(
@@ -639,7 +686,8 @@ def _record_relevant(
     room_id: EntityId | None,
     visible: set[EntityId],
 ) -> bool:
-    if room_id is not None and record.location_id == str(room_id):
+    del record
+    if room_id is not None and record_entity.has_relationship(HistoryLocation, room_id):
         return True
     for _edge, actor_id in record_entity.get_relationships(HistoryActor):
         if actor_id == character_id:
@@ -667,15 +715,22 @@ def _death_consequences(
 
 
 def _death_consequence_relevant(
+    entity: Entity,
     consequence: DeathConsequenceComponent,
     character_id: EntityId,
     room_id: EntityId | None,
     visible: set[EntityId],
 ) -> bool:
-    if room_id is not None and consequence.location_id == str(room_id):
+    del consequence
+    if room_id is not None and entity.has_relationship(DeathAt, room_id):
         return True
-    parsed_character = parse_entity_id(consequence.character_id)
-    return parsed_character == character_id or parsed_character in visible
+    death_id = _single_relationship_target(entity, DeathOf)
+    return death_id == character_id or death_id in visible
+
+
+def _single_relationship_target(entity: Entity, edge_type: type[Edge]) -> EntityId | None:
+    relationships = entity.get_relationships(edge_type)
+    return relationships[0][1] if relationships else None
 
 
 def _location_for_event_actor(world: World, event: DomainEvent) -> str:
@@ -713,10 +768,13 @@ def _truncate(text: str, limit: int) -> str:
 __all__ = [
     "CreatedBy",
     "CreatorSignatureComponent",
+    "CreditedDeed",
+    "DeathAt",
     "DeathConsequenceComponent",
     "DeathOf",
     "DeedReputationComponent",
     "HistoryActor",
+    "HistoryLocation",
     "HistoryTarget",
     "MarkOn",
     "PhysicalMarkComponent",

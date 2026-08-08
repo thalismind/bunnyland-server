@@ -49,7 +49,7 @@ from ...core.ecs import (
 from ...core.ecs import (
     room_id_for as _room_id,
 )
-from ...core.edges import ContainmentMode, Contains
+from ...core.edges import ContainmentMode, Contains, StudiedBy
 from ...core.events import DomainEvent, EventVisibility
 from ...core.events import event_base as _void_event
 from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
@@ -378,13 +378,12 @@ class DiplomaticMissionComponent(Component):
 @dataclass(frozen=True)
 class AlienArtifactComponent(Component):
     species_id: str = ""
-    studied_by: tuple[str, ...] = ()
     insight: str = ""
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         if (
             ctx.target is not None
-            and str(ctx.target.id) in self.studied_by
+            and ctx.entity.has_relationship(StudiedBy, ctx.target.id)
             and ctx.can_view_private_state
         ):
             return ()
@@ -395,7 +394,6 @@ class AlienArtifactComponent(Component):
 class XenobiologySampleComponent(Component):
     species_id: str = ""
     contamination: float = 0.0
-    studied_by: tuple[str, ...] = ()
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         return (f"Xenobiology sample {_name(ctx.entity)}: contamination {self.contamination:g}.",)
@@ -1678,14 +1676,10 @@ class StudyAlienArtifactHandler:
         if artifact is None:
             return rejected(error if error else "target is not an alien artifact")
         component = artifact.get_component(AlienArtifactComponent)
-        if str(character_id) in component.studied_by:
+        if artifact.has_relationship(StudiedBy, character_id):
             return rejected("artifact already studied")
-        updated = replace(
-            component,
-            studied_by=tuple(sorted((*component.studied_by, str(character_id)))),
-        )
         return planned(
-            MutationPlan((SetComponent(artifact.id, updated),)),
+            MutationPlan((AddEdge(artifact.id, character_id, StudiedBy()),)),
             AlienArtifactStudiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2889,12 +2883,10 @@ class StudyXenobiologyHandler:
         if error is not None:
             return error
         component = sample.get_component(XenobiologySampleComponent)
-        updated = replace(
-            component,
-            studied_by=tuple(sorted((*component.studied_by, str(character_id)))),
-        )
+        if sample.has_relationship(StudiedBy, character_id):
+            return rejected("sample already studied")
         return planned(
-            MutationPlan((SetComponent(sample.id, updated),)),
+            MutationPlan((AddEdge(sample.id, character_id, StudiedBy()),)),
             XenobiologyStudiedEvent(
                 **ctx.event_base(
                     visibility=EventVisibility.PRIVATE,
@@ -2904,7 +2896,7 @@ class StudyXenobiologyHandler:
                     else None,
                     target_ids=(str(sample.id),),
                     sample_id=str(sample.id),
-                    contamination=updated.contamination,
+                    contamination=component.contamination,
                 )
             ),
         )

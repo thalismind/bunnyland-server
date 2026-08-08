@@ -32,7 +32,7 @@ from ...core.ecs import (
 from ...core.ecs import (
     room_id_for as _room_id,
 )
-from ...core.edges import ContainmentMode, Contains
+from ...core.edges import ContainmentMode, Contains, StudiedBy
 from ...core.events import DomainEvent, EventVisibility
 from ...core.handlers import HandlerContext, HandlerResult, planned, rejected, require_entity
 from ...core.mutations import (
@@ -511,12 +511,11 @@ class CarvableComponent(Component):
 class VoiceInscriptionComponent(Component):
     word_id: str
     phrase: str = ""
-    studied_by: tuple[str, ...] = ()
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         if (
             ctx.target is not None
-            and str(ctx.target.id) in self.studied_by
+            and ctx.entity.has_relationship(StudiedBy, ctx.target.id)
             and ctx.can_view_private_state
         ):
             return ()
@@ -2489,17 +2488,11 @@ class StudyVoiceInscriptionHandler:
         word_id = parse_entity_id(inscription.word_id)
         if word_id is None or not ctx.world.has_entity(word_id):
             return rejected("voice inscription has no valid word")
-        if str(character_id) in inscription.studied_by:
+        if target.has_relationship(StudiedBy, character_id):
             return rejected("voice inscription already studied")
 
         operations: list[MutationOperation] = [
-            SetComponent(
-                target_id,
-                replace(
-                    inscription,
-                    studied_by=tuple(sorted((*inscription.studied_by, str(character_id)))),
-                ),
-            )
+            AddEdge(target_id, character_id, StudiedBy())
         ]
         if not character.has_relationship(KnowsWord, word_id):
             operations.append(AddEdge(character_id, word_id, KnowsWord(learned_at_epoch=ctx.epoch)))

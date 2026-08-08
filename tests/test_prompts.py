@@ -25,6 +25,7 @@ from bunnyland.core import (
     RestingComponent,
     RoomComponent,
     SleepingComponent,
+    StudiedBy,
     SuspendedComponent,
     replace_component,
     spawn_entity,
@@ -1062,14 +1063,12 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     assert ArtifactComponent(name="Blade", identified_by=(str(character.id),)).prompt_fragments(
         target_ctx(known_spell)
     ) == ("Artifact nearby: Blade (1 charges, identified).",)
-    assert (
-        VoiceInscriptionComponent(word_id="w", studied_by=(str(character.id),)).prompt_fragments(
-            target_ctx(known_spell)
-        )
-        == ()
-    )
-    assert VoiceInscriptionComponent(word_id="w").prompt_fragments(target_ctx(known_spell)) == (
-        "Voice inscription nearby: spark.",
+    known_spell.add_relationship(StudiedBy(), character.id)
+    assert VoiceInscriptionComponent(word_id="w").prompt_fragments(
+        target_ctx(known_spell)
+    ) == ()
+    assert VoiceInscriptionComponent(word_id="w").prompt_fragments(target_ctx(unknown_spell)) == (
+        "Voice inscription nearby: bolt.",
     )
 
     fossil = entity("fossil", FossilFragmentComponent())

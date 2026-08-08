@@ -97,7 +97,7 @@ def test_migrate_world_cli_writes_schema_v4_without_overwriting_source(tmp_path)
     assert main(["migrate-world", str(source), str(dest)]) == 0
 
     assert source.read_text() == original
-    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 4
+    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 5
 
 
 def test_migrate_world_cli_rejects_in_place_conversion(tmp_path):
@@ -314,7 +314,7 @@ def test_migrate_world_cli_writes_yaml_destination(tmp_path):
 
     assert main(["migrate-world", str(source), str(dest)]) == 0
 
-    assert '"schema_version": 4' in dest.read_text()
+    assert '"schema_version": 5' in dest.read_text()
 
 
 def _serve_args(**overrides):

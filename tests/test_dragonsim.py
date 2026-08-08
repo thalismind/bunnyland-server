@@ -15,6 +15,7 @@ from bunnyland.core import (
     PortableComponent,
     ReadableComponent,
     SleepingComponent,
+    StudiedBy,
     WritableComponent,
     build_submitted_command,
     container_of,
@@ -608,9 +609,10 @@ def test_dragonsim_adventure_parity_handlers_reject_wrong_kind_and_state_directl
         world,
         [
             IdentityComponent(name="studied slate", kind="prop"),
-            VoiceInscriptionComponent(word_id=str(word), studied_by=(str(scenario.character),)),
+            VoiceInscriptionComponent(word_id=str(word)),
         ],
     )
+    studied_slate.add_relationship(StudiedBy(), scenario.character)
     broken_slate = spawn_entity(
         world,
         [
@@ -2897,7 +2899,7 @@ def test_study_voice_inscription_when_word_already_known_skips_relationship():
         _handler_cmd(scenario, "study-voice-inscription", target_id=str(slate.id)),
     )
     assert result.ok
-    assert str(scenario.character) in slate.get_component(VoiceInscriptionComponent).studied_by
+    assert slate.has_relationship(StudiedBy, scenario.character)
 
 
 def test_dragonsim_fragments_skip_missing_and_componentless_relationships():

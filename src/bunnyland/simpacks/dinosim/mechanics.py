@@ -40,7 +40,7 @@ from ...core.ecs import (
 from ...core.ecs import (
     room_id_for as _room_id,
 )
-from ...core.edges import ContainmentMode, Contains, ExitTo
+from ...core.edges import ContainmentMode, Contains, ExitTo, StudiedBy
 from ...core.events import DomainEvent, EventVisibility
 from ...core.events import event_base as _event_base
 from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
@@ -198,11 +198,6 @@ class ImprintedBy(Edge):
 
 @dataclass(frozen=True)
 class CaredForBy(Edge):
-    pass
-
-
-@dataclass(frozen=True)
-class StudiedBy(Edge):
     pass
 
 

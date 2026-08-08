@@ -44,7 +44,7 @@ from ...core.ecs import (
 from ...core.ecs import (
     room_id_for as _room_id,
 )
-from ...core.edges import ContainmentMode, Contains
+from ...core.edges import ContainmentMode, Contains, StudiedBy
 from ...core.events import DomainEvent, EventVisibility, event_base
 from ...core.handlers import (
     HandlerContext,
@@ -265,12 +265,11 @@ class SuppressantComponent(Component):
 @dataclass(frozen=True)
 class SampleComponent(Component):
     sample_type: str = "irradiated tissue"
-    studied_by: tuple[str, ...] = ()
 
     def prompt_fragments(self, ctx: ComponentPromptContext) -> tuple[str, ...]:
         studied = (
             ctx.target is not None
-            and str(ctx.target.id) in self.studied_by
+            and ctx.entity.has_relationship(StudiedBy, ctx.target.id)
             and ctx.can_view_private_state
         )
         state = "studied" if studied else "unstudied"
@@ -1689,16 +1688,12 @@ class StudySampleHandler:
         if sample is None:
             return rejected(error if error else "target is not a sample")
         component = sample.get_component(SampleComponent)
+        if sample.has_relationship(StudiedBy, character_id):
+            return rejected("sample already studied")
         return planned(
             MutationPlan(
                 (
-                    SetComponent(
-                        sample.id,
-                        replace(
-                            component,
-                            studied_by=tuple(sorted((*component.studied_by, str(character_id)))),
-                        ),
-                    ),
+                    AddEdge(sample.id, character_id, StudiedBy()),
                 )
             ),
             SampleStudiedEvent(

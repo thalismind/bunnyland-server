@@ -33,6 +33,7 @@ from ...core.edges import ContainmentMode, Contains, ExitTo
 from ...core.events import DomainEvent, EventVisibility, SpeechSaidEvent, SpeechToldEvent
 from ...core.handlers import HandlerContext, HandlerResult, planned, rejected, require_character
 from ...core.mutations import (
+    AddComponent,
     AddEdge,
     AddEntity,
     DeleteEntity,
@@ -138,8 +139,8 @@ class TravelModeComponent(Component):
 
 
 @dataclass(frozen=True)
-class TravelingToDestination(Edge):
-    """traveler -> destination, carrying the active travel plan."""
+class TravelingComponent(Component):
+    """Singleton active-travel state indexed by the completion consequence."""
 
     started_at_epoch: int
     arrive_at_epoch: int
@@ -150,6 +151,11 @@ class TravelingToDestination(Edge):
         if not ctx.is_first_person:
             return ()
         return (f"Traveling by {self.mode}; arrival due at epoch {self.arrive_at_epoch}.",)
+
+
+@dataclass(frozen=True)
+class TravelingToDestination(Edge):
+    """traveler -> destination for the active ``TravelingComponent`` state."""
 
 
 @dataclass(frozen=True)
@@ -1424,7 +1430,9 @@ class PlanTravelHandler:
             return rejected("destination does not exist")
 
         character = ctx.entity(character_id)
-        if character.get_relationships(TravelingToDestination):
+        if character.has_component(TravelingComponent) or character.get_relationships(
+            TravelingToDestination
+        ):
             return rejected("character is already traveling")
         origin_id = container_of(character)
         if origin_id is None or not ctx.world.has_entity(origin_id):
@@ -1467,15 +1475,19 @@ class PlanTravelHandler:
             MutationPlan(
                 (
                     *supply_operations,
-                    AddEdge(
+                    AddComponent(
                         character_id,
-                        destination_id,
-                        TravelingToDestination(
+                        TravelingComponent(
                             started_at_epoch=ctx.epoch,
                             arrive_at_epoch=arrive_at,
                             mode=mode.mode,
                             route_label=route.label,
                         ),
+                    ),
+                    AddEdge(
+                        character_id,
+                        destination_id,
+                        TravelingToDestination(),
                     ),
                 )
             ),
@@ -1497,31 +1509,52 @@ class PlanTravelHandler:
 class TravelCompletionConsequence:
     def process(self, world: World, epoch: int) -> list[DomainEvent]:
         events: list[DomainEvent] = []
-        for character in world.query().execute_entities():
-            for plan, destination_id in tuple(character.get_relationships(TravelingToDestination)):
-                if epoch < plan.arrive_at_epoch:
-                    continue
-                origin_id = container_of(character)
-                if origin_id is not None and world.has_entity(origin_id):
-                    world.get_entity(origin_id).remove_relationship(Contains, character.id)
-                world.get_entity(destination_id).add_relationship(
-                    Contains(mode=ContainmentMode.ROOM_CONTENT), character.id
-                )
-                character.remove_relationship(TravelingToDestination, destination_id)
-                events.append(
-                    TravelCompletedEvent(
-                        **_travel_event_base(
-                            epoch,
-                            visibility=EventVisibility.PRIVATE,
-                            actor_id=str(character.id),
-                            room_id=str(destination_id),
-                            target_ids=(str(destination_id),),
-                            destination_id=str(destination_id),
-                            mode=plan.mode,
-                        )
-                    )
-                )
+        query = world.query().with_all([TravelingComponent])
+        for character in query.execute_entities():
+            event = _complete_travel_if_due(world, character, epoch)
+            if event is not None:
+                events.append(event)
         return events
+
+
+def _complete_travel_if_due(
+    world: World, character: Entity, epoch: int
+) -> TravelCompletedEvent | None:
+    plan = character.get_component(TravelingComponent)
+    destinations = tuple(character.get_relationships(TravelingToDestination))
+    if len(destinations) != 1:
+        for _edge, destination_id in destinations:
+            character.remove_relationship(TravelingToDestination, destination_id)
+        character.remove_component(TravelingComponent)
+        return None
+
+    _edge, destination_id = destinations[0]
+    if not world.has_entity(destination_id):
+        character.remove_relationship(TravelingToDestination, destination_id)
+        character.remove_component(TravelingComponent)
+        return None
+    if epoch < plan.arrive_at_epoch:
+        return None
+
+    origin_id = container_of(character)
+    if origin_id is not None and world.has_entity(origin_id):
+        world.get_entity(origin_id).remove_relationship(Contains, character.id)
+    world.get_entity(destination_id).add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT), character.id
+    )
+    character.remove_relationship(TravelingToDestination, destination_id)
+    character.remove_component(TravelingComponent)
+    return TravelCompletedEvent(
+        **_travel_event_base(
+            epoch,
+            visibility=EventVisibility.PRIVATE,
+            actor_id=str(character.id),
+            room_id=str(destination_id),
+            target_ids=(str(destination_id),),
+            destination_id=str(destination_id),
+            mode=plan.mode,
+        )
+    )
 
 
 def _route_between(origin: Entity, destination_id: EntityId) -> TravelRoute | None:
@@ -4007,6 +4040,7 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
         EtiquetteSkillComponent,
         StreetwiseSkillComponent,
         CustomClassComponent,
+        TravelingComponent,
         SupernaturalAfflictionComponent,
         AfflictionStigmaComponent,
         CureRequestComponent,
@@ -4015,7 +4049,7 @@ def daggersim_fragments(world: World, character: Entity) -> list[str]:
     ):
         if character.has_component(component_type):
             lines.extend(character.get_component(component_type).prompt_fragments(ctx))
-    for edge_type in (AnchoredToRoom, TravelingToDestination):
+    for edge_type in (AnchoredToRoom,):
         for edge, target_id in character.get_relationships(edge_type):
             edge_ctx = ComponentPromptContext.for_entity(
                 world, character, perspective=ctx.perspective, target=world.get_entity(target_id)
@@ -4270,6 +4304,7 @@ __all__ = [
     "TravelInterruptionComponent",
     "TravelInterruptionResolvedEvent",
     "TravelModeComponent",
+    "TravelingComponent",
     "TravelingToDestination",
     "TravelRoute",
     "TravelSupplyComponent",

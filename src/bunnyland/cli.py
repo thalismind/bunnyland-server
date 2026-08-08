@@ -1046,7 +1046,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
 
     migrate_world = sub.add_parser(
-        "migrate-world", help="convert a schema-v1/v2/v3 JSON or YAML world to schema v4"
+        "migrate-world", help="convert an older JSON or YAML world to schema v5"
     )
     migrate_world.add_argument("source", help="source world; never modified")
     migrate_world.add_argument("dest", help="destination JSON or YAML world")
@@ -1467,7 +1467,7 @@ def main(argv: list[str] | None = None) -> int:
             driver.save_snapshot(migrated, dest)
         else:
             dest.write_text(json.dumps(migrated, indent=2) + "\n")
-        print(f"Migrated {source} -> {dest} (schema v4).")
+        print(f"Migrated {source} -> {dest} (schema v5).")
         return 0
 
     if args.command == "recovery-manifest":

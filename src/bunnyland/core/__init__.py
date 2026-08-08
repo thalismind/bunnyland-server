@@ -128,6 +128,7 @@ from .edges import (
     HasThought,
     Holding,
     KnowsRoom,
+    StudiedBy,
     Wearing,
 )
 from .events import (
@@ -357,6 +358,7 @@ __all__ = [
     "HoldHandler",
     "Holding",
     "KnowsRoom",
+    "StudiedBy",
     "IdentityComponent",
     "InspectHandler",
     "InitiativeComponent",

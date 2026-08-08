@@ -4282,7 +4282,8 @@ weather delays, lodging, and interruption.
 
 ```python
 TravelModeComponent
-TravelPlanComponent
+TravelingComponent
+TravelingToDestination
 TravelCostComponent
 TravelRiskComponent
 TravelHubComponent
