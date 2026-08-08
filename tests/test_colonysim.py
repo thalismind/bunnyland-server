@@ -67,6 +67,7 @@ from bunnyland.simpacks.colonysim.mechanics import (
     ColonySimComponent,
     ColonyWealthComponent,
     ColonyWealthConsequence,
+    ColonyWealthUpdatedEvent,
     CompleteJobHandler,
     CompleteTradeHandler,
     CraftHandler,
@@ -1202,6 +1203,101 @@ async def test_room_quality_consequence_only_emits_on_actual_change():
     changed = consequence.process(scenario.actor.world, 300)
     assert any(isinstance(event, RoomQualityUpdatedEvent) for event in changed)
     assert room.get_component(RoomQualityComponent).updated_at_epoch == 300
+
+
+def test_colony_wealth_consequence_only_updates_on_actual_change():
+    scenario = build_scenario()
+    marker = spawn_entity(scenario.actor.world, [ColonySimComponent()])
+    consequence = ColonyWealthConsequence()
+
+    initialized = consequence.process(scenario.actor.world, 0)
+
+    assert len(initialized) == 1
+    assert isinstance(initialized[0], ColonyWealthUpdatedEvent)
+    assert marker.get_component(ColonyWealthComponent) == ColonyWealthComponent()
+
+    unchanged = consequence.process(scenario.actor.world, 100)
+
+    assert unchanged == []
+    assert marker.get_component(ColonyWealthComponent).updated_at_epoch == 0
+
+    second_marker = spawn_entity(
+        scenario.actor.world,
+        [ColonySimComponent(), ColonyWealthComponent(updated_at_epoch=50)],
+    )
+    spawn_entity(
+        scenario.actor.world,
+        [ResourceStackComponent(resource_type="wood", quantity=4)],
+    )
+
+    changed = consequence.process(scenario.actor.world, 200)
+
+    assert len(changed) == 2
+    assert all(isinstance(event, ColonyWealthUpdatedEvent) for event in changed)
+    assert marker.get_component(ColonyWealthComponent) == ColonyWealthComponent(
+        wealth=4.0,
+        expectations="low",
+        updated_at_epoch=200,
+    )
+    assert second_marker.get_component(ColonyWealthComponent).updated_at_epoch == 200
+
+
+def test_colony_wealth_processing_scales_with_indexed_candidates(monkeypatch):
+    scenario = build_scenario()
+    world = scenario.actor.world
+    marker = spawn_entity(world, [ColonySimComponent()])
+    stack = spawn_entity(world, [ResourceStackComponent(resource_type="wood", quantity=3)])
+    room_stat = spawn_entity(world, [RoomStatComponent(wealth=20.0)])
+    workstation = spawn_entity(world, [WorkstationComponent(station_type="bench", quality=2.0)])
+    combined = spawn_entity(
+        world,
+        [
+            ResourceStackComponent(resource_type="steel", quantity=2),
+            RoomStatComponent(wealth=4.0),
+            WorkstationComponent(station_type="forge", quality=0.5),
+        ],
+    )
+    neither = spawn_entity(world, [IdentityComponent(name="unrelated", kind="item")])
+    for index in range(200):
+        spawn_entity(world, [IdentityComponent(name=f"unrelated {index}", kind="item")])
+
+    stack_candidates: list[str] = []
+    room_stat_candidates: list[str] = []
+    workstation_candidates: list[str] = []
+    original_stack_wealth = colonysim._resource_stack_wealth
+    original_room_stat_wealth = colonysim._room_stat_wealth
+    original_workstation_wealth = colonysim._workstation_wealth
+
+    def counted_stack_wealth(entity):
+        stack_candidates.append(str(entity.id))
+        return original_stack_wealth(entity)
+
+    def counted_room_stat_wealth(entity):
+        room_stat_candidates.append(str(entity.id))
+        return original_room_stat_wealth(entity)
+
+    def counted_workstation_wealth(entity):
+        workstation_candidates.append(str(entity.id))
+        return original_workstation_wealth(entity)
+
+    monkeypatch.setattr(colonysim, "_resource_stack_wealth", counted_stack_wealth)
+    monkeypatch.setattr(colonysim, "_room_stat_wealth", counted_room_stat_wealth)
+    monkeypatch.setattr(colonysim, "_workstation_wealth", counted_workstation_wealth)
+
+    events = ColonyWealthConsequence().process(world, 300)
+
+    assert set(stack_candidates) == {str(stack.id), str(combined.id)}
+    assert set(room_stat_candidates) == {str(room_stat.id), str(combined.id)}
+    assert set(workstation_candidates) == {str(workstation.id), str(combined.id)}
+    assert str(neither.id) not in stack_candidates + room_stat_candidates + workstation_candidates
+    assert marker.get_component(ColonyWealthComponent) == ColonyWealthComponent(
+        wealth=54.0,
+        expectations="moderate",
+        updated_at_epoch=300,
+    )
+    assert len(events) == 1
+    assert events[0].wealth == 54.0
+    assert events[0].expectations == "moderate"
 
 
 async def test_work_priorities_allowed_areas_room_quality_and_wealth_fragments():
