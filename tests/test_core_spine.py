@@ -20,7 +20,10 @@ from bunnyland.claims import (
     current_controller,
     ensure_claim_secret,
     normalize_claimed_controllers_without_secrets,
+    reconcile_transient_controllers,
     remove_claim,
+    retire_transient_controller,
+    spawn_transient_controller,
     transfer_claim,
 )
 from bunnyland.core import (
@@ -69,6 +72,7 @@ from bunnyland.core.controllers import (
     MCPControllerComponent,
     ScriptedControllerComponent,
     SuspendedControllerComponent,
+    TransientControllerComponent,
     WebControllerComponent,
 )
 from bunnyland.core.ecs import get_or_none, reachable_ids
@@ -223,7 +227,10 @@ async def test_world_clock_advances():
 async def test_claim_timeout_suspends_inactive_web_controller():
     scenario = build_scenario()
     character = scenario.actor.world.get_entity(scenario.character)
-    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    web = spawn_transient_controller(
+        scenario.actor.world,
+        WebControllerComponent(client_id="client"),
+    )
     scenario.actor.assign_controller(scenario.character, web.id)
     apply_claim_timeout_settings(
         web,
@@ -243,13 +250,18 @@ async def test_claim_timeout_suspends_inactive_web_controller():
     controller = scenario.actor.world.get_entity(controller_id)
     assert character.has_component(SuspendedComponent)
     assert controller.has_component(SuspendedControllerComponent)
+    assert controller.has_component(TransientControllerComponent)
+    assert not scenario.actor.world.has_entity(web.id)
     assert changed[-1].controller_kind == "suspended"
 
 
 async def test_claim_timeout_can_fall_back_to_llm():
     scenario = build_scenario()
     character = scenario.actor.world.get_entity(scenario.character)
-    web = spawn_entity(scenario.actor.world, [WebControllerComponent(client_id="client")])
+    web = spawn_transient_controller(
+        scenario.actor.world,
+        WebControllerComponent(client_id="client"),
+    )
     scenario.actor.assign_controller(scenario.character, web.id)
     apply_claim_timeout_settings(
         web,
@@ -272,6 +284,70 @@ async def test_claim_timeout_can_fall_back_to_llm():
     assert not character.has_component(SuspendedComponent)
     assert llm.model == "claim-model"
     assert llm.provider == "openrouter"
+    assert controller.has_component(TransientControllerComponent)
+    assert not scenario.actor.world.has_entity(web.id)
+
+
+def test_retire_transient_controller_requires_detachment_and_no_fallback_reference():
+    scenario = build_scenario()
+    assert retire_transient_controller(scenario.actor, scenario.controller) is False
+    transient = spawn_transient_controller(
+        scenario.actor.world,
+        WebControllerComponent(client_id="client"),
+    )
+    scenario.actor.assign_controller(scenario.character, transient.id)
+
+    assert retire_transient_controller(scenario.actor, transient.id) is False
+    scenario.actor.assign_controller(scenario.character, scenario.controller)
+    add_claim(
+        transient,
+        client_kind="web",
+        client_id="client",
+        character_id=str(scenario.character),
+    )
+    assert retire_transient_controller(scenario.actor, transient.id) is False
+    remove_claim(transient)
+    holder = spawn_entity(
+        scenario.actor.world,
+        [ClaimTimeoutComponent(fallback_controller=str(transient.id))],
+    )
+    assert retire_transient_controller(scenario.actor, transient.id) is False
+
+    holder.remove_component(ClaimTimeoutComponent)
+    holder.add_component(ClaimTimeoutComponent(fallback_controller="suspend"))
+    assert retire_transient_controller(scenario.actor, transient.id) is True
+    assert not scenario.actor.world.has_entity(transient.id)
+    assert retire_transient_controller(scenario.actor, transient.id) is False
+
+
+def test_reconcile_transient_controllers_removes_only_marked_sessions():
+    scenario = build_scenario()
+    detached = spawn_transient_controller(
+        scenario.actor.world,
+        WebControllerComponent(client_id="detached"),
+    )
+    active = spawn_entity(
+        scenario.actor.world,
+        [WebControllerComponent(client_id="active")],
+    )
+    referenced = spawn_entity(
+        scenario.actor.world,
+        [DiscordControllerComponent(discord_user_id=1, default_channel_id=2)],
+    )
+    scenario.actor.assign_controller(scenario.character, active.id)
+    spawn_entity(
+        scenario.actor.world,
+        [ClaimTimeoutComponent(fallback_controller=str(referenced.id))],
+    )
+
+    assert reconcile_transient_controllers(scenario.actor) == 1
+    assert not scenario.actor.world.has_entity(detached.id)
+    assert not active.has_component(TransientControllerComponent)
+    assert not referenced.has_component(TransientControllerComponent)
+    assert scenario.actor.world.has_entity(referenced.id)
+    assert not scenario.actor.world.get_entity(scenario.controller).has_component(
+        TransientControllerComponent
+    )
 
 
 async def test_claim_timeout_can_fall_back_to_existing_controller_with_claim():

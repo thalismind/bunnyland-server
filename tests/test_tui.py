@@ -1095,10 +1095,13 @@ async def test_local_backend_release_controller_creates_suspended_fallback():
         player = (await backend.fetch_character_list())[0].character_id
         control = await backend.claim(player, World.parse(await backend.fetch_snapshot()))
         assert control is not None
+        old_controller_id = parse_entity_id(control.controller_id)
+        backend._controller = None
 
         released = await backend.release_controller(player, control)
 
         assert released is not None
+        assert not backend.actor.world.has_entity(old_controller_id)
         controller = backend.actor.world.get_entity(parse_entity_id(released.controller_id))
         assert controller.has_component(SuspendedControllerComponent)
         assert backend.actor.world.get_entity(parse_entity_id(player)).has_component(

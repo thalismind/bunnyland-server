@@ -32,7 +32,10 @@ from ..claims import (
     ensure_claim_secret,
     matching_controller,
     normalize_claimed_controllers_without_secrets,
+    reconcile_transient_controllers,
     remove_claim,
+    retire_transient_controller,
+    spawn_transient_controller,
     transfer_claim,
 )
 from ..content import load_content_library
@@ -51,7 +54,6 @@ from ..core import (
     container_of,
     parse_entity_id,
     replace_component,
-    spawn_entity,
 )
 from ..core.claim_timeout import apply_claim_timeout_settings, record_claim_activity
 from ..core.controllers import ClaimedComponent, ClaimTimeoutComponent
@@ -772,6 +774,7 @@ def create_app(
     actor.event_stream = stream
     claim_secrets = claim_secrets or ClaimSecretRegistry()
     normalize_claimed_controllers_without_secrets(actor, claim_secrets)
+    reconcile_transient_controllers(actor)
     moderation_store = moderation_store or ModerationStore(
         token_store.path if token_store is not None else ":memory:"
     )
@@ -1222,9 +1225,9 @@ def create_app(
             return command
         web_controller = _web_controller_for_client(claim.client_id)
         if web_controller is None:
-            web_controller = spawn_entity(
+            web_controller = spawn_transient_controller(
                 actor.world,
-                [WebControllerComponent(client_id=claim.client_id, label=claim.label or "web")],
+                WebControllerComponent(client_id=claim.client_id, label=claim.label or "web"),
             )
         transfer_claim(controller, web_controller)
         add_claim(
@@ -1240,6 +1243,7 @@ def create_app(
         record_claim_activity(web_controller, now_unix=int(time.time()))
         if character.has_component(SuspendedComponent):
             character.remove_component(SuspendedComponent)
+        retire_transient_controller(actor, controller.id)
         return replace(
             command,
             controller_id=str(web_controller.id),
@@ -1328,22 +1332,20 @@ def create_app(
             return existing
         normalized = selected.strip().lower().replace("_", "-")
         if normalized in {"suspend", "suspended", "offline"}:
-            controller = spawn_entity(
+            controller = spawn_transient_controller(
                 actor.world,
-                [SuspendedControllerComponent(reason=timeout.fallback_reason)],
+                SuspendedControllerComponent(reason=timeout.fallback_reason),
             )
             return controller, "suspended"
         if normalized in {"llm", "ai", "agent"}:
-            controller = spawn_entity(
+            controller = spawn_transient_controller(
                 actor.world,
-                [
-                    LLMControllerComponent(
-                        profile_name=timeout.llm_profile_name or "default",
-                        model=timeout.llm_model
-                        or os.environ.get("BUNNYLAND_CHARACTER_MODEL", "deepseek-v4-flash"),
-                        provider=timeout.llm_provider or "ollama",
-                    )
-                ],
+                LLMControllerComponent(
+                    profile_name=timeout.llm_profile_name or "default",
+                    model=timeout.llm_model
+                    or os.environ.get("BUNNYLAND_CHARACTER_MODEL", "deepseek-v4-flash"),
+                    provider=timeout.llm_provider or "ollama",
+                ),
             )
             return controller, "llm"
         raise HTTPException(status_code=400, detail="fallback_controller is not a controller")
@@ -1610,9 +1612,9 @@ def create_app(
                         controller = None
                 if controller is None:
                     created = True
-                    controller = spawn_entity(
+                    controller = spawn_transient_controller(
                         actor.world,
-                        [WebControllerComponent(client_id=client_id, label=label)],
+                        WebControllerComponent(client_id=client_id, label=label),
                     )
                 if active_claim is not None and active_controller is not None:
                     transfer_claim(active_controller, controller)
@@ -1668,6 +1670,8 @@ def create_app(
                             )
                         )
                     )
+                if active_controller is not None:
+                    retire_transient_controller(actor, active_controller.id)
 
             timeout = controller.get_component(ClaimTimeoutComponent)
             span.set_attribute("controller.id", str(controller.id))
@@ -1772,6 +1776,7 @@ def create_app(
                 generation = actor.assign_controller(character.id, new_controller.id)
                 if character.has_component(SuspendedComponent):
                     character.remove_component(SuspendedComponent)
+            retire_transient_controller(actor, controller.id)
             await actor.bus.publish(
                 ControllerChangedEvent(
                     **actor._event_base(

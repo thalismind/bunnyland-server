@@ -91,7 +91,6 @@ from bunnyland.discord.bot import (
 )
 from bunnyland.discord.claim import (
     _match_character,
-    _retire_discord_controller,
     discord_controlled_character,
     resume_discord_claim,
 )
@@ -1159,6 +1158,7 @@ def test_suspend_discord_character_keeps_claim_and_resume_restores_discord_contr
     assert claim_secrets.has_secret(suspended_claim.claim_id)
     assert discord_controlled_character(scenario.actor, 123) is None
     assert character.has_component(SuspendedComponent)
+    assert not scenario.actor.world.has_entity(old_controller_id)
 
     resumed = resume_discord_claim(
         scenario.actor,
@@ -1182,19 +1182,7 @@ def test_suspend_discord_character_keeps_claim_and_resume_restores_discord_contr
         resumed_controller_id,
         generation,
     )
-
-
-def test_retire_discord_controller_ignores_non_discord_controllers(scenario):
-    # Defensive branch: retiring a controller that is not a Discord controller is a no-op.
-    controller = spawn_entity(
-        scenario.actor.world,
-        [SuspendedControllerComponent(reason="resting")],
-    )
-
-    _retire_discord_controller(scenario.actor, controller.id)
-
-    assert controller.has_component(SuspendedControllerComponent)
-    assert not controller.has_component(DiscordControllerComponent)
+    assert not scenario.actor.world.has_entity(suspended_controller_id)
 
 
 def test_suspend_discord_character_reassigns_to_suspended_controller(scenario):
@@ -1203,6 +1191,8 @@ def test_suspend_discord_character_reassigns_to_suspended_controller(scenario):
         discord_user_id=123,
         character_name="Juniper",
     )
+    character = scenario.actor.world.get_entity(scenario.character)
+    old_controller_id = character.get_relationships(ControlledBy)[0][1]
 
     suspended = suspend_discord_character(
         scenario.actor,
@@ -1210,7 +1200,6 @@ def test_suspend_discord_character_reassigns_to_suspended_controller(scenario):
         reason="player suspended",
     )
 
-    character = scenario.actor.world.get_entity(scenario.character)
     edge, controller_id = character.get_relationships(ControlledBy)[0]
     controller = scenario.actor.world.get_entity(controller_id)
     marker = character.get_component(SuspendedComponent)
@@ -1219,6 +1208,7 @@ def test_suspend_discord_character_reassigns_to_suspended_controller(scenario):
     assert edge.generation == 2
     assert marker.reason == "player suspended"
     assert no_op.reason == "player suspended"
+    assert not scenario.actor.world.has_entity(old_controller_id)
     assert not controller.has_component(DiscordControllerComponent)
     assert render_character_list(scenario.actor).splitlines()[1] == "- Juniper - suspended"
     assert discord_controlled_character(scenario.actor, 123) is None

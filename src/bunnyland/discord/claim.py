@@ -19,6 +19,8 @@ from ..claims import (
     match_character_by_name,
     matching_controller,
     remove_claim,
+    retire_transient_controller,
+    spawn_transient_controller,
     transfer_claim,
 )
 from ..core import (
@@ -30,7 +32,6 @@ from ..core import (
     SuspendedComponent,
     SuspendedControllerComponent,
     WebControllerComponent,
-    spawn_entity,
 )
 from ..core.claim_timeout import (
     apply_claim_timeout_settings,
@@ -193,14 +194,12 @@ def assign_discord_controller(
         if existing_claim is not None and existing_claim.character_id != str(character.id):
             controller = None
     if controller is None:
-        controller = spawn_entity(
+        controller = spawn_transient_controller(
             actor.world,
-            [
-                DiscordControllerComponent(
-                    discord_user_id=discord_user_id,
-                    default_channel_id=default_channel_id,
-                )
-            ],
+            DiscordControllerComponent(
+                discord_user_id=discord_user_id,
+                default_channel_id=default_channel_id,
+            ),
         )
     else:
         for _edge, controller_id in character.get_relationships(ControlledBy):
@@ -248,6 +247,8 @@ def assign_discord_controller(
     actor.assign_controller(character.id, controller.id)
     if character.has_component(SuspendedComponent):
         character.remove_component(SuspendedComponent)
+    if active_controller is not None:
+        retire_transient_controller(actor, active_controller.id)
     return character.get_component(IdentityComponent).name
 
 
@@ -302,25 +303,21 @@ def resume_discord_claim(
 
     controller = _discord_controller_for(actor, discord_user_id, default_channel_id)
     if controller is None:
-        controller = spawn_entity(
+        controller = spawn_transient_controller(
             actor.world,
-            [
-                DiscordControllerComponent(
-                    discord_user_id=discord_user_id,
-                    default_channel_id=default_channel_id,
-                )
-            ],
+            DiscordControllerComponent(
+                discord_user_id=discord_user_id,
+                default_channel_id=default_channel_id,
+            ),
         )
     existing_claim = controller_claim(controller)
     if existing_claim is not None and existing_claim.claim_id != claim.claim_id:
-        controller = spawn_entity(
+        controller = spawn_transient_controller(
             actor.world,
-            [
-                DiscordControllerComponent(
-                    discord_user_id=discord_user_id,
-                    default_channel_id=default_channel_id,
-                )
-            ],
+            DiscordControllerComponent(
+                discord_user_id=discord_user_id,
+                default_channel_id=default_channel_id,
+            ),
         )
     transfer_claim(active_controller, controller)
     add_claim(
@@ -336,6 +333,7 @@ def resume_discord_claim(
     if character.has_component(SuspendedComponent):
         character.remove_component(SuspendedComponent)
     record_claim_activity(controller, now_unix=int(time.time()))
+    retire_transient_controller(actor, active_controller.id)
     return character, controller.id, generation
 
 
@@ -380,12 +378,6 @@ def set_discord_claim_fallback(
     return character.get_component(IdentityComponent).name, fallback
 
 
-def _retire_discord_controller(actor: WorldActor, controller_id) -> None:
-    controller = actor.world.get_entity(controller_id)
-    if controller.has_component(DiscordControllerComponent):
-        controller.remove_component(DiscordControllerComponent)
-
-
 def release_discord_claim(
     actor: WorldActor,
     *,
@@ -410,10 +402,13 @@ def suspend_discord_character(
 
     character, old_controller_id = _controlled_character(actor, discord_user_id)
     old_controller = actor.world.get_entity(old_controller_id)
-    controller = spawn_entity(actor.world, [SuspendedControllerComponent(reason=reason)])
+    controller = spawn_transient_controller(
+        actor.world,
+        SuspendedControllerComponent(reason=reason),
+    )
     transfer_claim(old_controller, controller)
     actor.suspend(character.id, controller.id, reason=reason)
-    _retire_discord_controller(actor, old_controller_id)
+    retire_transient_controller(actor, old_controller_id)
     return character.get_component(IdentityComponent).name
 
 

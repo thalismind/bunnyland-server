@@ -3653,16 +3653,15 @@ def test_web_command_submission_resumes_idle_claim(scenario):
     assert response.status_code == 409
     assert response.json()["detail"] == "no handler for say"
     assert response.json()["code"] == "command_rejected"
-    web_controller_id = parse_entity_id(claimed["controller_id"])
-    assert web_controller_id is not None
-    assert scenario.actor.current_generation(scenario.character, web_controller_id) is not None
-    assert (
-        scenario.actor.current_generation(
-            scenario.character,
-            web_controller_id,
-        )
-        != claimed["controller_generation"]
-    )
+    old_web_controller_id = parse_entity_id(claimed["controller_id"])
+    assert old_web_controller_id is not None
+    assert not scenario.actor.world.has_entity(old_web_controller_id)
+    character = scenario.actor.world.get_entity(scenario.character)
+    _edge, new_web_controller_id = character.get_relationships(ControlledBy)[0]
+    assert new_web_controller_id != old_web_controller_id
+    new_web_controller = scenario.actor.world.get_entity(new_web_controller_id)
+    assert new_web_controller.has_component(WebControllerComponent)
+    assert new_web_controller.get_component(ClaimedComponent).claim_id == claimed["id"]
 
 
 def test_web_command_submission_with_no_controller_returns_stale_generation(scenario):
@@ -3740,6 +3739,10 @@ def test_web_command_submission_rejects_unclaimed_and_resumes_portable_claims(
         label="toon",
         claim_id=claimed["id"],
     )
+    existing_web = spawn_entity(
+        scenario.actor.world,
+        [WebControllerComponent(client_id="client-a", label="existing")],
+    )
     non_web = client.post(
         f"/v1/play/claims/{claimed['id']}/commands",
         headers=_claim_headers("client-a", secret),
@@ -3752,7 +3755,8 @@ def test_web_command_submission_rejects_unclaimed_and_resumes_portable_claims(
     assert non_web.json()["detail"] == "no handler for say"
     active_controller_id = character.get_relationships(ControlledBy)[0][1]
     active_controller = scenario.actor.world.get_entity(active_controller_id)
-    assert active_controller.id != actor_controller.id
+    assert active_controller.id == existing_web.id
+    assert not scenario.actor.world.has_entity(actor_controller.id)
     assert active_controller.has_component(WebControllerComponent)
     assert active_controller.get_component(ClaimedComponent).client_kind == "web"
 
