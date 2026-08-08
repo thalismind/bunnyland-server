@@ -14,13 +14,18 @@ from typing import Protocol
 from uuid import uuid4
 from weakref import finalize
 
-from .claims import ClaimOwner, ClaimSecretRegistry, remove_claim
+from .claims import (
+    ClaimOwner,
+    ClaimSecretRegistry,
+    remove_claim,
+    retire_transient_controller,
+    spawn_transient_controller,
+)
 from .core import (
     CharacterComponent,
     LLMControllerComponent,
     SuspendedControllerComponent,
     parse_entity_id,
-    spawn_entity,
 )
 from .core.controllers import ClaimedComponent, ClaimTimeoutComponent
 from .core.events import DomainEvent, EventVisibility, event_base
@@ -483,19 +488,17 @@ class ModerationService:
         if parsed is not None and self.actor.world.has_entity(parsed):
             return self.actor.world.get_entity(parsed)
         if fallback in {"llm", "ai", "agent"}:
-            return spawn_entity(
+            return spawn_transient_controller(
                 self.actor.world,
-                [
-                    LLMControllerComponent(
-                        profile_name=timeout.llm_profile_name or "default",
-                        model=timeout.llm_model,
-                        provider=timeout.llm_provider or "ollama",
-                    )
-                ],
+                LLMControllerComponent(
+                    profile_name=timeout.llm_profile_name or "default",
+                    model=timeout.llm_model,
+                    provider=timeout.llm_provider or "ollama",
+                ),
             )
-        return spawn_entity(
+        return spawn_transient_controller(
             self.actor.world,
-            [SuspendedControllerComponent(reason=timeout.fallback_reason or "moderated")],
+            SuspendedControllerComponent(reason=timeout.fallback_reason or "moderated"),
         )
 
     def _release_claims(self, target: ModerationIdentity) -> None:
@@ -507,6 +510,7 @@ class ModerationService:
                     fallback = self._fallback_controller(controller)
                     self.actor.assign_controller(character.id, fallback.id)
             remove_claim(controller, self.claim_secrets)
+            retire_transient_controller(self.actor, controller.id)
 
     async def execute(
         self,

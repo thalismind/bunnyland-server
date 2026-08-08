@@ -101,6 +101,7 @@ from .controllers import (
     MCPControllerComponent,
     ScriptedControllerComponent,
     SuspendedControllerComponent,
+    TransientControllerComponent,
     WebControllerComponent,
 )
 from .ecs import (
@@ -412,6 +413,7 @@ __all__ = [
     "SubmittedCommand",
     "SuspendedComponent",
     "SuspendedControllerComponent",
+    "TransientControllerComponent",
     "WebControllerComponent",
     "TakeHandler",
     "TellCommand",

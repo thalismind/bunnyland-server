@@ -36,7 +36,7 @@ from .controllers import (
     SuspendedControllerComponent,
     WebControllerComponent,
 )
-from .ecs import parse_entity_id, replace_component, spawn_entity
+from .ecs import parse_entity_id, replace_component
 from .edges import ControlledBy
 from .events import ControllerChangedEvent
 
@@ -162,7 +162,12 @@ class ClaimTimeoutSystem:
         self.now = now
 
     async def __call__(self, actor: WorldActor) -> None:
-        from ..claims import controller_claim, transfer_claim
+        from ..claims import (
+            controller_claim,
+            retire_transient_controller,
+            spawn_transient_controller,
+            transfer_claim,
+        )
 
         if not self.controller_kinds:
             return
@@ -196,20 +201,19 @@ class ClaimTimeoutSystem:
                 controller = existing
                 kind = self._controller_kind(controller)
             elif claim.fallback_controller == CLAIM_FALLBACK_LLM:
-                controller = spawn_entity(
+                controller = spawn_transient_controller(
                     actor.world,
-                    [
-                        LLMControllerComponent(
-                            profile_name=claim.llm_profile_name or "default",
-                            model=claim.llm_model or self.default_llm_model,
-                            provider=claim.llm_provider or self.default_llm_provider,
-                        )
-                    ],
+                    LLMControllerComponent(
+                        profile_name=claim.llm_profile_name or "default",
+                        model=claim.llm_model or self.default_llm_model,
+                        provider=claim.llm_provider or self.default_llm_provider,
+                    ),
                 )
                 kind = "llm"
             else:
-                controller = spawn_entity(
-                    actor.world, [SuspendedControllerComponent(reason=claim.fallback_reason)]
+                controller = spawn_transient_controller(
+                    actor.world,
+                    SuspendedControllerComponent(reason=claim.fallback_reason),
                 )
                 kind = "suspended"
             transfer_claim(old_controller, controller)
@@ -221,6 +225,7 @@ class ClaimTimeoutSystem:
                 generation = actor.assign_controller(character.id, controller.id)
                 if character.has_component(SuspendedComponent):
                     character.remove_component(SuspendedComponent)
+            retire_transient_controller(actor, old_controller.id)
             await actor.bus.publish(
                 ControllerChangedEvent(
                     **actor._event_base(

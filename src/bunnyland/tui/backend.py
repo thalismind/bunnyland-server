@@ -29,6 +29,8 @@ from ..claims import (
     ClaimSecretRegistry,
     add_claim,
     remove_claim,
+    retire_transient_controller,
+    spawn_transient_controller,
     transfer_claim,
 )
 from ..content_warnings import world_content_flags
@@ -42,7 +44,6 @@ from ..core import (
     WebControllerComponent,
     build_submitted_command,
     container_of,
-    spawn_entity,
 )
 from ..core.claim_timeout import apply_claim_timeout_settings
 from ..core.ecs import parse_entity_id
@@ -911,9 +912,9 @@ class LocalBackend(Backend):
                 else None
             )
             if self._controller is None:
-                self._controller = spawn_entity(
+                self._controller = spawn_transient_controller(
                     self.actor.world,
-                    [WebControllerComponent(client_id=self.client_id, label="tui")],
+                    WebControllerComponent(client_id=self.client_id, label="tui"),
                 )
             claim = add_claim(
                 self._controller,
@@ -973,20 +974,18 @@ class LocalBackend(Backend):
                 if kind == "unknown":
                     return None
             elif fallback == "llm":
-                new_controller = spawn_entity(
+                new_controller = spawn_transient_controller(
                     self.actor.world,
-                    [
-                        LLMControllerComponent(
-                            profile_name="default",
-                            model=os.environ.get("BUNNYLAND_CHARACTER_MODEL", "deepseek-v4-flash"),
-                        )
-                    ],
+                    LLMControllerComponent(
+                        profile_name="default",
+                        model=os.environ.get("BUNNYLAND_CHARACTER_MODEL", "deepseek-v4-flash"),
+                    ),
                 )
                 kind = "llm"
             else:
-                new_controller = spawn_entity(
+                new_controller = spawn_transient_controller(
                     self.actor.world,
-                    [SuspendedControllerComponent(reason="released by TUI client")],
+                    SuspendedControllerComponent(reason="released by TUI client"),
                 )
                 kind = "suspended"
             transfer_claim(old_controller, new_controller)
@@ -1001,6 +1000,9 @@ class LocalBackend(Backend):
                 generation = self.actor.assign_controller(character_id, new_controller.id)
                 if character.has_component(SuspendedComponent):
                     character.remove_component(SuspendedComponent)
+            retire_transient_controller(self.actor, old_controller_id)
+            if self._controller is not None and self._controller.id == old_controller_id:
+                self._controller = None
         released = ControlClaim(
             controller_id=str(new_controller.id),
             generation=generation,

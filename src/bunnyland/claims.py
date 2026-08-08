@@ -9,7 +9,7 @@ from hashlib import sha256
 from time import time
 from uuid import uuid4
 
-from relics import Component
+from relics import Component, Entity, EntityId, World
 
 from bunnyland.simpacks.lifesim.mechanics import LifeStageComponent
 
@@ -18,14 +18,28 @@ from .core.contracts import ActorContext, EntityLike
 from .core.controllers import (
     ClaimedComponent,
     ClaimTimeoutComponent,
+    DiscordControllerComponent,
+    LLMControllerComponent,
+    MCPControllerComponent,
+    SuspendedControllerComponent,
+    TransientControllerComponent,
+    WebControllerComponent,
 )
-from .core.ecs import replace_component
+from .core.ecs import parse_entity_id, replace_component, spawn_entity
 from .core.edges import ControlledBy
 
 CHILD_LIFE_STAGES = frozenset({"baby", "infant", "toddler", "child"})
 CLIENT_KIND_DISCORD = "discord"
 CLIENT_KIND_MCP = "mcp"
 CLIENT_KIND_WEB = "web"
+
+type RuntimeControllerComponent = (
+    DiscordControllerComponent
+    | LLMControllerComponent
+    | MCPControllerComponent
+    | SuspendedControllerComponent
+    | WebControllerComponent
+)
 
 
 @dataclass(frozen=True)
@@ -178,6 +192,60 @@ def controller_claim(controller: EntityLike) -> ClaimedComponent | None:
     if controller.has_component(ClaimedComponent):
         return controller.get_component(ClaimedComponent)
     return None
+
+
+def spawn_transient_controller(
+    world: World,
+    controller: RuntimeControllerComponent,
+) -> Entity:
+    """Create a replaceable client or synthesized fallback controller."""
+
+    return spawn_entity(
+        world,
+        [controller, TransientControllerComponent(created_at_unix=int(time()))],
+    )
+
+
+def retire_transient_controller(actor: ActorContext, controller_id: EntityId) -> bool:
+    """Delete one detached runtime controller when no durable state refers to it."""
+
+    if not actor.world.has_entity(controller_id):
+        return False
+    controller = actor.world.get_entity(controller_id)
+    if (
+        not controller.has_component(TransientControllerComponent)
+        or controller.has_component(ClaimedComponent)
+    ):
+        return False
+    characters = actor.world.query().with_all([CharacterComponent]).execute_entities()
+    if any(
+        target_id == controller_id
+        for character in characters
+        for _edge, target_id in character.get_relationships(ControlledBy)
+    ):
+        return False
+    timeout_controllers = (
+        actor.world.query().with_all([ClaimTimeoutComponent]).execute_entities()
+    )
+    if any(
+        parse_entity_id(candidate.get_component(ClaimTimeoutComponent).fallback_controller)
+        == controller_id
+        for candidate in timeout_controllers
+    ):
+        return False
+    actor.world.remove(controller_id)
+    return True
+
+
+def reconcile_transient_controllers(actor: ActorContext) -> int:
+    """Remove marked runtime controllers left detached by an interrupted handoff."""
+
+    transient = list(
+        actor.world.query().with_all([TransientControllerComponent]).execute_entities()
+    )
+    return sum(
+        retire_transient_controller(actor, controller.id) for controller in transient
+    )
 
 
 def current_controller(
@@ -370,5 +438,8 @@ __all__ = [
     "matching_controller",
     "normalize_claimed_controllers_without_secrets",
     "remove_claim",
+    "reconcile_transient_controllers",
+    "retire_transient_controller",
+    "spawn_transient_controller",
     "transfer_claim",
 ]

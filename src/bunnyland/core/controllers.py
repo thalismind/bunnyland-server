@@ -123,6 +123,18 @@ class SuspendedControllerComponent(Component):
     reason: str = "offline"
 
 
+@dataclass(frozen=True)
+class TransientControllerComponent(Component):
+    """Marks a runtime controller that may be deleted once it is no longer referenced.
+
+    Client transports and synthesized fallback controllers are replaceable runtime state.
+    World-authored scripted, behavioral, and LLM controllers omit this marker so a control
+    handoff cannot accidentally remove reusable world configuration.
+    """
+
+    created_at_unix: int = 0
+
+
 __all__ = [
     "BehaviorControllerComponent",
     "ClaimedComponent",
@@ -132,5 +144,6 @@ __all__ = [
     "MCPControllerComponent",
     "ScriptedControllerComponent",
     "SuspendedControllerComponent",
+    "TransientControllerComponent",
     "WebControllerComponent",
 ]
