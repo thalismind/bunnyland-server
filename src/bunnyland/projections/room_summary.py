@@ -11,9 +11,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from weakref import WeakSet
 
 from relics import (
+    Component,
+    Edge,
+    Entity,
     EntityId,
+    Observer,
     OnComponentAdded,
     OnComponentRemoved,
     OnRelationshipAdded,
@@ -42,6 +47,8 @@ from ..core.edges import Contains, ExitTo
 # (Door/Container/Lockable open/closed/locked) all dirty the room they sit in.
 _ROOM_COMPONENTS = (
     RoomComponent,
+    IdentityComponent,
+    CharacterComponent,
     DescriptionComponent,
     LightComponent,
     TemperatureComponent,
@@ -50,6 +57,12 @@ _ROOM_COMPONENTS = (
     LockableComponent,
 )
 _ROOM_EDGES = (Contains, ExitTo)
+
+# Relics appends every observer passed to ``World.observe``. Projections are cheap,
+# short-lived reader objects in several request paths, so attachment must be scoped to
+# the world rather than to one projection instance or each read would retain another
+# complete observer set.
+_ATTACHED_WORLDS: WeakSet[World] = WeakSet()
 
 
 # --------------------------------------------------------------------------------------
@@ -213,35 +226,68 @@ SummaryRenderer = Callable[[RoomFacts], str]
 # --------------------------------------------------------------------------------------
 
 
-def _component_observer(component_type, dirty, *, removed: bool):
+def _mark_room_dirty(world: World, room_id: EntityId) -> None:
+    if not world.has_entity(room_id):
+        return
+    room = world.get_entity(room_id)
+    if not room.has_component(RoomComponent):
+        return
+    existing = (
+        room.get_component(RoomSummaryComponent)
+        if room.has_component(RoomSummaryComponent)
+        else RoomSummaryComponent()
+    )
+    if not existing.dirty:
+        replace_component(room, replace(existing, dirty=True))
+
+
+def _dirty_visible_room(world: World, entity: Entity) -> None:
+    """Dirty summaries whose rendered facts can include ``entity``."""
+    if entity.has_component(RoomComponent):
+        _mark_room_dirty(world, entity.id)
+        # Source-room summaries render the destination room's title in their exits.
+        for source_id, _edge in entity.get_incoming_relationships(ExitTo):
+            _mark_room_dirty(world, source_id)
+        return
+    parent = container_of(entity)
+    if parent is not None and world.has_entity(parent):
+        if world.get_entity(parent).has_component(RoomComponent):
+            _mark_room_dirty(world, parent)
+
+
+def _component_observer(component_type: type[Component], *, removed: bool) -> Observer:
     """A Relics observer that dirties the room of an entity when ``component_type`` changes."""
     if removed:
 
         class _Observer(OnComponentRemoved):
-            def on_component_removed(self, entity, component) -> None:
-                dirty(entity)
+            def on_component_removed(self, entity: Entity, component: Component) -> None:
+                _dirty_visible_room(self.world, entity)
     else:
 
         class _Observer(OnComponentAdded):
-            def on_component_added(self, entity, component) -> None:
-                dirty(entity)
+            def on_component_added(self, entity: Entity, component: Component) -> None:
+                _dirty_visible_room(self.world, entity)
 
     _Observer.component_type = component_type
     return _Observer()
 
 
-def _relationship_observer(edge_type, dirty, *, removed: bool):
+def _relationship_observer(edge_type: type[Edge], *, removed: bool) -> Observer:
     """A Relics observer that dirties a room when an ``edge_type`` edge from it changes."""
     if removed:
 
         class _Observer(OnRelationshipRemoved):
-            def on_relationship_removed(self, source, edge, target) -> None:
-                dirty(source)
+            def on_relationship_removed(
+                self, source: Entity, edge: Edge, target: Entity
+            ) -> None:
+                _dirty_visible_room(self.world, source)
     else:
 
         class _Observer(OnRelationshipAdded):
-            def on_relationship_added(self, source, edge, target) -> None:
-                dirty(source)
+            def on_relationship_added(
+                self, source: Entity, edge: Edge, target: Entity
+            ) -> None:
+                _dirty_visible_room(self.world, source)
 
     _Observer.edge_type = edge_type
     return _Observer()
@@ -262,45 +308,36 @@ class RoomSummaryProjection:
         self._attached = False
 
     def attach(self, world: World | None = None) -> RoomSummaryProjection:
-        """Register the ECS observers that dirty a room on relevant changes (idempotent)."""
+        """Register one ECS invalidation observer set per world."""
         if world is not None:
             self.world = world
-        if self._attached:
+        if self.world in _ATTACHED_WORLDS:
+            self._attached = True
             return self
         for component_type in _ROOM_COMPONENTS:
-            self.world.observe(_component_observer(component_type, self._dirty, removed=False))
-            self.world.observe(_component_observer(component_type, self._dirty, removed=True))
+            self.world.observe(_component_observer(component_type, removed=False))
+            self.world.observe(_component_observer(component_type, removed=True))
         for edge_type in _ROOM_EDGES:
-            self.world.observe(_relationship_observer(edge_type, self._dirty, removed=False))
-            self.world.observe(_relationship_observer(edge_type, self._dirty, removed=True))
+            self.world.observe(_relationship_observer(edge_type, removed=False))
+            self.world.observe(_relationship_observer(edge_type, removed=True))
+        _ATTACHED_WORLDS.add(self.world)
         self._attached = True
+
+        # Projection caches are derived data. Invalidate persisted clean entries once
+        # after loading so changes to invalidation rules or renderers cannot preserve a
+        # stale summary indefinitely.
+        for room in self.world.query().with_all([RoomSummaryComponent]).execute_entities():
+            _mark_room_dirty(self.world, room.id)
         return self
 
     # -- dirtying ----------------------------------------------------------------------
 
-    def _dirty(self, entity) -> None:
+    def _dirty(self, entity: Entity) -> None:
         """Dirty the room an observed entity belongs to: itself if a room, else its room."""
-        if entity.has_component(RoomComponent):
-            self.mark_dirty(entity.id)
-            return
-        parent = container_of(entity)
-        if parent is not None and self.world.has_entity(parent):
-            if self.world.get_entity(parent).has_component(RoomComponent):
-                self.mark_dirty(parent)
+        _dirty_visible_room(self.world, entity)
 
     def mark_dirty(self, room_id: EntityId) -> None:
-        if not self.world.has_entity(room_id):
-            return
-        room = self.world.get_entity(room_id)
-        if not room.has_component(RoomComponent):
-            return
-        existing = (
-            room.get_component(RoomSummaryComponent)
-            if room.has_component(RoomSummaryComponent)
-            else RoomSummaryComponent()
-        )
-        if not existing.dirty:
-            replace_component(room, replace(existing, dirty=True))
+        _mark_room_dirty(self.world, room_id)
 
     # -- reads -------------------------------------------------------------------------
 
