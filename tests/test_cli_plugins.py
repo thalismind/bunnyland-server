@@ -28,7 +28,9 @@ from bunnyland.core import (
     ControlledBy,
     DiscordControllerComponent,
     IdentityComponent,
+    LLMControllerComponent,
     SuspendedComponent,
+    TransientControllerComponent,
     WorldActor,
     spawn_entity,
 )
@@ -1755,7 +1757,7 @@ async def test_load_or_generate_world_reports_loaded_world(tmp_path, capsys):
     save_world(WorldActor(), path, meta=WorldMeta(seed="saved seed", generator="saved-gen"))
 
     actor, meta = await cli._load_or_generate_world(
-        _serve_args(load=str(path)),
+        _serve_args(load=str(path), llm=True, llm_provider="openrouter"),
         select_plugins([WORLDGEN]),
         [],
         cli.ServeCredentials(worldgen_provider="ollama"),
@@ -1765,7 +1767,79 @@ async def test_load_or_generate_world_reports_loaded_world(tmp_path, capsys):
     output = capsys.readouterr().out
     assert actor.epoch == 0
     assert meta.seed == "saved seed"
+    controllers = actor.world.query().with_all([LLMControllerComponent]).execute_entities()
+    assert [controller.get_component(LLMControllerComponent) for controller in controllers] == [
+        LLMControllerComponent(
+            profile_name="default",
+            model="character-model",
+            provider="openrouter",
+        )
+    ]
     assert f"Reloaded world from {str(path)!r}" in output
+
+
+def test_default_llm_controller_is_disabled_durable_and_idempotent():
+    actor = WorldActor()
+    models = cli.ServeModels(worldgen_model="world-model", character_model="character-model")
+    cli._ensure_default_llm_controller(actor, _serve_args(llm=False), models)
+    assert not list(
+        actor.world.query().with_all([LLMControllerComponent]).execute_entities()
+    )
+
+    spawn_entity(
+        actor.world,
+        [
+            LLMControllerComponent(
+                profile_name="default",
+                model="character-model",
+                provider="openrouter",
+            ),
+            TransientControllerComponent(),
+        ],
+    )
+    for component in (
+        LLMControllerComponent(
+            profile_name="specialist",
+            model="character-model",
+            provider="openrouter",
+        ),
+        LLMControllerComponent(
+            profile_name="default",
+            model="other-model",
+            provider="openrouter",
+        ),
+        LLMControllerComponent(
+            profile_name="default",
+            model="character-model",
+            provider="ollama",
+        ),
+    ):
+        spawn_entity(actor.world, [component])
+    args = _serve_args(llm=True, llm_provider="openrouter")
+    cli._ensure_default_llm_controller(actor, args, models)
+    cli._ensure_default_llm_controller(actor, args, models)
+
+    durable = list(
+        actor.world.query()
+        .with_all([LLMControllerComponent])
+        .with_none([TransientControllerComponent])
+        .execute_entities()
+    )
+    matching = [
+        controller.get_component(LLMControllerComponent)
+        for controller in durable
+        if controller.get_component(LLMControllerComponent).profile_name == "default"
+        and controller.get_component(LLMControllerComponent).model == "character-model"
+        and controller.get_component(LLMControllerComponent).provider == "openrouter"
+    ]
+    assert len(durable) == 4
+    assert matching == [
+        LLMControllerComponent(
+            profile_name="default",
+            model="character-model",
+            provider="openrouter",
+        )
+    ]
 
 
 def test_discord_filter_ids_can_come_from_environment(monkeypatch):

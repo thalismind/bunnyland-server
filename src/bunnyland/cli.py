@@ -25,6 +25,8 @@ from bunnyland.simpacks.lifesim.mechanics import configure_lifesim_aging
 from . import telemetry
 from .claims import ClaimSecretRegistry
 from .core.claim_timeout import CLAIM_TIMEOUT_DEFAULT_SECONDS, normalize_claim_timeout
+from .core.controllers import LLMControllerComponent, TransientControllerComponent
+from .core.ecs import spawn_entity
 from .core.systems import ClaimTimeoutSystem
 from .core.world_actor import WorldActor
 from .credentials import read_credential
@@ -412,6 +414,7 @@ async def _load_or_generate_world(
             f"Reloaded world from {args.load!r}: seed {meta.seed!r}, "
             f"generator {meta.generator!r}, game epoch {actor.epoch}s."
         )
+        _ensure_default_llm_controller(actor, args, models)
         return actor, meta
 
     actor = WorldActor()
@@ -443,7 +446,42 @@ async def _load_or_generate_world(
         f"Generated world {args.seed!r} via {generator.name!r}: "
         f"{len(result.rooms)} rooms, {len(result.characters)} characters."
     )
+    _ensure_default_llm_controller(actor, args, models)
     return actor, meta
+
+
+def _ensure_default_llm_controller(
+    actor: WorldActor,
+    args,
+    models: ServeModels,
+) -> None:
+    """Ensure an LLM-enabled world has a durable controller for its default model."""
+
+    if not args.llm:
+        return
+    controllers = (
+        actor.world.query()
+        .with_all([LLMControllerComponent])
+        .with_none([TransientControllerComponent])
+        .execute_entities()
+    )
+    if any(
+        (llm := controller.get_component(LLMControllerComponent)).profile_name == "default"
+        and llm.model == models.character_model
+        and llm.provider == args.llm_provider
+        for controller in controllers
+    ):
+        return
+    spawn_entity(
+        actor.world,
+        [
+            LLMControllerComponent(
+                profile_name="default",
+                model=models.character_model,
+                provider=args.llm_provider,
+            )
+        ],
+    )
 
 
 def _worldgen_options(args, credentials: ServeCredentials, models: ServeModels) -> GenOptions:

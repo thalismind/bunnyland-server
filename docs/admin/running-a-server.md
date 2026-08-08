@@ -100,7 +100,10 @@ With `--llm`, world generation and character controllers can use different model
 World generation defaults to `deepseek-v4-pro`; character controllers default to
 `deepseek-v4-flash`. Override them separately with `--worldgen-model` and
 `--character-model`, or use `--ollama-model` as a shared override. Each character keeps
-its own conversation history, so it remembers what it has done.
+its own conversation history, so it remembers what it has done. Enabling `--llm` also
+ensures that newly generated and reloaded worlds contain a reusable `default` controller
+for the configured character provider and model, so an administrator can assign it to a
+character that is currently suspended or using another controller.
 
 To use a local Ollama instead of the cloud, set `OLLAMA_HOST` to your local server; the API
 key may be any non-empty value for local servers that don't check it.
