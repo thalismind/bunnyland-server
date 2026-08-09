@@ -259,6 +259,7 @@ from bunnyland.simpacks.dinosim.mechanics import (
     validate_dinosim_relationships,
 )
 from bunnyland.simpacks.lifesim.mechanics import LifeStageComponent
+from bunnyland.simpacks.nukesim.mechanics import SampleComponent
 
 HOUR = 60 * 60
 DAY = 24 * HOUR
@@ -4383,6 +4384,14 @@ def test_dinosim_relationship_invariant_rejects_wrong_source_component():
 
     with pytest.raises(MutationError, match="TamedBy source .* lacks TamingComponent"):
         validate_dinosim_relationships(scenario.actor.world)
+
+
+def test_dinosim_relationship_invariant_accepts_shared_studied_by_sources():
+    scenario = build_scenario()
+    sample = spawn_entity(scenario.actor.world, [SampleComponent()])
+    sample.add_relationship(StudiedBy(), scenario.character)
+
+    validate_dinosim_relationships(scenario.actor.world)
 
 
 def test_dinosim_relationship_invariant_rejects_cardinality_and_wrong_endpoints():

@@ -4449,7 +4449,8 @@ def validate_dinosim_relationships(
         InspectedBy: EggInspectionComponent,
         ImprintedBy: ImprintComponent,
         CaredForBy: JuvenileCareComponent,
-        StudiedBy: WaterStudyComponent,
+        # StudiedBy is a shared core edge used by several simulation packs. Dinosim owns
+        # WaterStudyComponent, but cannot impose that source type on the other packs.
         BroodedBy: (IncubationComponent, BroodingComponent),
         TrackedAt: TrackComponent,
         MarkedBy: TerritoryComponent,
