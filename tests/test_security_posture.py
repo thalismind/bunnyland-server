@@ -64,4 +64,6 @@ def test_only_documented_chroma_advisory_is_ignored() -> None:
     assert "only-fixed: false" in workflow
     assert "vulnerability: CVE-2026-45829" in grype
     assert "scanner: grype" in scanner_exceptions
+    assert "package: chromadb" in scanner_exceptions
+    assert "ghcr.io/thalismind/bunnyland-server@sha256:" in scanner_exceptions
     assert "`CVE-2026-45829` (`PYSEC-2026-311` in pip-audit)" in exceptions

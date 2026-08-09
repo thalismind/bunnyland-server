@@ -227,6 +227,13 @@ The worktree may already be dirty.
 
 ## 9. Success Criteria
 
+### Always commit completed changes
+
+- After implementing and verifying requested changes, always create a focused Git commit.
+- Do not include unrelated dirty or generated files in the commit.
+- Use separate commits for separate repositories or independently reviewable changes.
+- Skip the commit only when the user explicitly asks not to commit.
+
 For a completed Bunnyland code change, aim to have:
 
 - Focused tests proving the changed behavior.

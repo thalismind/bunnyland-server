@@ -655,40 +655,62 @@ class ColonyWealthConsequence:
     """Bookkeep settlement wealth from resource stacks, room fixtures, and workstations."""
 
     def process(self, world: World, epoch: int) -> list[DomainEvent]:
-        wealth = 0.0
-        for entity in world.query().execute_entities():
-            if entity.has_component(ResourceStackComponent):
-                wealth += entity.get_component(ResourceStackComponent).quantity
-            if entity.has_component(RoomStatComponent):
-                wealth += entity.get_component(RoomStatComponent).wealth
-            if entity.has_component(WorkstationComponent):
-                wealth += 10.0 * entity.get_component(WorkstationComponent).quality
+        wealth = sum(
+            _resource_stack_wealth(entity)
+            for entity in world.query().with_all([ResourceStackComponent]).execute_entities()
+        )
+        wealth += sum(
+            _room_stat_wealth(entity)
+            for entity in world.query().with_all([RoomStatComponent]).execute_entities()
+        )
+        wealth += sum(
+            _workstation_wealth(entity)
+            for entity in world.query().with_all([WorkstationComponent]).execute_entities()
+        )
         expectations = "low" if wealth < 50 else "moderate" if wealth < 200 else "high"
+        rounded_wealth = round(wealth, 3)
         events: list[DomainEvent] = []
         for marker in world.query().with_all([ColonySimComponent]).execute_entities():
             existing = (
                 marker.get_component(ColonyWealthComponent)
                 if marker.has_component(ColonyWealthComponent)
-                else ColonyWealthComponent()
+                else None
             )
+            if (
+                existing is not None
+                and existing.wealth == rounded_wealth
+                and existing.expectations == expectations
+            ):
+                continue
             updated = ColonyWealthComponent(
-                wealth=round(wealth, 3),
+                wealth=rounded_wealth,
                 expectations=expectations,
                 updated_at_epoch=epoch,
             )
-            if existing != updated:
-                replace_component(marker, updated)
-                events.append(
-                    ColonyWealthUpdatedEvent(
-                        **_event_base(
-                            epoch,
-                            visibility=EventVisibility.SYSTEM,
-                            wealth=updated.wealth,
-                            expectations=updated.expectations,
-                        )
+            replace_component(marker, updated)
+            events.append(
+                ColonyWealthUpdatedEvent(
+                    **_event_base(
+                        epoch,
+                        visibility=EventVisibility.SYSTEM,
+                        wealth=updated.wealth,
+                        expectations=updated.expectations,
                     )
                 )
+            )
         return events
+
+
+def _resource_stack_wealth(entity: Entity) -> float:
+    return entity.get_component(ResourceStackComponent).quantity
+
+
+def _room_stat_wealth(entity: Entity) -> float:
+    return entity.get_component(RoomStatComponent).wealth
+
+
+def _workstation_wealth(entity: Entity) -> float:
+    return 10.0 * entity.get_component(WorkstationComponent).quality
 
 
 class MedicalRecoveryConsequence:

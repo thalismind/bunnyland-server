@@ -60,6 +60,7 @@ from bunnyland.plugins.ids import (
     NUKESIM,
     PROMPT_FILTERS,
     VOIDSIM,
+    WORLD_HEALTH,
     WORLDGEN,
 )
 from bunnyland.prompts.builder import PromptBuilder
@@ -97,7 +98,7 @@ def test_migrate_world_cli_writes_schema_v4_without_overwriting_source(tmp_path)
     assert main(["migrate-world", str(source), str(dest)]) == 0
 
     assert source.read_text() == original
-    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 4
+    assert json.loads(dest.read_text())["bunnyland"]["schema_version"] == 5
 
 
 def test_migrate_world_cli_rejects_in_place_conversion(tmp_path):
@@ -314,7 +315,7 @@ def test_migrate_world_cli_writes_yaml_destination(tmp_path):
 
     assert main(["migrate-world", str(source), str(dest)]) == 0
 
-    assert '"schema_version": 4' in dest.read_text()
+    assert '"schema_version": 5' in dest.read_text()
 
 
 def _serve_args(**overrides):
@@ -696,6 +697,29 @@ def test_cli_starter_pack_can_come_from_environment(monkeypatch, tmp_path):
         VOIDSIM,
         NUKESIM,
     )
+
+
+def test_cli_extra_plugin_preserves_default_plugin_set(tmp_path):
+    path = tmp_path / "world.json"
+
+    result = main(
+        [
+            "serve",
+            "--extra-plugin",
+            WORLD_HEALTH,
+            "--generator",
+            "empty",
+            "--ticks",
+            "1",
+            "--save",
+            str(path),
+        ]
+    )
+
+    assert result == 0
+    _actor, meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+    assert WORLD_HEALTH in meta.plugins
+    assert WORLDGEN in meta.plugins
 
 
 def test_missing_required_plugin_logs_error_and_exits(monkeypatch, caplog):

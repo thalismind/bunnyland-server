@@ -12,6 +12,7 @@ from bunnyland.core import (
     IdentityComponent,
     Lane,
     PortableComponent,
+    StudiedBy,
     build_submitted_command,
     container_of,
     parse_entity_id,
@@ -387,7 +388,13 @@ def test_nukesim_parity_handlers_mutate_state_directly():
         assert any(isinstance(event, event_type) for event in result.events)
 
     assert entity(suppressant_id).get_component(SuppressantComponent).uses == 1
-    assert str(scenario.character) in entity(sample_id).get_component(SampleComponent).studied_by
+    assert entity(sample_id).has_relationship(StudiedBy, scenario.character)
+    duplicate_study = execute_handler(
+        StudySampleHandler(),
+        ctx,
+        _handler_cmd(scenario, "study-sample", sample_id=str(sample_id)),
+    )
+    assert duplicate_study.reason == "sample already studied"
     assert entity(crate_id).get_component(LockedCrateComponent).locked is False
     assert entity(artifact_id).get_component(WastelandArtifactComponent).studied is True
     assert entity(salvage_id).get_component(FactionSalvageComponent).claimed_by == str(
@@ -790,9 +797,10 @@ def test_nukesim_component_prompt_fragments_cover_self_target_and_named_state():
         world,
         [
             IdentityComponent(name="glowing sample", kind="sample"),
-            SampleComponent(sample_type="fungus", studied_by=(str(character.id),)),
+            SampleComponent(sample_type="fungus"),
         ],
     )
+    sample.add_relationship(StudiedBy(), character.id)
     tech = spawn_entity(
         world,
         [

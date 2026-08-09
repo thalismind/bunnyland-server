@@ -831,6 +831,7 @@ def create_bunnyland_mcp_app(
     # the same policy as resource reads. Without this a play session could subscribe to an
     # admin resource URI and receive its change-timing notifications.
     resource_subscription_scopes: dict[str, tuple[str, ...]] = {}
+    tool_scopes: dict[str, tuple[str, ...]] = {}
 
     @low_server.subscribe_resource()
     async def subscribe_resource(uri: AnyUrl) -> None:
@@ -904,7 +905,9 @@ def create_bunnyland_mcp_app(
 
     def _tool(required_scopes: tuple[str, ...]):
         def register(fn):
-            return mcp.tool()(_authorized_capability(required_scopes, fn))
+            authorized = _authorized_capability(required_scopes, fn)
+            tool_scopes[authorized.__name__] = required_scopes
+            return mcp.tool()(authorized)
 
         return register
 
@@ -954,8 +957,10 @@ def create_bunnyland_mcp_app(
 
         def tool(self, *, scopes: Sequence[str]):
             def register(fn):
-                authorized = _authorized_capability(tuple(scopes), fn)
+                required_scopes = tuple(scopes)
+                authorized = _authorized_capability(required_scopes, fn)
                 authorized.__name__ = self._name(fn.__name__)
+                tool_scopes[authorized.__name__] = required_scopes
                 return mcp.tool()(authorized)
 
             return register
@@ -2143,6 +2148,35 @@ def create_bunnyland_mcp_app(
     except Exception:
         event_bridge.close()
         raise
+
+    fastmcp_list_tools = getattr(mcp, "list_tools", None)
+    lowlevel_list_tools = getattr(low_server, "list_tools", None)
+    if callable(fastmcp_list_tools) and callable(lowlevel_list_tools):
+
+        async def list_authorized_tools():
+            principal, request = _authenticated_request()
+            headers = getattr(request, "headers", {}) or {}
+            admin_client_allowed = False
+            if WORLD_ADMIN_SCOPE in principal.scopes:
+                try:
+                    require_allowed_client_id(
+                        headers.get(CLIENT_ID_HEADER), allowed_admin_client_ids, "admin"
+                    )
+                    admin_client_allowed = True
+                except PermissionError:
+                    pass
+            tools = await fastmcp_list_tools()
+            return [
+                tool
+                for tool in tools
+                if (required_scopes := tool_scopes.get(tool.name)) is not None
+                and all(scope in principal.scopes for scope in required_scopes)
+                and (
+                    WORLD_ADMIN_SCOPE not in required_scopes or admin_client_allowed
+                )
+            ]
+
+        lowlevel_list_tools()(list_authorized_tools)
 
     del worldgen_options
     mcp_app = mcp.streamable_http_app()

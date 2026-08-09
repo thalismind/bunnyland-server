@@ -650,6 +650,10 @@ class ControllerDispatch:
             )
 
     def _prompt_event_summary(self, character: Entity, event: DomainEvent) -> str | None:
+        if isinstance(event, CommandRejectedEvent) and not event.character_actionable:
+            # Internal failures remain available to operators through logs, telemetry, and
+            # receipts. A character cannot repair them, so do not turn them into prompt state.
+            return None
         summary = event_summary(self.actor.world, character, event)
         if summary:
             return summary

@@ -19,7 +19,8 @@ synchronous rejection now returned by the command submit endpoint, and how to us
 
 The availability flags are a **coarse hint** for the UI. The server (the command handler,
 on the next world tick) remains the source of truth and can still reject a command that
-looked available — see [Trust model](#trust-model).
+looked available — see
+[Trust model](#3-trust-model-availability-is-a-hint-the-tick-is-the-truth).
 
 ---
 

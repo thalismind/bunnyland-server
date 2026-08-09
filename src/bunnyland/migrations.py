@@ -6,7 +6,7 @@ from copy import deepcopy
 
 from pydantic import JsonValue
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 class WorldMigrationError(ValueError):
@@ -1491,7 +1491,13 @@ def _validate_v4(snapshot: dict[str, JsonValue]) -> None:
         "InspectedBy": ("EggInspectionComponent",),
         "ImprintedBy": ("ImprintComponent",),
         "CaredForBy": ("JuvenileCareComponent",),
-        "StudiedBy": ("WaterStudyComponent",),
+        "StudiedBy": (
+            "WaterStudyComponent",
+            "SampleComponent",
+            "AlienArtifactComponent",
+            "XenobiologySampleComponent",
+            "VoiceInscriptionComponent",
+        ),
         "BroodedBy": ("IncubationComponent", "BroodingComponent"),
         "TrackedAt": ("TrackComponent",),
         "MarkedBy": ("TerritoryComponent",),
@@ -1631,8 +1637,519 @@ def _validate_v4(snapshot: dict[str, JsonValue]) -> None:
             )
 
 
+def _migrate_v4(snapshot: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    _validate_v4(snapshot)
+    entities = _table(snapshot, "entities")
+    components = _table(snapshot, "components")
+    relationships = _table(snapshot, "relationships")
+    traveling = _records(components, "TravelingComponent")
+    if traveling:
+        raise WorldMigrationError("schema-v4 snapshot already contains TravelingComponent")
+
+    travel_hubs = _records(components, "TravelHubComponent")
+    for source_id, records in sorted(
+        _records(relationships, "TravelingToDestination").items()
+    ):
+        if source_id not in entities:
+            raise WorldMigrationError(
+                f"schema-v4 TravelingToDestination source {source_id!r} does not exist"
+            )
+        if not isinstance(records, list) or len(records) != 1:
+            raise WorldMigrationError(
+                f"schema-v4 TravelingToDestination source {source_id!r} requires one destination"
+            )
+        record = records[0]
+        if not isinstance(record, dict) or not isinstance(record.get("edge", {}), dict):
+            raise WorldMigrationError(
+                f"schema-v4 TravelingToDestination edge for {source_id!r} must be a mapping"
+            )
+        target_id = str(record.get("target") or "")
+        if target_id not in entities:
+            raise WorldMigrationError(
+                f"schema-v4 TravelingToDestination edge owned by {source_id!r} "
+                f"refers to missing target {target_id!r}"
+            )
+        if target_id not in travel_hubs:
+            raise WorldMigrationError(
+                f"schema-v4 TravelingToDestination target {target_id!r} is not a travel hub"
+            )
+        edge_fields = record.get("edge", {})
+        started_at_epoch = edge_fields.get("started_at_epoch")
+        arrive_at_epoch = edge_fields.get("arrive_at_epoch")
+        for field_name, value in (
+            ("started_at_epoch", started_at_epoch),
+            ("arrive_at_epoch", arrive_at_epoch),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise WorldMigrationError(
+                    f"schema-v4 TravelingToDestination.{field_name} for {source_id!r} "
+                    "must be an integer"
+                )
+        mode = edge_fields.get("mode", "foot")
+        route_label = edge_fields.get("route_label", "")
+        if not isinstance(mode, str) or not isinstance(route_label, str):
+            raise WorldMigrationError(
+                f"schema-v4 TravelingToDestination text fields for {source_id!r} "
+                "must be strings"
+            )
+        traveling[source_id] = {
+            "started_at_epoch": started_at_epoch,
+            "arrive_at_epoch": arrive_at_epoch,
+            "mode": mode,
+            "route_label": route_label,
+        }
+        record["edge"] = {}
+
+    characters = _records(components, "CharacterComponent")
+    rooms = _records(components, "RoomComponent")
+    history_records = _records(components, "WorldHistoryRecordComponent")
+    physical_marks = _records(components, "PhysicalMarkComponent")
+    signatures = _records(components, "CreatorSignatureComponent")
+
+    def live_typed_target(raw_target: JsonValue, typed: dict[str, JsonValue]) -> str | None:
+        target_id = str(raw_target or "")
+        return target_id if target_id in entities and target_id in typed else None
+
+    def clear_edges(edge_name: str, source_id: str) -> None:
+        _records(relationships, edge_name).pop(source_id, None)
+
+    def provenance_fields(
+        raw_fields: dict[str, JsonValue], *, owner_id: str, circumstance: str
+    ) -> dict[str, JsonValue]:
+        source_event_id = raw_fields.get("source_event_id", "")
+        created_at_epoch = raw_fields.get("created_at_epoch", 0)
+        if not isinstance(source_event_id, str):
+            raise WorldMigrationError(
+                f"schema-v4 creator provenance source_event_id for {owner_id!r} "
+                "must be a string"
+            )
+        if not isinstance(created_at_epoch, int) or isinstance(created_at_epoch, bool):
+            raise WorldMigrationError(
+                f"schema-v4 creator provenance created_at_epoch for {owner_id!r} "
+                "must be an integer"
+            )
+        return {
+            "source_event_id": source_event_id,
+            "created_at_epoch": created_at_epoch,
+            "circumstance": circumstance,
+        }
+
+    for record_id, raw_fields in sorted(history_records.items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(
+                f"WorldHistoryRecordComponent fields for {record_id!r} must be a mapping"
+            )
+        location_id = live_typed_target(raw_fields.pop("location_id", ""), rooms)
+        clear_edges("HistoryLocation", record_id)
+        if location_id is not None:
+            _add_edge(relationships, "HistoryLocation", record_id, location_id)
+
+    for mark_id, raw_fields in sorted(physical_marks.items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(
+                f"PhysicalMarkComponent fields for {mark_id!r} must be a mapping"
+            )
+        author_id = live_typed_target(raw_fields.pop("author_id", ""), characters)
+        signature_fields = signatures.pop(mark_id, None)
+        circumstance = ""
+        if signature_fields is not None:
+            if not isinstance(signature_fields, dict):
+                raise WorldMigrationError(
+                    f"CreatorSignatureComponent fields for {mark_id!r} must be a mapping"
+                )
+            signature_creator = live_typed_target(
+                signature_fields.pop("creator_id", ""), characters
+            )
+            author_id = author_id or signature_creator
+            circumstance = str(signature_fields.get("circumstance") or "")
+        clear_edges("CreatedBy", mark_id)
+        if author_id is not None:
+            _add_edge(
+                relationships,
+                "CreatedBy",
+                mark_id,
+                author_id,
+                provenance_fields(
+                    raw_fields,
+                    owner_id=mark_id,
+                    circumstance=circumstance,
+                ),
+            )
+
+    for artifact_id, raw_fields in sorted(signatures.items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(
+                f"CreatorSignatureComponent fields for {artifact_id!r} must be a mapping"
+            )
+        creator_id = live_typed_target(raw_fields.pop("creator_id", ""), characters)
+        clear_edges("CreatedBy", artifact_id)
+        if creator_id is not None:
+            _add_edge(
+                relationships,
+                "CreatedBy",
+                artifact_id,
+                creator_id,
+                provenance_fields(
+                    raw_fields,
+                    owner_id=artifact_id,
+                    circumstance=str(raw_fields.get("circumstance") or ""),
+                ),
+            )
+
+    reputations = _records(components, "DeedReputationComponent")
+    for character_id, raw_fields in sorted(reputations.items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(
+                f"DeedReputationComponent fields for {character_id!r} must be a mapping"
+            )
+        raw_deed_ids = raw_fields.pop("deed_ids", ()) or ()
+        if not isinstance(raw_deed_ids, (list, tuple)):
+            raise WorldMigrationError(
+                f"schema-v4 entity {character_id!r} component "
+                "DeedReputationComponent.deed_ids must be a sequence"
+            )
+        clear_edges("CreditedDeed", character_id)
+        for raw_deed_id in dict.fromkeys(str(value) for value in raw_deed_ids):
+            deed_id = live_typed_target(raw_deed_id, history_records)
+            if deed_id is None:
+                continue
+            deed_fields = history_records[deed_id]
+            score = (
+                float(deed_fields.get("salience", 0.0))
+                if isinstance(deed_fields, dict)
+                else 0.0
+            )
+            _add_edge(
+                relationships,
+                "CreditedDeed",
+                character_id,
+                deed_id,
+                {"score": score},
+            )
+
+    death_records = _records(components, "DeathConsequenceComponent")
+    for death_id, raw_fields in sorted(death_records.items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(
+                f"DeathConsequenceComponent fields for {death_id!r} must be a mapping"
+            )
+        character_id = live_typed_target(raw_fields.pop("character_id", ""), characters)
+        location_id = live_typed_target(raw_fields.pop("location_id", ""), rooms)
+        clear_edges("DeathOf", death_id)
+        clear_edges("DeathAt", death_id)
+        if character_id is not None:
+            _add_edge(relationships, "DeathOf", death_id, character_id)
+        if location_id is not None:
+            _add_edge(relationships, "DeathAt", death_id, location_id)
+
+    study_components = (
+        "SampleComponent",
+        "AlienArtifactComponent",
+        "XenobiologySampleComponent",
+        "VoiceInscriptionComponent",
+    )
+    for component_name in study_components:
+        for source_id, raw_fields in sorted(_records(components, component_name).items()):
+            if not isinstance(raw_fields, dict):
+                raise WorldMigrationError(
+                    f"{component_name} fields for {source_id!r} must be a mapping"
+                )
+            raw_character_ids = raw_fields.pop("studied_by", ()) or ()
+            if not isinstance(raw_character_ids, (list, tuple)):
+                raise WorldMigrationError(
+                    f"schema-v4 entity {source_id!r} component "
+                    f"{component_name}.studied_by must be a sequence"
+                )
+            for raw_character_id in dict.fromkeys(str(value) for value in raw_character_ids):
+                character_id = live_typed_target(raw_character_id, characters)
+                if character_id is not None:
+                    _add_edge(relationships, "StudiedBy", source_id, character_id)
+
+    decoration_sources = _records(components, "DecorationSource3DComponent")
+    decoration_edges = _records(relationships, "HasDecoration3D")
+    for decoration_id, raw_fields in sorted(decoration_sources.items()):
+        if not isinstance(raw_fields, dict):
+            raise WorldMigrationError(
+                f"DecorationSource3DComponent fields for {decoration_id!r} must be a mapping"
+            )
+        raw_room_id = raw_fields.pop("room_id", "")
+        room_id = live_typed_target(raw_room_id, rooms)
+        owners: list[str] = []
+        for candidate_id, records in decoration_edges.items():
+            if not isinstance(records, list):
+                raise WorldMigrationError(
+                    f"HasDecoration3D edges for {candidate_id!r} must be a list"
+                )
+            if any(
+                isinstance(record, dict) and record.get("target") == decoration_id
+                for record in records
+            ):
+                owners.append(candidate_id)
+        if len(owners) > 1 or (owners and room_id is not None and owners[0] != room_id):
+            raise WorldMigrationError(
+                f"schema-v4 DecorationSource3DComponent owner {decoration_id!r} "
+                "conflicts with HasDecoration3D"
+            )
+        if not owners and room_id is not None:
+            _add_edge(
+                relationships,
+                "HasDecoration3D",
+                room_id,
+                decoration_id,
+                {"role": str(raw_fields.get("role") or "")},
+            )
+
+    _table(snapshot, "bunnyland")["schema_version"] = 5
+    _validate_v5(snapshot)
+    return snapshot
+
+
+def _validate_v5(snapshot: dict[str, JsonValue]) -> None:
+    _validate_v4(snapshot)
+    entities = _table(snapshot, "entities")
+    components = _table(snapshot, "components")
+    relationships = _table(snapshot, "relationships")
+    travel_hubs = _records(components, "TravelHubComponent")
+    traveling = _records(components, "TravelingComponent")
+    travel_edges = _records(relationships, "TravelingToDestination")
+
+    for source_id, fields in traveling.items():
+        if source_id not in entities:
+            raise WorldMigrationError(
+                f"schema-v5 TravelingComponent owner {source_id!r} does not exist"
+            )
+        if not isinstance(fields, dict):
+            raise WorldMigrationError(
+                f"TravelingComponent fields for {source_id!r} must be a mapping"
+            )
+        if set(fields) != {"started_at_epoch", "arrive_at_epoch", "mode", "route_label"}:
+            raise WorldMigrationError(
+                f"schema-v5 TravelingComponent fields for {source_id!r} are invalid"
+            )
+        for field_name in ("started_at_epoch", "arrive_at_epoch"):
+            value = fields[field_name]
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise WorldMigrationError(
+                    f"schema-v5 TravelingComponent.{field_name} for {source_id!r} "
+                    "must be an integer"
+                )
+        if not isinstance(fields["mode"], str) or not isinstance(fields["route_label"], str):
+            raise WorldMigrationError(
+                f"schema-v5 TravelingComponent text fields for {source_id!r} must be strings"
+            )
+
+    for source_id, records in travel_edges.items():
+        if source_id not in traveling:
+            raise WorldMigrationError(
+                f"schema-v5 TravelingToDestination source {source_id!r} lacks "
+                "TravelingComponent"
+            )
+        if not isinstance(records, list) or len(records) != 1:
+            raise WorldMigrationError(
+                f"schema-v5 TravelingToDestination source {source_id!r} requires one destination"
+            )
+        record = records[0]
+        if not isinstance(record, dict) or not isinstance(record.get("edge", {}), dict):
+            raise WorldMigrationError(
+                f"schema-v5 TravelingToDestination edge for {source_id!r} must be a mapping"
+            )
+        if record.get("edge", {}):
+            raise WorldMigrationError(
+                f"schema-v5 TravelingToDestination edge for {source_id!r} "
+                "must not contain properties"
+            )
+        target_id = str(record.get("target") or "")
+        if target_id not in entities:
+            raise WorldMigrationError(
+                f"schema-v5 TravelingToDestination edge owned by {source_id!r} "
+                f"refers to missing target {target_id!r}"
+            )
+        if target_id not in travel_hubs:
+            raise WorldMigrationError(
+                f"schema-v5 TravelingToDestination target {target_id!r} is not a travel hub"
+            )
+
+    for source_id in traveling:
+        if source_id not in travel_edges:
+            raise WorldMigrationError(
+                f"schema-v5 TravelingComponent owner {source_id!r} requires one "
+                "TravelingToDestination edge"
+            )
+
+    legacy_fields = {
+        "WorldHistoryRecordComponent": ("location_id",),
+        "PhysicalMarkComponent": ("author_id",),
+        "CreatorSignatureComponent": ("creator_id",),
+        "DeedReputationComponent": ("deed_ids",),
+        "DeathConsequenceComponent": ("character_id", "location_id"),
+        "SampleComponent": ("studied_by",),
+        "AlienArtifactComponent": ("studied_by",),
+        "XenobiologySampleComponent": ("studied_by",),
+        "VoiceInscriptionComponent": ("studied_by",),
+        "DecorationSource3DComponent": ("room_id",),
+    }
+    for component_name, field_names in legacy_fields.items():
+        for owner_id, fields in _records(components, component_name).items():
+            if not isinstance(fields, dict):
+                raise WorldMigrationError(
+                    f"{component_name} fields for {owner_id!r} must be a mapping"
+                )
+            field_name = next((name for name in field_names if name in fields), None)
+            if field_name is not None:
+                raise WorldMigrationError(
+                    f"schema-v5 entity {owner_id!r} contains legacy "
+                    f"{component_name}.{field_name}"
+                )
+
+    physical_marks = _records(components, "PhysicalMarkComponent")
+    signatures = _records(components, "CreatorSignatureComponent")
+    duplicate_signature = next(
+        (owner_id for owner_id in physical_marks if owner_id in signatures), None
+    )
+    if duplicate_signature is not None:
+        raise WorldMigrationError(
+            f"schema-v5 physical mark {duplicate_signature!r} must not contain "
+            "CreatorSignatureComponent"
+        )
+
+    characters = _records(components, "CharacterComponent")
+    rooms = _records(components, "RoomComponent")
+    history_records = _records(components, "WorldHistoryRecordComponent")
+    reputations = _records(components, "DeedReputationComponent")
+    death_records = _records(components, "DeathConsequenceComponent")
+
+    def relationship_records(edge_name: str) -> dict[str, list[tuple[str, dict[str, JsonValue]]]]:
+        parsed: dict[str, list[tuple[str, dict[str, JsonValue]]]] = {}
+        seen: set[tuple[str, str]] = set()
+        for source_id, records in sorted(_records(relationships, edge_name).items()):
+            if source_id not in entities:
+                raise WorldMigrationError(
+                    f"schema-v5 {edge_name} source {source_id!r} does not exist"
+                )
+            if not isinstance(records, list):
+                raise WorldMigrationError(f"{edge_name} edges for {source_id!r} must be a list")
+            parsed[source_id] = []
+            for record in records:
+                if not isinstance(record, dict) or not isinstance(record.get("edge", {}), dict):
+                    raise WorldMigrationError(
+                        f"schema-v5 {edge_name} edge for {source_id!r} must be a mapping"
+                    )
+                target_id = str(record.get("target") or "")
+                if target_id not in entities:
+                    raise WorldMigrationError(
+                        f"schema-v5 {edge_name} edge owned by {source_id!r} "
+                        f"refers to missing target {target_id!r}"
+                    )
+                pair = (source_id, target_id)
+                if pair in seen:
+                    raise WorldMigrationError(
+                        f"schema-v5 contains duplicate {edge_name} edge "
+                        f"{source_id!r} -> {target_id!r}"
+                    )
+                seen.add(pair)
+                parsed[source_id].append((target_id, record.get("edge", {})))
+        return parsed
+
+    created_by = relationship_records("CreatedBy")
+    for source_id, records in created_by.items():
+        if source_id not in signatures and source_id not in physical_marks:
+            raise WorldMigrationError(
+                f"schema-v5 CreatedBy source {source_id!r} lacks creator provenance"
+            )
+        if len(records) > 1:
+            raise WorldMigrationError(
+                f"schema-v5 entity {source_id!r} has multiple CreatedBy targets"
+            )
+        for target_id, fields in records:
+            if target_id not in characters:
+                raise WorldMigrationError(
+                    f"schema-v5 CreatedBy target {target_id!r} is not a character"
+                )
+            if set(fields) != {"source_event_id", "created_at_epoch", "circumstance"}:
+                raise WorldMigrationError(
+                    f"schema-v5 CreatedBy fields for {source_id!r} are invalid"
+                )
+            if (
+                not isinstance(fields["source_event_id"], str)
+                or not isinstance(fields["created_at_epoch"], int)
+                or isinstance(fields["created_at_epoch"], bool)
+                or not isinstance(fields["circumstance"], str)
+            ):
+                raise WorldMigrationError(
+                    f"schema-v5 CreatedBy fields for {source_id!r} have invalid types"
+                )
+
+    history_locations = relationship_records("HistoryLocation")
+    for source_id, records in history_locations.items():
+        if source_id not in history_records:
+            raise WorldMigrationError(
+                f"schema-v5 HistoryLocation source {source_id!r} lacks "
+                "WorldHistoryRecordComponent"
+            )
+        if len(records) > 1:
+            raise WorldMigrationError(
+                f"schema-v5 entity {source_id!r} has multiple HistoryLocation targets"
+            )
+        for target_id, fields in records:
+            if target_id not in rooms:
+                raise WorldMigrationError(
+                    f"schema-v5 HistoryLocation target {target_id!r} is not a room"
+                )
+            if fields:
+                raise WorldMigrationError(
+                    f"schema-v5 HistoryLocation edge for {source_id!r} "
+                    "must not contain properties"
+                )
+
+    credited_deeds = relationship_records("CreditedDeed")
+    for source_id, records in credited_deeds.items():
+        if source_id not in reputations or source_id not in characters:
+            raise WorldMigrationError(
+                f"schema-v5 CreditedDeed source {source_id!r} lacks character reputation"
+            )
+        for target_id, fields in records:
+            if target_id not in history_records:
+                raise WorldMigrationError(
+                    f"schema-v5 CreditedDeed target {target_id!r} is not a history record"
+                )
+            score = fields.get("score")
+            if set(fields) != {"score"} or not isinstance(score, (int, float)) or isinstance(
+                score, bool
+            ):
+                raise WorldMigrationError(
+                    f"schema-v5 CreditedDeed score for {source_id!r} must be numeric"
+                )
+
+    for edge_name, source_components, target_components in (
+        ("DeathOf", death_records, characters),
+        ("DeathAt", death_records, rooms),
+    ):
+        parsed = relationship_records(edge_name)
+        for source_id, records in parsed.items():
+            if source_id not in source_components:
+                raise WorldMigrationError(
+                    f"schema-v5 {edge_name} source {source_id!r} lacks "
+                    "DeathConsequenceComponent"
+                )
+            if len(records) > 1:
+                raise WorldMigrationError(
+                    f"schema-v5 entity {source_id!r} has multiple {edge_name} targets"
+                )
+            for target_id, fields in records:
+                if target_id not in target_components:
+                    expected = "character" if edge_name == "DeathOf" else "room"
+                    raise WorldMigrationError(
+                        f"schema-v5 {edge_name} target {target_id!r} is not a {expected}"
+                    )
+                if fields:
+                    raise WorldMigrationError(
+                        f"schema-v5 {edge_name} edge for {source_id!r} "
+                        "must not contain properties"
+                    )
+
+
 def migrate_snapshot(snapshot: object) -> dict[str, JsonValue]:
-    """Return a validated schema-v4 copy of a raw JSON/YAML snapshot."""
+    """Return a validated schema-v5 copy of a raw JSON/YAML snapshot."""
 
     if not isinstance(snapshot, dict):
         raise WorldMigrationError("world snapshot must be a mapping")
@@ -1655,10 +2172,13 @@ def migrate_snapshot(snapshot: object) -> dict[str, JsonValue]:
         migrated = _migrate_v2(migrated)
         version = 3
     if version == 3:
-        return _migrate_v3(migrated)
+        migrated = _migrate_v3(migrated)
+        version = 4
+    if version == 4:
+        return _migrate_v4(migrated)
     for section in ("entities", "components", "relationships"):
         _table(migrated, section)
-    _validate_v4(migrated)
+    _validate_v5(migrated)
     return migrated
 
 

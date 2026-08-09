@@ -48,7 +48,8 @@ def main() -> None:
             migrated = _canonical_snapshot(migrate_snapshot(source))
             if migrated != expected:
                 raise AssertionError(
-                    f"schema-v{version} {suffix} migration does not match schema-v4"
+                    f"schema-v{version} {suffix} migration does not match "
+                    f"schema-v{CURRENT_SCHEMA_VERSION}"
                 )
 
 

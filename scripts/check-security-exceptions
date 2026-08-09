@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Fail CI when a scanner exception is expired or misses its weekly review."""
+"""Fail CI when scanner exceptions are broad, expired, or overdue for review."""
 
 from __future__ import annotations
 
 import re
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
+
+from security_exceptions import load_scanner_exceptions
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,46 +15,42 @@ EXCEPTIONS_FILE = ROOT / ".scanner-exceptions.yaml"
 GRYPE_FILE = ROOT / ".grype.yaml"
 
 
-def field(name: str, text: str) -> str:
-    match = re.search(
-        rf"(?m)^\s+(?:-\s+)?{re.escape(name)}:\s+(\S+)\s*$",
-        text,
-    )
-    if match is None:
-        raise SystemExit(f"{EXCEPTIONS_FILE}: missing {name}")
-    return match.group(1)
+def _grype_exceptions(text: str) -> set[tuple[str, str]]:
+    return {
+        (advisory, package.lower())
+        for advisory, package in re.findall(
+            r"(?m)^  - vulnerability:\s+(\S+)\s*$"
+            r"\n    package:\s*$\n      name:\s+(\S+)\s*$",
+            text,
+        )
+    }
 
 
 def main() -> None:
-    text = EXCEPTIONS_FILE.read_text(encoding="utf-8")
-    grype_text = GRYPE_FILE.read_text(encoding="utf-8")
-    today = date.today()
-    advisory = field("id", text)
-    expires = date.fromisoformat(field("expired_at", text))
-    reviewed = date.fromisoformat(field("last_reviewed_at", text))
-    interval = int(field("review_interval_days", text))
-    tracking = field("tracking_issue", text)
+    try:
+        entries = load_scanner_exceptions(EXCEPTIONS_FILE, today=date.today())
+        grype_text = GRYPE_FILE.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
 
-    if field("scanner", text) != "grype":
-        raise SystemExit(f"{EXCEPTIONS_FILE}: scanner must be grype")
-    if not re.search(
-        rf"(?m)^\s+- vulnerability:\s+{re.escape(advisory)}\s*$",
-        grype_text,
-    ):
-        raise SystemExit(f"{GRYPE_FILE}: missing exception for {advisory}")
-    if not tracking.startswith("docs/") or "#" not in tracking:
+    manifest_exceptions = {(entry.advisory, entry.package) for entry in entries}
+    configured_exceptions = _grype_exceptions(grype_text)
+    if configured_exceptions != manifest_exceptions:
         raise SystemExit(
-            f"{EXCEPTIONS_FILE}: tracking_issue must link to a repository issue"
+            f"{GRYPE_FILE}: scanner ignores must exactly match documented exceptions"
         )
-    if today > expires:
-        raise SystemExit(
-            f"{EXCEPTIONS_FILE}: exception expired on {expires.isoformat()}"
-        )
-    if today > reviewed + timedelta(days=interval):
-        raise SystemExit(
-            f"{EXCEPTIONS_FILE}: review overdue since "
-            f"{(reviewed + timedelta(days=interval)).isoformat()}"
-        )
+
+    for entry in entries:
+        document, anchor = entry.tracking_issue.split("#", 1)
+        document_path = ROOT / document
+        try:
+            documentation = document_path.read_text(encoding="utf-8").lower()
+        except OSError as exc:
+            raise SystemExit(str(exc)) from exc
+        if f"## {anchor}" not in documentation:
+            raise SystemExit(
+                f"{document_path}: missing tracking heading for {entry.advisory}"
+            )
 
 
 if __name__ == "__main__":

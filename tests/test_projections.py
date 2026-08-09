@@ -175,6 +175,41 @@ def test_room_summary_projection_accepts_custom_renderer():
     assert summary.visible_summary == "Mosslit Burrow: prose from renderer"
 
 
+def test_room_summary_projection_attaches_observers_once_per_world():
+    scenario = build_scenario()
+    world = scenario.actor.world
+
+    RoomSummaryProjection(world).attach()
+    observer_count = len(world._observers)
+
+    RoomSummaryProjection(world).attach()
+    RoomSummaryProjection(world).attach()
+
+    assert observer_count > 0
+    assert len(world._observers) == observer_count
+
+
+def test_room_summary_projection_invalidates_persisted_clean_cache_on_attach():
+    scenario = build_scenario()
+    room = scenario.actor.world.get_entity(scenario.room_a)
+    room.add_component(
+        RoomSummaryComponent(
+            visible_summary="stale persisted summary",
+            last_updated_epoch=10,
+            version=4,
+            dirty=False,
+        )
+    )
+
+    projection = RoomSummaryProjection(scenario.actor.world).attach()
+
+    assert room.get_component(RoomSummaryComponent).dirty is True
+    rebuilt = projection.summary(scenario.room_a, 20)
+    assert rebuilt.visible_summary != "stale persisted summary"
+    assert rebuilt.version == 5
+    assert rebuilt.last_updated_epoch == 20
+
+
 def test_room_summary_projection_dirty_edge_cases():
     scenario = build_scenario()
     projection = RoomSummaryProjection(scenario.actor.world).attach()
@@ -292,6 +327,81 @@ async def test_observer_dirties_room_when_an_exit_is_added():
 
     summary = projection.summary(scenario.room_b, scenario.actor.epoch)
     assert "up" in summary.visible_summary
+
+
+async def test_observer_dirties_room_when_visible_entity_identity_changes():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    projection = RoomSummaryProjection(world).attach()
+    initial = projection.summary(scenario.room_a, scenario.actor.epoch)
+    assert "Juniper" in initial.visible_summary
+
+    character = world.get_entity(scenario.character)
+    replace_component(
+        character,
+        replace(character.get_component(IdentityComponent), name="Clover"),
+    )
+    await scenario.actor.tick(0.0)
+
+    room = world.get_entity(scenario.room_a)
+    assert room.get_component(RoomSummaryComponent).dirty is True
+    rebuilt = projection.summary(scenario.room_a, scenario.actor.epoch)
+    assert "Clover" in rebuilt.visible_summary
+    assert "Juniper" not in rebuilt.visible_summary
+
+
+async def test_observer_dirties_room_when_entity_character_classification_changes():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    projection = RoomSummaryProjection(world).attach()
+    visitor = add_object(
+        scenario,
+        scenario.room_a,
+        [IdentityComponent(name="Clover", kind="visitor")],
+    )
+    await scenario.actor.tick(0.0)
+
+    initial = projection.summary(scenario.room_a, scenario.actor.epoch)
+    assert "You see: Clover." in initial.visible_summary
+
+    visitor.add_component(CharacterComponent(species="bunny"))
+    await scenario.actor.tick(0.0)
+
+    room = world.get_entity(scenario.room_a)
+    assert room.get_component(RoomSummaryComponent).dirty is True
+    rebuilt = projection.summary(scenario.room_a, scenario.actor.epoch)
+    assert "Here: " in rebuilt.visible_summary
+    assert "Clover" in rebuilt.visible_summary
+    assert "Juniper" in rebuilt.visible_summary
+    assert "You see: Clover." not in rebuilt.visible_summary
+
+    visitor.remove_component(CharacterComponent)
+    await scenario.actor.tick(0.0)
+
+    assert room.get_component(RoomSummaryComponent).dirty is True
+    rebuilt_again = projection.summary(scenario.room_a, scenario.actor.epoch)
+    assert "You see: Clover." in rebuilt_again.visible_summary
+
+
+async def test_observer_dirties_source_room_when_exit_destination_title_changes():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    projection = RoomSummaryProjection(world).attach()
+    initial = projection.summary(scenario.room_a, scenario.actor.epoch)
+    assert "north to North Tunnel" in initial.visible_summary
+
+    destination = world.get_entity(scenario.room_b)
+    replace_component(
+        destination,
+        replace(destination.get_component(RoomComponent), title="Clover Crossing"),
+    )
+    await scenario.actor.tick(0.0)
+
+    source = world.get_entity(scenario.room_a)
+    assert source.get_component(RoomSummaryComponent).dirty is True
+    rebuilt = projection.summary(scenario.room_a, scenario.actor.epoch)
+    assert "north to Clover Crossing" in rebuilt.visible_summary
+    assert "north to North Tunnel" not in rebuilt.visible_summary
 
 
 # -- perception -------------------------------------------------------------------------

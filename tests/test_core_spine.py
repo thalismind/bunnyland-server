@@ -1148,8 +1148,10 @@ def test_room_knowledge_skips_unplaced_and_nonroom_containers():
     assert nested.get_relationships(KnowsRoom) == []
 
 
-async def test_plan_event_failure_rolls_back_state_and_point_cost():
+async def test_plan_event_failure_rolls_back_state_and_point_cost(caplog):
     scenario = build_scenario(action_current=5)
+    rejected: list[CommandRejectedEvent] = []
+    scenario.actor.bus.subscribe(CommandRejectedEvent, rejected.append)
     character = scenario.actor.world.get_entity(scenario.character)
     original_identity = character.get_component(IdentityComponent)
     original_points = character.get_component(ActionPointsComponent)
@@ -1184,3 +1186,5 @@ async def test_plan_event_failure_rolls_back_state_and_point_cost():
     assert receipt is not None
     assert receipt.status is CommitStatus.REJECTED
     assert receipt.reason == "mutation failed: event projection failed"
+    assert rejected[-1].character_actionable is False
+    assert "mutation failed for character" in caplog.text

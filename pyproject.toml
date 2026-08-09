@@ -91,6 +91,7 @@ bunnyland = "bunnyland.cli:main"
 "bunnyland.toonsim" = "bunnyland.simpacks.toonsim.plugin:plugin"
 "bunnyland.voidsim" = "bunnyland.simpacks.voidsim.plugin:plugin"
 "bunnyland.worldgen" = "bunnyland.foundation.worldgen.plugin:plugin"
+"bunnyland.world_health" = "bunnyland.world_health.plugin:plugin"
 
 [dependency-groups]
 dev = [

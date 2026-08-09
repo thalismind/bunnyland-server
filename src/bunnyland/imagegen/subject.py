@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from relics import Entity, World
 
-from bunnyland.foundation.history.mechanics import WorldHistoryRecordComponent
+from bunnyland.foundation.history.mechanics import HistoryLocation, WorldHistoryRecordComponent
 
 from ..core.components import DescriptionComponent, IdentityComponent, RoomComponent
-from ..core.ecs import container_of, entity_name, parse_entity_id
+from ..core.ecs import container_of, entity_name
 
 
 def subject_for_entity(entity: Entity) -> str:
@@ -44,7 +44,8 @@ def subject_for_event(world: World, record_entity: Entity) -> str:
     """Describe a world-history record as a scene: summary, room, and who/what is present."""
     record = record_entity.get_component(WorldHistoryRecordComponent)
     parts = [record.summary]
-    location_id = parse_entity_id(record.location_id) if record.location_id else None
+    locations = record_entity.get_relationships(HistoryLocation)
+    location_id = locations[0][1] if locations else None
     if location_id is not None and world.has_entity(location_id):
         room = world.get_entity(location_id)
         if room.has_component(RoomComponent):

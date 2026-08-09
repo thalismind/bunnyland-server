@@ -88,6 +88,11 @@ class HasInjury(Edge):
     """character -> injury entity."""
 
 
+@dataclass(frozen=True)
+class StudiedBy(Edge):
+    """studyable entity -> character who has studied it."""
+
+
 __all__ = [
     "ContainmentMode",
     "Contains",
@@ -98,5 +103,6 @@ __all__ = [
     "HasThought",
     "Holding",
     "KnowsRoom",
+    "StudiedBy",
     "Wearing",
 ]

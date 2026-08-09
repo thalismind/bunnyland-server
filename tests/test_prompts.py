@@ -25,6 +25,7 @@ from bunnyland.core import (
     RestingComponent,
     RoomComponent,
     SleepingComponent,
+    StudiedBy,
     SuspendedComponent,
     replace_component,
     spawn_entity,
@@ -200,6 +201,32 @@ def test_fact_collection_enforces_viewer_awareness_and_global_key_uniqueness():
     for invalid in (-1, 1.5, True):
         with pytest.raises(ValueError, match="non-negative"):
             collect_prompt_facts(None, entity, [], cutoff=invalid)
+
+
+def test_prompt_builder_logs_and_omits_failed_fact_provider(caplog):
+    scenario = build_scenario()
+
+    def broken_provider(_world, _entity):
+        raise RuntimeError("operator-only component failure")
+
+    def healthy_provider(_world, _entity):
+        return [PromptFact(key="test.healthy", text="A useful condition.")]
+
+    def duplicate_provider(_world, _entity):
+        return [PromptFact(key="test.healthy", text="Conflicting condition.")]
+
+    builder = PromptBuilder(
+        scenario.actor.world,
+        fragment_providers=(broken_provider, healthy_provider, duplicate_provider),
+    )
+    context = builder.build(scenario.character)
+    prompt = render_prompt(context)
+
+    assert context.conditions == ("A useful condition.",)
+    assert "operator-only component failure" not in prompt
+    assert "Conflicting condition" not in prompt
+    assert "failed for character" in caplog.text
+    assert "duplicate prompt fact key" in caplog.text
 
 
 def test_component_prompt_context_validates_detail_scores():
@@ -985,14 +1012,12 @@ def test_migrated_component_prompt_fragments_cover_cross_pack_branches():
     assert ArtifactComponent(name="Blade", identified_by=(str(character.id),)).prompt_fragments(
         target_ctx(known_spell)
     ) == ("Artifact nearby: Blade (1 charges, identified).",)
-    assert (
-        VoiceInscriptionComponent(word_id="w", studied_by=(str(character.id),)).prompt_fragments(
-            target_ctx(known_spell)
-        )
-        == ()
-    )
-    assert VoiceInscriptionComponent(word_id="w").prompt_fragments(target_ctx(known_spell)) == (
-        "Voice inscription nearby: spark.",
+    known_spell.add_relationship(StudiedBy(), character.id)
+    assert VoiceInscriptionComponent(word_id="w").prompt_fragments(
+        target_ctx(known_spell)
+    ) == ()
+    assert VoiceInscriptionComponent(word_id="w").prompt_fragments(target_ctx(unknown_spell)) == (
+        "Voice inscription nearby: bolt.",
     )
 
     fossil = entity("fossil", FossilFragmentComponent())

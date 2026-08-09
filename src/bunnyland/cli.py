@@ -282,7 +282,9 @@ def _load_serve_plugins(args) -> tuple[list, list, PluginRuntimeContext]:
     try:
         plugins = select_plugins(
             args.plugin,
-            extra_enabled_ids=(MCP,) if args.mcp else (),
+            extra_enabled_ids=(
+                ((MCP,) if args.mcp else ()) + tuple(args.extra_plugin or ())
+            ),
             starter_pack=args.starter_pack or os.environ.get("BUNNYLAND_STARTER_PACK") or None,
         )
         ordered_plugins = resolve_order(plugins)
@@ -1051,7 +1053,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
 
     migrate_world = sub.add_parser(
-        "migrate-world", help="convert a schema-v1/v2/v3 JSON or YAML world to schema v4"
+        "migrate-world", help="convert an older JSON or YAML world to schema v5"
     )
     migrate_world.add_argument("source", help="source world; never modified")
     migrate_world.add_argument("dest", help="destination JSON or YAML world")
@@ -1131,6 +1133,12 @@ def main(argv: list[str] | None = None) -> int:
     serve = sub.add_parser("serve", help="generate a world and run the game loop")
     serve.add_argument("--config", default=None, help="read server settings from YAML")
     serve.add_argument("--plugin", action="append", default=None, help="enable a plugin id")
+    serve.add_argument(
+        "--extra-plugin",
+        action="append",
+        default=None,
+        help="enable a plugin in addition to the default or explicit plugin set",
+    )
     serve.add_argument(
         "--starter-pack",
         choices=tuple(sorted(STARTER_PACKS)),
@@ -1484,7 +1492,7 @@ def main(argv: list[str] | None = None) -> int:
             driver.save_snapshot(migrated, dest)
         else:
             dest.write_text(json.dumps(migrated, indent=2) + "\n")
-        print(f"Migrated {source} -> {dest} (schema v4).")
+        print(f"Migrated {source} -> {dest} (schema v5).")
         return 0
 
     if args.command == "recovery-manifest":

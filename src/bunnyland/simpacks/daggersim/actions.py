@@ -46,7 +46,8 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         cost=FOCUS_COST,
         description=(
             "Set out from your current travel hub toward a distant destination, starting a "
-            "timed journey along a known route. Both ends must be travel hubs linked by a route."
+            "timed journey along a known route. Both ends must be travel hubs linked by a route, "
+            "and starting the journey consumes one unit of travel supplies from your inventory."
         ),
     ),
     define_action(
@@ -224,8 +225,8 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ("quantity",),
         tool_name="buy_travel_supplies",
         description=(
-            "Buy a stock of travel supplies and add them to your inventory to sustain you on "
-            "the road. Choose how many units to purchase."
+            "Buy travel supplies and add them to your inventory stack to sustain you on the "
+            "road. Choose how many units to add."
         ),
     ),
     define_action(

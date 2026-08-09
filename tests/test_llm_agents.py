@@ -174,6 +174,16 @@ def test_prompt_event_summaries_keep_observations_and_action_outcomes_only():
             "Your move action was rejected: That way is blocked.",
         ),
         (
+            CommandRejectedEvent(
+                **prompt_event_base("internal-rejection"),
+                command_id="command-internal",
+                command_type="move",
+                reason="mutation failed: internal invariant",
+                character_actionable=False,
+            ),
+            None,
+        ),
+        (
             CommandExecutedEvent(
                 **prompt_event_base("executed"),
                 command_id="command-2",

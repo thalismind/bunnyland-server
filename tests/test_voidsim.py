@@ -13,6 +13,7 @@ from bunnyland.core import (
     Lane,
     MutationError,
     MutationPlan,
+    StudiedBy,
     build_submitted_command,
     container_of,
     execute_mutation_plan,
@@ -602,10 +603,13 @@ def test_voidsim_parity_handlers_mutate_state_directly():
     assert entity(drone_id).get_component(DroneComponent).assigned_task == "patch"
     assert entity(ai_id).get_component(ShipAIComponent).hacked is True
     assert entity(data_id).get_component(DataSalvageComponent).encrypted is False
-    assert (
-        str(scenario.character)
-        in entity(sample_id).get_component(XenobiologySampleComponent).studied_by
+    assert entity(sample_id).has_relationship(StudiedBy, scenario.character)
+    duplicate_study = execute_handler(
+        StudyXenobiologyHandler(),
+        ctx,
+        _handler_cmd(scenario, "study-xenobiology", sample_id=str(sample_id)),
     )
+    assert duplicate_study.reason == "sample already studied"
     assert entity(protocol_id).get_component(TradeProtocolComponent).accepted is True
     assert entity(emergency_id).get_component(EmergencyComponent).resolved is True
     assert entity(reactor_id).get_component(ReactorComponent).stability == 50
@@ -1949,9 +1953,10 @@ def test_voidsim_component_prompt_fragments_cover_module_and_target_state():
         scenario,
         [
             IdentityComponent(name="alien idol", kind="artifact"),
-            AlienArtifactComponent(studied_by=(str(character.id),)),
+            AlienArtifactComponent(),
         ],
     )
+    world.get_entity(artifact_id).add_relationship(StudiedBy(), character.id)
 
     room_ctx = ComponentPromptContext.for_entity(world, room, room=room)
     target_ctx = ComponentPromptContext.for_entity(
@@ -2036,7 +2041,7 @@ def test_voidsim_component_prompt_fragments_cover_alternate_branches():
     inactive_quarantine, inactive_quarantine_ctx = room_entity(
         "sample", "sample", QuarantineComponent(active=False)
     )
-    artifact, artifact_ctx = room_entity("idol", "artifact", AlienArtifactComponent(studied_by=()))
+    artifact, artifact_ctx = room_entity("idol", "artifact", AlienArtifactComponent())
 
     assert source.get_component(ChaosInfluenceComponent).prompt_fragments(source_ctx) == (
         "Chaos source warp crack: warp crack (1/hour).",
@@ -2079,10 +2084,11 @@ def test_voidsim_component_prompt_fragments_cover_alternate_branches():
             scenario,
             [
                 IdentityComponent(name="tablet", kind="artifact"),
-                AlienArtifactComponent(studied_by=(str(character.id),)),
+                AlienArtifactComponent(),
             ],
         )
     )
+    studied_artifact.add_relationship(StudiedBy(), character.id)
     assert (
         studied_artifact.get_component(AlienArtifactComponent).prompt_fragments(
             ComponentPromptContext.for_entity(
@@ -3179,9 +3185,9 @@ async def test_alien_contact_translation_quarantine_diplomacy_and_artifact_study
 
     await scenario.actor.submit(_cmd(scenario, "study-alien-artifact", artifact_id=str(artifact)))
     await scenario.actor.tick(HOUR)
-    assert scenario.actor.world.get_entity(artifact).get_component(
-        AlienArtifactComponent
-    ).studied_by == (str(scenario.character),)
+    assert scenario.actor.world.get_entity(artifact).has_relationship(
+        StudiedBy, scenario.character
+    )
     assert studied[0].insight == "harmony map"
 
     fragments = voidsim_fragments(
@@ -3859,8 +3865,11 @@ def test_alien_handlers_reject_already_done_state():
         scenario,
         [
             IdentityComponent(name="idol", kind="artifact"),
-            AlienArtifactComponent(studied_by=(character,)),
+            AlienArtifactComponent(),
         ],
+    )
+    scenario.actor.world.get_entity(artifact).add_relationship(
+        StudiedBy(), scenario.character
     )
     assert (
         execute_handler(

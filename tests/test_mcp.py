@@ -825,6 +825,13 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
 
             return decorate
 
+        def list_tools(self):
+            def decorate(func):
+                registered_low_server["list_tools"] = func
+                return func
+
+            return decorate
+
     class FakeFastMCP:
         def __init__(self, *args, **kwargs):
             captured["args"] = args
@@ -854,6 +861,9 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
 
         def get_context(self):
             return context_holder["ctx"]
+
+        async def list_tools(self):
+            return [SimpleNamespace(name=name) for name in registered_tools]
 
         def streamable_http_app(self):
             async def asgi_app(scope, receive, send):
@@ -897,6 +907,7 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
         scenario.actor,
         plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
         imagegen=imagegen,
+        admin_client_ids=["approved-admin"],
     )
 
     paths = {route.path for route in app.routes}
@@ -911,6 +922,12 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     assert "play_send_command" in registered_tools
     assert "play_get_projection" in registered_tools
     assert "admin_patch_world" in registered_tools
+    context_holder["ctx"].request_context.request.headers[CLIENT_ID_HEADER] = "approved-admin"
+    admin_listing = asyncio.run(registered_low_server["list_tools"]())
+    assert any(tool.name.startswith("admin_") for tool in admin_listing)
+    context_holder["ctx"] = _authenticated_mcp_context()
+    denied_admin_listing = asyncio.run(registered_low_server["list_tools"]())
+    assert all(not tool.name.startswith("admin_") for tool in denied_admin_listing)
     assert "bunnyland://v1/features" in registered_resources
     assert "bunnyland://v1/catalog" in registered_resources
     assert "bunnyland://v1/characters" in registered_resources
@@ -927,6 +944,9 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     # Resource subscriptions honor the declared scope: a play-only session cannot subscribe
     # to an admin resource URI and receive its change-timing notifications.
     context_holder["ctx"] = _authenticated_mcp_context(scopes=frozenset({WORLD_PLAY_SCOPE}))
+    play_listing = asyncio.run(registered_low_server["list_tools"]())
+    assert any(tool.name.startswith("play_") for tool in play_listing)
+    assert all(not tool.name.startswith("admin_") for tool in play_listing)
     with pytest.raises(RuntimeError, match="scope required"):
         asyncio.run(
             registered_low_server["subscribe_resource"](AnyUrl("bunnyland://v1/admin/world"))
@@ -936,6 +956,7 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     with pytest.raises(RuntimeError, match="client is not controlling"):
         registered_tools["play_get_projection"](client_id="missing")
 
+    context_holder["ctx"].request_context.request.headers[CLIENT_ID_HEADER] = "approved-admin"
     admin_patch_world = registered_tools["admin_patch_world"]
     assert list(inspect.signature(admin_patch_world).parameters) == ["operations"]
     patched = asyncio.run(admin_patch_world(operations=[]))
@@ -2145,6 +2166,11 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
                 init = await session.initialize()
                 assert init.capabilities.resources is not None
                 assert init.capabilities.resources.subscribe is True
+                listed_tools = await session.list_tools()
+                assert any(tool.name.startswith("play_") for tool in listed_tools.tools)
+                assert all(
+                    not tool.name.startswith("admin_") for tool in listed_tools.tools
+                )
 
                 admin_result = await session.call_tool("admin_world_overview", {})
                 assert admin_result.isError is True
@@ -2233,6 +2259,10 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
                 async with read_stream, write_stream:
                     async with ClientSession(read_stream, write_stream) as session:
                         await session.initialize()
+                        listed_tools = await session.list_tools()
+                        assert any(
+                            tool.name.startswith("admin_") for tool in listed_tools.tools
+                        )
                         characters = await session.call_tool("play_list_characters", {})
                         overview = await session.call_tool("admin_world_overview", {})
                         assert characters.isError is False

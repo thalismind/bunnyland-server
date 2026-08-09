@@ -87,7 +87,7 @@ class KnowsGossip(Edge):
 
 @dataclass(frozen=True)
 class ObligationComponent(Component):
-    """A promise, request, offer, threat, debt, or agreement tracked as state."""
+    """A promise, accepted request or offer, threat, debt, or agreement tracked as state."""
 
     kind: str
     text: str
@@ -129,6 +129,7 @@ _GOSSIP_RELAY_CEILING = 0.9
 _GOSSIP_PROMPT_LIMIT = 5
 _OBLIGATION_PROMPT_LIMIT = 5
 _OBLIGATION_INTENTS = frozenset({"offer", "promise", "request", "threat"})
+_SPEECH_OBLIGATION_INTENTS = _OBLIGATION_INTENTS - {"request"}
 _OBLIGATION_RESOLUTIONS = frozenset({"fulfilled", "failed", "canceled"})
 
 # How the speaker's bond toward a listener shifts, by speech intent (spec 14.2).
@@ -572,7 +573,10 @@ class RelationshipReactor:
 
 
 class ObligationReactor:
-    """Projects promise/request/offer/threat speech into explicit obligation state."""
+    """Projects self-binding speech into explicit obligation state.
+
+    Requests remain social events unless the requested character separately accepts them.
+    """
 
     def __init__(self, world: World) -> None:
         self.world = world
@@ -583,7 +587,7 @@ class ObligationReactor:
 
     def _on_speech(self, event: SpeechSaidEvent | SpeechToldEvent) -> None:
         intent = event.final_interpretation or "neutral"
-        if intent not in _OBLIGATION_INTENTS:
+        if intent not in _SPEECH_OBLIGATION_INTENTS:
             return
         speaker_id = parse_entity_id(event.actor_id) if event.actor_id else None
         if speaker_id is None or not self.world.has_entity(speaker_id):
@@ -592,16 +596,12 @@ class ObligationReactor:
             target_id = parse_entity_id(raw_target_id)
             if target_id is None or target_id == speaker_id or not self.world.has_entity(target_id):
                 continue
-            if intent == "request":
-                debtor_id, creditor_id = target_id, speaker_id
-            else:
-                debtor_id, creditor_id = speaker_id, target_id
             create_obligation(
                 self.world,
                 kind=intent,
                 text=event.text,
-                debtor_id=debtor_id,
-                creditor_id=creditor_id,
+                debtor_id=speaker_id,
+                creditor_id=target_id,
                 source_event_id=event.event_id,
                 created_at_epoch=event.world_epoch,
             )

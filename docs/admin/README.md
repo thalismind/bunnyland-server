@@ -1,5 +1,16 @@
 # Admin & controllers
 
+## Community server setup
+
+Start with the [server setup overview](server-setup.md). Its ordered public-host sequence
+covers installation, configuration, authentication, same-origin TLS hosting, worlds and
+persistence, LLM controllers, Discord, MCP, image generation, and recovery operations.
+
+The sequence is written for community self-hosters. It uses native local operation first,
+then `systemd` and nginx; published containers are an alternative packaging path. The retired
+generic VPS installer and Bunnyland's internal release operations are intentionally outside
+the guide.
+
 Use the deployed web `moderation.html` tool for audited kick, suspend, ban, lift, identity
 status, and history workflows. It requires `world:admin`.
 
@@ -98,6 +109,7 @@ behaviour is added by **plugins**; the builtins are:
 |-------------------------|---------------------------------------------------------------|
 | `bunnyland.core_verbs`  | move, take, put, use, write, rest/sleep/wake/wait, say, tell, threaded conversations |
 | `bunnyland.checkpoints` | opt-in save/reload checkpoint objects and verbs; see [checkpoint world building](checkpoint-world-building.md) |
+| `bunnyland.world_health` | opt-in collection-time structural, controller, claim, and command-queue health metrics |
 | `bunnyland.lifesim`     | daily needs, eat/drink, self-care, homes, work, family, aging |
 | `bunnyland.memory`      | take-note / remember (private, focus-lane)                    |
 | `bunnyland.worldgen`    | the `oneshot` and `recursive` world generators                |
@@ -266,5 +278,5 @@ high-salience events, and voice drift before any human or model-based quality re
 For external dashboards, the engine can also export OpenTelemetry metrics (world counts,
 tick cadence, command accept/reject rates, LLM token usage) and traces (tick → command →
 handler, controller → agent decision). It is off by default; see the
-[OpenTelemetry section](running-a-server.md#observability-opentelemetry) of the
-running-a-server guide for the `otel` extra and the `BUNNYLAND_OTEL_ENABLED` gate.
+[OpenTelemetry section](backups-upgrades-observability.md#optional-opentelemetry) of the
+operations guide for the `otel` extra and the `BUNNYLAND_OTEL_ENABLED` gate.

@@ -51,11 +51,11 @@ ownership rules do not change during 1.x.
 
 ## Persisted worlds
 
-Every 1.x release must import schema-v1, schema-v2, schema-v3, and schema-v4 JSON and YAML
+Every 1.x release must import schema-v1 through schema-v5 JSON and YAML
 worlds. Migration is one-way in memory; loading an old save does not rewrite it, and the
 next explicit save writes the current schema. `tests/fixtures/migrations/` is the checked-in
 golden corpus. Package CI runs that corpus using the newly installed wheel and source
 distribution, so a source-tree fallback cannot hide a broken release artifact.
 
-Support for a future schema-v5 may be added during 1.x only if schema-v1 through schema-v4
+Support for a future schema-v6 may be added during 1.x only if schema-v1 through schema-v5
 imports remain intact. Removing an old migration requires 2.x.

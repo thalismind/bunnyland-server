@@ -40,7 +40,7 @@ from ...core.ecs import (
 from ...core.ecs import (
     room_id_for as _room_id,
 )
-from ...core.edges import ContainmentMode, Contains, ExitTo
+from ...core.edges import ContainmentMode, Contains, ExitTo, StudiedBy
 from ...core.events import DomainEvent, EventVisibility
 from ...core.events import event_base as _event_base
 from ...core.handlers import HandlerContext, HandlerResult, planned, rejected
@@ -198,11 +198,6 @@ class ImprintedBy(Edge):
 
 @dataclass(frozen=True)
 class CaredForBy(Edge):
-    pass
-
-
-@dataclass(frozen=True)
-class StudiedBy(Edge):
     pass
 
 
@@ -4454,7 +4449,8 @@ def validate_dinosim_relationships(
         InspectedBy: EggInspectionComponent,
         ImprintedBy: ImprintComponent,
         CaredForBy: JuvenileCareComponent,
-        StudiedBy: WaterStudyComponent,
+        # StudiedBy is a shared core edge used by several simulation packs. Dinosim owns
+        # WaterStudyComponent, but cannot impose that source type on the other packs.
         BroodedBy: (IncubationComponent, BroodingComponent),
         TrackedAt: TrackComponent,
         MarkedBy: TerritoryComponent,

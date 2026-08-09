@@ -8,7 +8,7 @@ from bunnyland.core import spawn_entity
 from bunnyland.core.components import DescriptionComponent, IdentityComponent
 from bunnyland.core.ecs import container_of
 from bunnyland.core.events import DomainEvent
-from bunnyland.foundation.history.mechanics import record_world_history
+from bunnyland.foundation.history.mechanics import HistoryLocation, record_world_history
 from bunnyland.imagegen.components import (
     EventImageComponent,
     ImageRequestComponent,
@@ -158,6 +158,7 @@ def test_subject_for_event_non_room_location():
         created_at_epoch=0,
         location_id=str(scenario.character),
     )
+    record.add_relationship(HistoryLocation(), scenario.character)
     text = subject_for_event(world, record)
     assert "An odd event" in text
     assert "in " not in text  # the location is not a room, so no room title

@@ -25,6 +25,7 @@ from bunnyland.core import (
     CommandCost,
     Lane,
     OnInsufficientPoints,
+    WorldActor,
     build_submitted_command,
     spawn_entity,
 )
@@ -86,6 +87,23 @@ def test_init_is_a_no_op_when_disabled(monkeypatch):
     assert telemetry.enabled() is False
     # A second init is idempotent and still a no-op.
     assert telemetry.init_telemetry() is False
+
+
+@pytest.mark.parametrize("value", ["invalid", "nan", "inf", "-1"])
+def test_world_audit_rejects_invalid_orphan_grace(monkeypatch, value):
+    monkeypatch.setenv("BUNNYLAND_OTEL_WORLD_AUDIT_ENABLED", "true")
+    monkeypatch.setenv("BUNNYLAND_OTEL_ORPHAN_GRACE_SECONDS", value)
+    with pytest.raises(
+        ValueError,
+        match="BUNNYLAND_OTEL_ORPHAN_GRACE_SECONDS must be a finite nonnegative number",
+    ):
+        telemetry._world_audit_config()
+
+
+def test_disabled_world_audit_ignores_invalid_grace(monkeypatch):
+    monkeypatch.delenv("BUNNYLAND_OTEL_WORLD_AUDIT_ENABLED", raising=False)
+    monkeypatch.setenv("BUNNYLAND_OTEL_ORPHAN_GRACE_SECONDS", "invalid")
+    assert telemetry._world_audit_config() == (False, 300.0)
 
 
 def test_otel_import_failure_marks_unavailable_and_no_ops(monkeypatch):
@@ -906,6 +924,115 @@ def test_world_gauges_report_live_counts(otel_capture):
     rooms = points["bunnyland.world.rooms"][0].value
     assert characters == 1
     assert rooms == 2
+    assert "bunnyland.world.entities.orphaned" not in points
+
+
+@pytestmark_otel
+def test_world_health_gauge_collects_only_on_scrape_and_registers_once(otel_capture):
+    _span_exporter, reader = otel_capture
+    scenario = build_scenario()
+    calls: list[WorldActor] = []
+
+    def collect(actor):
+        calls.append(actor)
+        return {
+            ("detached_controller", "warning"): 2,
+            ("invalid_controller_target", "error"): 0,
+        }
+
+    telemetry.register_world_health_gauge(scenario.actor, collect)
+    telemetry.register_world_health_gauge(scenario.actor, collect)
+    assert calls == []
+
+    points = _metric_points(reader)["bunnyland.world.health.issues"]
+    assert calls == [scenario.actor]
+    assert {
+        (point.attributes["check"], point.attributes["severity"]): point.value
+        for point in points
+    } == {
+        ("detached_controller", "warning"): 2,
+        ("invalid_controller_target", "error"): 0,
+    }
+
+
+def test_world_health_registration_and_callback_are_noops_without_telemetry():
+    scenario = build_scenario()
+    calls = []
+    telemetry.reset_for_tests()
+    telemetry.register_world_health_gauge(
+        scenario.actor, lambda actor: calls.append(actor) or {}
+    )
+
+    assert calls == []
+    assert list(telemetry._observe_world_health_issues(None)) == []
+
+
+@pytestmark_otel
+def test_world_audit_gauge_reports_mature_orphans(monkeypatch):
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+
+    monkeypatch.setenv("BUNNYLAND_OTEL_ENABLED", "1")
+    monkeypatch.setenv("BUNNYLAND_OTEL_WORLD_AUDIT_ENABLED", "1")
+    monkeypatch.setenv("BUNNYLAND_OTEL_ORPHAN_GRACE_SECONDS", "0")
+    resource = Resource.create({"service.name": "bunnyland-audit-test"})
+    reader = InMemoryMetricReader()
+    telemetry.reset_for_tests()
+    assert telemetry.init_telemetry(
+        providers=(
+            TracerProvider(resource=resource),
+            MeterProvider(resource=resource, metric_readers=[reader]),
+        )
+    )
+    scenario = build_scenario()
+    spawn_entity(scenario.actor.world)
+    telemetry.register_world_gauges(scenario.actor)
+    telemetry.register_world_gauges(scenario.actor)
+
+    points = _metric_points(reader)
+    assert points["bunnyland.world.entities.orphaned"][0].value == 1
+
+
+def test_orphan_audit_tracks_grace_state_relationships_and_deletion():
+    from bunnyland.core import Contains, IdentityComponent
+
+    scenario = build_scenario()
+    world = scenario.actor.world
+    blank = spawn_entity(world)
+    component_bearing = spawn_entity(
+        world, [IdentityComponent(name="stateful", kind="object")]
+    )
+    incoming_only = spawn_entity(world)
+    outgoing_only = spawn_entity(world)
+    room = world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(), incoming_only.id)
+    outgoing_only.add_relationship(Contains(), scenario.room_a)
+    telemetry._orphan_grace_seconds = 5.0
+
+    assert telemetry._orphaned_entity_count(world, now=10.0) == 0
+    assert telemetry._orphaned_entity_count(world, now=15.0) == 1
+
+    blank.add_component(IdentityComponent(name="claimed", kind="object"))
+    assert telemetry._orphaned_entity_count(world, now=16.0) == 0
+    blank.remove_component(IdentityComponent)
+    assert telemetry._orphaned_entity_count(world, now=20.0) == 0
+    assert telemetry._orphaned_entity_count(world, now=25.0) == 1
+
+    room.remove_relationship(Contains, incoming_only.id)
+    outgoing_only.remove_relationship(Contains, scenario.room_a)
+    assert telemetry._orphaned_entity_count(world, now=26.0) == 1
+    assert telemetry._orphaned_entity_count(world, now=31.0) == 3
+
+    world.remove(blank)
+    assert telemetry._orphaned_entity_count(world, now=32.0) == 2
+    assert blank.id not in telemetry._orphan_candidates
+    assert component_bearing.id not in telemetry._orphan_candidates
+
+
+def test_orphan_audit_observer_has_no_value_before_world_registration():
+    assert list(telemetry._observe_orphaned_entities(None)) == []
 
 
 @pytestmark_otel
@@ -1072,11 +1199,16 @@ def test_event_stream_emits_connection_loss_and_projection_metrics(otel_capture)
 
 @pytestmark_otel
 def test_prometheus_exporter_serves_private_metrics(monkeypatch, tmp_path):
+    from bunnyland.plugins import apply_plugin
+    from bunnyland.world_health.plugin import plugin as world_health_plugin
+
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
 
     monkeypatch.setenv("BUNNYLAND_OTEL_ENABLED", "1")
+    monkeypatch.setenv("BUNNYLAND_OTEL_WORLD_AUDIT_ENABLED", "1")
+    monkeypatch.setenv("BUNNYLAND_OTEL_ORPHAN_GRACE_SECONDS", "0")
     monkeypatch.setenv("BUNNYLAND_OTEL_TRACE_FILE", str(tmp_path / "trace.jsonl"))
     monkeypatch.setenv("OTEL_METRICS_EXPORTER", "prometheus")
     monkeypatch.setenv("OTEL_EXPORTER_PROMETHEUS_HOST", "127.0.0.1")
@@ -1084,10 +1216,17 @@ def test_prometheus_exporter_serves_private_metrics(monkeypatch, tmp_path):
     telemetry.reset_for_tests()
     assert telemetry.init_telemetry() is True
     telemetry.record_prompt_characters(42, {"controller_kind": "llm"})
+    scenario = build_scenario()
+    spawn_entity(scenario.actor.world)
+    telemetry.register_world_gauges(scenario.actor)
+    apply_plugin(world_health_plugin(), scenario.actor)
 
     response = httpx.get(f"http://127.0.0.1:{port}/metrics")
     assert response.status_code == 200
     assert "bunnyland_prompt_characters" in response.text
+    assert "bunnyland_world_entities_orphaned" in response.text
+    assert "bunnyland_world_health_issues" in response.text
+    assert 'check="detached_controller"' in response.text
     assert 'controller_kind="llm"' in response.text
     assert "character.id" not in response.text
 

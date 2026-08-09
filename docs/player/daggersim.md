@@ -35,8 +35,9 @@ Plan travel to a known travel hub:
 !plan-travel destination_id="North Tunnel"
 ```
 
-Travel starts immediately and completes after its route duration. Until it completes, your
-character is still subject to normal world time.
+Travel starts immediately, consumes one unit of travel supplies from your direct inventory,
+and completes after its route duration. Invalid destinations and unavailable routes do not
+consume supplies. Until travel completes, your character is still subject to normal world time.
 
 ## Institutions, services, and generated work
 
@@ -259,6 +260,9 @@ Use lodging, camping, supplies, and interruptions while traveling:
 !buy-travel-supplies quantity=3
 !resolve-travel-interruption interruption_id="washed out bridge"
 ```
+
+Travel-supply purchases add units to one inventory stack. Existing duplicate stacks are
+combined automatically when you buy supplies or start a journey.
 
 Magic services can make potions, recharge enchanted items, and identify ingredients:
 
