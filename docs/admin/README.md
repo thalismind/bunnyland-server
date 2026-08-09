@@ -9,6 +9,10 @@ The hosted sandbox's concise player rules, privacy/retention notice, model-provi
 disclosure, security contact, and solo-operator powers are in the
 [controlled preview policy](preview-sandbox-policy.md).
 
+For hand-authored settings, start with the [world-building guide series](world-building.md).
+It develops one example from premise, regions, rooms, characters, and items through quests,
+relationships, obligations, scripts, memories, routines, and autonomous LLM characters.
+
 ## Controllers
 
 A **character** is a persistent entity. Who acts for it is a separate, swappable
