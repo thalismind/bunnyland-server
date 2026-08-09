@@ -11,11 +11,11 @@
 - Status: temporary launch exception
 
 Bunnyland retains ChromaDB because removing it would break the required memory backend. The
-exception applies only to the embedded `PersistentClient` and `EphemeralClient` use in the
-server process. Bunnyland does not run or expose a Chroma HTTP server, does not enable
-`trust_remote_code`, and accepts collection selection only from ECS memory profiles created
-by Bunnyland. Player-provided shared collection values must match those registered on the
-profile.
+exception applies only to the immutable server image digest recorded in
+`.scanner-exceptions.yaml` and its embedded `PersistentClient` and `EphemeralClient` use.
+Bunnyland does not run or expose a Chroma HTTP server, does not enable `trust_remote_code`,
+and accepts collection selection only from ECS memory profiles created by Bunnyland.
+Player-provided shared collection values must match those registered on the profile.
 
 Every weekly review must update `last_reviewed_at` in `.scanner-exceptions.yaml`, confirm
 the matching `.grype.yaml` rule and guard test still pass, check for an upstream fix, and

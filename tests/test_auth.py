@@ -992,8 +992,12 @@ async def test_auth_metadata_rotation_delivery_and_failure_rate_limit(tmp_path) 
 @pytest.mark.asyncio
 async def test_login_limits_ip_spraying_and_distributed_username_attempts(tmp_path) -> None:
     class RejectingCredentials:
+        def __init__(self) -> None:
+            self.calls = 0
+
         async def authenticate(self, username: str, password: str):
             del username, password
+            self.calls += 1
             return None
 
     async def login(client, username: str, address: str):
@@ -1018,10 +1022,11 @@ async def test_login_limits_ip_spraying_and_distributed_username_attempts(tmp_pa
     tokens.close()
 
     tokens = TokenStore(tmp_path / "distributed.sqlite3")
+    distributed_credentials = RejectingCredentials()
     app = create_app(
         build_scenario().actor,
         token_store=tokens,
-        user_credentials=RejectingCredentials(),
+        user_credentials=distributed_credentials,
     )
     for index in range(20):
         async with httpx.AsyncClient(
@@ -1035,6 +1040,7 @@ async def test_login_limits_ip_spraying_and_distributed_username_attempts(tmp_pa
     ) as client:
         assert (await login(client, " target ", "ignored")).status_code == 401
         assert (await login(client, " TARGET ", "ignored")).status_code == 429
+    assert distributed_credentials.calls == 21
     tokens.close()
 
 
