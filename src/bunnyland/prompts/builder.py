@@ -8,6 +8,7 @@ stays free of mechanic-specific phrasing (spec 16.3).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -42,6 +43,7 @@ from .facts import (
 
 # A fragment provider returns extra status lines for a character (e.g. needs).
 FragmentProvider = Callable[[World, Entity], Sequence[PromptFactLike]]
+LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -188,19 +190,13 @@ class PromptBuilder:
             if character.has_component(AffectComponent)
             else ()
         )
-        condition_facts = collect_prompt_facts(
-            self.world,
-            character,
-            self.fragment_providers,
-            cutoff=detail_cutoff,
+        condition_facts = self._collect_prompt_facts(
+            character, self.fragment_providers, cutoff=detail_cutoff
         )
         conditions = [fact.text for fact in condition_facts]
         persona = self._persona_facts(character, identity)
-        persona_facts = collect_prompt_facts(
-            self.world,
-            character,
-            self.persona_providers,
-            cutoff=detail_cutoff,
+        persona_facts = self._collect_prompt_facts(
+            character, self.persona_providers, cutoff=detail_cutoff
         )
         persona.extend(fact.text for fact in persona_facts)
 
@@ -252,6 +248,45 @@ class PromptBuilder:
             recall=recall,
             commands=commands,
         )
+
+    def _collect_prompt_facts(
+        self,
+        character: Entity,
+        providers: Sequence[FragmentProvider],
+        *,
+        cutoff: int,
+    ) -> tuple[PromptFact, ...]:
+        """Collect prompt facts while keeping provider defects out of character context."""
+
+        # Preserve cutoff validation even when no providers are registered.
+        collect_prompt_facts(self.world, character, (), cutoff=cutoff)
+        collected: list[PromptFact] = []
+        seen: set[str] = set()
+        for provider in providers:
+            provider_name = (
+                f"{getattr(provider, '__module__', type(provider).__module__)}."
+                f"{getattr(provider, '__qualname__', type(provider).__qualname__)}"
+            )
+            try:
+                facts = collect_prompt_facts(
+                    self.world,
+                    character,
+                    (provider,),
+                    cutoff=cutoff,
+                )
+                duplicate = next((fact.key for fact in facts if fact.key in seen), None)
+                if duplicate is not None:
+                    raise ValueError(f"duplicate prompt fact key {duplicate!r}")
+            except Exception:  # noqa: BLE001 - a broken plugin must not replace the prompt.
+                LOG.exception(
+                    "prompt fact provider %s failed for character %s; omitting its facts",
+                    provider_name,
+                    character.id,
+                )
+                continue
+            collected.extend(facts)
+            seen.update(fact.key for fact in facts)
+        return tuple(collected)
 
     # -- helpers -----------------------------------------------------------------------
 

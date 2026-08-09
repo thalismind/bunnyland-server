@@ -1155,8 +1155,17 @@ class WorldActor:
                         ),
                     )
                 except Exception as exc:  # noqa: BLE001 - transaction rejects atomically.
+                    LOG.exception(
+                        "command %s mutation failed for character %s",
+                        command.command_id,
+                        character_id,
+                    )
                     self.queues.pop(character_id, lane)
-                    await self._reject(command, f"mutation failed: {exc}")
+                    await self._reject(
+                        command,
+                        f"mutation failed: {exc}",
+                        character_actionable=False,
+                    )
                     return _LaneOutcome(executed=False, stop_lane=False)
                 deferred_events, transaction_point_events = built
                 result = replace(
@@ -1467,7 +1476,13 @@ class WorldActor:
     async def _publish(self, event: DomainEvent) -> None:
         await self.bus.publish(event)
 
-    async def _reject(self, command: SubmittedCommand, reason: str) -> None:
+    async def _reject(
+        self,
+        command: SubmittedCommand,
+        reason: str,
+        *,
+        character_actionable: bool = True,
+    ) -> None:
         telemetry.record_command_rejected(command.command_type, reason)
         # Annotate the enclosing command.attempt span with why the command failed.
         telemetry.set_span_attributes(
@@ -1483,6 +1498,7 @@ class WorldActor:
                 command_id=command.command_id,
                 command_type=command.command_type,
                 reason=reason,
+                character_actionable=character_actionable,
             )
         )
         await self._publish(event)

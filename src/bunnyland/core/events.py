@@ -15,12 +15,23 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, TypeVar
+from typing import TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .components import GenerationIntentComponent
+
+type EventValue = (
+    None
+    | bool
+    | int
+    | float
+    | str
+    | tuple["EventValue", ...]
+    | list["EventValue"]
+    | dict[str, "EventValue"]
+)
 
 
 class EventVisibility(StrEnum):
@@ -48,7 +59,7 @@ class DomainEvent(BaseModel):
 
 
 def serialized_event_visible_to(
-    event: Mapping[str, Any],
+    event: Mapping[str, object],
     *,
     character_id: str,
     room_of: Callable[[str], str | None],
@@ -62,7 +73,8 @@ def serialized_event_visible_to(
     if not character_id:
         return False
     actor_id = event.get("actor_id")
-    targets = event.get("target_ids") or ()
+    raw_targets = event.get("target_ids")
+    targets = raw_targets if isinstance(raw_targets, (list, tuple, set, frozenset)) else ()
     if actor_id == character_id:
         return True
     if character_id in targets:
@@ -73,7 +85,13 @@ def serialized_event_visible_to(
     if visibility == EventVisibility.ROOM.value:
         return bool(event.get("room_id")) and event.get("room_id") == room_of(character_id)
     if visibility == EventVisibility.DIRECTED.value:
-        return character_id in (event.get("overhearer_ids") or ())
+        raw_overhearers = event.get("overhearer_ids")
+        overhearers = (
+            raw_overhearers
+            if isinstance(raw_overhearers, (list, tuple, set, frozenset))
+            else ()
+        )
+        return character_id in overhearers
     return False
 
 
@@ -81,10 +99,10 @@ def event_base(
     epoch: int,
     *,
     default_visibility: EventVisibility | None = None,
-    **kwargs: Any,
-) -> dict[str, Any]:
+    **kwargs: object,
+) -> dict[str, object]:
     """Create the common deterministic event payload fields."""
-    base: dict[str, Any] = {
+    base: dict[str, object] = {
         "event_id": uuid4().hex,
         "world_epoch": epoch,
         "created_at": datetime.now(UTC),
@@ -114,6 +132,7 @@ class CommandRejectedEvent(DomainEvent):
     command_id: str
     command_type: str
     reason: str
+    character_actionable: bool = True
 
 
 class CommandQueuedEvent(DomainEvent):
@@ -131,8 +150,8 @@ class CommandCancelledEvent(DomainEvent):
 class CommandExecutedEvent(DomainEvent):
     command_id: str
     command_type: str
-    payload: dict[str, Any] = Field(default_factory=dict)
-    result_events: tuple[dict[str, Any], ...] = ()
+    payload: dict[str, EventValue] = Field(default_factory=dict)
+    result_events: tuple[dict[str, EventValue], ...] = ()
 
 
 class CommandExpiredEvent(DomainEvent):

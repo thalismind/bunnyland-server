@@ -204,6 +204,32 @@ def test_fact_collection_enforces_viewer_awareness_and_global_key_uniqueness():
             collect_prompt_facts(None, entity, [], cutoff=invalid)
 
 
+def test_prompt_builder_logs_and_omits_failed_fact_provider(caplog):
+    scenario = build_scenario()
+
+    def broken_provider(_world, _entity):
+        raise RuntimeError("operator-only component failure")
+
+    def healthy_provider(_world, _entity):
+        return [PromptFact(key="test.healthy", text="A useful condition.")]
+
+    def duplicate_provider(_world, _entity):
+        return [PromptFact(key="test.healthy", text="Conflicting condition.")]
+
+    builder = PromptBuilder(
+        scenario.actor.world,
+        fragment_providers=(broken_provider, healthy_provider, duplicate_provider),
+    )
+    context = builder.build(scenario.character)
+    prompt = render_prompt(context)
+
+    assert context.conditions == ("A useful condition.",)
+    assert "operator-only component failure" not in prompt
+    assert "Conflicting condition" not in prompt
+    assert "failed for character" in caplog.text
+    assert "duplicate prompt fact key" in caplog.text
+
+
 def test_component_prompt_context_validates_detail_scores():
     scenario = build_scenario()
     character = scenario.actor.world.get_entity(scenario.character)
