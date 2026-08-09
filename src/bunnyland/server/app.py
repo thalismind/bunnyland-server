@@ -2429,6 +2429,12 @@ def create_app(
         request: Request,
         client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> JobResource:
+        if character_chat is None:
+            raise HTTPException(
+                status_code=404,
+                detail="character chat is not enabled",
+                headers={"X-Bunnyland-Problem-Code": "chat_disabled"},
+            )
         parsed = parse_entity_id(character_id)
         if parsed is None or not actor.world.has_entity(parsed):
             raise HTTPException(status_code=404, detail="character does not exist")
@@ -2442,9 +2448,9 @@ def create_app(
                 status_code=409,
                 detail="unconscious character is not available to chat",
             )
-        if character.has_component(SleepingComponent) and (
-            character_chat is None or not character_chat.allow_sleeping_character_chat
-        ):
+        if character.has_component(
+            SleepingComponent
+        ) and not character_chat.allow_sleeping_character_chat:
             raise HTTPException(
                 status_code=409,
                 detail="sleeping character cannot be interrupted by chat",
@@ -2488,9 +2494,7 @@ def create_app(
         )
         response.headers["Location"] = f"/v1/chat/characters/{character_id}/jobs/{job.id}"
         if controller_kind == "llm":
-            if character_chat is None:
-                _chat_job_failure(character_id, job.id, "character chat is not enabled")
-            elif not open_character_chat:
+            if not open_character_chat:
                 _chat_job_failure(character_id, job.id, "open character chat is disabled")
             else:
                 task = asyncio.create_task(
@@ -2541,6 +2545,12 @@ def create_app(
         request: Request,
         client_id: str = Header(alias=CLIENT_ID_HEADER),
     ) -> JobResource:
+        if character_chat is None:
+            raise HTTPException(
+                status_code=404,
+                detail="character chat is not enabled",
+                headers={"X-Bunnyland-Problem-Code": "chat_disabled"},
+            )
         normalized_client_id = _required_client_id(client_id)
         return _chat_job_for_client(
             job_id, character_id, normalized_client_id, _request_subject(request)

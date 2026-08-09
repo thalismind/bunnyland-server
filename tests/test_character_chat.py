@@ -869,9 +869,9 @@ async def test_character_chat_status_and_disabled_route():
             f"/v1/chat/characters/{scenario.character}/jobs",
             json={"kind": "chat", "message": "hi"},
         )
-        assert response.status_code == 202
-        assert response.json()["status"] == "failed"
-    assert response.json()["failure"]["detail"] == "character chat is not enabled"
+        assert response.status_code == 404
+        assert response.json()["code"] == "chat_disabled"
+    assert response.json()["detail"] == "character chat is not enabled"
 
 
 @pytest.mark.asyncio
@@ -1178,7 +1178,18 @@ async def test_character_chat_job_fails_after_pending_action_timeout(monkeypatch
 @pytest.mark.asyncio
 async def test_character_chat_requires_client_and_supported_controller():
     scenario = build_scenario()
-    app = create_app(scenario.actor, allow_unauthenticated_embedding=True)
+
+    class Service:
+        allow_sleeping_character_chat = False
+
+        async def chat(self, _character_id, _request):
+            raise AssertionError("unsupported controllers must not start character chat")
+
+    app = create_app(
+        scenario.actor,
+        character_chat=Service(),
+        allow_unauthenticated_embedding=True,
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
     ) as client:

@@ -5199,6 +5199,39 @@ def test_v1_chat_job_rate_limited_per_caller(scenario, monkeypatch):
     assert fresh.status_code == 202
 
 
+def test_v1_chat_jobs_fail_closed_without_a_configured_service(scenario, monkeypatch):
+    published = []
+
+    async def capture(event):
+        published.append(event)
+
+    monkeypatch.setattr(scenario.actor.bus, "publish", capture)
+    controller = spawn_entity(
+        scenario.actor.world,
+        [WebControllerComponent(client_id="human-client", label="Human")],
+    )
+    scenario.actor.assign_controller(scenario.character, controller.id)
+    app = create_app(scenario.actor)
+    client = pytest.importorskip("fastapi.testclient").TestClient(app)
+    url = f"/v1/chat/characters/{scenario.character}/jobs"
+    headers = {CLIENT_ID_HEADER: "profile-client"}
+    body = ChatJobRequest(kind="chat", message="hello").model_dump(mode="json")
+
+    submissions = [client.post(url, headers=headers, json=body) for _ in range(12)]
+    invalid_character = client.post(
+        "/v1/chat/characters/not-an-id/jobs", headers=headers, json=body
+    )
+    retrieval = client.get(f"{url}/not-a-job", headers=headers)
+
+    for response in (*submissions, invalid_character, retrieval):
+        assert response.status_code == 404
+        assert response.headers["content-type"].startswith("application/problem+json")
+        assert response.json()["code"] == "chat_disabled"
+        assert response.json()["type"].endswith("/chat_disabled")
+    assert all("location" not in response.headers for response in submissions)
+    assert published == []
+
+
 def test_v1_chat_job_rejects_llm_when_open_chat_disabled(scenario):
     class FakeChat:
         allowed_tools: tuple[str, ...] = ()

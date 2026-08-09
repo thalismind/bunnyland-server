@@ -22,6 +22,7 @@ from fastapi.security import HTTPAuthorizationCredentials, SecurityScopes
 from starlette.requests import Request
 
 import bunnyland.server.auth as auth_module
+from bunnyland.core import DiscordControllerComponent, spawn_entity
 from bunnyland.server import app as server_app
 from bunnyland.server.app import HSTS_VALUE, create_app
 from bunnyland.server.auth import (
@@ -152,13 +153,51 @@ async def test_character_profile_and_chat_routes_enforce_their_own_scopes(tmp_pa
             chat_path,
             headers=headers(chat_token),
             json={"kind": "chat", "message": "hello"},
-        )).status_code == 202
+        )).status_code == 404
         assert (await client.get(profile_path, headers=headers(play_token))).status_code == 200
         assert (await client.post(
             chat_path,
             headers=headers(play_token),
             json={"kind": "chat", "message": "hello"},
-        )).status_code == 202
+        )).status_code == 404
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_character_profile_reveals_controller_identity_only_to_admin(tmp_path) -> None:
+    scenario = build_scenario()
+    controller = spawn_entity(
+        scenario.actor.world,
+        [DiscordControllerComponent(discord_user_id=42, default_channel_id=99)],
+    )
+    scenario.actor.assign_controller(scenario.character, controller.id)
+    store = TokenStore(tmp_path / "tokens.sqlite3")
+    player_token, _ = store.issue("player", [WORLD_PLAY_SCOPE], automatic_rotation=False)
+    admin_token, _ = store.issue("admin", [WORLD_ADMIN_SCOPE], automatic_rotation=False)
+    app = create_app(scenario.actor, token_store=store)
+
+    def headers(token: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {token}", CLIENT_ID_HEADER: "browser-a"}
+
+    path = f"/v1/profile/characters/{scenario.character}"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://testserver"
+    ) as client:
+        player = await client.get(path, headers=headers(player_token))
+        admin = await client.get(path, headers=headers(admin_token))
+
+    assert player.json()["controller"] == {
+        "controller_id": str(controller.id),
+        "generation": scenario.generation + 1,
+        "kind": "discord",
+        "name": "Discord user",
+        "detail": "",
+    }
+    assert admin.json()["controller"] == {
+        **player.json()["controller"],
+        "name": "Discord user 42",
+        "detail": "channel 99",
+    }
     store.close()
 
 
