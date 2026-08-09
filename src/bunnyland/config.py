@@ -59,6 +59,8 @@ class WorldConfig:
     autosave_every: int = 0
     memory_backend: str = "in-memory"
     memory_path: str = ""
+    memory_recall_limit: int = 3
+    memory_recall_min_score: float = 0.35
     controller_definitions: str = ""
     claim_timeout_seconds: int | None = None
     claim_timeout_controllers: tuple[str, ...] = ()
@@ -290,6 +292,8 @@ class BunnylandConfig:
             "load_paused": world.load_paused,
             "memory_backend": world.memory_backend,
             "memory_path": world.memory_path or None,
+            "memory_recall_limit": world.memory_recall_limit,
+            "memory_recall_min_score": world.memory_recall_min_score,
             "save": world.save or None,
             "controller_definitions": world.controller_definitions or None,
             "autosave_every": world.autosave_every,
@@ -372,6 +376,8 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_AUTOSAVE_EVERY", world.autosave_every)
         _set_if(env, "BUNNYLAND_MEMORY_BACKEND", world.memory_backend)
         _set_if(env, "BUNNYLAND_MEMORY_PATH", world.memory_path)
+        _set_if(env, "BUNNYLAND_MEMORY_RECALL_LIMIT", world.memory_recall_limit)
+        _set_if(env, "BUNNYLAND_MEMORY_RECALL_MIN_SCORE", world.memory_recall_min_score)
         _set_if(env, "BUNNYLAND_ENABLE_LLM", llm.enabled)
         _set_if(env, "BUNNYLAND_LLM_PROVIDER", llm.provider)
         _set_if(env, "BUNNYLAND_WORLDGEN_PROVIDER", llm.worldgen_provider or llm.provider)

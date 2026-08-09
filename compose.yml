@@ -30,6 +30,8 @@ services:
           set -- "$$@" --starter-pack "$${BUNNYLAND_STARTER_PACK}"
         fi
         set -- "$$@" --memory-backend "$$memory_backend"
+        set -- "$$@" --memory-recall-limit "$${BUNNYLAND_MEMORY_RECALL_LIMIT:-3}"
+        set -- "$$@" --memory-recall-min-score "$${BUNNYLAND_MEMORY_RECALL_MIN_SCORE:-0.35}"
         if [ -n "$${BUNNYLAND_MEMORY_PATH:-}" ]; then
           set -- "$$@" --memory-path "$${BUNNYLAND_MEMORY_PATH}"
         fi
@@ -53,6 +55,8 @@ services:
       BUNNYLAND_AUTOSAVE_EVERY: ${BUNNYLAND_AUTOSAVE_EVERY:-20}
       BUNNYLAND_MEMORY_BACKEND: ${BUNNYLAND_MEMORY_BACKEND:-in-memory}
       BUNNYLAND_MEMORY_PATH: ${BUNNYLAND_MEMORY_PATH:-}
+      BUNNYLAND_MEMORY_RECALL_LIMIT: ${BUNNYLAND_MEMORY_RECALL_LIMIT:-3}
+      BUNNYLAND_MEMORY_RECALL_MIN_SCORE: ${BUNNYLAND_MEMORY_RECALL_MIN_SCORE:-0.35}
       BUNNYLAND_ENABLE_LLM: ${BUNNYLAND_ENABLE_LLM:-0}
       BUNNYLAND_LLM_PROVIDER: ${BUNNYLAND_LLM_PROVIDER:-ollama}
       BUNNYLAND_WORLDGEN_PROVIDER: ${BUNNYLAND_WORLDGEN_PROVIDER:-}

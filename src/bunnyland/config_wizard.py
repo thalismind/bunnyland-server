@@ -909,6 +909,26 @@ def build_textual_wizard_app(
                             classes="advanced-field",
                         )
                         yield field_label(
+                            "Automatic memory recall limit",
+                            "memory-recall-limit",
+                            advanced=True,
+                        )
+                        yield Input(
+                            value=str(initial.world.memory_recall_limit),
+                            id="memory-recall-limit",
+                            classes="advanced-field",
+                        )
+                        yield field_label(
+                            "Automatic memory recall minimum score",
+                            "memory-recall-min-score",
+                            advanced=True,
+                        )
+                        yield Input(
+                            value=str(initial.world.memory_recall_min_score),
+                            id="memory-recall-min-score",
+                            classes="advanced-field",
+                        )
+                        yield field_label(
                             "Controller definitions",
                             "controller-definitions",
                             advanced=True,
@@ -1473,6 +1493,8 @@ def build_textual_wizard_app(
                     autosave_every=self._int("#autosave-every"),
                     memory_backend=self._select("#memory-backend"),
                     memory_path=self._input("#memory-path"),
+                    memory_recall_limit=self._int("#memory-recall-limit"),
+                    memory_recall_min_score=self._float("#memory-recall-min-score"),
                     controller_definitions=self._input("#controller-definitions"),
                     claim_timeout_seconds=self._optional_int_input("#claim-timeout-seconds"),
                     claim_timeout_controllers=_csv_values(

@@ -33,7 +33,7 @@ from .credentials import read_credential
 from .discord.claim import assign_discord_controller
 from .engine import GameLoop
 from .llm_agents import DEFAULT_MODEL, ControllerDispatch, ScriptedAgent
-from .memory import install_memory
+from .memory import configure_memory_recall, install_memory
 from .migrations import migrate_snapshot
 from .persistence import (
     WorldMeta,
@@ -508,8 +508,13 @@ def _configure_actor_backends(
 
     memory_path = _resolve_memory_path(args)
     try:
+        configure_memory_recall(
+            actor,
+            limit=getattr(args, "memory_recall_limit", 3),
+            min_score=getattr(args, "memory_recall_min_score", 0.35),
+        )
         configure_memory_backend(actor, args.memory_backend, memory_path)
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
     if args.memory_backend != "in-memory":
         print(
@@ -1202,6 +1207,18 @@ def main(argv: list[str] | None = None) -> int:
             "persistent Chroma directory when --memory-backend=chroma, "
             "or JSON file when --memory-backend=json"
         ),
+    )
+    serve.add_argument(
+        "--memory-recall-limit",
+        type=int,
+        default=3,
+        help="automatic relevant memories per character prompt (0 disables recall)",
+    )
+    serve.add_argument(
+        "--memory-recall-min-score",
+        type=float,
+        default=0.35,
+        help="minimum normalized relevance for automatic memory recall (0 to 1)",
     )
     serve.add_argument("--save", default=None, help="save the world to this path on exit")
     serve.add_argument(

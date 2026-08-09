@@ -23,6 +23,8 @@ services:
           set -- "$$@" --character-chat
         fi
         set -- "$$@" --memory-backend "$$memory_backend"
+        set -- "$$@" --memory-recall-limit "$${BUNNYLAND_MEMORY_RECALL_LIMIT:-3}"
+        set -- "$$@" --memory-recall-min-score "$${BUNNYLAND_MEMORY_RECALL_MIN_SCORE:-0.35}"
         if [ -n "$${BUNNYLAND_MEMORY_PATH:-}" ]; then
           set -- "$$@" --memory-path "$${BUNNYLAND_MEMORY_PATH}"
         fi

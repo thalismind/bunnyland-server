@@ -115,10 +115,13 @@ from .recovery import RecoveryEndReason, end_rest_operations, rest_ended_event
 from .systems import ActionRegenSystem, FocusRegenSystem, WorldClockSystem
 
 if TYPE_CHECKING:
+    from ..memory import MemoryRecallPolicy
+    from ..memory.store import MemoryStore
     from ..persistence import WorldMeta
     from ..plugins.model import Plugin, PluginRuntimeContext
     from ..plugins.registry import PluginRegistry
     from ..prompts.facts import PromptFactLike
+    from ..prompts.filters import AutomaticPromptFilter
 
 #: Control verbs change the controller itself (spec 7.4); they carry no point cost and
 #: bypass generation/participation gates so handoff and resume always work.
@@ -216,6 +219,10 @@ class WorldActor:
         self.world_id = ""
         #: Populated by the plugin loader without making core import plugin modules.
         self.plugins: PluginRegistry | None = None
+        #: Optional memory and prompt-filter services populated by foundation plugins.
+        self.memory_store: MemoryStore | None = None
+        self.memory_recall_policy: MemoryRecallPolicy | None = None
+        self.automatic_prompt_filters: list[AutomaticPromptFilter] = []
         #: Prompt providers are registered by the plugin loader. Core handlers access them
         #: through ``project_prompt_facts`` without importing plugin-owned mechanics.
         self.prompt_fragment_providers: tuple[PromptFragmentProvider, ...] = ()
@@ -235,6 +242,16 @@ class WorldActor:
 
     def register_handler(self, handler: CommandHandler) -> None:
         self._handlers.setdefault(handler.command_type, []).append(handler)
+
+    def register_automatic_prompt_filter(self, binding: AutomaticPromptFilter) -> None:
+        if any(
+            existing.definition_id == binding.definition_id
+            for existing in self.automatic_prompt_filters
+        ):
+            raise ValueError(
+                f"automatic prompt filter {binding.definition_id!r} is already registered"
+            )
+        self.automatic_prompt_filters.append(binding)
 
     def register_action_definition(self, definition: ActionDefinition) -> None:
         self._action_definitions[definition.command_type] = definition

@@ -57,10 +57,20 @@ def test_compose_startup_commands_wire_memory_env_flags() -> None:
         assert 'memory_backend="$${BUNNYLAND_MEMORY_BACKEND:-in-memory}"' in text
         assert 'set -- "$$@" --memory-backend "$$memory_backend"' in text
         assert 'set -- "$$@" --memory-path "$${BUNNYLAND_MEMORY_PATH}"' in text
+        assert 'set -- "$$@" --memory-recall-limit "$${BUNNYLAND_MEMORY_RECALL_LIMIT:-3}"' in text
+        assert (
+            'set -- "$$@" --memory-recall-min-score '
+            '"$${BUNNYLAND_MEMORY_RECALL_MIN_SCORE:-0.35}"'
+        ) in text
 
     base_compose = (repo_root / "compose.yml").read_text()
     assert "BUNNYLAND_MEMORY_BACKEND: ${BUNNYLAND_MEMORY_BACKEND:-in-memory}" in base_compose
     assert "BUNNYLAND_MEMORY_PATH: ${BUNNYLAND_MEMORY_PATH:-}" in base_compose
+    assert "BUNNYLAND_MEMORY_RECALL_LIMIT: ${BUNNYLAND_MEMORY_RECALL_LIMIT:-3}" in base_compose
+    assert (
+        "BUNNYLAND_MEMORY_RECALL_MIN_SCORE: "
+        "${BUNNYLAND_MEMORY_RECALL_MIN_SCORE:-0.35}"
+    ) in base_compose
 
 
 def test_vps_docker_setup_directs_operators_to_coordinated_ansible_flow() -> None:
@@ -164,7 +174,12 @@ def test_bunnyland_config_round_trips_yaml_with_private_mode(tmp_path: Path) -> 
     path = tmp_path / "bunnyland.yml"
     config = BunnylandConfig(
         deployment=DeploymentConfig(domain="localhost", data_dir="/tmp/bunnyland"),
-        world=WorldConfig(starter_pack="peaceful", memory_backend="json"),
+        world=WorldConfig(
+            starter_pack="peaceful",
+            memory_backend="json",
+            memory_recall_limit=5,
+            memory_recall_min_score=0.6,
+        ),
         llm=LlmConfig(enabled=True, ollama_api_key="ollama-key"),
         discord=DiscordConfig(enabled=True, token="discord-token"),
         server=ServerConfig(
@@ -184,6 +199,10 @@ def test_bunnyland_config_round_trips_yaml_with_private_mode(tmp_path: Path) -> 
     assert loaded.server.allow_sleeping_character_chat is True
     assert loaded.llm.ollama_api_key == "ollama-key"
     assert loaded.world.memory_backend == "json"
+    assert loaded.world.memory_recall_limit == 5
+    assert loaded.world.memory_recall_min_score == 0.6
+    assert loaded.to_serve_args()["memory_recall_limit"] == 5
+    assert loaded.to_env()["BUNNYLAND_MEMORY_RECALL_MIN_SCORE"] == "0.6"
 
 
 def test_bunnyland_config_loads_empty_file_as_defaults(tmp_path: Path) -> None:

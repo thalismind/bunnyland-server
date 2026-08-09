@@ -933,6 +933,7 @@ class ControllerDispatch:
                         character=self.actor.world.get_entity(character_id),
                         context=context,
                         epoch=input_epoch,
+                        include_automatic=controller_kind == "llm",
                     )
                 if telemetry.enabled():
                     dspan.set_attribute("decision.prompt_chars", len(prompt))
