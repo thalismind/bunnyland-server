@@ -1,61 +1,52 @@
 # Config wizard
 
-The config wizard is the recommended way to create and maintain a Bunnyland server
-configuration. It writes a YAML config for the server and deployment scripts, plus the
-generated web config that the frontend container serves.
+The config wizard turns a verified local command into a repeatable `bunnyland.yml`. It can
+also render the browser's `config.json`. Use it before writing a `systemd` unit or container
+configuration by hand.
 
-Run it from the server repo with:
+## Prerequisites
+
+Complete [the first-server guide](running-a-server.md), stop that test server, and work from
+the server repository. The Textual wizard needs the normal project environment; prompt mode
+works in terminals where a full-screen interface is unavailable.
 
 ```bash
 uv run bunnyland config-wizard
 ```
 
-For scripted or CI use, run the same command with CLI/non-interactive flags:
+Alternatives:
 
 ```bash
 uv run bunnyland config-wizard --cli
-uv run bunnyland config-wizard --non-interactive --config bunnyland.yml
+uv run bunnyland config-wizard --config bunnyland.yml --dry-run
 ```
 
-## Layout
+Use `--non-interactive` to validate and rewrite an existing config without prompts:
 
-The Textual wizard is organized as a staged setup flow. The stage list on the left is
-selectable, so you can move forward, jump back, or review earlier choices without walking
-through every page again.
+```bash
+uv run bunnyland config-wizard \
+  --non-interactive \
+  --config bunnyland.yml
+```
 
-The wizard starts with the world setup and then moves through gameplay features and
-integrations before ending with deployment and access details. Required fields are visible
-by default. Less common operational fields are hidden until you enable advanced settings.
+## Work through the stages
 
-The bottom bar keeps the main actions visible:
+The stage list starts with world setup, then moves through mechanics, integrations,
+deployment, and access. Required fields are visible by default; **Advanced** reveals
+lower-frequency settings. You can jump backward without losing current form values.
 
-- `Apply` writes the configuration once required fields are populated.
-- `Close` exits without applying changes.
-- `Advanced` toggles low-frequency fields.
+- **Apply** validates and writes the selected outputs.
+- **Close** exits without applying changes.
+- Each focusable `?` opens field-specific help.
+- **Review** shows the resulting configuration or the next blocking validation error.
 
-The footer also exposes keyboard shortcuts for the same actions.
+Choose a long-running world (`ticks: 0`) only after the local finite-tick test has passed.
+Keep `server.api_host` at `127.0.0.1` for hosted deployments. Public access belongs at nginx,
+not on the Uvicorn listener.
 
-## Help and review
+## Review outputs before using them
 
-Each field label has a focusable `?` button. Use it from the keyboard or mouse to open a
-small help dialog with short guidance and examples. Help is intentionally attached to the
-field rather than embedded in the page, so the main flow stays compact.
-
-The Review screen builds the config from the current form state and shows either a summary
-or the one issue that must be fixed before saving. Review errors appear in the review body,
-not in the shared page banner.
-
-## Working with generated files
-
-By default, the wizard reads the config path you pass with `--config` and writes back to
-that path. If no file exists, it starts from safe defaults and generates fresh secrets for
-the initial admin login.
-
-The setup script consumes the generated YAML and web config through environment variables
-when it launches Compose. That keeps the container runtime path simple: the YAML file is
-mounted into the server container, and the rendered web config is mounted into nginx.
-
-Use explicit output paths when you want to review generated files before applying them:
+Render to temporary files first:
 
 ```bash
 uv run bunnyland config-wizard \
@@ -65,11 +56,93 @@ uv run bunnyland config-wizard \
   --dry-run
 ```
 
+The server configuration is a typed YAML document with these top-level sections:
+`server`, `world`, `plugins`, `addons`, `llm`, `discord`, `mcp`, `web`, `deployment`, and
+`imagegen`. Unknown or misspelled fields are rejected. Start the server with:
+
+```bash
+uv run bunnyland serve --config bunnyland.yml
+```
+
+The generated web configuration points the browser at `/api/`. Preserve that same-origin
+path when nginx is added later.
+
+## Secret handling
+
+Treat `bunnyland.yml` as a secret if the wizard places provider keys or a Discord token in
+it. The writer sets mode `0600`, but you must also keep the file outside public web roots,
+exclude it from Git and backups shared with untrusted people, and restrict its parent
+directory.
+
+For native service deployments, you can keep reusable credentials in root- or
+service-owned files and expose their paths through these environment variables:
+
+```text
+OLLAMA_CLOUD_API_KEY_FILE=/etc/bunnyland/ollama.key
+OPENROUTER_API_KEY_FILE=/etc/bunnyland/openrouter.key
+DISCORD_TOKEN_FILE=/etc/bunnyland/discord.token
+```
+
+Do not use both a literal variable and its matching `_FILE` variable. Bunnyland rejects the
+ambiguous credential source instead of guessing. Never put secret values in command-line
+arguments, public `config.json`, URLs, screenshots, or world snapshots.
+
+Authentication users and automation tokens are deliberately separate from the general
+config: `server.auth_users_file` points at an Argon2 user inventory and `server.token_db`
+points at the private SQLite token store. The next guide creates both.
+
 ## Plugin safety
 
-The plugin stage only imports modules that you explicitly provide with the wizard command.
-Already-loaded plugin modules can be shown because their code has already run. Unloaded
-modules that look relevant may be listed as suggestions, but the wizard does not import
-them by itself.
+The plugin stage imports only modules explicitly supplied with the wizard command. Already
+loaded modules may be displayed, and unloaded candidates may be suggested, but the wizard
+does not import suggestions automatically.
 
-Only import plugin modules that you trust.
+Preselect a trusted plugin by repeating `--plugin`:
+
+```bash
+uv run bunnyland config-wizard \
+  --config bunnyland.yml \
+  --plugin bunnyland.core_verbs \
+  --plugin bunnyland.worldgen
+```
+
+External plugin modules execute Python in the server process. Install only packages whose
+source and release provenance you trust.
+
+## Validate after edits
+
+After every manual edit:
+
+```bash
+uv run bunnyland config-wizard --config bunnyland.yml --dry-run
+uv run bunnyland serve --config bunnyland.yml --ticks 1
+```
+
+The one-tick launch catches configuration that parses but cannot initialize its selected
+plugins, providers, files, or ports. Do not run the second command against an active world's
+save path; validate with a copy or a disposable world.
+
+## Troubleshooting
+
+### Textual cannot open
+
+Use `--cli`. For unattended validation, use `--non-interactive --config bunnyland.yml`.
+
+### The wizard refuses to save
+
+Open **Review** and fix the reported field. Check absolute browser origins, numeric ports and
+IDs, writable output directories, and required integration credentials.
+
+### The server ignores a manual edit
+
+Confirm that the service actually passes `--config` with the file you edited. If a CLI flag
+or environment variable overrides the same field, remove the duplicate source and keep one
+authoritative configuration path.
+
+### The web client connects to the wrong server
+
+Regenerate the web output and verify that `serverUrl` is `/api/`. Do not publish the private
+server YAML as browser configuration.
+
+[← Install and run your first server](running-a-server.md) ·
+[Authentication, permissions, and moderation →](authentication-permissions-moderation.md)

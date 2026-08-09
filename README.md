@@ -114,7 +114,8 @@ uv run bunnyland serve --llm --generator recursive --ticks 20
 
 Ollama is the default provider. OpenRouter can drive character controllers and world
 generation with `--llm-provider openrouter`, `--worldgen-provider openrouter`, and
-`OPENROUTER_API_KEY`; see [Running a server](docs/admin/running-a-server.md#connecting-an-llm).
+`OPENROUTER_API_KEY`; see
+[LLM providers and character controllers](docs/admin/llm-providers-controllers.md).
 
 ## Docker Compose
 
@@ -168,7 +169,7 @@ BUNNYLAND_OTEL_ENABLED=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
 
 The Compose stack ships an optional single-container [Grafana Tempo](https://grafana.com/oss/tempo/)
 backend (`compose.tempo.yml`). See
-[Observability](docs/admin/running-a-server.md#observability-opentelemetry) for the full
+[Observability](docs/admin/backups-upgrades-observability.md#optional-opentelemetry) for the full
 metric/span reference and the Tempo setup.
 
 ## 📚 Documentation

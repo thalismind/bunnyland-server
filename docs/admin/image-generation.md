@@ -8,6 +8,17 @@ time — and the engine only ever stores a small URL reference, never image byte
 Image generation is **off** until `COMFYUI_SERVER_URL` is set or a generator is explicitly
 selected. Existing ComfyUI-only configuration remains valid and selects `comfyui`.
 
+## Prerequisites and boundary
+
+Complete [MCP server and local agents](mcp-local-agent.md), even if MCP is disabled. Install
+the `imagegen` extra, choose a durable media directory, and decide which provider may receive
+world descriptions. ComfyUI should remain on loopback or a private network; never expose its
+workflow API directly to the internet.
+
+Generated media is public presentation data once served by the web client. Prompts can still
+contain community-authored names and descriptions, so review provider retention/data-use
+terms and do not include private memories or operator notes in templates.
+
 ## Turning it on
 
 Choose one server-wide fallback. Any purpose can override it independently:
@@ -53,7 +64,7 @@ to have an Ollama model write richer prompts (it reuses your `OLLAMA_HOST` /
 
 > **Discord avatars require a public URL.** Posting a character's portrait as a Discord
 > avatar needs an absolute, reachable image URL, so set `BUNNYLAND_PUBLIC_BASE_URL`
-> (e.g. `https://sandbox.example.com`). Everything else — the web client and event-image
+> (e.g. `https://play.example.com`). Everything else — the web client and event-image
 > uploads — works without it.
 
 The `imagegen` extra provides the dependencies (`httpx`, `websockets`, `Pillow`):
@@ -73,6 +84,11 @@ BUNNYLAND_IMAGE_GENERATOR=openrouter
 BUNNYLAND_IMAGE_OPENROUTER_MODEL=google/gemini-3.1-flash-lite-image
 OPENROUTER_API_KEY=sk-or-...
 ```
+
+For a hosted service, prefer
+`OPENROUTER_API_KEY_FILE=/etc/bunnyland/openrouter.key` over a literal variable. Keep the
+file mode `0600`. Never put the key in the image template JSON, browser configuration, model
+prompt, URL, repository, screenshot, or logs.
 
 Install both optional dependency groups for OpenRouter image generation:
 
@@ -217,3 +233,34 @@ The ComfyUI suite also needs `COMFYUI_SERVER_URL`. The OpenRouter suite also nee
 
 Event and interaction **videos** are planned; the data model already reserves space for
 them, but only images are generated today.
+
+## Troubleshooting
+
+### Jobs time out or remain pending
+
+Check reachability from the Bunnyland service account to `COMFYUI_SERVER_URL`, inspect the
+ComfyUI queue, and confirm the selected workflow's model files exist. Increase the timeout
+only after measuring a successful generation on the same hardware.
+
+### ComfyUI works locally but not from the service
+
+Keep ComfyUI private, but bind it to an address reachable on the private service network.
+Check host/container network names and firewall policy; do not publish port 8188 as a fix.
+
+### OpenRouter returns an unsupported-output error
+
+Use an image-capable model currently available to your account and keep
+`BUNNYLAND_IMAGE_OPENROUTER_MODEL` explicit. Bunnyland will not silently switch providers.
+
+### Images work in the web client but not as Discord avatars
+
+Set `BUNNYLAND_PUBLIC_BASE_URL` to the HTTPS Bunnyland origin and verify the resulting media
+URL is reachable without a local hostname. Do not expose the media filesystem itself.
+
+### Media disappears after a restart
+
+Mount or configure a durable `BUNNYLAND_MEDIA_DIR` and include it in the consistent backup
+set. A database/snapshot reference cannot recreate a deleted image file.
+
+[← MCP server and local agents](mcp-local-agent.md) ·
+[Backups, upgrades, observability, and recovery →](backups-upgrades-observability.md)

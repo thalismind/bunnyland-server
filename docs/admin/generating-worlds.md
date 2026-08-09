@@ -85,7 +85,7 @@ uv run bunnyland serve --generator empty --ticks 0 \
 ```
 
 For LLM-generated worlds, add `--llm` and provider credentials as described in
-[running a server](running-a-server.md#connecting-an-llm).
+[LLM providers and character controllers](llm-providers-controllers.md).
 
 ## Generate through the admin API
 

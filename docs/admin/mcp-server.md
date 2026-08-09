@@ -1,5 +1,9 @@
 # MCP server authentication
 
+For the full community-host setup, client connection flow, least-privilege test, and
+troubleshooting, start with [MCP server and local agents](mcp-local-agent.md). This page is a
+compact authentication reference for custom integrations.
+
 Bunnyland mounts streamable HTTP MCP at `/v1/mcp` when `bunnyland serve --mcp` is enabled.
 The MCP transport uses the same opaque bearer tokens as every other API client; there is no
 MCP-specific credential or tool argument.
@@ -42,3 +46,7 @@ receive `403` when an admin tool is requested.
 
 Never place tokens in MCP tool arguments, URLs, repository configuration, screenshots, or
 logs. Use the client's protected secret/credential facility and normal bearer-header support.
+
+If the endpoint works on loopback but not through the public origin, verify the nginx
+`/api/` proxy forwards `Authorization` and `X-Bunnyland-Client-Id`, disables response
+buffering, and preserves Streamable HTTP requests at `/api/v1/mcp/`.

@@ -9,6 +9,17 @@ directly.
 > `!say`, `!take`) and shares the LLM's name resolver. In production, run it with
 > `bunnyland serve --discord` so it shares the same `WorldActor` as the simulation and API.
 
+## Prerequisites and boundary
+
+Complete [LLM providers and character controllers](llm-providers-controllers.md) even if
+your Discord-driven characters do not use an LLM. The server should already run under a
+dedicated account with durable world/auth state and a working HTTPS web client.
+
+Discord is an ingress adapter, not a separate game server. Keep it in the Bunnyland process
+that owns the `WorldActor`, restrict the guild/channel/DM sources it accepts, and configure
+moderation separately. A Discord identity is not automatically linked to a Bunnyland web or
+MCP identity.
+
 ## 1. Install the extra
 
 ```bash
@@ -34,6 +45,12 @@ launch script:
 ```
 DISCORD_TOKEN=...
 ```
+
+For a public native service, prefer a mode-`0600` credential file referenced by
+`DISCORD_TOKEN_FILE=/etc/bunnyland/discord.token`. Do not set both `DISCORD_TOKEN` and
+`DISCORD_TOKEN_FILE`. Never put the token in `bunnyland.yml` stored in Git, a command line,
+chat, screenshots, world snapshots, or logs. Rotate it immediately in the Developer Portal
+if it is exposed.
 
 ## 4. Wire a user to a character
 
@@ -221,3 +238,34 @@ I don't see 'jurnal' (item) here. Did you mean: marsh journal?
 
 This is the same `did_you_mean` helper the LLM agents get as a prompt hint — humans and
 agents are coached identically.
+
+## Troubleshooting
+
+### The bot is online but ignores commands
+
+Confirm **Message Content Intent** is enabled, the bot can view/read/send in the channel,
+and the guild/channel/DM allowlists match numeric IDs. If both guild and channel lists are
+configured, a guild command must match both.
+
+### Startup says the Discord token is missing
+
+Check that exactly one of `DISCORD_TOKEN` and `DISCORD_TOKEN_FILE` is visible to the service
+account. A credential file must contain only the token and be readable by that account.
+
+### `!claim` cannot find a character
+
+Run `!characters`, use an unambiguous name prefix, and confirm a claimable character is
+suspended. Child characters require the explicit `--discord-allow-child-claims` policy.
+
+### Moderator commands return unauthorized
+
+Guild commands require an allowed moderator user ID or role ID; DMs require an allowed user
+ID. Discord administrator permission alone does not grant Bunnyland moderation.
+
+### The bot reconnects but the world does not advance
+
+The shared server process must still run the game loop. Check the Bunnyland service and its
+provider/controller errors rather than restarting a separate Discord-only process.
+
+[← LLM providers and character controllers](llm-providers-controllers.md) ·
+[MCP server and local agents →](mcp-local-agent.md)
