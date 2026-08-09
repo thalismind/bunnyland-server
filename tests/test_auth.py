@@ -11,6 +11,7 @@ import time
 import weakref
 from contextlib import closing
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -1040,7 +1041,43 @@ async def test_login_limits_ip_spraying_and_distributed_username_attempts(tmp_pa
     ) as client:
         assert (await login(client, " target ", "ignored")).status_code == 401
         assert (await login(client, " TARGET ", "ignored")).status_code == 429
-    assert distributed_credentials.calls == 21
+    assert distributed_credentials.calls == 22
+    tokens.close()
+
+
+@pytest.mark.asyncio
+async def test_successful_login_bypasses_and_resets_username_failure_limit(tmp_path) -> None:
+    class Credentials:
+        async def authenticate(self, username: str, password: str):
+            if username.strip().lower() == "target" and password == "correct":
+                return SimpleNamespace(username="target", scopes=frozenset({WORLD_PLAY_SCOPE}))
+            return None
+
+    tokens = TokenStore(tmp_path / "tokens.sqlite3")
+    app = create_app(
+        build_scenario().actor,
+        token_store=tokens,
+        user_credentials=Credentials(),
+    )
+
+    async def login(address: str, password: str) -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=(address, 1234)),
+            base_url="https://testserver",
+        ) as client:
+            return await client.post(
+                "/v1/auth/session",
+                json={"username": " TARGET ", "password": password, "delivery": "body"},
+            )
+
+    for index in range(20):
+        assert (await login(f"192.0.2.{index + 1}", "wrong")).status_code == 401
+    assert (await login("192.0.2.40", "wrong")).status_code == 429
+
+    success = await login("192.0.2.41", "correct")
+    assert success.status_code == 200
+    assert success.json()["subject"] == "target"
+    assert (await login("192.0.2.42", "wrong")).status_code == 401
     tokens.close()
 
 
@@ -1108,6 +1145,88 @@ async def test_auth_cors_never_allows_cross_origin_credentials(tmp_path) -> None
         )
         assert disallowed.status_code == 400
         assert "access-control-allow-origin" not in disallowed.headers
+    tokens.close()
+
+
+@pytest.mark.asyncio
+async def test_validation_problem_never_echoes_submitted_password(tmp_path) -> None:
+    tokens = TokenStore(tmp_path / "tokens.sqlite3")
+    app = create_app(
+        build_scenario().actor,
+        token_store=tokens,
+        user_credentials=_credentials(tmp_path),
+    )
+    password = "visible-secret-" * 80
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://testserver"
+    ) as client:
+        response = await client.post(
+            "/v1/auth/session",
+            json={"username": "player", "password": password, "delivery": "body"},
+        )
+
+    assert response.status_code == 422
+    assert password not in response.text
+    assert "input" not in response.text
+    assert "ctx" not in response.text
+    assert "url" not in response.text
+    tokens.close()
+
+
+@pytest.mark.asyncio
+async def test_cors_wraps_early_security_and_request_limit_responses(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("BUNNYLAND_MAX_REQUEST_BODY_BYTES", "64")
+    origin = "https://web.example"
+    tokens = TokenStore(tmp_path / "tokens.sqlite3")
+    token, _ = tokens.issue("player", [WORLD_PLAY_SCOPE], automatic_rotation=False)
+    app = create_app(
+        build_scenario().actor,
+        token_store=tokens,
+        cors_origins=[origin],
+        rate_limit_requests=1,
+    )
+
+    async def request(address: str, method: str, path: str, **kwargs) -> httpx.Response:
+        headers = {"Origin": origin, **kwargs.pop("headers", {})}
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=(address, 1234)),
+            base_url="https://testserver",
+        ) as client:
+            return await client.request(method, path, headers=headers, **kwargs)
+
+    unauthorized = await request("192.0.2.1", "GET", "/v1/play/characters")
+    forbidden = await request(
+        "192.0.2.2",
+        "GET",
+        "/v1/play/characters",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    oversized = await request(
+        "192.0.2.3",
+        "POST",
+        "/v1/auth/session",
+        content=b"x" * 65,
+    )
+    assert (await request("192.0.2.4", "GET", "/v1/public/world")).status_code == 200
+    limited = await request("192.0.2.4", "GET", "/v1/public/world")
+    disallowed = await request(
+        "192.0.2.5",
+        "GET",
+        "/v1/play/characters",
+        headers={"Origin": "https://hostile.example"},
+    )
+
+    assert [unauthorized.status_code, forbidden.status_code, oversized.status_code] == [
+        401,
+        403,
+        413,
+    ]
+    assert limited.status_code == 429
+    for response in (unauthorized, forbidden, oversized, limited):
+        assert response.headers["access-control-allow-origin"] == origin
+    assert "access-control-allow-origin" not in disallowed.headers
     tokens.close()
 
 

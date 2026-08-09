@@ -72,6 +72,27 @@ from bunnyland.simpacks.lifesim.mechanics import LifeStageComponent
 _AUTHENTICATED_REQUEST = object()
 
 
+class _FakeTransportSecuritySettings:
+    def __init__(
+        self,
+        *,
+        enable_dns_rebinding_protection: bool,
+        allowed_hosts: list[str],
+        allowed_origins: list[str],
+    ) -> None:
+        self.enable_dns_rebinding_protection = enable_dns_rebinding_protection
+        self.allowed_hosts = allowed_hosts
+        self.allowed_origins = allowed_origins
+
+
+def _install_fake_transport_security(monkeypatch) -> None:
+    transport_security_module = ModuleType("mcp.server.transport_security")
+    transport_security_module.TransportSecuritySettings = _FakeTransportSecuritySettings
+    monkeypatch.setitem(
+        sys.modules, "mcp.server.transport_security", transport_security_module
+    )
+
+
 def _authenticated_mcp_context(scopes=frozenset({WORLD_PLAY_SCOPE, WORLD_ADMIN_SCOPE})):
     principal = TokenPrincipal(
         token_id="test-token",
@@ -797,7 +818,9 @@ async def test_mcp_event_bridge_filters_and_notifies_client_resources(scenario):
         bridge.close()
 
 
-def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario, tmp_path):
+def test_create_app_mounts_mcp_inside_existing_fastapi_app(
+    monkeypatch, scenario, tmp_path, caplog
+):
     captured = {}
     registered_tools = {}
     registered_resources = {}
@@ -879,6 +902,7 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     exceptions_module.ToolError = RuntimeError
     monkeypatch.setitem(sys.modules, "mcp", mcp_module)
     monkeypatch.setitem(sys.modules, "mcp.server", server_module)
+    _install_fake_transport_security(monkeypatch)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
 
@@ -917,6 +941,18 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     assert captured["kwargs"]["stateless_http"] is False
     assert captured["kwargs"]["json_response"] is True
     assert captured["kwargs"]["streamable_http_path"] == "/"
+    transport_security = captured["kwargs"]["transport_security"]
+    assert transport_security.enable_dns_rebinding_protection is True
+    assert transport_security.allowed_hosts == [
+        "localhost",
+        "localhost:*",
+        "127.0.0.1",
+        "127.0.0.1:*",
+        "[::1]",
+        "[::1]:*",
+    ]
+    assert transport_security.allowed_origins == []
+    assert "restricting Host headers to loopback" in caplog.text
     assert "play_claim_character" in registered_tools
     assert "play_release_control" in registered_tools
     assert "play_send_command" in registered_tools
@@ -961,6 +997,16 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(monkeypatch, scenario
     assert list(inspect.signature(admin_patch_world).parameters) == ["operations"]
     patched = asyncio.run(admin_patch_world(operations=[]))
     assert patched["ok"] is True
+
+    create_app(
+        scenario.actor,
+        plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
+        cors_origins=["https://mcp.example:8443", "https://mcp.example:8443/"],
+    )
+    configured_security = captured["kwargs"]["transport_security"]
+    assert configured_security.enable_dns_rebinding_protection is True
+    assert configured_security.allowed_hosts == ["mcp.example:8443"]
+    assert configured_security.allowed_origins == ["https://mcp.example:8443"]
 
 
 async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenario):
@@ -1024,6 +1070,7 @@ async def test_mcp_registered_tools_return_expected_payloads(monkeypatch, scenar
     exceptions_module.ToolError = RuntimeError
     monkeypatch.setitem(sys.modules, "mcp", mcp_module)
     monkeypatch.setitem(sys.modules, "mcp.server", server_module)
+    _install_fake_transport_security(monkeypatch)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
 
@@ -1323,6 +1370,7 @@ async def test_mcp_registered_tools_wrap_runtime_errors(monkeypatch, scenario):
     exceptions_module.ToolError = FakeToolError
     monkeypatch.setitem(sys.modules, "mcp", mcp_module)
     monkeypatch.setitem(sys.modules, "mcp.server", server_module)
+    _install_fake_transport_security(monkeypatch)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
 
@@ -1506,6 +1554,7 @@ def _install_fake_fastmcp(monkeypatch, *, registered_tools, low_server, get_cont
     exceptions_module.ToolError = RuntimeError
     monkeypatch.setitem(sys.modules, "mcp", mcp_module)
     monkeypatch.setitem(sys.modules, "mcp.server", server_module)
+    _install_fake_transport_security(monkeypatch)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
 
@@ -2276,6 +2325,59 @@ async def test_mcp_streamable_client_claims_plays_receives_events_and_releases(s
         token_store.close()
 
 
+def test_mcp_loopback_fallback_accepts_no_origin_and_rejects_hostile_headers(
+    scenario, caplog
+):
+    testclient = pytest.importorskip("fastapi.testclient")
+    token_store = TokenStore(":memory:")
+    token, _ = token_store.issue(
+        "mcp-player", [WORLD_PLAY_SCOPE], automatic_rotation=False
+    )
+    app = create_app(
+        scenario.actor,
+        plugins=select(bunnyland_plugins(), [MCP, WORLDGEN]),
+        token_store=token_store,
+    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        CLIENT_ID_HEADER: "loopback-client",
+        "Accept": "application/json, text/event-stream",
+    }
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "security-test", "version": "1"},
+        },
+    }
+
+    with testclient.TestClient(app, base_url="http://localhost") as client:
+        loopback = client.post(
+            "/v1/mcp/", headers={**headers, "Host": "localhost:8765"}, json=body
+        )
+        hostile_host = client.post(
+            "/v1/mcp/", headers={**headers, "Host": "hostile.invalid"}, json=body
+        )
+        hostile_origin = client.post(
+            "/v1/mcp/",
+            headers={
+                **headers,
+                "Host": "127.0.0.1:8765",
+                "Origin": "https://hostile.invalid",
+            },
+            json=body,
+        )
+
+    assert loopback.status_code not in {403, 421}
+    assert hostile_host.status_code == 421
+    assert hostile_origin.status_code == 403
+    assert "restricting Host headers to loopback" in caplog.text
+    token_store.close()
+
+
 def _capture_mcp_tools(
     monkeypatch,
     actor,
@@ -2367,6 +2469,7 @@ def _capture_mcp_tools(
     exceptions_module.ToolError = RuntimeError
     monkeypatch.setitem(sys.modules, "mcp", ModuleType("mcp"))
     monkeypatch.setitem(sys.modules, "mcp.server", ModuleType("mcp.server"))
+    _install_fake_transport_security(monkeypatch)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
     create_app(

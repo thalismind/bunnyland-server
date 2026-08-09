@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import inspect
 import json
+import logging
 import os
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -82,6 +83,8 @@ from ..server.serialization import (
     serialize_world,
     serialize_world_overview,
 )
+
+logger = logging.getLogger("bunnyland.mcp")
 
 if TYPE_CHECKING:
     from ..core.world_actor import WorldActor
@@ -766,16 +769,32 @@ def create_bunnyland_mcp_app(
             "the MCP server requires the 'mcp' extra: pip install bunnyland[mcp]"
         ) from exc
 
-    transport_security = None
-    if trusted_origins:
-        from mcp.server.transport_security import TransportSecuritySettings
+    from mcp.server.transport_security import TransportSecuritySettings
 
+    if trusted_origins:
         transport_security = TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
             allowed_hosts=list(
                 dict.fromkeys(urlsplit(origin).netloc for origin in trusted_origins)
             ),
             allowed_origins=list(dict.fromkeys(trusted_origins)),
+        )
+    else:
+        logger.warning(
+            "MCP started without configured trusted origins; restricting Host headers "
+            "to loopback and rejecting requests that supply Origin"
+        )
+        transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[
+                "localhost",
+                "localhost:*",
+                "127.0.0.1",
+                "127.0.0.1:*",
+                "[::1]",
+                "[::1]:*",
+            ],
+            allowed_origins=[],
         )
 
     mcp = FastMCP(

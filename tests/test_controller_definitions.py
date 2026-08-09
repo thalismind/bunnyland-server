@@ -431,10 +431,20 @@ def _install_fake_mcp(monkeypatch) -> dict:
 
     fastmcp_module = ModuleType("mcp.server.fastmcp")
     exceptions_module = ModuleType("mcp.server.fastmcp.exceptions")
+    transport_security_module = ModuleType("mcp.server.transport_security")
+
+    class FakeTransportSecuritySettings:
+        def __init__(self, **settings: object) -> None:
+            self.__dict__.update(settings)
+
     fastmcp_module.FastMCP = FakeFastMCP
     exceptions_module.ToolError = RuntimeError
+    transport_security_module.TransportSecuritySettings = FakeTransportSecuritySettings
     monkeypatch.setitem(sys.modules, "mcp", ModuleType("mcp"))
     monkeypatch.setitem(sys.modules, "mcp.server", ModuleType("mcp.server"))
+    monkeypatch.setitem(
+        sys.modules, "mcp.server.transport_security", transport_security_module
+    )
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
     return registered

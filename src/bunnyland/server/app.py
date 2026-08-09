@@ -688,7 +688,15 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def _validation_problem(request: Request, exc: RequestValidationError):
-        return _problem_response(request, 422, exc.errors(), code="validation_error")
+        safe_errors = [
+            {
+                "loc": list(error["loc"]),
+                "msg": str(error["msg"]),
+                "type": str(error["type"]),
+            }
+            for error in exc.errors()
+        ]
+        return _problem_response(request, 422, safe_errors, code="validation_error")
 
     @app.exception_handler(ModerationRestrictedError)
     async def _moderation_problem(request: Request, exc: ModerationRestrictedError):
@@ -700,21 +708,6 @@ def create_app(
             restriction=exc.restriction,
         )
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=trusted_origins,
-        allow_credentials=False,
-        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=[
-            "Authorization",
-            "Content-Type",
-            CLIENT_ID_HEADER,
-            "X-Bunnyland-Claim-Id",
-            "X-Bunnyland-Claim-Secret",
-            "Mcp-Protocol-Version",
-            "Mcp-Session-Id",
-        ],
-    )
     request_limit = (
         int(os.environ.get(RATE_LIMIT_REQUESTS_ENV, RATE_LIMIT_REQUESTS))
         if rate_limit_requests is None
@@ -952,17 +945,23 @@ def create_app(
             raise HTTPException(status_code=401, detail="invalid username or password")
         normalized_username = login.username.strip()
         ip_allowed, ip_retry_after = login_ip_rate_limiter.check(_client_host(request))
-        username_allowed, username_retry_after = login_username_rate_limiter.check(
-            normalized_username
-        )
-        if not ip_allowed or not username_allowed:
+        if not ip_allowed:
             raise HTTPException(
                 status_code=429,
                 detail="login rate limit exceeded",
-                headers={"Retry-After": str(max(ip_retry_after, username_retry_after))},
+                headers={"Retry-After": str(ip_retry_after)},
             )
         user = await user_credentials.authenticate(login.username, login.password)
         if user is None:
+            username_allowed, username_retry_after = login_username_rate_limiter.check(
+                normalized_username
+            )
+            if not username_allowed:
+                raise HTTPException(
+                    status_code=429,
+                    detail="login rate limit exceeded",
+                    headers={"Retry-After": str(username_retry_after)},
+                )
             raise HTTPException(
                 status_code=401,
                 detail="invalid username or password",
@@ -1167,8 +1166,8 @@ def create_app(
             response.headers["Strict-Transport-Security"] = HSTS_VALUE
         return response
 
-    # Added last so it ends up outermost (Starlette prepends), rejecting an oversized body
-    # before any other middleware does work for it.
+    # Starlette prepends middleware. CORS is registered at the end of app construction so
+    # it wraps this body cap as well as HSTS, authentication, and both request limiters.
     app.add_middleware(MaxBodySizeMiddleware, max_bytes=max_request_body_bytes)
 
     from ..foundation.media.plugin import plugin as media_plugin
@@ -3806,6 +3805,23 @@ def create_app(
         )
 
     route_surface_matrix(app)
+    # Registered last so Starlette makes CORS the outermost middleware. Early 401/403,
+    # body-limit 413, and rate-limit 429 responses must all carry trusted-origin headers.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=trusted_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            CLIENT_ID_HEADER,
+            "X-Bunnyland-Claim-Id",
+            "X-Bunnyland-Claim-Secret",
+            "Mcp-Protocol-Version",
+            "Mcp-Session-Id",
+        ],
+    )
     return app
 
 
