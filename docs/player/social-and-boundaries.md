@@ -21,10 +21,10 @@ Speech records text, inferred intent, and the final interpretation. Praise, apol
 requests, promises, insults, and threats can shift social bonds when the social mechanic is
 enabled.
 
-Promises, offers, requests, and threats also become explicit obligations when social
-mechanics are enabled. A promise or offer makes the speaker owe the listener; a request
-makes the listener owe the speaker. Resolve an obligation when it is fulfilled, failed, or
-canceled:
+Promises, offers, and threats also become explicit obligations when social mechanics are
+enabled because they bind the speaker. A request remains a social event; it does not make
+the listener owe the speaker unless the listener separately commits. Resolve an obligation
+when it is fulfilled, failed, or canceled:
 
 ```text
 !resolve-obligation obligation_id=entity_42 status=fulfilled note="fixed before dusk"
