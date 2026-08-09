@@ -548,9 +548,13 @@ def _inventory_targets(actor: WorldActor, character) -> list[ClientTargetView]:
     return sorted(targets, key=lambda target: target.label.lower())
 
 
-def _controller_display(controller) -> tuple[str, str, str]:
+def _controller_display(
+    controller, *, reveal_identity: bool = False
+) -> tuple[str, str, str]:
     if controller.has_component(DiscordControllerComponent):
         discord = controller.get_component(DiscordControllerComponent)
+        if not reveal_identity:
+            return ("discord", "Discord user", "")
         return (
             "discord",
             f"Discord user {discord.discord_user_id}",
@@ -558,11 +562,15 @@ def _controller_display(controller) -> tuple[str, str, str]:
         )
     if controller.has_component(WebControllerComponent):
         web = controller.get_component(WebControllerComponent)
-        label = web.label or web.client_id or "web"
+        label = web.label or (web.client_id if reveal_identity else "") or "web"
+        if not reveal_identity:
+            return ("web", label, "")
         return ("web", label, web.client_id if web.client_id and web.client_id != label else "")
     if controller.has_component(MCPControllerComponent):
         mcp = controller.get_component(MCPControllerComponent)
-        label = mcp.label or mcp.client_id or "MCP client"
+        label = mcp.label or (mcp.client_id if reveal_identity else "") or "MCP client"
+        if not reveal_identity:
+            return ("mcp", label, "")
         return ("mcp", label, mcp.client_id if mcp.client_id and mcp.client_id != label else "")
     if controller.has_component(LLMControllerComponent):
         llm = controller.get_component(LLMControllerComponent)
@@ -581,9 +589,13 @@ def _controller_display(controller) -> tuple[str, str, str]:
     return ("", entity_name(controller), "")
 
 
-def _controller_view(actor: WorldActor, character) -> ClientControllerView | None:
+def _controller_view(
+    actor: WorldActor, character, *, reveal_identity: bool = False
+) -> ClientControllerView | None:
     for edge, controller_id in character.get_relationships(ControlledBy):
-        kind, name, detail = _controller_display(actor.world.get_entity(controller_id))
+        kind, name, detail = _controller_display(
+            actor.world.get_entity(controller_id), reveal_identity=reveal_identity
+        )
         return ClientControllerView(
             controller_id=str(controller_id),
             generation=edge.generation,
@@ -1183,7 +1195,10 @@ def serialize_action_search(
 
 
 def serialize_character_projection(
-    actor: WorldActor, character_id: str
+    actor: WorldActor,
+    character_id: str,
+    *,
+    reveal_controller_identity: bool = False,
 ) -> CharacterProjectionResponse:
     """Return a viewer-scoped, player-facing view for structured clients.
 
@@ -1240,7 +1255,9 @@ def serialize_character_projection(
         room=room,
         inventory=groups["inventory"],
         points=_points_view(character),
-        controller=_controller_view(actor, character),
+        controller=_controller_view(
+            actor, character, reveal_identity=reveal_controller_identity
+        ),
         sheet=_character_sheet_projection(actor, character),
         current_goal=_current_goal(character),
         suggested_actions=_first_run_suggestions(actor, character, room),

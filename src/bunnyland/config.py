@@ -126,6 +126,7 @@ class ServerConfig:
     character_chat: bool = False
     open_character_chat: bool = True
     allow_sleeping_character_chat: bool = False
+    character_sheets: bool = True
     http_rate_limit_requests: int = 0
     http_rate_limit_window_seconds: float = 1.0
     cors_origins: tuple[str, ...] = ()
@@ -320,6 +321,7 @@ class BunnylandConfig:
             "character_chat": server.character_chat,
             "open_character_chat": server.open_character_chat,
             "allow_sleeping_character_chat": server.allow_sleeping_character_chat,
+            "character_sheets": server.character_sheets,
             "auth_users_file": server.auth_users_file,
             "token_db": server.token_db,
             "player_client_id": list(server.player_client_ids) or None,
@@ -387,6 +389,7 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_ENABLE_MCP", self.mcp.enabled)
         _set_if(env, "BUNNYLAND_ENABLE_CHARACTER_CHAT", server.character_chat)
         _set_if(env, "BUNNYLAND_OPEN_CHARACTER_CHAT", server.open_character_chat)
+        _set_if(env, "BUNNYLAND_ENABLE_CHARACTER_SHEETS", server.character_sheets)
         _set_if(
             env,
             "BUNNYLAND_ALLOW_SLEEPING_CHARACTER_CHAT",

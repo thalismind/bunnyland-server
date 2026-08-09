@@ -545,6 +545,7 @@ def create_app(
     imagegen: ImageGenService | None = None,
     character_chat: CharacterChatService | None = None,
     open_character_chat: bool = True,
+    character_sheets: bool = True,
     claim_secrets: ClaimSecretRegistry | None = None,
     memory_store=None,
     rate_limit_requests: int | None = None,
@@ -1023,7 +1024,7 @@ def create_app(
                 if character_chat is not None
                 else False
             ),
-            character_sheets=True,
+            character_sheets=character_sheets,
             image_generation=imagegen is not None,
         )
 
@@ -2265,14 +2266,37 @@ def create_app(
         return await v1_characters()
 
     @profile_v1.get("/characters/{character_id}", response_model=CharacterProfileResource)
-    async def v1_character_profile(character_id: str) -> CharacterProfileResource:
+    async def v1_character_profile(
+        character_id: str, request: Request
+    ) -> CharacterProfileResource:
+        principal = getattr(request.state, "auth_principal", None)
+        reveal_controller_identity = isinstance(
+            principal, TokenPrincipal
+        ) and scope_granted(principal.scopes, WORLD_ADMIN_SCOPE)
         try:
-            projection = serialize_character_projection(actor, character_id)
+            projection = serialize_character_projection(
+                actor,
+                character_id,
+                reveal_controller_identity=reveal_controller_identity,
+            )
         except ValueError as exc:
             detail = str(exc)
             status = 400 if detail == "entity is not a character" else 404
             raise HTTPException(status_code=status, detail=detail) from exc
         room = projection.room.model_copy(update={"entities": [], "exits": []})
+        sheet = projection.sheet
+        if not character_sheets:
+            sheet = sheet.model_copy(
+                update={
+                    "status": [],
+                    "vitals": [],
+                    "needs": [],
+                    "affect": [],
+                    "relations": [],
+                    "injuries": [],
+                    "notes": [],
+                }
+            )
         return CharacterProfileResource(
             **_world_fields(),
             character_id=projection.character_id,
@@ -2281,7 +2305,7 @@ def create_app(
             room=room,
             points=projection.points,
             controller=projection.controller,
-            sheet=projection.sheet,
+            sheet=sheet,
         )
 
     def _request_subject(request: Request) -> str | None:

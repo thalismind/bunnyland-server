@@ -854,10 +854,24 @@ def test_client_view_describes_controller_identity(scenario):
     def assign_and_view(components):
         controller = spawn_entity(world, components)
         generation = actor.assign_controller(scenario.character, controller.id)
-        view = serialize_character_projection(actor, str(scenario.character)).model_dump(
-            mode="json"
-        )
-        return generation, view["controller"]
+        redacted = serialize_character_projection(
+            actor, str(scenario.character)
+        ).model_dump(mode="json")["controller"]
+        revealed = serialize_character_projection(
+            actor,
+            str(scenario.character),
+            reveal_controller_identity=True,
+        ).model_dump(mode="json")["controller"]
+        return generation, redacted, revealed
+
+    def redacted_display(kind, name, detail):
+        if kind == "discord":
+            return "Discord user", ""
+        if kind == "web":
+            return name if name != "tab-1" else "web", ""
+        if kind == "mcp":
+            return name if name != "agent-2" else "MCP client", ""
+        return name, detail
 
     cases = [
         (
@@ -914,9 +928,17 @@ def test_client_view_describes_controller_identity(scenario):
         ),
     ]
     for components, kind, name, detail in cases:
-        generation, controller = assign_and_view(components)
-        assert controller == {
-            "controller_id": controller["controller_id"],
+        generation, redacted, revealed = assign_and_view(components)
+        safe_name, safe_detail = redacted_display(kind, name, detail)
+        assert redacted == {
+            "controller_id": redacted["controller_id"],
+            "generation": generation,
+            "kind": kind,
+            "name": safe_name,
+            "detail": safe_detail,
+        }
+        assert revealed == {
+            "controller_id": revealed["controller_id"],
             "generation": generation,
             "kind": kind,
             "name": name,
@@ -2150,6 +2172,39 @@ def test_health_reports_configured_feature_flags(scenario, monkeypatch):
         "image_generation": True,
         "allow_sleeping_character_chat": True,
     }
+
+
+def test_disabled_character_sheets_preserve_profile_identity_only(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    full_sheet = serialize_character_projection(
+        scenario.actor, str(scenario.character)
+    ).sheet.model_dump(mode="json")
+    app = create_app(scenario.actor, character_sheets=False)
+    client = testclient.TestClient(app)
+
+    features = client.get("/v1/public/features")
+    profile = client.get(
+        f"/v1/profile/characters/{scenario.character}",
+        headers={CLIENT_ID_HEADER: "profile-client"},
+    )
+
+    assert features.json()["character_sheets"] is False
+    assert profile.status_code == 200
+    sheet = profile.json()["sheet"]
+    for field in (
+        "kind",
+        "species",
+        "biography",
+        "description",
+        "appearance",
+        "tags",
+        "profile",
+        "skills",
+        "traits",
+    ):
+        assert sheet[field] == full_sheet[field]
+    for field in ("status", "vitals", "needs", "affect", "relations", "injuries", "notes"):
+        assert sheet[field] == []
 
 
 def test_fastapi_character_list_returns_claim_lobby_without_state(scenario):

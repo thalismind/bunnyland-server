@@ -2011,6 +2011,17 @@ async def test_remote_backend_runtime_sign_in_and_auth_required_detection(monkey
                 raise self.post_error
             return Response()
 
+        async def get(self, url):
+            assert url.endswith("/public/features")
+
+            class FeatureResponse:
+                def raise_for_status(self): ...
+
+                def json(self):
+                    return {"character_sheets": True, "character_chat": True}
+
+            return FeatureResponse()
+
         async def aclose(self): ...
 
     client = Client()
@@ -2248,6 +2259,7 @@ async def test_remote_backend_http_methods_use_async_client(monkeypatch):
     assert cancelled is True
     assert clients[0].closed is True
     assert clients[0].requests == [
+        ("GET", "https://server.example/public/features", None),
         ("GET", "https://server.example/admin/world/snapshot", None),
         ("GET", "https://server.example/play/characters", None),
         (

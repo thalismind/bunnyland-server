@@ -42,6 +42,7 @@ async def run_loop_with_api(
     imagegen: ImageGenService | None = None,
     character_chat: CharacterChatService | None = None,
     open_character_chat: bool = True,
+    character_sheets: bool = True,
     claim_secrets: ClaimSecretRegistry | None = None,
     moderation_service: ModerationService | None = None,
     max_ticks: int | None = None,
@@ -83,6 +84,7 @@ async def run_loop_with_api(
         imagegen=imagegen,
         character_chat=character_chat,
         open_character_chat=open_character_chat,
+        character_sheets=character_sheets,
         claim_secrets=claim_secrets,
     )
     telemetry.instrument_fastapi(app)

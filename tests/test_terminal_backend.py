@@ -301,6 +301,44 @@ async def test_remote_chat_availability_reports_disabled_server():
     )
 
 
+async def test_remote_start_caches_validated_feature_flags_before_ui(monkeypatch):
+    calls = []
+
+    class Client:
+        def __init__(self):
+            self.headers = {}
+
+        async def get(self, url):
+            calls.append(url)
+            assert url.endswith("/public/features")
+            return Response(
+                {
+                    "character_chat": False,
+                    "character_sheets": False,
+                    "allow_sleeping_character_chat": False,
+                }
+            )
+
+        async def aclose(self):
+            pass
+
+    client = Client()
+    monkeypatch.setattr("httpx.AsyncClient", lambda **_kwargs: client)
+    backend = RemoteBackend("https://server.example")
+
+    await backend.start()
+    try:
+        assert backend.supports_character_sheets is False
+        assert await backend.character_chat_availability() == (
+            False,
+            "Character chat is not enabled on this server",
+        )
+        assert await backend.allows_sleeping_character_chat() is False
+        assert len(calls) == 1
+    finally:
+        await backend.close()
+
+
 async def test_backend_default_character_operations_are_typed_failures():
     class Stub(Backend):
         supports_character_chat = True

@@ -1055,6 +1055,7 @@ class RemoteBackend(Backend):
         self._auth_scopes: frozenset[str] = frozenset()
         self._rotate_after: int | None = None
         self._rotation_task = None
+        self._features: FeatureStatusResponse | None = None
         self._claims: dict[str, ControlClaim] = {}
         self._claim_get_tasks: dict[tuple[str, str, str, str], asyncio.Task[dict | None]] = {}
 
@@ -1125,6 +1126,8 @@ class RemoteBackend(Backend):
 
         self._client = httpx.AsyncClient(timeout=10.0)
         self._client.headers["X-Bunnyland-Client-Id"] = self.client_id
+        features = await self._fetch_features()
+        self.supports_character_sheets = features.character_sheets
         if self.token_file is not None and self.token_file.exists():
             self._access_token = secure_read_text(self.token_file).strip()
             self._set_access_token(self._access_token)
@@ -1325,19 +1328,21 @@ class RemoteBackend(Backend):
         return await self.character_chat_access(character_id)
 
     async def character_chat_availability(self) -> tuple[bool, str]:
-        res = await self._client.get(f"{self.base}/public/features")
-        res.raise_for_status()
-        features = FeatureStatusResponse.model_validate(res.json())
+        features = await self._fetch_features()
         if features.character_chat:
             return True, ""
         return False, "Character chat is not enabled on this server"
 
-    async def allows_sleeping_character_chat(self) -> bool:
+    async def _fetch_features(self) -> FeatureStatusResponse:
+        if self._features is not None:
+            return self._features
         res = await self._client.get(f"{self.base}/public/features")
         res.raise_for_status()
-        return FeatureStatusResponse.model_validate(
-            res.json()
-        ).allow_sleeping_character_chat
+        self._features = FeatureStatusResponse.model_validate(res.json())
+        return self._features
+
+    async def allows_sleeping_character_chat(self) -> bool:
+        return (await self._fetch_features()).allow_sleeping_character_chat
 
     @staticmethod
     def _character_chat_job(resource: JobResource, character_id: str) -> CharacterChatJob:

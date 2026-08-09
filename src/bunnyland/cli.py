@@ -822,6 +822,7 @@ async def _run_api_runtime(
                 imagegen=imagegen,
                 character_chat=character_chat,
                 open_character_chat=getattr(args, "open_character_chat", True),
+                character_sheets=getattr(args, "character_sheets", True),
                 claim_secrets=claim_secrets,
                 moderation_service=getattr(discord_bot, "moderation_service", None),
                 max_ticks=max_ticks,
@@ -1386,6 +1387,15 @@ def main(argv: list[str] | None = None) -> int:
             "let any authenticated player chat with llm-controlled characters (default: "
             "enabled); --no-open-character-chat routes chat only to human controllers "
             "(env: BUNNYLAND_OPEN_CHARACTER_CHAT)"
+        ),
+    )
+    serve.add_argument(
+        "--character-sheets",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("BUNNYLAND_ENABLE_CHARACTER_SHEETS") is not False,
+        help=(
+            "expose detailed character sheets (default: enabled); disable with "
+            "--no-character-sheets (env: BUNNYLAND_ENABLE_CHARACTER_SHEETS)"
         ),
     )
     serve.add_argument(

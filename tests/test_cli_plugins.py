@@ -1268,6 +1268,25 @@ def test_cli_sleeping_character_chat_is_default_off_with_env_and_flag_opt_in(mon
     assert parsed == [False, True, False, True]
 
 
+def test_cli_character_sheets_are_default_on_with_env_and_flag_opt_out(monkeypatch):
+    parsed = []
+
+    def fake_run(coro):
+        parsed.append(coro.cr_frame.f_locals["args"].character_sheets)
+        coro.close()
+
+    monkeypatch.setattr(cli.asyncio, "run", fake_run)
+    monkeypatch.delenv("BUNNYLAND_ENABLE_CHARACTER_SHEETS", raising=False)
+    assert main(["serve"]) == 0
+
+    monkeypatch.setenv("BUNNYLAND_ENABLE_CHARACTER_SHEETS", "0")
+    assert main(["serve"]) == 0
+    assert main(["serve", "--character-sheets"]) == 0
+    assert main(["serve", "--no-character-sheets"]) == 0
+
+    assert parsed == [True, False, True, False]
+
+
 def test_cli_chat_command_forwards_options(monkeypatch):
     import bunnyland.chat as chat
 
@@ -1953,7 +1972,12 @@ async def test_run_api_runtime_without_mcp_uses_default_auth_paths(monkeypatch, 
 
     actor = WorldActor()
     meta = WorldMeta(seed="moss", generator="empty")
-    args = _serve_args(api_port=8765, max_rooms=9, save=str(tmp_path / "world.json"))
+    args = _serve_args(
+        api_port=8765,
+        character_sheets=False,
+        max_rooms=9,
+        save=str(tmp_path / "world.json"),
+    )
     loop = type("Loop", (), {"run": lambda self, *, max_ticks: asyncio.sleep(0, result=1)})()
 
     monkeypatch.setattr(runtime, "run_loop_with_api", fake_run_loop_with_api)
@@ -1973,6 +1997,7 @@ async def test_run_api_runtime_without_mcp_uses_default_auth_paths(monkeypatch, 
     assert ticks == 3
     assert calls["kwargs"]["auth_users_path"] == "data/auth-users.yml"
     assert calls["kwargs"]["token_db_path"] == "data/auth-tokens.sqlite3"
+    assert calls["kwargs"]["character_sheets"] is False
     assert calls["kwargs"]["worldgen_options"].max_rooms == 9
     assert "Serving MCP" not in capsys.readouterr().out
 

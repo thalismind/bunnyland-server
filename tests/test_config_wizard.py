@@ -185,6 +185,7 @@ def test_bunnyland_config_round_trips_yaml_with_private_mode(tmp_path: Path) -> 
         server=ServerConfig(
             character_chat=True,
             allow_sleeping_character_chat=True,
+            character_sheets=False,
             auth_users_file="/tmp/users.yml",
             token_db="/tmp/tokens.sqlite3",
         ),
@@ -197,12 +198,15 @@ def test_bunnyland_config_round_trips_yaml_with_private_mode(tmp_path: Path) -> 
     assert loaded.server.auth_users_file == "/tmp/users.yml"
     assert loaded.server.token_db == "/tmp/tokens.sqlite3"
     assert loaded.server.allow_sleeping_character_chat is True
+    assert loaded.server.character_sheets is False
     assert loaded.llm.ollama_api_key == "ollama-key"
     assert loaded.world.memory_backend == "json"
     assert loaded.world.memory_recall_limit == 5
     assert loaded.world.memory_recall_min_score == 0.6
     assert loaded.to_serve_args()["memory_recall_limit"] == 5
+    assert loaded.to_serve_args()["character_sheets"] is False
     assert loaded.to_env()["BUNNYLAND_MEMORY_RECALL_MIN_SCORE"] == "0.6"
+    assert loaded.to_env()["BUNNYLAND_ENABLE_CHARACTER_SHEETS"] == "0"
 
 
 def test_bunnyland_config_loads_empty_file_as_defaults(tmp_path: Path) -> None:
@@ -285,6 +289,7 @@ def test_bunnyland_config_renders_setup_env() -> None:
     assert env["BUNNYLAND_DISCORD_COOLDOWN_SECONDS"] == "3"
     assert env["BUNNYLAND_HTTP_RATE_LIMIT_REQUESTS"] == "20"
     assert env["BUNNYLAND_ALLOW_SLEEPING_CHARACTER_CHAT"] == "1"
+    assert env["BUNNYLAND_ENABLE_CHARACTER_SHEETS"] == "1"
     assert env["BUNNYLAND_HTTP_RATE_LIMIT_WINDOW_SECONDS"] == "2.5"
     assert env["BUNNYLAND_CORS_ORIGINS"] == "https://sandbox.example.com"
     assert env["BUNNYLAND_FORWARDED_ALLOW_IPS"] == "172.28.0.2"
