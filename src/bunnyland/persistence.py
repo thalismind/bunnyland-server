@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import shutil
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import is_dataclass
 from datetime import UTC, datetime
@@ -47,6 +48,7 @@ type TupleTree = (
 CHECKSUM_SUFFIX = ".sha256"
 DEFAULT_BACKUP_COUNT = 3
 DEFAULT_JOURNAL_RECORDS = 5000
+DEFAULT_JOURNAL_SEGMENT_RECORDS = 100
 
 
 class MemoryManifest(BaseModel):
@@ -96,41 +98,179 @@ class RecoveryManifest(BaseModel):
 
 
 class OperationalJournal:
-    """Bounded append-only JSONL audit trail adjacent to a canonical snapshot."""
+    """Bounded segmented JSONL audit trail adjacent to a canonical snapshot."""
 
-    def __init__(self, save_path: str | Path, *, max_records: int = DEFAULT_JOURNAL_RECORDS):
-        save_path = Path(save_path)
-        self.path = save_path.with_name(f"{save_path.name}.journal.jsonl")
+    def __init__(
+        self,
+        save_path: str | Path,
+        *,
+        max_records: int = DEFAULT_JOURNAL_RECORDS,
+        segment_records: int = DEFAULT_JOURNAL_SEGMENT_RECORDS,
+    ):
+        if max_records <= 0:
+            raise ValueError("max_records must be positive")
+        if segment_records <= 0:
+            raise ValueError("segment_records must be positive")
+        self.save_path = Path(save_path)
+        self.path = self.save_path.with_name(f"{self.save_path.name}.journal.jsonl")
         self.max_records = max_records
+        self.segment_records = min(segment_records, max_records)
+        self._completed: list[tuple[int, Path]] = []
+        self._active_records = 0
+        self._migration_performed = False
+        self._initialize()
 
     def append(self, record_type: str, **fields: object) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         record = {
             "journal_version": 1,
             "record_type": record_type,
             "recorded_at": datetime.now(UTC).isoformat(),
             **_jsonable(fields),
         }
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, separators=(",", ":"), default=str) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        self._bound()
+        serialized = json.dumps(record, separators=(",", ":"), default=str) + "\n"
+        migrated = self._migration_performed
+        with telemetry.span(
+            "journal.append",
+            {
+                "record.type": record_type,
+                "journal.migrated": migrated,
+                "journal.rotated": False,
+            },
+        ) as append_span:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._make_room_for_record()
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(serialized)
+                handle.flush()
+                os.fsync(handle.fileno())
+            self._active_records += 1
+            rotated = self._rotate_active_if_full()
+            append_span.set_attribute("journal.rotated", rotated)
+            telemetry.mark_span_ok(append_span)
+        self._migration_performed = False
 
     def records(self) -> list[dict[str, JsonValue]]:
-        if not self.path.exists():
-            return []
-        return [json.loads(line) for line in self.path.read_text().splitlines() if line]
+        records: list[dict[str, JsonValue]] = []
+        paths = [path for _index, path in self._completed]
+        if self.path.exists():
+            paths.append(self.path)
+        for path in paths:
+            with path.open(encoding="utf-8") as handle:
+                records.extend(json.loads(line) for line in handle if line.strip())
+        return records[-self.max_records :]
 
-    def _bound(self) -> None:
-        lines = self.path.read_text().splitlines(keepends=True)
-        if len(lines) <= self.max_records:
+    def _initialize(self) -> None:
+        self._completed = self._completed_segments()
+        legacy_paths = sorted(self.path.parent.glob(f".{self.path.name}.legacy-recovery-*"))
+        for legacy_path in legacy_paths:
+            self._recover_legacy(legacy_path)
+        if not self.path.exists():
             return
-        temporary = self.path.with_name(f".{self.path.name}.tmp")
-        temporary.write_text("".join(lines[-self.max_records :]))
-        _fsync_file(temporary)
-        os.replace(temporary, self.path)
+        with self.path.open(encoding="utf-8") as handle:
+            self._active_records = sum(1 for line in handle if line.strip())
+        if self._active_records >= self.segment_records:
+            self._start_legacy_migration()
+
+    def _completed_segments(self) -> list[tuple[int, Path]]:
+        prefix = f"{self.save_path.name}.journal."
+        completed: list[tuple[int, Path]] = []
+        for path in self.save_path.parent.glob(f"{prefix}*.jsonl"):
+            index_text = path.name[len(prefix) : -len(".jsonl")]
+            if index_text.isdigit():
+                completed.append((int(index_text), path))
+        return sorted(completed)
+
+    def _segment_path(self, index: int) -> Path:
+        return self.save_path.with_name(f"{self.save_path.name}.journal.{index:08d}.jsonl")
+
+    def _next_segment_index(self) -> int:
+        return self._completed[-1][0] + 1 if self._completed else 1
+
+    def _legacy_path(self, start_index: int) -> Path:
+        return self.path.with_name(
+            f".{self.path.name}.legacy-recovery-{start_index:08d}"
+        )
+
+    def _start_legacy_migration(self) -> None:
+        start_index = self._next_segment_index()
+        legacy_path = self._legacy_path(start_index)
+        os.replace(self.path, legacy_path)
         _fsync_directory(self.path.parent)
+        self._active_records = 0
+        self._recover_legacy(legacy_path)
+
+    def _recover_legacy(self, legacy_path: Path) -> None:
+        start_text = legacy_path.name.rsplit("-", 1)[-1]
+        if not start_text.isdigit():
+            raise ValueError(f"invalid journal recovery filename: {legacy_path.name}")
+        start_index = int(start_text)
+        for index, path in tuple(self._completed):
+            if index >= start_index:
+                path.unlink(missing_ok=True)
+        self._completed = [item for item in self._completed if item[0] < start_index]
+        self.path.unlink(missing_ok=True)
+
+        retained: deque[str] = deque(maxlen=self.max_records)
+        with legacy_path.open(encoding="utf-8") as source:
+            for line in source:
+                if line.strip():
+                    retained.append(line if line.endswith("\n") else f"{line}\n")
+        while len(self._completed) * self.segment_records + len(retained) > self.max_records:
+            _index, oldest = self._completed.pop(0)
+            oldest.unlink()
+
+        lines = list(retained)
+        completed_count = len(lines) // self.segment_records
+        temporary_targets: list[tuple[Path, Path]] = []
+        for offset in range(completed_count):
+            target = self._segment_path(start_index + offset)
+            temporary = target.with_name(f".{target.name}.migration.tmp")
+            begin = offset * self.segment_records
+            self._write_migration_file(
+                temporary,
+                lines[begin : begin + self.segment_records],
+            )
+            temporary_targets.append((temporary, target))
+        active_lines = lines[completed_count * self.segment_records :]
+        if active_lines:
+            active_temporary = self.path.with_name(f".{self.path.name}.migration.tmp")
+            self._write_migration_file(active_temporary, active_lines)
+            temporary_targets.append((active_temporary, self.path))
+
+        for temporary, target in temporary_targets:
+            os.replace(temporary, target)
+        _fsync_directory(self.path.parent)
+        legacy_path.unlink()
+        _fsync_directory(self.path.parent)
+        self._completed = self._completed_segments()
+        self._active_records = len(active_lines)
+        self._migration_performed = True
+
+    @staticmethod
+    def _write_migration_file(path: Path, lines: list[str]) -> None:
+        with path.open("w", encoding="utf-8") as handle:
+            handle.writelines(lines)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+    def _make_room_for_record(self) -> None:
+        retained = len(self._completed) * self.segment_records + self._active_records
+        while retained >= self.max_records:
+            _index, oldest = self._completed.pop(0)
+            oldest.unlink()
+            _fsync_directory(self.path.parent)
+            retained -= self.segment_records
+
+    def _rotate_active_if_full(self) -> bool:
+        if self._active_records < self.segment_records:
+            return False
+        index = self._next_segment_index()
+        completed = self._segment_path(index)
+        os.replace(self.path, completed)
+        _fsync_directory(self.path.parent)
+        self._completed.append((index, completed))
+        self._active_records = 0
+        return True
 
 
 def _jsonable(value: object) -> JsonValue:
@@ -256,7 +396,7 @@ def save_world(
             os.replace(temporary, path)
             os.replace(checksum_temporary, checksum_path)
             _fsync_directory(path.parent)
-            OperationalJournal(path).append(
+            _actor_journal(actor, path).append(
                 "checkpoint",
                 world_epoch=actor.epoch,
                 checksum=checksum,
@@ -397,7 +537,7 @@ def reload_world(
             world_namespace=loaded_meta.memory.world_namespace or loaded_meta.world_id,
         )
         if quarantine.quarantined:
-            OperationalJournal(path).append(
+            _actor_journal(actor, path).append(
                 "memory_quarantine",
                 world_id=loaded_meta.world_id,
                 checkpoint_epoch=quarantine.checkpoint_epoch,
@@ -415,6 +555,15 @@ def reload_world(
         plugin_context=plugin_context,
     )
     return meta
+
+
+def _actor_journal(actor: WorldActor, path: str | Path) -> OperationalJournal:
+    path = Path(path)
+    journal = actor.persistence.journal
+    if journal is None or journal.save_path != path:
+        journal = OperationalJournal(path)
+        actor.persistence.journal = journal
+    return journal
 
 
 def clone_world_identity(

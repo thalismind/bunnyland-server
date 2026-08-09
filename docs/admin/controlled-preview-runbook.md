@@ -34,8 +34,11 @@ bunnyland recovery-manifest \
 
 The command verifies the saved-world checksum and writes a checksum beside the recovery
 manifest. Preserve the world snapshot and sidecar, memory directory or JSON store, media
-tree and manifest, recovery manifest and sidecar, journal, and rollback checkpoint as one
-restore boundary.
+tree and manifest, recovery manifest and sidecar, the complete operational journal file set,
+and rollback checkpoint as one restore boundary. The journal set includes the active
+`<save>.journal.jsonl`, every `<save>.journal.NNNNNNNN.jsonl` completed segment, and any
+recovery-marked legacy or migration temporary file present after an interrupted startup.
+Do not back up or restore only the active segment.
 
 ## Remote backup and clean-host restore drill
 
@@ -84,18 +87,20 @@ schemas exercised by the gate.
 
 ## Stuck ticks or runaway agents
 
-Pause the runtime. Capture health, recent traces, queue depths, the operational journal,
-and a snapshot before changing state. Suspend the affected controller claim; do not edit
-the character around validation. Resume for one tick and verify receipts and projections.
+Pause the runtime. Capture health, recent traces, queue depths, every active, numbered, and
+recovery-marked operational journal file, and a snapshot before changing state. Suspend the
+affected controller claim; do not edit the character around validation. Resume for one tick
+and verify receipts and projections.
 If the tick still fails, restore the last verified checkpoint and quarantine memory newer
 than its epoch.
 
 ## Corruption
 
-Stop mutation, preserve the corrupt file and sidecar, and verify the checksum. Try the
-newest backup whose data and sidecar agree. Load it offline before replacing the live
-path. Quarantine journal and memory records above the restored checkpoint epoch. Never
-"fix" a checksum to match unexplained data.
+Stop mutation, preserve the corrupt file and sidecar, the active journal, all numbered
+journal segments, and any recovery-marked migration files, then verify the checksum. Try
+the newest backup whose data and sidecar agree. Load it offline before replacing the live
+path. Restore the journal files as one set, then quarantine journal and memory records above
+the restored checkpoint epoch. Never "fix" a checksum to match unexplained data.
 
 ## Provider failure
 

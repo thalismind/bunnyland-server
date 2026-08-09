@@ -2387,13 +2387,181 @@ def test_operational_journal_is_bounded_and_checkpointed(tmp_path):
     path = tmp_path / "world.json"
     save_world(actor, path, meta=WorldMeta(seed="journal"))
 
-    journal = OperationalJournal(path, max_records=2)
+    journal = OperationalJournal(path, max_records=2, segment_records=1)
     journal.append("epoch_transition", from_epoch=0, to_epoch=1)
     journal.append("epoch_transition", from_epoch=1, to_epoch=2)
 
     records = journal.records()
     assert len(records) == 2
     assert [record["to_epoch"] for record in records] == [1, 2]
+
+
+def test_operational_journal_rotates_aggregates_and_drops_whole_oldest_segment(tmp_path):
+    path = tmp_path / "world.json"
+    journal = OperationalJournal(path, max_records=5, segment_records=2)
+
+    for sequence in range(6):
+        journal.append("sequence", sequence=sequence)
+
+    completed = sorted(tmp_path.glob("world.json.journal.*.jsonl"))
+    assert [segment.name for segment in completed] == [
+        "world.json.journal.00000002.jsonl",
+        "world.json.journal.00000003.jsonl",
+    ]
+    assert not journal.path.exists()
+    assert [record["sequence"] for record in journal.records()] == [2, 3, 4, 5]
+    assert all(
+        len(segment.read_text(encoding="utf-8").splitlines()) == 2
+        for segment in completed
+    )
+    assert all(
+        json.loads(line)["journal_version"] == 1
+        for segment in completed
+        for line in segment.read_text(encoding="utf-8").splitlines()
+    )
+
+
+def test_operational_journal_append_never_opens_completed_segments(tmp_path, monkeypatch):
+    path = tmp_path / "world.json"
+    journal = OperationalJournal(path, max_records=5, segment_records=2)
+    for sequence in range(5):
+        journal.append("sequence", sequence=sequence)
+    completed = {segment for _index, segment in journal._completed}
+    original_open = Path.open
+
+    def guarded_open(candidate, *args, **kwargs):
+        if candidate in completed:
+            raise AssertionError(f"append opened completed segment {candidate}")
+        return original_open(candidate, *args, **kwargs)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(Path, "open", guarded_open)
+        journal.append("sequence", sequence=5)
+
+    assert [record["sequence"] for record in journal.records()] == [2, 3, 4, 5]
+
+
+def test_operational_journal_scans_active_once_and_serializes_each_append_once(
+    tmp_path, monkeypatch
+):
+    from bunnyland import persistence
+
+    path = tmp_path / "world.json"
+    active = path.with_name(f"{path.name}.journal.jsonl")
+    active.write_text('{"sequence":0}\n', encoding="utf-8")
+    original_open = Path.open
+    active_reads = 0
+
+    def tracked_open(candidate, mode="r", *args, **kwargs):
+        nonlocal active_reads
+        if candidate == active and mode == "r":
+            active_reads += 1
+        return original_open(candidate, mode, *args, **kwargs)
+
+    original_dumps = json.dumps
+    serializations = 0
+
+    def tracked_dumps(value, *args, **kwargs):
+        nonlocal serializations
+        serializations += 1
+        return original_dumps(value, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+    journal = OperationalJournal(path, segment_records=10)
+    monkeypatch.setattr(persistence.json, "dumps", tracked_dumps)
+    journal.append("sequence", sequence=1)
+    journal.append("sequence", sequence=2)
+
+    assert active_reads == 1
+    assert serializations == 2
+
+
+@pytest.mark.parametrize("legacy_records", [5000, 5107])
+def test_operational_journal_migrates_monolith_once_and_keeps_newest_records(
+    tmp_path, legacy_records
+):
+    path = tmp_path / "world.json"
+    active = path.with_name(f"{path.name}.journal.jsonl")
+    active.write_text(
+        "".join(json.dumps({"sequence": sequence}) + "\n" for sequence in range(legacy_records)),
+        encoding="utf-8",
+    )
+
+    journal = OperationalJournal(path)
+
+    completed = sorted(tmp_path.glob("world.json.journal.*.jsonl"))
+    assert len(completed) == 50
+    assert not active.exists()
+    assert not list(tmp_path.glob(".*legacy-recovery-*"))
+    records = journal.records()
+    assert len(records) == 5000
+    assert records[0]["sequence"] == legacy_records - 5000
+    assert records[-1]["sequence"] == legacy_records - 1
+    assert all(len(segment.read_text().splitlines()) == 100 for segment in completed)
+
+    restarted = OperationalJournal(path)
+    assert [record["sequence"] for record in restarted.records()] == [
+        record["sequence"] for record in records
+    ]
+
+
+def test_operational_journal_recovers_interrupted_legacy_migration(tmp_path):
+    path = tmp_path / "world.json"
+    active = path.with_name(f"{path.name}.journal.jsonl")
+    segment_one = tmp_path / "world.json.journal.00000001.jsonl"
+    segment_one.write_text('{"sequence":-2}\n{"sequence":-1}\n', encoding="utf-8")
+    stale_segment = tmp_path / "world.json.journal.00000002.jsonl"
+    stale_segment.write_text("interrupted\n", encoding="utf-8")
+    active.write_text("interrupted\n", encoding="utf-8")
+    legacy = tmp_path / ".world.json.journal.jsonl.legacy-recovery-00000002"
+    legacy.write_text(
+        "".join(json.dumps({"sequence": sequence}) + "\n" for sequence in range(7)),
+        encoding="utf-8",
+    )
+    stale_temporary = tmp_path / ".world.json.journal.00000002.jsonl.migration.tmp"
+    stale_temporary.write_text("interrupted\n", encoding="utf-8")
+
+    journal = OperationalJournal(path, max_records=5, segment_records=2)
+
+    assert [record["sequence"] for record in journal.records()] == [2, 3, 4, 5, 6]
+    assert not legacy.exists()
+    assert not stale_temporary.exists()
+    assert all(
+        json.loads(line)
+        for segment in [*sorted(tmp_path.glob("world.json.journal.*.jsonl")), active]
+        if segment.exists()
+        for line in segment.read_text().splitlines()
+    )
+
+
+def test_operational_journal_ignores_nonsegment_files_and_blank_legacy_lines(tmp_path):
+    path = tmp_path / "world.json"
+    ignored = tmp_path / "world.json.journal.notes.jsonl"
+    ignored.write_text("operator notes\n", encoding="utf-8")
+    legacy = tmp_path / ".world.json.journal.jsonl.legacy-recovery-00000001"
+    legacy.write_text('\n{"sequence":1}\n', encoding="utf-8")
+
+    journal = OperationalJournal(path, segment_records=2)
+
+    assert [record["sequence"] for record in journal.records()] == [1]
+    assert ignored.read_text(encoding="utf-8") == "operator notes\n"
+
+
+def test_operational_journal_rejects_invalid_recovery_filename(tmp_path):
+    invalid = tmp_path / ".world.json.journal.jsonl.legacy-recovery-invalid"
+    invalid.write_text('{"sequence":1}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid journal recovery filename"):
+        OperationalJournal(tmp_path / "world.json")
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [({"max_records": 0}, "max_records"), ({"segment_records": 0}, "segment_records")],
+)
+def test_operational_journal_rejects_nonpositive_bounds(tmp_path, options, message):
+    with pytest.raises(ValueError, match=message):
+        OperationalJournal(tmp_path / "world.json", **options)
 
 
 def test_recovery_manifest_pins_world_memory_media_and_release(tmp_path):
@@ -2496,6 +2664,54 @@ def test_reload_automatically_quarantines_future_memory_documents(tmp_path):
     quarantined = store.list_documents("older-world.quarantine.character-memory")
     assert [document.document for document in quarantined] == ["after checkpoint"]
     assert OperationalJournal(snapshot).records()[-1]["record_type"] == "memory_quarantine"
+
+
+def test_actor_owned_journal_records_checkpoints_receipts_and_memory_quarantine(tmp_path):
+    from bunnyland.memory import InMemoryStore
+
+    plugins = bunnyland_plugins()
+    actor = WorldActor()
+    apply_plugins(plugins, actor)
+    spawn_entity(actor.world, [MemoryProfileComponent(vector_collection="character-memory")])
+    store = InMemoryStore()
+    actor.memory_store = store
+    snapshot = tmp_path / "world.json"
+    stamped = save_world(
+        actor,
+        snapshot,
+        meta=WorldMeta(
+            seed="actor-journal",
+            memory=MemoryManifest(
+                world_namespace="actor-journal",
+                collection_namespace="actor-journal",
+            ),
+        ),
+    )
+    journal = actor.persistence.journal
+    assert journal is not None
+    actor.configure_persistence(save_path=snapshot, meta=stamped, plugins=plugins)
+    assert actor.persistence.journal is journal
+
+    command = build_submitted_command(
+        character_id="entity_999999",
+        controller_id="entity_999998",
+        controller_generation=0,
+        command_type="move",
+        cost=CommandCost(),
+        lane=Lane.WORLD,
+        command_id="actor-journal-rejection",
+    )
+    assert asyncio.run(actor.submit(command)).accepted is False
+    store.add("character-memory", text="future memory", created_at_epoch=1)
+
+    reload_world(actor, snapshot, meta=stamped, registry=PluginRegistry(plugins))
+
+    assert actor.persistence.journal is journal
+    assert [record["record_type"] for record in journal.records()] == [
+        "checkpoint",
+        "command_receipt",
+        "memory_quarantine",
+    ]
 
 
 def test_reload_with_memory_store_and_no_future_documents_skips_quarantine_journal(tmp_path):

@@ -1315,10 +1315,33 @@ async def test_save_and_load_emit_persistence_spans_and_metrics(otel_capture, tm
     assert spans["world.save"].attributes["entity.count"] > 0
     assert spans["world.load"].attributes["operation"] == "load"
     assert spans["world.load"].attributes["entity.count"] > 0
+    journal_append = spans["journal.append"]
+    assert journal_append.attributes["record.type"] == "checkpoint"
+    assert journal_append.attributes["journal.migrated"] is False
+    assert journal_append.attributes["journal.rotated"] is False
+    assert journal_append.parent.span_id == spans["world.save"].context.span_id
 
     points = _metric_points(reader)
     operations = {p.attributes["operation"] for p in points["bunnyland.world.persist.duration"]}
     assert operations == {"save", "load"}
+
+
+@pytestmark_otel
+async def test_journal_append_span_reports_migration_and_rotation(otel_capture, tmp_path):
+    from bunnyland.persistence import OperationalJournal
+
+    span_exporter, _reader = otel_capture
+    path = tmp_path / "world.json"
+    active = path.with_name(f"{path.name}.journal.jsonl")
+    active.write_text('{"journal_version":1,"record_type":"legacy"}\n', encoding="utf-8")
+
+    journal = OperationalJournal(path, max_records=3, segment_records=1)
+    journal.append("checkpoint", world_epoch=1)
+
+    append_span = _spans_by_name(span_exporter)["journal.append"]
+    assert append_span.attributes["record.type"] == "checkpoint"
+    assert append_span.attributes["journal.migrated"] is True
+    assert append_span.attributes["journal.rotated"] is True
 
 
 @pytestmark_otel

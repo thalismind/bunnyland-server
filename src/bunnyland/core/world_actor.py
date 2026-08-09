@@ -117,7 +117,7 @@ from .systems import ActionRegenSystem, FocusRegenSystem, WorldClockSystem
 if TYPE_CHECKING:
     from ..memory import MemoryRecallPolicy
     from ..memory.store import MemoryStore
-    from ..persistence import WorldMeta
+    from ..persistence import OperationalJournal, WorldMeta
     from ..plugins.model import Plugin, PluginRuntimeContext
     from ..plugins.registry import PluginRegistry
     from ..prompts.facts import PromptFactLike
@@ -172,6 +172,7 @@ class WorldPersistenceContext:
     meta: WorldMeta | None = None
     plugins: tuple[Plugin, ...] = ()
     plugin_context: PluginRuntimeContext | None = None
+    journal: OperationalJournal | None = None
 
 
 class WorldActor:
@@ -297,11 +298,19 @@ class WorldActor:
         plugins: tuple[Plugin, ...] = (),
         plugin_context: PluginRuntimeContext | None = None,
     ) -> None:
+        journal = self.persistence.journal
+        if save_path is None:
+            journal = None
+        elif journal is None or journal.save_path != Path(save_path):
+            from ..persistence import OperationalJournal
+
+            journal = OperationalJournal(save_path)
         self.persistence = WorldPersistenceContext(
             save_path=save_path,
             meta=meta,
             plugins=tuple(plugins),
             plugin_context=plugin_context,
+            journal=journal,
         )
 
     def available_command_types(self) -> tuple[str, ...]:
@@ -480,9 +489,8 @@ class WorldActor:
         while len(self._receipts) > self._receipt_cache_size:
             self._receipts.popitem(last=False)
         if self.persistence.save_path is not None:
-            from ..persistence import OperationalJournal
-
-            OperationalJournal(self.persistence.save_path).append(
+            assert self.persistence.journal is not None
+            self.persistence.journal.append(
                 "command_receipt",
                 receipt=receipt,
                 mutation_summary={"event_count": len(event_ids)},

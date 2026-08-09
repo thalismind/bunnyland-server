@@ -77,9 +77,15 @@ rotates three backups, atomically renames the checkpoint and checksum, then `fsy
 directory. Restore verifies a present checksum before parsing. Schema-v2 checkpoints made
 before checksum sidecars remain readable. Restore drills must also exercise `.bak.1`.
 
-The bounded `<save>.journal.jsonl` records checkpoint markers, command receipts, mutation
-summaries, event ranges, RNG state, and epochs. It supports audit and recovery diagnosis;
-it is not event sourcing and cannot replace a snapshot.
+The bounded operational journal records checkpoint markers, command receipts, mutation
+summaries, event ranges, RNG state, and epochs. `<save>.journal.jsonl` is the active
+append-only segment. Full 100-record segments are atomically renamed to
+`<save>.journal.NNNNNNNN.jsonl`; completed segments are immutable and the oldest completed
+segment is deleted before retained history could exceed 5,000 records. Chronological reads
+aggregate numbered segments and then the active segment. A pre-segmentation monolithic
+journal is migrated once through recovery-marked temporary files at startup. The complete
+active-and-numbered file set is one backup and restore boundary. The journal supports audit
+and recovery diagnosis; it is not event sourcing and cannot replace a snapshot.
 
 World metadata contains a versioned memory manifest: world namespace, backend, checkpoint
 epoch, collection namespace, embedding implementation, and high watermark. Source
