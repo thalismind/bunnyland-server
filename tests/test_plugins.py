@@ -84,6 +84,7 @@ from bunnyland.plugins.ids import (
     STORYTELLER,
     TOONSIM,
     VOIDSIM,
+    WORLD_HEALTH,
     WORLDGEN,
 )
 from bunnyland.plugins.loader import _match_plugin_id, discover_plugins
@@ -119,6 +120,7 @@ def test_builtin_plugins_declared():
         STORYTELLER,
         IMAGEGEN,
         CHECKPOINTS,
+        WORLD_HEALTH,
     }
     assert discord_plugins()[0].id == DISCORD
 
@@ -128,7 +130,9 @@ def test_select_defaults_to_default_enabled():
     assert len(select(plugins, None)) == 25
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
     assert CHECKPOINTS not in {p.id for p in select(plugins, None)}
+    assert WORLD_HEALTH not in {p.id for p in select(plugins, None)}
     assert [p.id for p in select(plugins, [CHECKPOINTS])] == [CHECKPOINTS]
+    assert [p.id for p in select(plugins, [WORLD_HEALTH])] == [WORLD_HEALTH]
 
 
 def test_prompt_filter_plugin_registers_typed_async_definitions():

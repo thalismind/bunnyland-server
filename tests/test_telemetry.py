@@ -25,6 +25,7 @@ from bunnyland.core import (
     CommandCost,
     Lane,
     OnInsufficientPoints,
+    WorldActor,
     build_submitted_command,
     spawn_entity,
 )
@@ -927,6 +928,46 @@ def test_world_gauges_report_live_counts(otel_capture):
 
 
 @pytestmark_otel
+def test_world_health_gauge_collects_only_on_scrape_and_registers_once(otel_capture):
+    _span_exporter, reader = otel_capture
+    scenario = build_scenario()
+    calls: list[WorldActor] = []
+
+    def collect(actor):
+        calls.append(actor)
+        return {
+            ("detached_controller", "warning"): 2,
+            ("invalid_controller_target", "error"): 0,
+        }
+
+    telemetry.register_world_health_gauge(scenario.actor, collect)
+    telemetry.register_world_health_gauge(scenario.actor, collect)
+    assert calls == []
+
+    points = _metric_points(reader)["bunnyland.world.health.issues"]
+    assert calls == [scenario.actor]
+    assert {
+        (point.attributes["check"], point.attributes["severity"]): point.value
+        for point in points
+    } == {
+        ("detached_controller", "warning"): 2,
+        ("invalid_controller_target", "error"): 0,
+    }
+
+
+def test_world_health_registration_and_callback_are_noops_without_telemetry():
+    scenario = build_scenario()
+    calls = []
+    telemetry.reset_for_tests()
+    telemetry.register_world_health_gauge(
+        scenario.actor, lambda actor: calls.append(actor) or {}
+    )
+
+    assert calls == []
+    assert list(telemetry._observe_world_health_issues(None)) == []
+
+
+@pytestmark_otel
 def test_world_audit_gauge_reports_mature_orphans(monkeypatch):
     from opentelemetry.sdk.metrics import MeterProvider
     from opentelemetry.sdk.metrics.export import InMemoryMetricReader
@@ -1158,6 +1199,9 @@ def test_event_stream_emits_connection_loss_and_projection_metrics(otel_capture)
 
 @pytestmark_otel
 def test_prometheus_exporter_serves_private_metrics(monkeypatch, tmp_path):
+    from bunnyland.plugins import apply_plugin
+    from bunnyland.world_health.plugin import plugin as world_health_plugin
+
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -1175,11 +1219,14 @@ def test_prometheus_exporter_serves_private_metrics(monkeypatch, tmp_path):
     scenario = build_scenario()
     spawn_entity(scenario.actor.world)
     telemetry.register_world_gauges(scenario.actor)
+    apply_plugin(world_health_plugin(), scenario.actor)
 
     response = httpx.get(f"http://127.0.0.1:{port}/metrics")
     assert response.status_code == 200
     assert "bunnyland_prompt_characters" in response.text
     assert "bunnyland_world_entities_orphaned" in response.text
+    assert "bunnyland_world_health_issues" in response.text
+    assert 'check="detached_controller"' in response.text
     assert 'controller_kind="llm"' in response.text
     assert "character.id" not in response.text
 

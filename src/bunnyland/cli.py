@@ -282,7 +282,9 @@ def _load_serve_plugins(args) -> tuple[list, list, PluginRuntimeContext]:
     try:
         plugins = select_plugins(
             args.plugin,
-            extra_enabled_ids=(MCP,) if args.mcp else (),
+            extra_enabled_ids=(
+                ((MCP,) if args.mcp else ()) + tuple(args.extra_plugin or ())
+            ),
             starter_pack=args.starter_pack or os.environ.get("BUNNYLAND_STARTER_PACK") or None,
         )
         ordered_plugins = resolve_order(plugins)
@@ -1126,6 +1128,12 @@ def main(argv: list[str] | None = None) -> int:
     serve = sub.add_parser("serve", help="generate a world and run the game loop")
     serve.add_argument("--config", default=None, help="read server settings from YAML")
     serve.add_argument("--plugin", action="append", default=None, help="enable a plugin id")
+    serve.add_argument(
+        "--extra-plugin",
+        action="append",
+        default=None,
+        help="enable a plugin in addition to the default or explicit plugin set",
+    )
     serve.add_argument(
         "--starter-pack",
         choices=tuple(sorted(STARTER_PACKS)),

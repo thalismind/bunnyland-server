@@ -60,6 +60,7 @@ from bunnyland.plugins.ids import (
     NUKESIM,
     PROMPT_FILTERS,
     VOIDSIM,
+    WORLD_HEALTH,
     WORLDGEN,
 )
 from bunnyland.prompts.builder import PromptBuilder
@@ -694,6 +695,29 @@ def test_cli_starter_pack_can_come_from_environment(monkeypatch, tmp_path):
         VOIDSIM,
         NUKESIM,
     )
+
+
+def test_cli_extra_plugin_preserves_default_plugin_set(tmp_path):
+    path = tmp_path / "world.json"
+
+    result = main(
+        [
+            "serve",
+            "--extra-plugin",
+            WORLD_HEALTH,
+            "--generator",
+            "empty",
+            "--ticks",
+            "1",
+            "--save",
+            str(path),
+        ]
+    )
+
+    assert result == 0
+    _actor, meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+    assert WORLD_HEALTH in meta.plugins
+    assert WORLDGEN in meta.plugins
 
 
 def test_missing_required_plugin_logs_error_and_exits(monkeypatch, caplog):

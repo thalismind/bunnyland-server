@@ -128,6 +128,12 @@ class _MeterProvider(Protocol):
     def get_meter(self, name: str) -> _Meter: ...
 
 
+class WorldHealthCollector(Protocol):
+    """Collect bounded world-health issue counts for an observable metric."""
+
+    def __call__(self, actor: WorldActor) -> Mapping[tuple[str, str], int]: ...
+
+
 # Module-level state. ``_ENABLED`` is the single hot-path gate.
 _ENABLED = False
 _initialized = False
@@ -141,6 +147,9 @@ _gauges_stream: EventStream | None = None
 _world_gauges_registered = False
 _runtime_gauges_registered = False
 _stream_gauges_registered = False
+_world_health_actor: WorldActor | None = None
+_world_health_collector: WorldHealthCollector | None = None
+_world_health_gauge_registered = False
 _world_audit_enabled = False
 _orphan_grace_seconds = 300.0
 _orphan_candidates: dict[EntityId, float] = {}
@@ -592,6 +601,31 @@ def register_world_gauges(actor: WorldActor) -> None:
         )
 
 
+def register_world_health_gauge(
+    actor: WorldActor, collector: WorldHealthCollector
+) -> None:
+    """Register an opt-in, collection-time world-health audit.
+
+    The caller controls whether this registration occurs. The potentially expensive
+    collector is invoked only by the observable gauge callback, never during a game tick.
+    """
+
+    global _world_health_actor, _world_health_collector, _world_health_gauge_registered
+    if not _ENABLED:
+        return
+    _world_health_actor = actor
+    _world_health_collector = collector
+    if _world_health_gauge_registered:
+        return
+    _world_health_gauge_registered = True
+    assert _meter is not None
+    _meter.create_observable_gauge(
+        "bunnyland.world.health.issues",
+        callbacks=[_observe_world_health_issues],
+        description="World-health findings grouped by bounded check and severity.",
+    )
+
+
 def register_runtime_gauges(
     actor: WorldActor, dispatch: ControllerDispatch, loop: GameLoop
 ) -> None:
@@ -713,6 +747,14 @@ def _orphaned_entity_count(world: World, *, now: float | None = None) -> int:
 def _observe_orphaned_entities(_options: object) -> Iterator[object]:
     if _gauges_actor is not None:
         yield _observation(_orphaned_entity_count(_gauges_actor.world))
+
+
+def _observe_world_health_issues(_options: object) -> Iterator[object]:
+    if _world_health_actor is None or _world_health_collector is None:
+        return
+    counts = _world_health_collector(_world_health_actor)
+    for (check, severity), count in sorted(counts.items()):
+        yield _observation(count, {"check": check, "severity": severity})
 
 
 def _observe(count_fn: Callable[[World], int]) -> Iterator[object]:
@@ -1190,6 +1232,7 @@ def reset_for_tests() -> None:
     global _ENABLED, _initialized, _tracer, _meter, _instruments
     global _gauges_actor, _gauges_dispatch, _gauges_loop, _gauges_stream
     global _world_gauges_registered, _runtime_gauges_registered, _stream_gauges_registered
+    global _world_health_actor, _world_health_collector, _world_health_gauge_registered
     global _world_audit_enabled, _orphan_grace_seconds
     global _prometheus_server, _prometheus_thread
     if _prometheus_server is not None:
@@ -1207,6 +1250,9 @@ def reset_for_tests() -> None:
     _world_gauges_registered = False
     _runtime_gauges_registered = False
     _stream_gauges_registered = False
+    _world_health_actor = None
+    _world_health_collector = None
+    _world_health_gauge_registered = False
     _world_audit_enabled = False
     _orphan_grace_seconds = 300.0
     _orphan_candidates.clear()
@@ -1246,6 +1292,7 @@ __all__ = [
     "record_worldgen_request",
     "register_event_stream",
     "register_runtime_gauges",
+    "register_world_health_gauge",
     "register_world_gauges",
     "reset_for_tests",
     "set_span_attributes",

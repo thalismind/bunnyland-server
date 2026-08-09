@@ -161,6 +161,7 @@ uv run bunnyland serve --config bunnyland.yml
 | `--cors-origin` | (none) | Permit one absolute browser origin; repeat as needed. Wildcard and `null` origins are invalid. |
 | `--forwarded-allow-ips` | `127.0.0.1` | Exact trusted reverse-proxy address passed to Uvicorn. |
 | `--plugin`       | (all default)  | Enable only the named plugin id(s); repeatable. See [admin](./). |
+| `--extra-plugin` | (none) | Add a plugin without replacing the default or explicit plugin set; repeatable. |
 | `--starter-pack` | (none)         | Enable a startup preset: `peaceful`, `fantastic`, or `futuristic`. |
 | `--verbose`      | off            | Log each decision and world-generation step at INFO.           |
 | `--load`         | (none)         | Resume a saved world instead of generating. See [persistence](../developer/persistence.md). |
@@ -321,6 +322,8 @@ is safe to leave the instrumentation in place in production and flip the gate on
 | `bunnyland.llm.cost` | counter (USD) | `provider`, `model` |
 | `bunnyland.world.entities` / `.characters` / `.rooms` | observable gauge | — |
 | `bunnyland.world.characters.active` | observable gauge | `controller_kind` |
+| `bunnyland.world.entities.orphaned` | opt-in observable gauge | — |
+| `bunnyland.world.health.issues` | opt-in observable gauge | `check`, `severity` |
 | `bunnyland.command.queue.depth` | observable gauge | `stage` |
 | `bunnyland.loop.iteration.duration` | histogram (s) | `paused` |
 | `bunnyland.controller.turn.duration` | histogram (s) | `controller_kind`, `outcome` |
@@ -336,6 +339,30 @@ private Prometheus scrape. `OTEL_EXPORTER_PROMETHEUS_HOST` defaults to
 `127.0.0.1` and `OTEL_EXPORTER_PROMETHEUS_PORT` defaults to `9464`. Do not put
 this listener behind the public application proxy; publish or forward it on
 localhost only.
+
+### Optional world audits
+
+World audits walk live ECS state and can be expensive for large worlds, so they are off by
+default and do not run during ticks. The existing orphan gauge is enabled independently:
+
+```bash
+BUNNYLAND_OTEL_WORLD_AUDIT_ENABLED=1
+BUNNYLAND_OTEL_ORPHAN_GRACE_SECONDS=300
+```
+
+The `bunnyland.world_health` plugin adds structural, relationship-index, controller,
+claim, and queued-command issue counts. Enable it without replacing the normal plugin set:
+
+```bash
+uv run bunnyland serve --extra-plugin bunnyland.world_health
+```
+
+Its O(entities + relationships + queued commands) collector runs only when the observable
+gauge is scraped. The metric always emits the fixed check/severity series, including zeros;
+it never attaches entity or command ids.
+
+The plugin does not duplicate `bunnyland.world.entities.orphaned`. Operators that want the
+complete dashboard row should enable both the plugin and the orphan audit gate.
 
 **Spans emitted** — a server loop iteration is the trace root, with the world tick and the
 controller turn hanging off it:

@@ -513,6 +513,7 @@ def test_canonical_builtin_package_entrypoints_are_independently_importable():
         "bunnyland.foundation.social": "bunnyland.social",
         "bunnyland.foundation.storyteller": "bunnyland.storyteller",
         "bunnyland.foundation.worldgen": "bunnyland.worldgen",
+        "bunnyland.world_health": "bunnyland.world_health",
     }
     for module_name, plugin_id in expected.items():
         module = import_module(f"{module_name}.plugin")

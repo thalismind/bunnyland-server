@@ -27,5 +27,6 @@ IMAGEGEN = "bunnyland.imagegen"
 MCP = "bunnyland.mcp"
 CHECKPOINTS = "bunnyland.checkpoints"
 DISCORD = "bunnyland.discord"
+WORLD_HEALTH = "bunnyland.world_health"
 
 __all__ = [name for name in globals() if name.isupper()]
