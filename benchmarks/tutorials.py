@@ -1018,10 +1018,9 @@ async def _build_session(
     recording = _RecordingAgent(agent)
     dispatch = ControllerDispatch(
         actor,
-        PromptBuilder(
-            actor.world,
-            memory_store=actor.memory_store,
-            fragment_providers=actor.prompt_fragment_providers,
+            PromptBuilder(
+                actor.world,
+                fragment_providers=actor.prompt_fragment_providers,
             persona_providers=collect_persona_fragments(plugins),
         ),
         recording,

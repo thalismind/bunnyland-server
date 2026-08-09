@@ -11,18 +11,22 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+
+from pydantic import JsonValue, TypeAdapter
 
 from .. import telemetry
 from .store import (
     InMemoryStore,
+    MemoryDocument,
     MemoryEntry,
     _entry_metadata,
     normalize_tags,
 )
 
+_MEMORY_FILE = TypeAdapter(dict[str, dict[str, list[dict[str, JsonValue]]]])
 
-def _entry_to_json(entry: MemoryEntry) -> dict[str, Any]:
+
+def _entry_to_json(entry: MemoryEntry) -> dict[str, JsonValue]:
     # ``score`` is search-only state, so it is intentionally not persisted.
     return {
         "id": entry.id,
@@ -34,13 +38,13 @@ def _entry_to_json(entry: MemoryEntry) -> dict[str, Any]:
     }
 
 
-def _entry_from_json(data: dict[str, Any]) -> MemoryEntry:
+def _entry_from_json(data: dict[str, JsonValue]) -> MemoryEntry:
     tags = normalize_tags(data.get("tags", ()))
     metadata = _entry_metadata(
         tags,
         int(data.get("created_at_epoch", 0) or 0),
         str(data.get("source", "manual")),
-        data.get("metadata"),
+        data.get("metadata") if isinstance(data.get("metadata"), dict) else None,
     )
     return MemoryEntry(
         id=str(data["id"]),
@@ -74,7 +78,8 @@ class JsonMemoryStore(InMemoryStore):
                 telemetry.mark_span_ok(backend_span)
                 return
             encoded = self._path.read_text(encoding="utf-8")
-            raw = json.loads(encoded)
+            decoded: object = json.loads(encoded)
+            raw = _MEMORY_FILE.validate_python(decoded)
             for collection, entries in raw.get("collections", {}).items():
                 self._collections[collection] = [_entry_from_json(item) for item in entries]
             backend_span.set_attribute("memory.outcome", "loaded")
@@ -135,8 +140,8 @@ class JsonMemoryStore(InMemoryStore):
         collection: str,
         *,
         document: str,
-        metadata: dict[str, Any],
-    ):
+        metadata: dict[str, JsonValue],
+    ) -> MemoryDocument:
         created = super().create_document(collection, document=document, metadata=metadata)
         self._save()
         return created
@@ -147,8 +152,8 @@ class JsonMemoryStore(InMemoryStore):
         note_id: str,
         *,
         document: str,
-        metadata: dict[str, Any],
-    ):
+        metadata: dict[str, JsonValue],
+    ) -> MemoryDocument | None:
         updated = super().update_document(collection, note_id, document=document, metadata=metadata)
         if updated is not None:
             self._save()

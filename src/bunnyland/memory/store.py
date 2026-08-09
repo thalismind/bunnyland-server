@@ -11,8 +11,10 @@ import difflib
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Protocol
 from uuid import uuid4
+
+from pydantic import JsonValue
 
 # Minimum difflib similarity for a query token to count as a fuzzy match. Exact matches
 # always score 1.0; this only governs typo/near-miss tolerance in keyword search.
@@ -27,14 +29,14 @@ class MemoryEntry:
     created_at_epoch: int = 0
     source: str = "manual"
     score: float | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, JsonValue] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class MemoryDocument:
     id: str
     document: str
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, JsonValue] = field(default_factory=dict)
 
 
 class MemoryStore(Protocol):
@@ -66,7 +68,7 @@ class MemoryStore(Protocol):
         collection: str,
         *,
         document: str,
-        metadata: dict[str, Any],
+        metadata: dict[str, JsonValue],
     ) -> MemoryDocument: ...
 
     def update_document(
@@ -75,7 +77,7 @@ class MemoryStore(Protocol):
         note_id: str,
         *,
         document: str,
-        metadata: dict[str, Any],
+        metadata: dict[str, JsonValue],
     ) -> MemoryDocument | None: ...
 
 
@@ -156,15 +158,18 @@ def _fuzzy_score(query_tokens: set[str], candidates: set[str]) -> float:
         match = difflib.get_close_matches(token, pool, n=1, cutoff=_FUZZY_CUTOFF)
         if match:
             score += difflib.SequenceMatcher(None, token, match[0]).ratio()
-    return score
+    normalizer = min(len(query_tokens), len(candidates))
+    if normalizer == 0:
+        return 0.0
+    return min(1.0, score / normalizer)
 
 
 def _entry_metadata(
     tags: tuple[str, ...],
     created_at_epoch: int,
     source: str,
-    metadata: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+    metadata: dict[str, JsonValue] | None = None,
+) -> dict[str, JsonValue]:
     values = dict(metadata or {})
     values["tags"] = list(normalize_tags(values.get("tags", tags)))
     values.setdefault("created_at_epoch", created_at_epoch)
@@ -287,7 +292,7 @@ class InMemoryStore:
         collection: str,
         *,
         document: str,
-        metadata: dict[str, Any],
+        metadata: dict[str, JsonValue],
     ) -> MemoryDocument:
         created = _entry_from_document(
             MemoryDocument(id=uuid4().hex, document=document, metadata=dict(metadata))
@@ -310,7 +315,7 @@ class InMemoryStore:
         note_id: str,
         *,
         document: str,
-        metadata: dict[str, Any],
+        metadata: dict[str, JsonValue],
     ) -> MemoryDocument | None:
         entries = self._collections.get(collection, [])
         updated = _entry_from_document(

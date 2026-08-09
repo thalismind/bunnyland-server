@@ -146,6 +146,8 @@ uv run bunnyland serve --config bunnyland.yml
 | `--ollama-model` | (none)         | Shared Ollama model override for generation and characters. |
 | `--worldgen-model` | `deepseek-v4-pro` | Ollama model for world generation.                    |
 | `--character-model` | `deepseek-v4-flash` | Default Ollama model for character controllers.    |
+| `--memory-recall-limit` | `3` | Maximum relevant private memories automatically added to each character prompt; `0` disables automatic recall. |
+| `--memory-recall-min-score` | `0.35` | Minimum normalized relevance (`0..1`) for automatic recall. |
 | `--ticks`        | `10`           | Number of rounds to run; `0` runs forever (until Ctrl-C).      |
 | `--tick-seconds` | `1.0`          | Real seconds the loop sleeps between rounds (when `--ticks 0`).  |
 | `--time-scale`   | `3600.0`       | Game seconds that pass per round.                              |
@@ -167,6 +169,13 @@ uv run bunnyland serve --config bunnyland.yml
 | `--load-paused`  | off            | Start the server tick cycle paused when used with `--load`.    |
 | `--save`         | (none)         | Save the world to this path on exit.                           |
 | `--autosave-every`| `0`           | Autosave every N ticks (needs `--save`).                       |
+
+Characters with a memory profile automatically receive relevant private memories in LLM
+decision, character-chat, and MCP prompts. Retrieval is bounded and failures are logged
+without exposing the error to the character. The equivalent container settings are
+`BUNNYLAND_MEMORY_RECALL_LIMIT` and `BUNNYLAND_MEMORY_RECALL_MIN_SCORE`. An explicit
+character recall filter overrides the server default, while the `remember` action remains
+available for deliberate searches.
 
 ## Admin surface security
 

@@ -40,7 +40,6 @@ from bunnyland.foundation.persona.mechanics import (
 )
 from bunnyland.foundation.policy.mechanics import BoundaryTag, CharacterBoundaryComponent
 from bunnyland.foundation.social.mechanics import SocialBond
-from bunnyland.memory import InMemoryStore
 from bunnyland.plugins import bunnyland_plugins, collect_persona_fragments
 from bunnyland.projections import RecentContextProjection, RoomSummaryProjection
 from bunnyland.projections.perception import PerceivedEntity
@@ -428,7 +427,7 @@ def test_status_helper_uses_condition_precedence(scenario):
     assert _status(character) == "dead"
 
 
-def test_build_context_includes_needs_feelings_and_notes():
+def test_build_context_includes_needs_and_feelings_without_retrieving_memory():
     scenario = build_scenario()
     char = scenario.actor.world.get_entity(scenario.character)
     char.add_component(HungerComponent(meter=Meter(value=75.0)))  # urgent
@@ -436,14 +435,8 @@ def test_build_context_includes_needs_feelings_and_notes():
     char.add_component(
         AffectComponent(current=AffectVector(stress=20.0), labels=frozenset({"tense"}))
     )
-    char.add_component(MemoryProfileComponent(vector_collection="juniper"))
-
-    store = InMemoryStore()
-    store.add("juniper", text="The basin water is unsafe.", created_at_epoch=1)
-
     builder = PromptBuilder(
         scenario.actor.world,
-        memory_store=store,
         fragment_providers=[need_fragments],
     )
     ctx = builder.build(scenario.character, epoch=scenario.actor.epoch)
@@ -451,7 +444,8 @@ def test_build_context_includes_needs_feelings_and_notes():
     assert any("hungry" in n for n in ctx.conditions)
     assert all("dry" not in n for n in ctx.conditions)  # thirst calm
     assert "tense" in ctx.feelings
-    assert "The basin water is unsafe." in ctx.notes
+    assert ctx.notes == ()
+    assert ctx.recall == ()
 
 
 async def test_build_context_surfaces_structured_social_cues_from_recent_events():
@@ -676,77 +670,6 @@ def test_social_cues_handle_unresolved_visible_character_ids():
     )
 
     assert cues == ("Stranger has not answered you.",)
-
-
-def test_build_context_surfaces_relevant_memory_with_audit_metadata():
-    scenario = build_scenario()
-    add_item(scenario, scenario.room_a, "stone basin")
-    char = scenario.actor.world.get_entity(scenario.character)
-    char.add_component(MemoryProfileComponent(vector_collection="juniper"))
-    store = InMemoryStore()
-    unsafe = store.add(
-        "juniper",
-        text="The basin water is unsafe.",
-        tags=("basin", "water"),
-        created_at_epoch=1,
-        source="manual",
-    )
-    store.add(
-        "juniper",
-        text="Hazel hid turnips in the attic.",
-        tags=("attic",),
-        created_at_epoch=2,
-        source="manual",
-    )
-
-    ctx = PromptBuilder(scenario.actor.world, memory_store=store).build(scenario.character)
-    prompt = render_prompt(ctx)
-
-    assert len(ctx.recall) == 1
-    assert "The basin water is unsafe." in ctx.recall[0]
-    assert ctx.recall[0].startswith('[untrusted world memory] "')
-    assert f"memory:{unsafe.id}" in ctx.recall[0]
-    assert "source:manual" in ctx.recall[0]
-    assert "score:" in ctx.recall[0]
-    assert "turnips" not in " ".join(ctx.recall)
-    assert "Recall:" in prompt
-
-
-def test_build_context_bounds_recall_while_preserving_relevant_memory():
-    scenario = build_scenario()
-    add_item(scenario, scenario.room_a, "stone basin")
-    char = scenario.actor.world.get_entity(scenario.character)
-    char.add_component(MemoryProfileComponent(vector_collection="juniper"))
-    store = InMemoryStore()
-    for index in range(8):
-        store.add(
-            "juniper",
-            text=f"Basin noise {index} " + ("filler " * 40),
-            tags=("basin",),
-            created_at_epoch=index,
-        )
-    important = store.add(
-        "juniper",
-        text="Basin water stone warning: the clear pool is poison.",
-        tags=("basin", "water", "stone"),
-        created_at_epoch=99,
-        source="reflection",
-    )
-    builder = PromptBuilder(
-        scenario.actor.world,
-        memory_store=store,
-        recall_limit=9,
-        recall_budget_chars=180,
-        recall_line_chars=80,
-    )
-
-    ctx = builder.build(scenario.character)
-    joined = "\n".join(ctx.recall)
-
-    assert f"memory:{important.id}" in joined
-    assert "source:reflection" in joined
-    assert sum(len(line) for line in ctx.recall) + max(0, len(ctx.recall) - 1) <= 180
-    assert len(ctx.recall) < 9
 
 
 def test_component_prompt_context_lazy_room_siblings_and_inventory_helpers():
@@ -1277,7 +1200,7 @@ def test_social_cue_reports_a_visible_character_just_left():
     assert "Hazel just left." in ctx.social_cues
 
 
-def test_recall_is_empty_when_query_has_no_content():
+def test_prompt_builder_leaves_recall_empty_even_when_character_has_memory():
     scenario = build_scenario()
     world = scenario.actor.world
     # A room with an empty title and nothing visible produces an empty recall query.
@@ -1286,25 +1209,7 @@ def test_recall_is_empty_when_query_has_no_content():
     blank_room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), scenario.character)
     char = world.get_entity(scenario.character)
     char.add_component(MemoryProfileComponent(vector_collection="juniper"))
-    store = InMemoryStore()
-    store.add("juniper", text="A memory.", created_at_epoch=1)
-
-    ctx = PromptBuilder(world, memory_store=store).build(scenario.character)
+    ctx = PromptBuilder(world).build(scenario.character)
 
     assert ctx.location_title == ""
-    assert ctx.recall == ()
-
-
-def test_recall_budget_of_zero_drops_all_memory():
-    scenario = build_scenario()
-    add_item(scenario, scenario.room_a, "stone basin")
-    char = scenario.actor.world.get_entity(scenario.character)
-    char.add_component(MemoryProfileComponent(vector_collection="juniper"))
-    store = InMemoryStore()
-    store.add("juniper", text="The basin water is unsafe.", tags=("basin",), created_at_epoch=1)
-
-    ctx = PromptBuilder(scenario.actor.world, memory_store=store, recall_budget_chars=0).build(
-        scenario.character
-    )
-
     assert ctx.recall == ()

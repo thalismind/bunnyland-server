@@ -56,6 +56,7 @@ class CorruptedPromptFilterComponent(Component):
 @dataclass(frozen=True)
 class RecallPromptFilterComponent(Component):
     limit: int = 3
+    min_score: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -92,7 +93,7 @@ async def redacted_filter(
         if not eligible:
             return word
         score = _unit_hash(
-            context.character.id, context.filter_entity.id, text, match.start(), word
+            context.character.id, context.filter_key, text, match.start(), word
         )
         if score < strength:
             return component.replacement
@@ -118,12 +119,12 @@ async def corrupted_filter(
         if len(word) < 4 or not replacements:
             return word
         score = _unit_hash(
-            context.character.id, context.filter_entity.id, text, match.start(), word
+            context.character.id, context.filter_key, text, match.start(), word
         )
         if score >= strength:
             return word
         index = int(
-            _unit_hash(context.filter_entity.id, word, match.start(), "replacement")
+            _unit_hash(context.filter_key, word, match.start(), "replacement")
             * len(replacements)
         )
         return replacements[min(index, len(replacements) - 1)]
@@ -134,11 +135,11 @@ async def corrupted_filter(
         candidates = [index for index, line in enumerate(lines) if line and not line.endswith(":")]
         for index in reversed(candidates):
             score = _unit_hash(
-                context.character.id, context.filter_entity.id, text, index, "phrase"
+                context.character.id, context.filter_key, text, index, "phrase"
             )
             if score < strength / 4:
                 phrase_index = int(
-                    _unit_hash(context.filter_entity.id, index, "phrase-choice") * len(phrases)
+                    _unit_hash(context.filter_key, index, "phrase-choice") * len(phrases)
                 )
                 lines.insert(index + 1, phrases[min(phrase_index, len(phrases) - 1)])
         corrupted = "\n".join(lines)
@@ -160,6 +161,9 @@ async def recall_filter(
     limit = max(0, component.limit)
     if limit == 0:
         return text
+    min_score = float(component.min_score)
+    if not 0.0 <= min_score <= 1.0:
+        raise ValueError("recall minimum score must be between 0 and 1")
     collection = context.character.get_component(MemoryProfileComponent).vector_collection
     entries = context.memory_store.search(
         collection,
@@ -167,14 +171,23 @@ async def recall_filter(
         mode="vector",
         limit=limit,
     )
+    entries = [entry for entry in entries if (entry.score or 0.0) >= min_score]
     if not entries:
         return text
     lines = [text.rstrip(), "", "Recall:"]
-    lines.extend(
-        f'- [untrusted world memory] "{entry.text}" '
-        f"[memory:{entry.id} source:{entry.source}]"
-        for entry in entries
-    )
+    used = len("Recall:\n")
+    for entry in entries:
+        memory = " ".join(entry.text.split())
+        if len(memory) > 240:
+            memory = memory[:237].rstrip() + "..."
+        line = (
+            f'- [untrusted world memory] "{memory}" '
+            f"[memory:{entry.id} source:{entry.source}]"
+        )
+        if used + len(line) + 1 > 900:
+            continue
+        lines.append(line)
+        used += len(line) + 1
     return "\n".join(lines) + "\n"
 
 

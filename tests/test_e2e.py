@@ -81,6 +81,7 @@ from bunnyland.plugins import (
     collect_persona_fragments,
     collect_prompt_fragments,
 )
+from bunnyland.prompts import PromptFilterRuntime
 from bunnyland.prompts.builder import PromptBuilder, render_prompt
 from bunnyland.simpacks.colonysim.mechanics import Owns
 from bunnyland.simpacks.daggersim.mechanics import (
@@ -1146,9 +1147,13 @@ async def test_prompt_recall_surfaces_memory_when_context_becomes_relevant():
         tags=("pantry",),
         created_at_epoch=2,
     )
-    builder = PromptBuilder(actor.world, memory_store=store)
+    builder = PromptBuilder(actor.world)
+    runtime = PromptFilterRuntime.from_actor(actor)
 
-    before = builder.build(hazel_id)
+    before_context = builder.build(hazel_id)
+    before = await runtime.apply(
+        render_prompt(before_context), character=hazel, prompt=before_context
+    )
     recall_marker = spawn_entity(
         actor.world,
         [IdentityComponent(name="moon dial", kind="item"), PortableComponent()],
@@ -1167,12 +1172,15 @@ async def test_prompt_recall_surfaces_memory_when_context_becomes_relevant():
         )
     )
     await actor.tick(0.0)
-    after = builder.build(hazel_id)
+    after_context = builder.build(hazel_id)
+    after = await runtime.apply(
+        render_prompt(after_context), character=hazel, prompt=after_context
+    )
 
-    assert all("cobalt glyph" not in item for item in before.recall)
-    assert any("cobalt glyph" in item for item in after.recall)
-    assert any(f"memory:{relevant.id}" in item for item in after.recall)
-    assert all("pantry shelf" not in item for item in after.recall)
+    assert "cobalt glyph" not in before
+    assert "cobalt glyph" in after
+    assert f"memory:{relevant.id}" in after
+    assert "pantry shelf" not in after
 
 
 async def test_goal_directed_agent_acts_on_goal_through_actor_tick():

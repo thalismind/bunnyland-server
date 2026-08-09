@@ -42,7 +42,6 @@ from bunnyland.memory.handlers import (
     TakeNoteHandler,
 )
 from bunnyland.memory.jsonfile import JsonMemoryStore
-from bunnyland.prompts.builder import PromptBuilder, render_prompt
 
 HOUR = 3600.0
 
@@ -281,9 +280,6 @@ async def test_conversation_lines_become_retrievable_participant_memories():
     assert clover_results[0].source == "conversation"
     assert "conversation" in hazel_results[0].tags
 
-    prompt = render_prompt(PromptBuilder(scenario.actor.world, memory_store=store).build(hazel.id))
-    assert "Please watch the east tunnel" in prompt
-    assert "source:conversation" in prompt
 
 
 def test_conversation_memory_reactor_ignores_invalid_or_unprofiled_participants():
@@ -717,6 +713,13 @@ def test_inmemory_store_keyword_tolerates_typos():
     assert store.search("c", query="mountain", mode="keyword") == []
 
 
+def test_inmemory_store_query_against_only_stopwords_has_no_match():
+    store = InMemoryStore()
+    store.add("c", text="the and")
+
+    assert store.search("c", query="water", mode="keyword") == []
+
+
 def test_inmemory_store_delete_skips_non_matching_entries():
     store = InMemoryStore()
     first = store.add("c", text="the basin water is unsafe", created_at_epoch=1)
@@ -1042,6 +1045,7 @@ def test_chroma_store_vector_keyword_and_embedding_paths():
                 "ids": [[row[0] for row in rows]],
                 "documents": [[row[1] for row in rows]],
                 "metadatas": [[row[2] for row in rows]],
+                "distances": [[0.0, 3.0][: len(rows)]],
             }
 
     class FakeClient:
@@ -1072,6 +1076,8 @@ def test_chroma_store_vector_keyword_and_embedding_paths():
     # metadata was None, so tags/source fall back to defaults.
     assert vector[0].tags == ()
     assert vector[0].source == "manual"
+    assert vector[0].score == 1.0
+    assert vector[1].score == 0.25
 
     # keyword mode filters by shared tokens.
     keyword = store.search("c", query="water", mode="keyword", limit=5)

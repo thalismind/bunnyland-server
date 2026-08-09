@@ -42,6 +42,7 @@ from bunnyland.foundation.environment.mechanics import MoistureComponent, Shelte
 from bunnyland.foundation.storyteller.mechanics import IncidentSpawned
 from bunnyland.foundation.storyteller.plugin import plugin as storyteller_plugin
 from bunnyland.llm_agents.tools import tool_schemas
+from bunnyland.memory import configure_memory_recall
 from bunnyland.plugins import (
     CommandContribution,
     ContentContribution,
@@ -725,6 +726,30 @@ async def test_applying_memory_plugin_enables_notes():
     await scenario.actor.submit(note)
     await scenario.actor.tick(0.0)
     assert len(notes) == 1
+
+
+def test_memory_and_prompt_filter_plugins_register_runtime_only_automatic_recall():
+    scenario = _bare_scenario()
+    apply_plugins(
+        [
+            plugin
+            for plugin in bunnyland_plugins()
+            if plugin.id in (CORE_VERBS, MEMORY, PROMPT_FILTERS)
+        ],
+        scenario.actor,
+    )
+
+    assert len(scenario.actor.automatic_prompt_filters) == 1
+    automatic = scenario.actor.automatic_prompt_filters[0]
+    assert automatic.definition_id == "bunnyland.prompt_filters.recall"
+    assert automatic.required_component is MemoryProfileComponent
+    assert automatic.component_factory() is not None
+    with pytest.raises(ValueError, match="already registered"):
+        scenario.actor.register_automatic_prompt_filter(automatic)
+    configure_memory_recall(scenario.actor, limit=0)
+    assert automatic.component_factory() is None
+    scenario.actor.memory_recall_policy = None
+    assert automatic.component_factory() is None
 
 
 async def test_applying_lifesim_plugin_enables_skill_progression():

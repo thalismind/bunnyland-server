@@ -349,6 +349,8 @@ def _serve_args(**overrides):
         "mcp": False,
         "memory_backend": "in-memory",
         "memory_path": None,
+        "memory_recall_limit": 3,
+        "memory_recall_min_score": 0.35,
         "module": [],
         "ollama_model": None,
         "plugin": None,
@@ -1656,6 +1658,9 @@ def test_configure_actor_backends_applies_lifesim_and_reports_memory_backend(
     assert calls["lifesim"] == (actor, True)
     expected_memory_path = str(tmp_path / "worlds" / "main.memory" / "chroma")
     assert calls["memory"] == (actor, "chroma", expected_memory_path)
+    assert actor.memory_recall_policy is not None
+    assert actor.memory_recall_policy.limit == 3
+    assert actor.memory_recall_policy.min_score == 0.35
     assert f"Using 'chroma' memory backend at {expected_memory_path}." in capsys.readouterr().out
 
 
@@ -1668,6 +1673,19 @@ def test_configure_actor_backends_converts_memory_runtime_errors(monkeypatch):
 
     with pytest.raises(SystemExit, match="memory unavailable"):
         cli._configure_actor_backends(WorldActor(), _serve_args(), None)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"memory_recall_limit": -1},
+        {"memory_recall_min_score": -0.1},
+        {"memory_recall_min_score": 1.1},
+    ),
+)
+def test_configure_actor_backends_rejects_invalid_automatic_recall(overrides):
+    with pytest.raises(SystemExit, match="memory recall"):
+        cli._configure_actor_backends(WorldActor(), _serve_args(**overrides), None)
 
 
 def test_build_serve_agent_constructs_enabled_providers(monkeypatch):

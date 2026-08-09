@@ -27,10 +27,11 @@ from bunnyland.mcp.server import (
     assign_mcp_controller,
     render_mcp_client_prompt,
 )
-from bunnyland.memory import InMemoryStore, install_memory
+from bunnyland.memory import InMemoryStore, configure_memory_recall, install_memory
 from bunnyland.persistence import WorldMeta, load_world, save_world
 from bunnyland.plugins import PluginRegistry, bunnyland_plugins
 from bunnyland.prompts import (
+    AutomaticPromptFilter,
     PromptBuilder,
     PromptFilterDefinition,
     PromptFilterRuntime,
@@ -51,6 +52,30 @@ def _bind(scenario, component: Component, *, order: int = 0):
 
 def _runtime(scenario, *, llm=None) -> PromptFilterRuntime:
     return PromptFilterRuntime(scenario.actor, BUILTIN_PROMPT_FILTERS, llm=llm)
+
+
+def _enable_automatic_recall(scenario, *, limit: int = 3, min_score: float = 0.35):
+    store = install_memory(scenario.actor, InMemoryStore())
+    configure_memory_recall(scenario.actor, limit=limit, min_score=min_score)
+
+    def component():
+        policy = scenario.actor.memory_recall_policy
+        assert policy is not None
+        if policy.limit == 0:
+            return None
+        return RecallPromptFilterComponent(
+            limit=policy.limit,
+            min_score=policy.min_score,
+        )
+
+    scenario.actor.register_automatic_prompt_filter(
+        AutomaticPromptFilter(
+            definition_id="bunnyland.prompt_filters.recall",
+            required_component=MemoryProfileComponent,
+            component_factory=component,
+        )
+    )
+    return store
 
 
 def _prompt(scenario):
@@ -247,6 +272,164 @@ async def test_recall_queries_preceding_text_and_appends_three_auditable_memorie
 
 
 @pytest.mark.asyncio
+async def test_automatic_recall_applies_threshold_and_explicit_binding_overrides_it():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(MemoryProfileComponent(vector_collection="juniper-private"))
+    store = _enable_automatic_recall(scenario)
+    relevant = store.add(
+        "juniper-private",
+        text="Juniper remembers the Mosslit Burrow warning.",
+        source="conversation",
+    )
+    store.add(
+        "juniper-private",
+        text="A polar observatory tracks distant comets.",
+        source="note",
+    )
+    context = _prompt(scenario)
+
+    filtered = await _runtime(scenario).apply(
+        render_prompt(context), character=character, prompt=context
+    )
+
+    assert f"memory:{relevant.id}" in filtered
+    assert "polar observatory" not in filtered
+    assert filtered.count("Recall:") == 1
+
+    _bind(scenario, RecallPromptFilterComponent(limit=0))
+    overridden = await _runtime(scenario).apply(
+        render_prompt(context), character=character, prompt=context
+    )
+    assert "[untrusted world memory]" not in overridden
+
+
+@pytest.mark.asyncio
+async def test_automatic_recall_bounds_and_sanitizes_memory_lines():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(MemoryProfileComponent(vector_collection="juniper-private"))
+    store = _enable_automatic_recall(scenario, limit=10, min_score=0.0)
+    for index in range(10):
+        store.add(
+            "juniper-private",
+            text=f"Mosslit\nBurrow memory {index} " + ("detail " * 60),
+        )
+    context = _prompt(scenario)
+
+    filtered = await _runtime(scenario).apply(
+        render_prompt(context), character=character, prompt=context
+    )
+
+    recall = filtered.rsplit("Recall:\n", maxsplit=1)[1]
+    assert len(recall) <= 903
+    assert "Mosslit\nBurrow" not in recall
+    assert recall.count("[untrusted world memory]") < 10
+
+
+@pytest.mark.asyncio
+async def test_automatic_recall_backend_failure_is_logged_and_hidden_from_prompt(caplog):
+    class FailingStore(InMemoryStore):
+        def search(self, collection, *, query=None, mode="recent", limit=5):
+            del collection, query, mode, limit
+            raise RuntimeError("operator-only vector failure")
+
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(MemoryProfileComponent(vector_collection="juniper-private"))
+    _enable_automatic_recall(scenario)
+    scenario.actor.memory_store = FailingStore()
+    context = _prompt(scenario)
+    original = render_prompt(context)
+
+    filtered = await _runtime(scenario).apply(
+        original, character=character, prompt=context
+    )
+
+    assert filtered == original
+    assert "operator-only vector failure" not in filtered
+    assert "prompt filter bunnyland.prompt_filters.recall failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_automatic_recall_can_be_skipped_for_non_llm_controller_turns():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(MemoryProfileComponent(vector_collection="juniper-private"))
+    store = _enable_automatic_recall(scenario, min_score=0.0)
+    store.add("juniper-private", text="Juniper recalls a shelter warning.")
+    context = _prompt(scenario)
+    original = render_prompt(context)
+
+    filtered = await _runtime(scenario).apply(
+        original,
+        character=character,
+        prompt=context,
+        include_automatic=False,
+    )
+
+    assert filtered == original
+
+
+@pytest.mark.asyncio
+async def test_runtime_skips_unavailable_and_invalid_automatic_filters(caplog):
+    unknown = build_scenario()
+    unknown_character = unknown.actor.world.get_entity(unknown.character)
+    unknown_character.add_component(MemoryProfileComponent(vector_collection="unknown"))
+    unknown.actor.register_automatic_prompt_filter(
+        AutomaticPromptFilter(
+            definition_id="example.missing",
+            required_component=MemoryProfileComponent,
+            component_factory=lambda: RecallPromptFilterComponent(),
+        )
+    )
+    unknown_context = _prompt(unknown)
+    assert (
+        await _runtime(unknown).apply(
+            "raw", character=unknown_character, prompt=unknown_context
+        )
+        == "raw"
+    )
+
+    disabled = build_scenario()
+    disabled_character = disabled.actor.world.get_entity(disabled.character)
+    disabled_character.add_component(MemoryProfileComponent(vector_collection="disabled"))
+    disabled.actor.register_automatic_prompt_filter(
+        AutomaticPromptFilter(
+            definition_id="bunnyland.prompt_filters.recall",
+            required_component=MemoryProfileComponent,
+            component_factory=lambda: None,
+        )
+    )
+    disabled_context = _prompt(disabled)
+    assert (
+        await _runtime(disabled).apply(
+            "raw", character=disabled_character, prompt=disabled_context
+        )
+        == "raw"
+    )
+
+    invalid = build_scenario()
+    invalid_character = invalid.actor.world.get_entity(invalid.character)
+    invalid_character.add_component(MemoryProfileComponent(vector_collection="invalid"))
+    invalid.actor.register_automatic_prompt_filter(
+        AutomaticPromptFilter(
+            definition_id="bunnyland.prompt_filters.recall",
+            required_component=MemoryProfileComponent,
+            component_factory=lambda: RedactedPromptFilterComponent(),
+        )
+    )
+    invalid_context = _prompt(invalid)
+    assert (
+        await _runtime(invalid).apply(
+            "raw", character=invalid_character, prompt=invalid_context
+        )
+        == "raw"
+    )
+    assert "produced RedactedPromptFilterComponent" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_recall_missing_dependencies_empty_results_and_zero_limit_fail_open(caplog):
     missing_store = build_scenario()
     _bind(missing_store, RecallPromptFilterComponent())
@@ -287,6 +470,20 @@ async def test_recall_missing_dependencies_empty_results_and_zero_limit_fail_ope
         == "raw"
     )
     assert "recall prompt filter requires" in caplog.text
+
+    invalid_score = build_scenario()
+    invalid_character = invalid_score.actor.world.get_entity(invalid_score.character)
+    invalid_character.add_component(MemoryProfileComponent(vector_collection="invalid"))
+    install_memory(invalid_score.actor, InMemoryStore())
+    _bind(invalid_score, RecallPromptFilterComponent(min_score=2.0))
+    invalid_context = _prompt(invalid_score)
+    assert (
+        await _runtime(invalid_score).apply(
+            "raw", character=invalid_character, prompt=invalid_context
+        )
+        == "raw"
+    )
+    assert "recall minimum score must be between 0 and 1" in caplog.text
 
 
 class _Narrator:
@@ -467,7 +664,6 @@ async def test_runtime_skips_unregistered_or_ambiguous_filter_entities(caplog):
     assert "has 0 registered filter components" in caplog.text
     assert "has 2 registered filter components" in caplog.text
 
-
 @dataclass(frozen=True)
 class _CountingFilterComponent(Component):
     suffix: str = "!"
@@ -516,6 +712,11 @@ async def test_runtime_rejects_duplicate_component_definitions_and_non_text_resu
     second = PromptFilterDefinition("example.second", _CountingFilterComponent, identity)
     with pytest.raises(ValueError, match="registered by both"):
         PromptFilterRuntime(scenario.actor, (first, second))
+    duplicate_id = PromptFilterDefinition(
+        "example.first", RedactedPromptFilterComponent, identity
+    )
+    with pytest.raises(ValueError, match="duplicate prompt filter definition"):
+        PromptFilterRuntime(scenario.actor, (first, duplicate_id))
 
     async def invalid(text, context, component):
         del text, context, component
@@ -563,6 +764,11 @@ def test_filter_components_and_bindings_survive_save_reload(tmp_path):
         StorytellerPromptFilterComponent(instruction="Use terse cave-horror prose."),
         order=8,
     )
+    recall = _bind(
+        scenario,
+        RecallPromptFilterComponent(limit=2, min_score=0.6),
+        order=9,
+    )
     path = tmp_path / "filtered-world.json"
     save_world(scenario.actor, path, meta=WorldMeta(seed="filters"))
 
@@ -575,13 +781,18 @@ def test_filter_components_and_bindings_survive_save_reload(tmp_path):
     storyteller_component = loaded.world.get_entity(storyteller.id).get_component(
         StorytellerPromptFilterComponent
     )
+    recall_component = loaded.world.get_entity(recall.id).get_component(
+        RecallPromptFilterComponent
+    )
 
     assert bindings == [
         (PromptFilterBinding(order=7), filter_entity.id),
         (PromptFilterBinding(order=8), storyteller.id),
+        (PromptFilterBinding(order=9), recall.id),
     ]
     assert component == RedactedPromptFilterComponent(strength=0.6, replacement="---")
     assert storyteller_component.instruction == "Use terse cave-horror prose."
+    assert recall_component == RecallPromptFilterComponent(limit=2, min_score=0.6)
 
 
 class _CapturingAgent:
@@ -603,6 +814,10 @@ class _CapturingAgent:
 @pytest.mark.asyncio
 async def test_autonomous_and_character_chat_paths_receive_filtered_text():
     scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(MemoryProfileComponent(vector_collection="juniper-private"))
+    store = _enable_automatic_recall(scenario, min_score=0.0)
+    store.add("juniper-private", text="Juniper recalls a shelter warning.")
     _bind(
         scenario,
         RedactedPromptFilterComponent(strength=1.0, targets=("Mosslit", "Burrow")),
@@ -613,6 +828,7 @@ async def test_autonomous_and_character_chat_paths_receive_filtered_text():
     await dispatch.run_once()
     await asyncio.gather(*tuple(dispatch._inflight.values()))
     assert "Mosslit Burrow" not in agent.prompts[0]
+    assert "Juniper recalls a shelter warning" in agent.prompts[0]
 
     chat = CharacterChatService(scenario.actor, PromptBuilder(scenario.actor.world), agent)
     await chat.chat(
@@ -621,11 +837,16 @@ async def test_autonomous_and_character_chat_paths_receive_filtered_text():
     )
     compiled_context = agent.messages[0][1]["content"]
     assert "Mosslit Burrow" not in compiled_context
+    assert "Juniper recalls a shelter warning" in compiled_context
 
 
 @pytest.mark.asyncio
 async def test_mcp_prompt_path_receives_filtered_text():
     scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(MemoryProfileComponent(vector_collection="juniper-private"))
+    store = _enable_automatic_recall(scenario, min_score=0.0)
+    store.add("juniper-private", text="Juniper recalls a shelter warning.")
     _bind(
         scenario,
         RedactedPromptFilterComponent(strength=1.0, targets=("Mosslit", "Burrow")),
@@ -648,4 +869,5 @@ async def test_mcp_prompt_path_receives_filtered_text():
     )
 
     assert "Mosslit Burrow" not in response["prompt"]
+    assert "Juniper recalls a shelter warning" in response["prompt"]
     assert response["character_id"] == str(scenario.character)

@@ -7,21 +7,78 @@ inserted sequence number in the metadata.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Protocol
 from uuid import uuid4
+
+from pydantic import JsonValue, TypeAdapter
 
 from .. import telemetry
 from .store import MemoryDocument, MemoryEntry, normalize_tags
 
+_JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
-def _metadata_for_chroma(metadata: dict[str, Any]) -> dict[str, Any]:
+
+class _ChromaCollection(Protocol):
+    def add(
+        self,
+        *,
+        ids: list[str],
+        documents: list[str],
+        metadatas: list[dict[str, JsonValue]],
+    ) -> None: ...
+
+    def query(self, *, query_texts: list[str], n_results: int) -> dict[str, object]: ...
+
+    def get(
+        self,
+        ids: list[str] | None = None,
+        include: list[str] | None = None,
+    ) -> dict[str, object]: ...
+
+    def delete(self, *, ids: list[str]) -> None: ...
+
+    def update(
+        self,
+        *,
+        ids: list[str],
+        documents: list[str],
+        metadatas: list[dict[str, JsonValue]],
+    ) -> None: ...
+
+
+class _ChromaClient(Protocol):
+    def get_or_create_collection(
+        self, *, name: str, **kwargs: object
+    ) -> _ChromaCollection: ...
+
+
+def _flat_list(result: dict[str, object], key: str) -> list[object]:
+    value = result.get(key)
+    return value if isinstance(value, list) else []
+
+
+def _nested_list(result: dict[str, object], key: str) -> list[object]:
+    outer = _flat_list(result, key)
+    if not outer or not isinstance(outer[0], list):
+        return []
+    return outer[0]
+
+
+def _json_object(value: object) -> dict[str, JsonValue]:
+    if not isinstance(value, dict):
+        return {}
+    return _JSON_OBJECT.validate_python(value)
+
+
+def _metadata_for_chroma(metadata: dict[str, JsonValue]) -> dict[str, JsonValue]:
     values = dict(metadata)
     values["tags"] = ",".join(normalize_tags(values.get("tags", ())))
     return values
 
 
-def _metadata_for_document(metadata: dict[str, Any]) -> dict[str, Any]:
+def _metadata_for_document(metadata: dict[str, JsonValue]) -> dict[str, JsonValue]:
     values = dict(metadata)
     values["tags"] = list(normalize_tags(values.get("tags", ())))
     return values
@@ -32,8 +89,8 @@ class ChromaMemoryStore:
 
     def __init__(
         self,
-        client=None,
-        embedding_function=None,
+        client: _ChromaClient | None = None,
+        embedding_function: object | None = None,
         persist_path: str | Path | None = None,
     ) -> None:
         if client is None:
@@ -52,8 +109,8 @@ class ChromaMemoryStore:
         self._embedding_function = embedding_function
         self._counter = 0
 
-    def _collection(self, collection: str):
-        kwargs = {}
+    def _collection(self, collection: str) -> _ChromaCollection:
+        kwargs: dict[str, object] = {}
         if self._embedding_function is not None:
             kwargs["embedding_function"] = self._embedding_function
         return self._client.get_or_create_collection(name=collection, **kwargs)
@@ -167,7 +224,7 @@ class ChromaMemoryStore:
         collection: str,
         *,
         document: str,
-        metadata: dict[str, Any],
+        metadata: dict[str, JsonValue],
     ) -> MemoryDocument:
         with telemetry.span(
             "memory.backend", {"memory.backend": "chroma", "memory.operation": "create"}
@@ -193,7 +250,7 @@ class ChromaMemoryStore:
         note_id: str,
         *,
         document: str,
-        metadata: dict[str, Any],
+        metadata: dict[str, JsonValue],
     ) -> MemoryDocument | None:
         with telemetry.span(
             "memory.backend", {"memory.backend": "chroma", "memory.operation": "update"}
@@ -222,54 +279,67 @@ class ChromaMemoryStore:
             return result
 
     @staticmethod
-    def _documents_from_get(got: dict) -> list[MemoryDocument]:
-        ids = got.get("ids", []) or []
-        docs = got.get("documents", []) or []
-        metas = got.get("metadatas", []) or []
+    def _documents_from_get(got: dict[str, object]) -> list[MemoryDocument]:
+        ids = _flat_list(got, "ids")
+        docs = _flat_list(got, "documents")
+        metas = _flat_list(got, "metadatas")
         documents = []
         for id_, doc, meta in zip(ids, docs, metas, strict=False):
             documents.append(
                 MemoryDocument(
-                    id=id_,
-                    document=doc or "",
-                    metadata=_metadata_for_document(meta or {}),
+                    id=str(id_),
+                    document=str(doc or ""),
+                    metadata=_metadata_for_document(_json_object(meta)),
                 )
             )
         return documents
 
     @staticmethod
-    def _tags_from_metadata(meta: dict) -> tuple[str, ...]:
+    def _tags_from_metadata(meta: dict[str, JsonValue]) -> tuple[str, ...]:
         return normalize_tags(meta.get("tags", ""))
 
     @classmethod
-    def _entries_from_get(cls, got: dict) -> list[MemoryEntry]:
-        ids = got.get("ids", []) or []
-        docs = got.get("documents", []) or []
-        metas = got.get("metadatas", []) or []
+    def _entries_from_get(cls, got: dict[str, object]) -> list[MemoryEntry]:
+        ids = _flat_list(got, "ids")
+        docs = _flat_list(got, "documents")
+        metas = _flat_list(got, "metadatas")
         entries = []
         for id_, doc, meta in zip(ids, docs, metas, strict=False):
-            meta = _metadata_for_document(meta or {})
+            decoded_meta = _metadata_for_document(_json_object(meta))
             entries.append(
                 MemoryEntry(
-                    id=id_,
-                    text=doc,
-                    tags=cls._tags_from_metadata(meta),
-                    created_at_epoch=int(meta.get("created_at_epoch", 0)),
-                    source=str(meta.get("source", "manual")),
-                    metadata=dict(meta),
+                    id=str(id_),
+                    text=str(doc or ""),
+                    tags=cls._tags_from_metadata(decoded_meta),
+                    created_at_epoch=int(decoded_meta.get("created_at_epoch", 0)),
+                    source=str(decoded_meta.get("source", "manual")),
+                    metadata=dict(decoded_meta),
                 )
             )
         return entries
 
     @classmethod
-    def _entries_from_query(cls, result: dict) -> list[MemoryEntry]:
+    def _entries_from_query(cls, result: dict[str, object]) -> list[MemoryEntry]:
         # Chroma query nests results one level deeper (per query text).
         flatten = {
-            "ids": (result.get("ids") or [[]])[0],
-            "documents": (result.get("documents") or [[]])[0],
-            "metadatas": (result.get("metadatas") or [[]])[0],
+            "ids": _nested_list(result, "ids"),
+            "documents": _nested_list(result, "documents"),
+            "metadatas": _nested_list(result, "metadatas"),
         }
-        return cls._entries_from_get(flatten)
+        entries = cls._entries_from_get(flatten)
+        distances = _nested_list(result, "distances")
+        return [
+            replace(
+                entry,
+                score=(
+                    1.0 / (1.0 + max(0.0, float(distance)))
+                    if index < len(distances)
+                    and isinstance((distance := distances[index]), (int, float))
+                    else None
+                ),
+            )
+            for index, entry in enumerate(entries)
+        ]
 
 
 __all__ = ["ChromaMemoryStore"]

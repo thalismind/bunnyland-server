@@ -20,6 +20,7 @@ from .facts import (
     PromptFactLike,
 )
 from .filters import (
+    AutomaticPromptFilter,
     PromptFilterContext,
     PromptFilterDefinition,
     PromptFilterRuntime,
@@ -27,6 +28,7 @@ from .filters import (
 )
 
 __all__ = [
+    "AutomaticPromptFilter",
     "ComponentPromptContext",
     "DETAILED_DETAIL_CUTOFF",
     "PromptFact",

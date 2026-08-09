@@ -22,7 +22,6 @@ from ..core.components import (
     DownedComponent,
     FocusPointsComponent,
     IdentityComponent,
-    MemoryProfileComponent,
     PortableComponent,
     RestingComponent,
     SleepingComponent,
@@ -113,12 +112,8 @@ class PromptBuilder:
         *,
         room_summary: RoomSummaryProjection | None = None,
         recent_context: RecentContextProjection | None = None,
-        memory_store=None,
         fragment_providers: Sequence[FragmentProvider] = (),
         persona_providers: Sequence[FragmentProvider] = (),
-        recall_limit: int = 3,
-        recall_budget_chars: int = 900,
-        recall_line_chars: int = 240,
         include_entity_ids: bool = False,
     ) -> None:
         self.world = world
@@ -129,12 +124,8 @@ class PromptBuilder:
         # changes (idempotent; mutations dirty the room on the next tick).
         self.room_summary = (room_summary or RoomSummaryProjection(world)).attach()
         self.recent_context = recent_context
-        self.memory_store = memory_store
         self.fragment_providers = tuple(fragment_providers)
         self.persona_providers = tuple(persona_providers)
-        self.recall_limit = max(0, recall_limit)
-        self.recall_budget_chars = max(0, recall_budget_chars)
-        self.recall_line_chars = max(40, recall_line_chars)
 
     def rebind(self, world: World) -> None:
         """Point the builder at a replacement world (e.g. after a live regeneration that
@@ -213,14 +204,6 @@ class PromptBuilder:
             recent=tuple(recent),
         )
 
-        notes = self._notes(character)
-        recall = self._recall(
-            character,
-            location_title=location_title,
-            visible_characters=visible_characters,
-            visible_objects=visible_objects,
-            recent=tuple(recent),
-        )
         commands = self._available_commands(
             exits=perception.exits,
             visible_entities=perception.entities,
@@ -248,8 +231,6 @@ class PromptBuilder:
             feelings=feelings,
             social_cues=social_cues,
             recent=tuple(recent),
-            notes=notes,
-            recall=recall,
             commands=commands,
         )
 
@@ -340,13 +321,6 @@ class PromptBuilder:
             )
         return tuple(sorted(held))
 
-    def _notes(self, character: Entity) -> tuple[str, ...]:
-        if self.memory_store is None or not character.has_component(MemoryProfileComponent):
-            return ()
-        collection = character.get_component(MemoryProfileComponent).vector_collection
-        entries = self.memory_store.search(collection, mode="recent", limit=3)
-        return tuple(entry.text for entry in entries)
-
     def _social_cues(
         self,
         character: Entity,
@@ -428,60 +402,6 @@ class PromptBuilder:
         if bond is None:
             return False
         return bond.familiarity >= 0.4 or bond.trust >= 0.3 or bond.affinity >= 0.4
-
-    def _recall(
-        self,
-        character: Entity,
-        *,
-        location_title: str,
-        visible_characters: tuple[str, ...],
-        visible_objects: tuple[str, ...],
-        recent: tuple[str, ...],
-    ) -> tuple[str, ...]:
-        if self.memory_store is None or not character.has_component(MemoryProfileComponent):
-            return ()
-        query = " ".join(
-            value
-            for value in (
-                location_title,
-                *visible_characters,
-                *visible_objects,
-                *recent,
-            )
-            if value
-        )
-        if not query.strip():
-            return ()
-        collection = character.get_component(MemoryProfileComponent).vector_collection
-        entries = self.memory_store.search(
-            collection, query=query, mode="keyword", limit=self.recall_limit
-        )
-        lines = (
-            f'[untrusted world memory] "{self._truncate_memory(entry.text)}" '
-            f"[memory:{entry.id} source:{entry.source} score:{entry.score or 0.0:.1f}]"
-            for entry in entries
-        )
-        return self._fit_memory_budget(lines)
-
-    def _truncate_memory(self, text: str) -> str:
-        if len(text) <= self.recall_line_chars:
-            return text
-        return text[: self.recall_line_chars - 3].rstrip() + "..."
-
-    def _fit_memory_budget(self, lines) -> tuple[str, ...]:
-        if self.recall_budget_chars <= 0:
-            return ()
-        kept: list[str] = []
-        used = 0
-        for line in lines:
-            next_used = used + len(line)
-            if kept:
-                next_used += 1
-            if next_used > self.recall_budget_chars:
-                continue
-            kept.append(line)
-            used = next_used
-        return tuple(kept)
 
     def _available_commands(
         self,
