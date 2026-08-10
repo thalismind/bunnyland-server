@@ -21,7 +21,8 @@ from bunnyland.core import (
     replace_component,
     spawn_entity,
 )
-from bunnyland.core.edges import ContainmentMode, Contains
+from bunnyland.core.controllers import BehaviorControllerComponent, LLMControllerComponent
+from bunnyland.core.edges import ContainmentMode, Contains, ControlledBy
 from bunnyland.foundation.policy.mechanics import (
     BoundaryTag,
     CharacterBoundaryComponent,
@@ -29,7 +30,11 @@ from bunnyland.foundation.policy.mechanics import (
 )
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, resolve_order, select
 from bunnyland.plugins.ids import CORE_VERBS, POLICY, TOONSIM, WORLDGEN
-from bunnyland.sandbox.generation import _enabled_regions, sandbox_generator
+from bunnyland.sandbox.generation import (
+    REPRESENTATIVE_LLM_ACT_EVERY_TICKS,
+    _enabled_regions,
+    sandbox_generator,
+)
 from bunnyland.sandbox.mechanics import (
     AFTER_DARK_SCOPE,
     AcceptAfterDarkWarningHandler,
@@ -59,13 +64,16 @@ def _command(character_id, command_type: str, payload: dict[str, object] | None 
     )
 
 
-async def _generate(enabled_ids: tuple[str, ...] | None):
+async def _generate(
+    enabled_ids: tuple[str, ...] | None,
+    options: GenOptions | None = None,
+):
     discovered = list(bunnyland_plugins())
     plugins = select(discovered, enabled_ids)
     actor = WorldActor()
     apply_plugins(plugins, actor)
     generator = collect_generators(plugins)["bunnyland-sandbox"]
-    result = await generator.generate(actor, "sandbox-test", GenOptions())
+    result = await generator.generate(actor, "sandbox-test", options or GenOptions())
     return actor, result
 
 
@@ -189,6 +197,41 @@ async def test_generator_enriches_every_loaded_bundled_simpack_region() -> None:
                 actor.world.has_entity(target_id)
                 for _edge, target_id in entity.get_relationships(edge_type)
             )
+
+
+@pytest.mark.asyncio
+async def test_generator_assigns_representative_llms_only_when_enabled() -> None:
+    offline_actor, offline = await _generate(None)
+    online_actor, online = await _generate(
+        None,
+        GenOptions(llm=True, provider="openrouter", model="sandbox-character"),
+    )
+    representative_specs = tuple(
+        character for region in REGIONS for character in region.characters
+    )
+
+    for spec in representative_specs:
+        offline_character = offline_actor.world.get_entity(offline.characters[spec.key])
+        _edge, offline_controller_id = offline_character.get_relationships(ControlledBy)[0]
+        assert offline_actor.world.get_entity(offline_controller_id).has_component(
+            BehaviorControllerComponent
+        )
+
+        online_character = online_actor.world.get_entity(online.characters[spec.key])
+        _edge, online_controller_id = online_character.get_relationships(ControlledBy)[0]
+        llm = online_actor.world.get_entity(online_controller_id).get_component(
+            LLMControllerComponent
+        )
+        assert llm.profile_name == "default"
+        assert llm.provider == "openrouter"
+        assert llm.model == "sandbox-character"
+        assert llm.act_every_ticks == REPRESENTATIVE_LLM_ACT_EVERY_TICKS
+
+    arrivals = [
+        online_actor.world.get_entity(online.characters[f"new_arrival_{index}"])
+        for index in range(1, 5)
+    ]
+    assert all(character.has_component(SuspendedComponent) for character in arrivals)
 
 
 async def _after_dark_world():

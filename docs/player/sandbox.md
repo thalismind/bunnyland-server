@@ -55,8 +55,9 @@ world-policy disablement always blocks entry and is never overridden by the sand
 
 The sandbox gives its five regional representatives deterministic behavioral controllers by
 default and leaves the four New Arrivals suspended for players to claim. Use the launcher to
-generate a fresh world, replace only those representative controllers with one reusable LLM
-controller, save it, and start the local API:
+generate a fresh LLM-enabled world, save it, and start the local API. The sandbox generator
+itself assigns LLM controllers to the representatives only when LLM generation options are
+enabled:
 
 ```bash
 export OPENROUTER_API_KEY_FILE=/absolute/path/to/openrouter.key
@@ -65,10 +66,10 @@ scripts/launch-sandbox-llm \
   --world artifacts/sandbox-world-llm.json
 ```
 
-The default 30-second tick and `--act-every-ticks 6` interval let each representative act
-about once every three minutes. Use `--act-every-ticks 1` for every dispatch tick. Add
-`--character-chat` to enable the character-chat API. The server listens on
-`127.0.0.1:8765`, runs until interrupted, autosaves, and saves again on clean shutdown.
+The default 30-second tick and six-tick representative interval let each representative act
+about once every three minutes. Add `--character-chat` to enable the character-chat API. The
+server listens on `127.0.0.1:8765`, runs until interrupted, autosaves, and saves again on clean
+shutdown.
 
 Existing output is never replaced implicitly. Use `--reuse` to launch an already prepared
 world or `--force` to regenerate it. Use `--prepare-only` when another process will launch

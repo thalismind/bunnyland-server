@@ -15,6 +15,7 @@ from bunnyland.core.controllers import LLMControllerComponent
 from bunnyland.core.edges import ControlledBy
 from bunnyland.persistence import load_world
 from bunnyland.plugins import PluginRegistry, bunnyland_plugins
+from bunnyland.sandbox.generation import REPRESENTATIVE_LLM_ACT_EVERY_TICKS
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "launch_sandbox_llm.py"
 REPRESENTATIVES = {
@@ -48,7 +49,6 @@ async def test_prepare_sandbox_world_assigns_only_representatives(tmp_path: Path
         seed="launcher test",
         provider="openrouter",
         model="example/model",
-        act_every_ticks=4,
     )
 
     actor, meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
@@ -67,12 +67,12 @@ async def test_prepare_sandbox_world_assigns_only_representatives(tmp_path: Path
             assigned_controller_ids.add(controller_id)
             assert llm.provider == "openrouter"
             assert llm.model == "example/model"
-            assert llm.act_every_ticks == 4
+            assert llm.act_every_ticks == REPRESENTATIVE_LLM_ACT_EVERY_TICKS
             assert not character.has_component(SuspendedComponent)
         elif identity.name.startswith("New Arrival "):
             arrivals.append(character)
 
-    assert len(assigned_controller_ids) == 1
+    assert len(assigned_controller_ids) == len(REPRESENTATIVES)
     assert len(arrivals) == 4
     assert all(character.has_component(SuspendedComponent) for character in arrivals)
 
@@ -88,7 +88,6 @@ async def test_prepare_sandbox_world_refuses_existing_output(tmp_path: Path) -> 
             seed="launcher test",
             provider="openrouter",
             model="example/model",
-            act_every_ticks=1,
         )
 
 
@@ -118,19 +117,6 @@ def test_launcher_prepare_only_reuse_and_argument_validation(tmp_path: Path) -> 
             ]
         )
     assert missing.value.code == 2
-
-    with pytest.raises(SystemExit) as invalid_interval:
-        LAUNCHER.main(
-            [
-                "--world",
-                str(path),
-                "--character-model",
-                "example/model",
-                "--act-every-ticks",
-                "0",
-            ]
-        )
-    assert invalid_interval.value.code == 2
 
 
 def test_launcher_builds_bounded_local_server_arguments(tmp_path: Path, monkeypatch) -> None:

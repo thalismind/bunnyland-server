@@ -6,7 +6,9 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from ..core.components import GenerationIntentComponent, WorldInfoComponent
+from ..core.controllers import LLMControllerComponent
 from ..core.ecs import replace_component
+from ..core.edges import ControlledBy
 from ..core.generation import GenerationDelta, GenerationRequest
 from ..worldgen.generators import GenOptions
 from ..worldgen.instantiate import InstantiatedWorld, instantiate
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
 ENTRANCE_CAPABILITY = "bunnyland.sandbox.after-dark-entrance"
 EXIT_CAPABILITY = "bunnyland.sandbox.after-dark-exit"
 CAPABILITIES = (ENTRANCE_CAPABILITY, EXIT_CAPABILITY)
+REPRESENTATIVE_LLM_ACT_EVERY_TICKS = 6
 
 
 class SandboxGenerationEnricher:
@@ -182,7 +185,30 @@ def _arrivals() -> list[CharacterSpec]:
     ]
 
 
-def _proposal(seed: str, regions: tuple[SandboxRegionSpec, ...]) -> WorldProposal:
+def _representative_characters(
+    region: SandboxRegionSpec,
+    options: GenOptions,
+) -> tuple[CharacterSpec, ...]:
+    if not options.llm:
+        return region.characters
+    return tuple(
+        character.model_copy(
+            update={
+                "controller": "llm",
+                "llm_profile": "default",
+                "llm_model": options.model,
+                "llm_provider": options.provider,
+            }
+        )
+        for character in region.characters
+    )
+
+
+def _proposal(
+    seed: str,
+    regions: tuple[SandboxRegionSpec, ...],
+    options: GenOptions,
+) -> WorldProposal:
     rooms = _base_rooms()
     objects = [*_base_objects(regions)]
     characters = [*_arrivals()]
@@ -195,7 +221,7 @@ def _proposal(seed: str, regions: tuple[SandboxRegionSpec, ...]) -> WorldProposa
     for region in regions:
         rooms.append(region.room)
         objects.extend(region.objects)
-        characters.extend(region.characters)
+        characters.extend(_representative_characters(region, options))
         exits.extend(
             (
                 ExitSpec(
@@ -224,12 +250,30 @@ async def sandbox_generator(
     seed: str,
     options: GenOptions,
 ) -> InstantiatedWorld:
-    """Build Crossroads and enrich one region for each enabled bundled simpack."""
+    """Build Crossroads and enrich one region for each enabled bundled simpack.
 
-    del options
+    This deterministic generator makes no model calls. When ``options.llm`` is enabled,
+    its provider and model configure the generated representatives' LLM controllers.
+    """
+
     regions = _enabled_regions(actor)
-    result = await instantiate(actor, _proposal(seed, regions))
+    result = await instantiate(actor, _proposal(seed, regions, options))
     async with actor._lock:
+        if options.llm:
+            for region in regions:
+                for character in region.characters:
+                    generated = actor.world.get_entity(result.characters[character.key])
+                    _edge, controller_id = generated.get_relationships(ControlledBy)[0]
+                    controller = actor.world.get_entity(controller_id)
+                    llm = controller.get_component(LLMControllerComponent)
+                    replace_component(
+                        controller,
+                        replace(
+                            llm,
+                            act_every_ticks=REPRESENTATIVE_LLM_ACT_EVERY_TICKS,
+                        ),
+                    )
+
         entrance = actor.world.get_entity(result.objects["after_dark_entrance"])
         entrance.add_relationship(
             AfterDarkPassage(),
@@ -263,6 +307,7 @@ __all__ = [
     "ENTRANCE_CAPABILITY",
     "EXIT_CAPABILITY",
     "GENERATION_ENRICHER",
+    "REPRESENTATIVE_LLM_ACT_EVERY_TICKS",
     "SandboxGenerationEnricher",
     "sandbox_generator",
 ]

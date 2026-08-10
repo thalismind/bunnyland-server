@@ -10,8 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bunnyland.cli import main as bunnyland_main
-from bunnyland.core.controllers import LLMControllerComponent
-from bunnyland.core.ecs import spawn_entity
 from bunnyland.core.world_actor import WorldActor
 from bunnyland.persistence import WorldMeta, save_world
 from bunnyland.plugins import apply_plugins, bunnyland_plugins, resolve_order, select
@@ -24,7 +22,6 @@ DEFAULT_WORLD_PATH = Path("artifacts/sandbox-world-llm.json")
 @dataclass(frozen=True)
 class PreparedSandbox:
     path: Path
-    controller_id: str
     representative_names: tuple[str, ...]
 
 
@@ -40,10 +37,9 @@ async def prepare_sandbox_world(
     seed: str,
     provider: str,
     model: str,
-    act_every_ticks: int,
     overwrite: bool = False,
 ) -> PreparedSandbox:
-    """Generate a sandbox and assign its region representatives to one LLM controller."""
+    """Generate a sandbox whose generator assigns its representative LLM controllers."""
 
     if path.exists() and not overwrite:
         raise FileExistsError(path)
@@ -52,26 +48,11 @@ async def prepare_sandbox_world(
     actor = WorldActor()
     apply_plugins(plugins, actor)
     generator = collect_generators(plugins)["bunnyland-sandbox"]
-    result = await generator.generate(actor, seed, GenOptions())
-
-    controller = spawn_entity(
-        actor.world,
-        [
-            LLMControllerComponent(
-                profile_name="default",
-                provider=provider,
-                model=model,
-                act_every_ticks=act_every_ticks,
-            )
-        ],
+    await generator.generate(
+        actor,
+        seed,
+        GenOptions(llm=True, provider=provider, model=model),
     )
-    names = []
-    for spec in representative_specs():
-        character_id = result.characters.get(spec.key)
-        if character_id is None:
-            raise RuntimeError(f"sandbox representative {spec.name!r} was not generated")
-        actor.assign_controller(character_id, controller.id)
-        names.append(spec.name)
 
     save_world(
         actor,
@@ -84,8 +65,7 @@ async def prepare_sandbox_world(
     )
     return PreparedSandbox(
         path=path,
-        controller_id=str(controller.id),
-        representative_names=tuple(sorted(names)),
+        representative_names=tuple(sorted(spec.name for spec in representative_specs())),
     )
 
 
@@ -138,7 +118,6 @@ def _parser() -> argparse.ArgumentParser:
         default="openrouter",
     )
     parser.add_argument("--character-model", required=True)
-    parser.add_argument("--act-every-ticks", type=int, default=6)
     parser.add_argument("--ticks", type=int, default=0)
     parser.add_argument("--tick-seconds", type=float, default=30.0)
     parser.add_argument("--time-scale", type=float, default=60.0)
@@ -161,9 +140,6 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    if args.act_every_ticks < 1:
-        parser.error("--act-every-ticks must be at least 1")
-
     if args.reuse:
         if not args.world.is_file():
             parser.error(f"cannot reuse missing world: {args.world}")
@@ -180,7 +156,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 seed=args.seed,
                 provider=args.llm_provider,
                 model=args.character_model,
-                act_every_ticks=args.act_every_ticks,
                 overwrite=args.force,
             )
         )
