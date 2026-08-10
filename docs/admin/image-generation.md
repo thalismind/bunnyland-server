@@ -285,7 +285,8 @@ Generated files are served read-only at `GET /v1/public/media/{kind}/{name}`.
 
 ## Live provider validation
 
-Live image and LLM suites are independent and are not part of the default test gate:
+Live image, text/LLM, and video suites have independent flags and are not part of the
+default test gate:
 
 ```bash
 BUNNYLAND_LIVE_IMAGEGEN_COMFY=1 \
@@ -297,10 +298,14 @@ BUNNYLAND_LIVE_IMAGEGEN_OPENROUTER=1 \
 
 BUNNYLAND_LIVE_LLM=1 \
   uv run -m pytest -m live_llm
+
+BUNNYLAND_LIVE_VIDEOGEN_COMFY=1 \
+  uv run -m pytest -m live_videogen_comfy
 ```
 
-The ComfyUI suite also needs `COMFYUI_SERVER_URL`. The OpenRouter suite also needs
-`OPENROUTER_API_KEY` and always requires its separate live model variable.
+The two ComfyUI suites also need `COMFYUI_SERVER_URL`; enabling one does not enable the
+other. The OpenRouter suite also needs `OPENROUTER_API_KEY` and always requires its separate
+live model variable. Text/LLM credentials remain independent from both media suites.
 
 ## Troubleshooting
 
