@@ -4,6 +4,12 @@ Below is the first-pass **master mechanics catalogue** for bunnyland. This is in
 
 The peaceful starter pack now has playable v1 coverage for the core catalogue loops:
 
+- `sandbox`: the deterministic `bunnyland-sandbox` generator builds Crossroads Arrival,
+  claimable New Arrivals, Commons, and one enrichment-driven region for each loaded bundled
+  simpack. The optional After Dark district uses explicit acknowledge, enter, leave, and
+  withdrawal actions backed by the existing boundary policy; it adds no routes or
+  transport-specific behavior.
+
 - `core_verbs`: shared stateful rest and sleep recovery with optional durations, explicit
   waking, action and danger interruption, typed lifecycle events, prompt state, bounded
   stress relief thoughts, and `wait` as a state-free turn yield.

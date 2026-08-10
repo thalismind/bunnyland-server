@@ -89,6 +89,7 @@ from bunnyland.plugins.ids import (
     WORLDGEN,
 )
 from bunnyland.plugins.loader import _match_plugin_id, discover_plugins
+from bunnyland.sandbox.plugin import SANDBOX_PLUGIN_ID
 
 
 def test_builtin_plugins_declared():
@@ -106,6 +107,7 @@ def test_builtin_plugins_declared():
         SOCIAL,
         POLICY,
         PROMPT_FILTERS,
+        SANDBOX_PLUGIN_ID,
         PERSONA,
         GARDENSIM,
         DRAGONSIM,
@@ -128,7 +130,7 @@ def test_builtin_plugins_declared():
 
 def test_select_defaults_to_default_enabled():
     plugins = bunnyland_plugins()
-    assert len(select(plugins, None)) == 25
+    assert len(select(plugins, None)) == 26
     assert [p.id for p in select(plugins, [MEMORY])] == [MEMORY]
     assert CHECKPOINTS not in {p.id for p in select(plugins, None)}
     assert WORLD_HEALTH not in {p.id for p in select(plugins, None)}

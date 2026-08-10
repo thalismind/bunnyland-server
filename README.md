@@ -176,6 +176,8 @@ metric/span reference and the Tempo setup.
 
 ### Player guides
 
+- **[Crossroads sandbox](docs/player/sandbox.md)** — claim a New Arrival, explore regions
+  contributed by loaded simpacks, and use command-gated After Dark access.
 - **[Getting started](docs/player/getting-started.md)** — the first few turns and where
   to go next.
 - **[Client guides](docs/player/clients/README.md)** — choosing and using the terminal
