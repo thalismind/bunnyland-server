@@ -13,10 +13,12 @@ Textual conversation screen; successful activation refreshes the screen and enab
 Other unsupported controllers remain read-only and can be replaced with one of the world's
 existing LLM controllers by an administrator.
 
-The Textual conversation screen includes a **Separate reply paragraphs** option. When it
-is enabled, blank-line-separated paragraphs in a new agent reply appear as individual
-messages with a short visual delay. The saved conversation and the history sent back to
-the agent still contain one complete reply.
+The Textual conversation screen has the same local history and formatting controls as the
+web character chat: **Markdown**, **Remember on this device**, **Separate reply
+paragraphs**, and **Clear history**. Turning remembrance off clears terminal chat history
+files and keeps subsequent conversation only for the open session. Paragraph separation
+adds a short visual delay while preserving one complete reply in saved and agent-facing
+history.
 
 ## Local Ollama
 

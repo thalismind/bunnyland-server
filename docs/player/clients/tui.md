@@ -118,8 +118,9 @@ character's queue.
 
 Select a visible character, then choose **Sheet** or press `s` to open a scrollable native
 character sheet. With no character target, the current player is used. The sheet includes
-identity and biography, status and metrics, profile details, skills, traits, relationships,
-injuries, and notes. It works in both local and remote sessions without opening a browser.
+the character id, room, controller, action/focus points, portrait link, identity and
+biography, status and metrics, profile details, skills, traits, relationships, injuries,
+and notes. It works in both local and remote sessions without opening a browser.
 
 Choose **Chat** or press `c` to open a conversation. The TUI uses the selected visible
 character, then the current player, and otherwise presents a character picker. Provider
