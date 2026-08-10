@@ -45,6 +45,16 @@ class ExitTo(Edge):
 
 
 @dataclass(frozen=True)
+class AllowsMembersOf(Edge):
+    """room -> group/faction whose members may enter a members-only room.
+
+    A room may allow multiple groups. Relics removes the relationship if either endpoint
+    is deleted, and movement treats the targets as an OR set while composing this gate
+    with the room's other entry restrictions.
+    """
+
+
+@dataclass(frozen=True)
 class Holding(Edge):
     slot: str = "hand"
 
@@ -94,6 +104,7 @@ class StudiedBy(Edge):
 
 
 __all__ = [
+    "AllowsMembersOf",
     "ContainmentMode",
     "Contains",
     "ControlledBy",

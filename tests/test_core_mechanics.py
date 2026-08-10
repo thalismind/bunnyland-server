@@ -10,6 +10,8 @@ from bunnyland.claims import controlled_character
 from bunnyland.core import (
     ActionDefinition,
     ActionPointsComponent,
+    AdminComponent,
+    AllowsMembersOf,
     AttentionComponent,
     BleedingComponent,
     BodyPlanComponent,
@@ -38,6 +40,7 @@ from bunnyland.core import (
     OnInsufficientPoints,
     PainComponent,
     PerceptionComponent,
+    RoomGateComponent,
     SleepingComponent,
     StealthComponent,
     StimulusComponent,
@@ -76,6 +79,8 @@ from bunnyland.core.events import (
 )
 from bunnyland.core.handlers.base import HandlerContext, require_reachable_entity
 from bunnyland.simpacks.barbariansim.mechanics import AttackHandler
+from bunnyland.simpacks.dragonsim.mechanics import MemberOfFaction
+from bunnyland.simpacks.lifesim.mechanics import LifeStageComponent, OwnsHome
 
 HOUR = 3600.0
 
@@ -370,6 +375,108 @@ def test_move_handler_can_select_exit_by_target_id_and_custom_noise():
     noise = next(iter(noises)).get_component(NoiseComponent)
     assert noise.loudness == 2.5
     assert noise.room_id == str(scenario.room_b)
+
+
+def test_move_handler_enforces_adults_only_room_gate():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    destination = world.get_entity(scenario.room_b)
+    character = world.get_entity(scenario.character)
+    destination.add_component(
+        RoomGateComponent(adults_only=True, rejection_reason="Adults only beyond this point.")
+    )
+    ctx = HandlerContext(world, scenario.actor.epoch)
+
+    missing_stage = MoveHandler().execute(ctx, _command(scenario))
+    assert missing_stage.reason == "Adults only beyond this point."
+
+    character.add_component(LifeStageComponent(stage="child"))
+    child = MoveHandler().execute(ctx, _command(scenario))
+    assert child.reason == "Adults only beyond this point."
+
+    replace_component(character, LifeStageComponent(stage="elder"))
+    assert MoveHandler().execute(ctx, _command(scenario)).ok is True
+
+
+def test_move_handler_enforces_group_or_faction_membership_room_gate():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    destination = world.get_entity(scenario.room_b)
+    character = world.get_entity(scenario.character)
+    destination.add_component(
+        RoomGateComponent(members_only=True, rejection_reason="Wardens only.")
+    )
+    ctx = HandlerContext(world, scenario.actor.epoch)
+
+    no_allowed_group = MoveHandler().execute(ctx, _command(scenario))
+    assert no_allowed_group.reason == "Wardens only."
+
+    wardens = spawn_entity(world, [IdentityComponent(name="Wardens", kind="faction")])
+    outsiders = spawn_entity(world, [IdentityComponent(name="Outsiders", kind="faction")])
+    destination.add_relationship(AllowsMembersOf(), wardens.id)
+    character.add_relationship(MemberOfFaction(), outsiders.id)
+    wrong_faction = MoveHandler().execute(ctx, _command(scenario))
+    assert wrong_faction.reason == "Wardens only."
+
+    character.add_relationship(MemberOfFaction(), wardens.id)
+    assert MoveHandler().execute(ctx, _command(scenario)).ok is True
+
+
+def test_move_handler_enforces_room_owner_gate():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    destination = world.get_entity(scenario.room_b)
+    destination.add_component(RoomGateComponent(owner_only=True, rejection_reason="Private home."))
+    ctx = HandlerContext(world, scenario.actor.epoch)
+
+    no_owner = MoveHandler().execute(ctx, _command(scenario))
+    assert no_owner.reason == "Private home."
+
+    other = spawn_entity(
+        world,
+        [IdentityComponent(name="Clover", kind="character"), CharacterComponent()],
+    )
+    other.add_relationship(OwnsHome(), destination.id)
+    other_owner = MoveHandler().execute(ctx, _command(scenario))
+    assert other_owner.reason == "Private home."
+
+    other.remove_relationship(OwnsHome, destination.id)
+    world.get_entity(scenario.character).add_relationship(OwnsHome(), destination.id)
+    assert MoveHandler().execute(ctx, _command(scenario)).ok is True
+
+
+def test_move_handler_enforces_admin_only_room_gate():
+    scenario = build_scenario()
+    world = scenario.actor.world
+    destination = world.get_entity(scenario.room_b)
+    destination.add_component(
+        RoomGateComponent(admin_only=True, rejection_reason="The admin lounge is restricted.")
+    )
+    ctx = HandlerContext(world, scenario.actor.epoch)
+
+    ordinary = MoveHandler().execute(ctx, _command(scenario))
+    assert ordinary.reason == "The admin lounge is restricted."
+
+    world.get_entity(scenario.controller).add_component(AdminComponent(label="operator"))
+    assert MoveHandler().execute(ctx, _command(scenario)).ok is True
+
+    world.get_entity(scenario.controller).remove_component(AdminComponent)
+    world.get_entity(scenario.character).add_component(AdminComponent(label="host"))
+    assert MoveHandler().execute(ctx, _command(scenario)).ok is True
+
+
+async def test_room_gate_custom_rejection_reason_is_published_to_player():
+    scenario = build_scenario()
+    scenario.actor.world.get_entity(scenario.room_b).add_component(
+        RoomGateComponent(owner_only=True, rejection_reason="Juniper's key does not fit.")
+    )
+    rejected_events = collect(scenario.actor, CommandRejectedEvent)
+
+    scenario.actor.submit_nowait(_command(scenario))
+    await scenario.actor.tick(0.0)
+
+    assert rejected_events[-1].reason == "Juniper's key does not fit."
+    assert scenario.character_room() == scenario.room_a
 
 
 def test_world_actor_registration_helpers_and_bind_clock_paths():

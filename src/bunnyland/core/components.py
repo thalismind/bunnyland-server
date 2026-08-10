@@ -232,6 +232,17 @@ class RoomComponent(Component):
 
 
 @dataclass(frozen=True)
+class RoomGateComponent(Component):
+    """Composable entry restrictions and their player-facing rejection text."""
+
+    adults_only: bool = False
+    members_only: bool = False
+    owner_only: bool = False
+    admin_only: bool = False
+    rejection_reason: str = "You cannot enter this room."
+
+
+@dataclass(frozen=True)
 class RegionComponent(Component):
     """A named geographic or structural area above room scale.
 
@@ -606,6 +617,7 @@ __all__ = [
     "ReadableComponent",
     "RegionComponent",
     "RoomComponent",
+    "RoomGateComponent",
     "RoomSummaryComponent",
     "RestingComponent",
     "SleepingComponent",

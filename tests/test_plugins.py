@@ -11,6 +11,7 @@ from bunnyland.core import (
     ActionExample,
     ActionPattern,
     AdminComponent,
+    AllowsMembersOf,
     CommandCost,
     Contains,
     ControllerOutboxMessageComponent,
@@ -21,6 +22,7 @@ from bunnyland.core import (
     MemoryProfileComponent,
     MutationPlan,
     RestingComponent,
+    RoomGateComponent,
     SubmittedCommand,
     WorldActor,
     build_submitted_command,
@@ -340,6 +342,8 @@ def test_collect_ecs_types_preserves_plugin_order():
 def test_builtin_admin_and_storyteller_ecs_types_are_registered():
     assert AdminComponent in core_verbs_plugin().ecs.components
     assert RestingComponent in core_verbs_plugin().ecs.components
+    assert RoomGateComponent in core_verbs_plugin().ecs.components
+    assert AllowsMembersOf in core_verbs_plugin().ecs.edges
     assert {
         RestStartedEvent,
         RestEndedEvent,
