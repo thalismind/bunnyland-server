@@ -27,8 +27,19 @@ from rich.style import Style
 from rich.text import Text
 
 from ..core.actions import ActionArgument, ActionDefinition, ActionPattern, action_icon_for
-from ..imagegen.affordance import DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
-from ..imagegen.feed import latest_image_completion, latest_image_failure
+from ..imagegen.affordance import (
+    DELIVER_EMOJI,
+    FAIL_EMOJI,
+    REQUEST_EMOJI,
+    VIDEO_DELIVER_EMOJI,
+    VIDEO_REQUEST_EMOJI,
+)
+from ..imagegen.feed import (
+    latest_image_completion,
+    latest_image_failure,
+    latest_video_completion,
+    latest_video_failure,
+)
 from ..llm_agents.dispatch import suggest_names
 from ..llm_agents.natural_language import NaturalCommandParser
 from ..server.models import CharacterSummaryView
@@ -55,6 +66,7 @@ META_COMMANDS = (
     "exit",
 )
 IMAGE_COMMANDS = ("image", "img")
+VIDEO_COMMANDS = ("video",)
 SHEET_COMMANDS = ("sheet", "profile")
 CHAT_COMMANDS = ("chat",)
 
@@ -188,6 +200,8 @@ class BunnylandRepl:
         self._events = tui_events.EventNarrator()
         self._event_image_url = ""
         self._event_image_failure_epoch = -1
+        self._event_video_url = ""
+        self._event_video_failure_epoch = -1
         self._refresh_task: asyncio.Task[None] | None = None
 
     # ── data ──────────────────────────────────────────────────────────────────
@@ -340,6 +354,7 @@ class BunnylandRepl:
             show_icons=self.show_icons,
         )
         lines.extend(self._image_lines(messages))
+        lines.extend(self._video_lines(messages))
         return lines
 
     def _image_lines(self, messages: list[dict]) -> list[Text]:
@@ -359,6 +374,24 @@ class BunnylandRepl:
             self._event_image_failure_epoch = failure["world_epoch"]
             reason = failure.get("reason") or "image generation failed"
             out.append(Text(f"{FAIL_EMOJI} image request failed: {reason}", style="yellow"))
+        return out
+
+    def _video_lines(self, messages: list[dict]) -> list[Text]:
+        out: list[Text] = []
+        completion = latest_video_completion(messages)
+        if completion is not None and completion["url"] != self._event_video_url:
+            self._event_video_url = str(completion["url"])
+            out.append(
+                Text(
+                    f"{VIDEO_DELIVER_EMOJI} scene video ready: {completion['url']}",
+                    style="cyan",
+                )
+            )
+        failure = latest_video_failure(messages)
+        if failure is not None and failure["world_epoch"] != self._event_video_failure_epoch:
+            self._event_video_failure_epoch = int(failure["world_epoch"])
+            reason = failure.get("reason") or "video generation failed"
+            out.append(Text(f"{FAIL_EMOJI} video request failed: {reason}", style="yellow"))
         return out
 
     # ── dispatch ──────────────────────────────────────────────────────────────
@@ -395,6 +428,8 @@ class BunnylandRepl:
             return await self._cancel(rest)
         if verb in IMAGE_COMMANDS:
             return await self._request_image()
+        if verb in VIDEO_COMMANDS:
+            return await self._request_video()
         if verb in SHEET_COMMANDS:
             return await self._open_sheet(rest)
         if verb in CHAT_COMMANDS:
@@ -411,6 +446,17 @@ class BunnylandRepl:
             note = "image ready" if result.status == "skipped" else "image requested"
             return Text(f"{REQUEST_EMOJI} {note}.", style="cyan")
         return Text(f"{REQUEST_EMOJI} {result.reason}", style="yellow")
+
+    async def _request_video(self) -> Text:
+        if not self.player_id:
+            return Text("Pick a player first: play <name>.")
+        if not self.backend.supports_video_requests:
+            return Text("Video requests are not available for this session.", style="yellow")
+        result = await self.backend.request_video(self.player_id)
+        if result.ok:
+            note = "video ready" if result.status == "skipped" else "video requested"
+            return Text(f"{VIDEO_REQUEST_EMOJI} {note}.", style="cyan")
+        return Text(f"{VIDEO_REQUEST_EMOJI} {result.reason}", style="yellow")
 
     def _sheet_target(self, name: str) -> str | None:
         query = name.strip()
@@ -653,6 +699,8 @@ class BunnylandRepl:
         commands = list(META_COMMANDS)
         if self.backend.supports_image_requests:
             commands.extend(IMAGE_COMMANDS)
+        if self.backend.supports_video_requests:
+            commands.extend(VIDEO_COMMANDS)
         if self.backend.supports_character_sheets:
             commands.extend(SHEET_COMMANDS)
         if self.backend.supports_character_chat:

@@ -22,8 +22,19 @@ from textual.widgets.option_list import Option
 from ..content_warnings import has_world_introduction, visible_content_flags
 from ..core.actions import action_icon_for
 from ..core.claim_timeout import normalize_claim_timeout
-from ..imagegen.affordance import DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
-from ..imagegen.feed import latest_image_completion, latest_image_failure
+from ..imagegen.affordance import (
+    DELIVER_EMOJI,
+    FAIL_EMOJI,
+    REQUEST_EMOJI,
+    VIDEO_DELIVER_EMOJI,
+    VIDEO_REQUEST_EMOJI,
+)
+from ..imagegen.feed import (
+    latest_image_completion,
+    latest_image_failure,
+    latest_video_completion,
+    latest_video_failure,
+)
 from ..server.models import CharacterSummaryView
 from ..server.v1_models import PublicWorldResource
 from ..terminal_config import (
@@ -345,6 +356,7 @@ class BunnylandTUI(App[None]):
     BINDINGS = [
         ("r", "refresh", "Refresh"),
         ("i", "request_image", f"{REQUEST_EMOJI} Image"),
+        ("v", "request_video", f"{VIDEO_REQUEST_EMOJI} Video"),
         ("s", "open_sheet", "Open Sheet"),
         ("c", "open_chat", "Chat"),
         ("x", "clear_target", "Clear Target"),
@@ -390,6 +402,8 @@ class BunnylandTUI(App[None]):
         self._events_primed = False
         self._event_image_url = ""
         self._event_image_failure_epoch = -1
+        self._event_video_url = ""
+        self._event_video_failure_epoch = -1
         self._refresh_error: str | None = None
         self._refresh_task: asyncio.Task[None] | None = None
         self._live_task: asyncio.Task | None = None
@@ -423,6 +437,8 @@ class BunnylandTUI(App[None]):
                     yield Button("Release", id="claim-release", disabled=True)
                     if self.backend.supports_image_requests:
                         yield Button(f"{REQUEST_EMOJI} Image", id="request-image")
+                    if self.backend.supports_video_requests:
+                        yield Button(f"{VIDEO_REQUEST_EMOJI} Video", id="request-video")
                     if self.backend.supports_character_sheets:
                         yield Button("▣ Sheet", id="open-sheet")
                     if self.backend.supports_character_chat or self.needs_chat_setup:
@@ -1008,12 +1024,15 @@ class BunnylandTUI(App[None]):
             show_icons=self.show_icons,
         )
         image_lines = self._image_activity(events, prime=prime)
+        video_lines = self._video_activity(events, prime=prime)
         if prime:
             self._render_activity()
             return
         for line in lines:
             self._append_activity(line)
         for line in image_lines:
+            self._append_activity(line)
+        for line in video_lines:
             self._append_activity(line)
 
     def _image_activity(self, events: list[dict], *, prime: bool) -> list[Text]:
@@ -1035,6 +1054,31 @@ class BunnylandTUI(App[None]):
             if not prime:
                 reason = failure.get("reason") or "image generation failed"
                 lines.append(Text(f"{FAIL_EMOJI} image request failed: {reason}", style="yellow"))
+        return lines
+
+    def _video_activity(self, events: list[dict], *, prime: bool) -> list[Text]:
+        lines: list[Text] = []
+        completion = latest_video_completion(events)
+        if completion is not None and completion["url"] != self._event_video_url:
+            self._event_video_url = str(completion["url"])
+            if not prime:
+                lines.append(
+                    Text(
+                        f"{VIDEO_DELIVER_EMOJI} scene video ready: {completion['url']}",
+                        style="cyan",
+                    )
+                )
+        failure = latest_video_failure(events)
+        if failure is not None and failure["world_epoch"] != self._event_video_failure_epoch:
+            self._event_video_failure_epoch = int(failure["world_epoch"])
+            if not prime:
+                reason = failure.get("reason") or "video generation failed"
+                lines.append(
+                    Text(
+                        f"{FAIL_EMOJI} video request failed: {reason}",
+                        style="yellow",
+                    )
+                )
         return lines
 
     def _append_activity(self, line: Text) -> None:
@@ -1122,6 +1166,10 @@ class BunnylandTUI(App[None]):
     async def _request_image_pressed(self, _event: Button.Pressed) -> None:
         await self.action_request_image()
 
+    @on(Button.Pressed, "#request-video")
+    async def _request_video_pressed(self, _event: Button.Pressed) -> None:
+        await self.action_request_video()
+
     @on(Button.Pressed, "#open-sheet")
     async def _open_sheet_pressed(self, _event: Button.Pressed) -> None:
         await self.action_open_sheet()
@@ -1160,6 +1208,21 @@ class BunnylandTUI(App[None]):
             self._append_activity(Text(f"{REQUEST_EMOJI} {note}.", style="cyan"))
         else:
             self._append_activity(Text(f"{REQUEST_EMOJI} {result.reason}", style="yellow"))
+
+    async def action_request_video(self) -> None:
+        """Request a clip of recent events when the backend advertises video generation."""
+        if not self.player_id:
+            self._append_activity(Text("Select a character before requesting a video."))
+            return
+        if not self.backend.supports_video_requests:
+            self._append_activity(Text("Video requests are not available for this session."))
+            return
+        result = await self.backend.request_video(self.player_id)
+        if result.ok:
+            note = "video ready" if result.status == "skipped" else "video requested"
+            self._append_activity(Text(f"{VIDEO_REQUEST_EMOJI} {note}.", style="cyan"))
+        else:
+            self._append_activity(Text(f"{VIDEO_REQUEST_EMOJI} {result.reason}", style="yellow"))
 
     async def action_open_sheet(self) -> None:
         """Open the selected or current character's native terminal sheet."""

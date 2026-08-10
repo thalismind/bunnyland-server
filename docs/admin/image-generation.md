@@ -1,7 +1,8 @@
-# Image generation
+# Image and video generation
 
 Bunnyland can illustrate a world with ComfyUI, OpenRouter, or a plugin generator: character
 portraits, single-object renders, toon sprites, and on-request scene images for world events.
+An independently configured ComfyUI workflow can also produce short event-video clips.
 The simulation never blocks on this — generation runs on a background worker, one job at a
 time — and the engine only ever stores a small URL reference, never image bytes.
 
@@ -49,10 +50,11 @@ COMFYUI_SERVER_URL=http://localhost:8188   # WHERE your ComfyUI server is
 COMFYUI_USE_WEBSOCKET=1                     # watch progress over /ws (HTTP polling fallback)
 COMFYUI_POLL_INTERVAL_SECONDS=1
 COMFYUI_TIMEOUT_SECONDS=120
-BUNNYLAND_MEDIA_DIR=/data/media             # where generated images are written
+BUNNYLAND_MEDIA_DIR=/data/media             # where generated images and clips are written
 BUNNYLAND_IMAGE_WORKFLOWS=sdxl             # WHICH workflow family (model) to use for images
 BUNNYLAND_IMAGE_PROMPT_STYLE=              # force "tag" or "natural" (blank = family default)
 BUNNYLAND_IMAGE_TEMPLATES=/data/image-workflows.json  # optional per-template overrides
+BUNNYLAND_VIDEO_TEMPLATE=event-video         # named video template; blank disables videos
 BUNNYLAND_IMAGE_ENHANCER=stub              # "stub" (offline) or "llm" (uses OLLAMA_*)
 BUNNYLAND_IMAGE_BACKFILL_SECONDS=5         # cadence of the portrait/sprite backfill
 ```
@@ -109,9 +111,55 @@ to a different generator.
 - **Event images** — generated only when a player requests one (see the player guide). The
   first request for an event is generated and then reused for everyone; admins can force a
   regenerate.
+- **Event videos** — generated only when a player requests a clip of the latest events in
+  their room. Video generation is advertised separately from images and remains off unless
+  `BUNNYLAND_VIDEO_TEMPLATE` names a valid ComfyUI video template.
 
-Generated images **persist**: the reference is saved with the world, and nothing is
-regenerated once an entity or event has an image.
+Generated media **persists**: the reference is saved with the world, and nothing is
+regenerated once an entity or event has that image or clip.
+
+## Enabling short ComfyUI videos
+
+Video generation requires `COMFYUI_SERVER_URL`, `BUNNYLAND_IMAGE_TEMPLATES`, and
+`BUNNYLAND_VIDEO_TEMPLATE`. Add an API-format ComfyUI workflow to the same template file
+used for image overrides. Its template metadata must use `purpose: "event"` and
+`media: "video"`; the configured name must match exactly:
+
+```json
+{
+  "templates": [
+    {
+      "name": "event-video",
+      "purpose": "event",
+      "media": "video",
+      "prompt_style": "natural",
+      "width": 768,
+      "height": 512,
+      "output_node_id": "42",
+      "graph": { "...": "the exported ComfyUI API workflow" },
+      "slots": []
+    }
+  ]
+}
+```
+
+Keep clip duration, frame rate, and codec fixed in the workflow graph. Bunnyland injects the
+same `%PROMPT%`, `%NEGATIVE%`, `%SEED%`, `%WIDTH%`, and `%HEIGHT%` values used by image
+templates. The output node may be a native ComfyUI video output or VideoHelperSuite's video
+combine node; saved MP4 and WebM outputs are accepted. Bunnyland refuses to start when the
+named template is absent, has another purpose, or declares image media.
+
+With the template file in place:
+
+```bash
+COMFYUI_SERVER_URL=http://localhost:8188
+BUNNYLAND_IMAGE_TEMPLATES=/data/image-workflows.json
+BUNNYLAND_VIDEO_TEMPLATE=event-video
+```
+
+`GET /v1/public/features` reports `image_generation` and `video_generation` independently.
+Browser clients hide each corresponding control when its flag is false. Discord only accepts
+the 🎬 reaction when video generation is advertised.
 
 ## Choosing a ComfyUI model family
 
@@ -200,15 +248,20 @@ With a bearer token scoped for `world:admin`:
 
 ```bash
 # Generate (or regenerate) an image for any entity or history record:
-POST /admin/world/generate-image
-     {"entity_id": "...", "purpose": "portrait|entity|sprite|event",
+POST /v1/admin/world/generation-jobs
+     {"kind": "image", "entity_id": "...",
+      "purpose": "portrait|entity|sprite|event",
       "template": "", "alpha": false, "force": false}
 
+# Generate a video for a history record:
+POST /v1/admin/world/generation-jobs
+     {"kind": "video", "entity_id": "...", "template": "", "force": false}
+
 # Check a job:
-GET  /admin/world/generate-image/{job_id}
+GET  /v1/admin/world/generation-jobs/{job_id}
 ```
 
-Generated files are served read-only at `GET /media/{kind}/{name}`.
+Generated files are served read-only at `GET /v1/public/media/{kind}/{name}`.
 
 ## Live provider validation
 
@@ -228,11 +281,6 @@ BUNNYLAND_LIVE_LLM=1 \
 
 The ComfyUI suite also needs `COMFYUI_SERVER_URL`. The OpenRouter suite also needs
 `OPENROUTER_API_KEY` and always requires its separate live model variable.
-
-## Coming soon
-
-Event and interaction **videos** are planned; the data model already reserves space for
-them, but only images are generated today.
 
 ## Troubleshooting
 

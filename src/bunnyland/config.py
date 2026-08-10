@@ -164,6 +164,7 @@ class ImageGenConfigBlock:
     media_root: str = "media"
     public_base_url: str = ""
     templates_path: str = ""
+    video_template: str = ""
     workflows: str = "anima"
     prompt_style: str = ""
     enhancer: str = ""
@@ -454,6 +455,7 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_MEDIA_DIR", imagegen.media_root)
         _set_if(env, "BUNNYLAND_PUBLIC_BASE_URL", imagegen.public_base_url)
         _set_if(env, "BUNNYLAND_IMAGE_TEMPLATES", imagegen.templates_path)
+        _set_if(env, "BUNNYLAND_VIDEO_TEMPLATE", imagegen.video_template)
         _set_if(env, "BUNNYLAND_IMAGE_WORKFLOWS", imagegen.workflows)
         _set_if(env, "BUNNYLAND_IMAGE_PROMPT_STYLE", imagegen.prompt_style)
         _set_if(env, "BUNNYLAND_IMAGE_ENHANCER", imagegen.enhancer)

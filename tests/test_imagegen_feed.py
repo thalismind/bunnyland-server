@@ -5,8 +5,15 @@ from __future__ import annotations
 from bunnyland.imagegen.events import (
     ImageGenerationCompletedEvent,
     ImageGenerationFailedEvent,
+    VideoGenerationCompletedEvent,
+    VideoGenerationFailedEvent,
 )
-from bunnyland.imagegen.feed import latest_image_completion, latest_image_failure
+from bunnyland.imagegen.feed import (
+    latest_image_completion,
+    latest_image_failure,
+    latest_video_completion,
+    latest_video_failure,
+)
 from bunnyland.server.serialization import serialize_event
 
 
@@ -34,6 +41,20 @@ def _failed(*, epoch: int, purpose: str = "event") -> dict:
             entity_id="char-1",
             purpose=purpose,
             reason="comfyui exploded",
+        )
+    )
+
+
+def _video_event(*, epoch: int, failed: bool = False) -> dict:
+    event_type = VideoGenerationFailedEvent if failed else VideoGenerationCompletedEvent
+    fields = {"reason": "encoder failed"} if failed else {"url": f"/videos/{epoch}.mp4"}
+    return serialize_event(
+        event_type(
+            event_id=f"v{epoch}",
+            world_epoch=epoch,
+            created_at="2026-01-01T00:00:00Z",
+            entity_id="history-1",
+            **fields,
         )
     )
 
@@ -103,3 +124,21 @@ def test_failure_purpose_filter():
     messages = [_failed(epoch=8, purpose="portrait")]
     assert latest_image_failure(messages, purpose="event") is None
     assert latest_image_failure(messages, purpose="portrait")["world_epoch"] == 8
+
+
+def test_video_completion_and_failure_use_the_same_newest_event_rules():
+    messages = [_video_event(epoch=2), _video_event(epoch=7), _video_event(epoch=9, failed=True)]
+    assert latest_video_completion(messages)["url"] == "/videos/7.mp4"
+    assert latest_video_failure(messages)["reason"] == "encoder failed"
+    assert latest_video_completion([]) is None
+
+
+def test_malformed_feed_entries_are_ignored():
+    malformed = [
+        {"data": "not-an-object"},
+        {"event_type": "VideoGenerationCompletedEvent", "event": "not-an-object"},
+        {"event_type": "VideoGenerationCompletedEvent", "event": {
+            "purpose": "event", "url": "/video.mp4", "world_epoch": {},
+        }},
+    ]
+    assert latest_video_completion(malformed)["world_epoch"] == {}

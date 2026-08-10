@@ -75,8 +75,8 @@ from ..imagegen.media import (
     SEGMENT_SPRITES,
     MediaStore,
 )
-from ..imagegen.scene import request_scene_image
-from ..imagegen.spec import ImagePurpose
+from ..imagegen.scene import request_scene_image, request_scene_video
+from ..imagegen.spec import ImagePurpose, MediaKind
 from ..llm_agents import (
     ControllerDefinitionStore,
     action_library_names,
@@ -166,6 +166,7 @@ from .models import (
     WorldRoomGenerationResponse,
     WorldRuntimeResponse,
     WorldSaveResponse,
+    WorldVideoGenerationRequest,
 )
 from .onboarding import OnboardingTracker
 from .patches import WorldPatchError, apply_world_patch
@@ -218,7 +219,7 @@ from .v1_models import (
     ProblemDetails,
     PublicWorldResource,
     RuntimePatchRequest,
-    SceneImageJobRequest,
+    SceneMediaJobRequest,
 )
 from .worldgen import (
     generate_character_patch,
@@ -830,6 +831,12 @@ def create_app(
             raise HTTPException(status_code=409, detail="image generation is not configured")
         return imagegen
 
+    def _require_videogen() -> ImageGenService:
+        service = _require_imagegen()
+        if not getattr(service, "video_enabled", False):
+            raise HTTPException(status_code=409, detail="video generation is not configured")
+        return service
+
     def _require_memory_store():
         if memory_store is None:
             raise HTTPException(status_code=409, detail="memory is not configured")
@@ -1025,6 +1032,7 @@ def create_app(
             ),
             character_sheets=character_sheets,
             image_generation=imagegen is not None,
+            video_generation=imagegen is not None and getattr(imagegen, "video_enabled", False),
         )
 
     @app.middleware("http")
@@ -2047,6 +2055,20 @@ def create_app(
         )
         return _image_response(job)
 
+    async def _generate_video_request(
+        request: WorldVideoGenerationRequest,
+    ) -> WorldImageGenerationResponse:
+        service = _require_videogen()
+        job = await service.start(
+            request.entity_id,
+            ImagePurpose.EVENT,
+            template_name=request.template,
+            extra=request.extra,
+            force=request.force,
+            media=MediaKind.VIDEO,
+        )
+        return _image_response(job)
+
     async def _scene_image_request(
         character_id: str,
     ) -> WorldImageGenerationResponse | None:
@@ -2055,6 +2077,15 @@ def create_app(
         # when there is no room to illustrate, which each caller renders as its own error.
         service = _require_imagegen()
         job = await request_scene_image(actor, service, character_id=character_id)
+        if job is None:
+            return None
+        return _image_response(job)
+
+    async def _scene_video_request(
+        character_id: str,
+    ) -> WorldImageGenerationResponse | None:
+        service = _require_videogen()
+        job = await request_scene_video(actor, service, character_id=character_id)
         if job is None:
             return None
         return _image_response(job)
@@ -2119,7 +2150,16 @@ def create_app(
                     _without_preview_fields(_image_response(current))
                 ),
                 "failure": (
-                    _problem_for_job_v1(str(current.error or "image generation failed"))
+                    _problem_for_job_v1(
+                        str(
+                            current.error
+                            or (
+                                "video generation failed"
+                                if job.kind == "video"
+                                else "image generation failed"
+                            )
+                        )
+                    )
                     if status == "failed"
                     else None
                 ),
@@ -2127,7 +2167,7 @@ def create_app(
         )
 
     async def _refresh_generation_job_v1(job: JobResource) -> JobResource:
-        if job.kind == "image":
+        if job.kind in {"image", "video"}:
             return _refresh_image_job_v1(job)
         if job.kind != "world" or generation_job is None or generation_job.job_id != job.id:
             return job
@@ -3018,7 +3058,7 @@ def create_app(
     @play_v1.post("/claims/{claim_id}/jobs", response_model=JobResource, status_code=202)
     async def v1_submit_player_job(
         claim_id: str,
-        body: SceneImageJobRequest,
+        body: SceneMediaJobRequest,
         request: Request,
         response: Response,
         claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
@@ -3030,7 +3070,7 @@ def create_app(
         character, _controller, _edge, _claim = _claim_context_v1(
             claim_id, claim_secret, normalized_client_id, owner
         )
-        # Each of these starts a GPU image generation, so cap them per caller the way chat
+        # Each of these starts GPU media generation, so cap them per caller the way chat
         # jobs are. The general request limiter is far too loose for work this expensive.
         subject = _request_subject(request)
         allowed, retry_after = scene_image_rate_limiter.check(
@@ -3039,21 +3079,29 @@ def create_app(
         if not allowed:
             raise HTTPException(
                 status_code=429,
-                detail="scene image rate limit exceeded",
+                detail=(
+                    "scene video rate limit exceeded"
+                    if body.kind == "scene_video"
+                    else "scene image rate limit exceeded"
+                ),
                 headers={"Retry-After": str(retry_after)},
             )
         created = datetime.now(UTC)
-        image = await _scene_image_request(str(character.id))
-        if image is None:
+        generated = (
+            await _scene_video_request(str(character.id))
+            if body.kind == "scene_video"
+            else await _scene_image_request(str(character.id))
+        )
+        if generated is None:
             raise HTTPException(status_code=400, detail="character has no room to illustrate")
         job = JobResource(
             **_world_fields(),
-            id=image.job_id,
+            id=generated.job_id,
             kind=body.kind,
-            status=_job_status_v1(image.status),
+            status=_job_status_v1(generated.status),
             created_at=created,
             updated_at=datetime.now(UTC),
-            result=JOB_RESULT_ADAPTER.validate_python(_without_preview_fields(image)),
+            result=JOB_RESULT_ADAPTER.validate_python(_without_preview_fields(generated)),
         )
         player_job_registry.put(job, owner=claim_id)
         response.headers["Location"] = f"/v1/play/claims/{claim_id}/jobs/{job.id}"
@@ -3355,6 +3403,10 @@ def create_app(
         elif body.kind == "event":
             result = await _generate_event_request(
                 WorldEventGenerationRequest.model_validate(request_data)
+            )
+        elif body.kind == "video":
+            result = await _generate_video_request(
+                WorldVideoGenerationRequest.model_validate(request_data)
             )
         else:
             result = await _generate_image_request(

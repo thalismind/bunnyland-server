@@ -9,7 +9,8 @@ plugin contributes via ``ContentContribution.prompt_enhancers``.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+
+from pydantic import JsonValue
 
 from ..core.world_actor import WorldActor
 from ..plugins.loader import collect_prompt_enhancers
@@ -29,7 +30,7 @@ from .prompt import (
     StubPromptEnhancer,
 )
 from .service import ImageGenService
-from .spec import ImagePurpose
+from .spec import ImagePurpose, MediaKind
 from .store import WorkflowTemplateStore, default_templates
 
 
@@ -55,10 +56,12 @@ def build_image_service(
     config: ImageGenConfig,
     *,
     plugins: Sequence[Plugin] = (),
-    plugin_config: Mapping[str, Any] | None = None,
+    plugin_config: Mapping[str, JsonValue] | None = None,
 ) -> ImageGenService:
     """Assemble the full image generation service from config and plugins."""
     selected_names = {config.generator_for(purpose.value) for purpose in ImagePurpose}
+    if config.video_template:
+        selected_names.add("comfyui")
     registry: dict[str, ImageGenerator] = collect_image_generators(plugins, config, plugin_config)
 
     for builtin in ("comfyui", "in-memory", "openrouter"):
@@ -91,12 +94,24 @@ def build_image_service(
     routed = {
         purpose: registry[config.generator_for(purpose.value)] for purpose in ImagePurpose
     }
+    video_generator = None
+    if config.video_template:
+        assert templates is not None
+        video_template = templates.get(config.video_template)
+        if video_template is None:
+            raise ValueError(f"unknown video workflow template {config.video_template!r}")
+        if video_template.purpose is not ImagePurpose.EVENT:
+            raise ValueError("video workflow template must have purpose 'event'")
+        if video_template.media is not MediaKind.VIDEO:
+            raise ValueError("video workflow template must declare media 'video'")
+        video_generator = registry["comfyui"]
     media = MediaStore(config.media_root)
     actor.media_service = media
     return ImageGenService(
         actor,
         config,
         generators=routed,
+        video_generator=video_generator,
         client=client,
         templates=templates,
         enhancer=select_enhancer(config, plugins),

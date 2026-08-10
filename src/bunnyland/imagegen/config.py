@@ -47,6 +47,8 @@ class ImageGenConfig:
     media_root: str = "media"
     public_base_url: str = ""
     templates_path: str = ""
+    #: Explicit ComfyUI template name for short event videos. Blank disables video generation.
+    video_template: str = ""
     #: Workflow family to use for images. The base is the first keyword (before the first
     #: "-"): "anima" (default, lowest VRAM), "sdxl", "klein", or "flux2dev" (highest
     #: quality). A suffix is allowed for a server's own label, e.g. "anima-my-server".
@@ -92,6 +94,7 @@ class ImageGenConfig:
             media_root=environ.get("BUNNYLAND_MEDIA_DIR", "media").strip(),
             public_base_url=environ.get("BUNNYLAND_PUBLIC_BASE_URL", "").strip().rstrip("/"),
             templates_path=environ.get("BUNNYLAND_IMAGE_TEMPLATES", "").strip(),
+            video_template=environ.get("BUNNYLAND_VIDEO_TEMPLATE", "").strip(),
             workflows=environ.get("BUNNYLAND_IMAGE_WORKFLOWS", "anima").strip() or "anima",
             prompt_style=environ.get("BUNNYLAND_IMAGE_PROMPT_STYLE", "").strip(),
             enhancer=environ.get("BUNNYLAND_IMAGE_ENHANCER", "").strip(),

@@ -5,6 +5,7 @@ from __future__ import annotations
 from bunnyland.foundation.imagegen.plugin import plugin as imagegen_plugin
 from bunnyland.imagegen.components import (
     EventImageComponent,
+    EventVideoComponent,
     ImageRequestComponent,
     PortraitImageComponent,
 )
@@ -12,6 +13,9 @@ from bunnyland.imagegen.events import (
     ImageGenerationCompletedEvent,
     ImageGenerationFailedEvent,
     ImageGenerationStartedEvent,
+    VideoGenerationCompletedEvent,
+    VideoGenerationFailedEvent,
+    VideoGenerationStartedEvent,
 )
 from bunnyland.imagegen.prompt import StubPromptEnhancer
 from bunnyland.plugins import (
@@ -29,12 +33,16 @@ def test_imagegen_plugin_registers_components_and_events():
     assert set(plugin.ecs.components) == {
         PortraitImageComponent,
         EventImageComponent,
+        EventVideoComponent,
         ImageRequestComponent,
     }
     assert set(plugin.commands.typed_events) == {
         ImageGenerationStartedEvent,
         ImageGenerationCompletedEvent,
         ImageGenerationFailedEvent,
+        VideoGenerationStartedEvent,
+        VideoGenerationCompletedEvent,
+        VideoGenerationFailedEvent,
     }
 
 

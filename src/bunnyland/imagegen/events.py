@@ -39,8 +39,39 @@ class ImageGenerationFailedEvent(DomainEvent):
     reason: str
 
 
+class VideoGenerationStartedEvent(DomainEvent):
+    """A short event-video job was queued."""
+
+    entity_id: str
+    purpose: str = "event"
+    generator: str = "comfyui"
+    template: str = ""
+
+
+class VideoGenerationCompletedEvent(DomainEvent):
+    """A short event-video job finished and its reference was attached."""
+
+    entity_id: str
+    purpose: str = "event"
+    url: str
+    generator: str = "comfyui"
+    template: str = ""
+
+
+class VideoGenerationFailedEvent(DomainEvent):
+    """A short event-video job failed; nothing was attached."""
+
+    entity_id: str
+    purpose: str = "event"
+    generator: str = "comfyui"
+    reason: str
+
+
 __all__ = [
     "ImageGenerationCompletedEvent",
     "ImageGenerationFailedEvent",
     "ImageGenerationStartedEvent",
+    "VideoGenerationCompletedEvent",
+    "VideoGenerationFailedEvent",
+    "VideoGenerationStartedEvent",
 ]

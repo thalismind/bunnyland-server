@@ -42,8 +42,21 @@ class EventImageComponent(Component):
 
 
 @pydantic_dataclass(frozen=True)
+class EventVideoComponent(Component):
+    """A generated short video attached to a world-history record entity."""
+
+    url: str = ""
+    prompt: str = ""
+    seed: int = 0
+    template: str = ""
+    generator: str = "comfyui"
+    source_event_id: str = ""
+    generated_at_epoch: int = 0
+
+
+@pydantic_dataclass(frozen=True)
 class ImageRequestComponent(Component):
-    """Marks an entity/record with an image generation request in flight."""
+    """Marks an entity or history record with a media generation request in flight."""
 
     purpose: str = ""
     requested_at_epoch: int = 0
@@ -52,6 +65,7 @@ class ImageRequestComponent(Component):
 
 __all__ = [
     "EventImageComponent",
+    "EventVideoComponent",
     "ImageRequestComponent",
     "PortraitImageComponent",
 ]

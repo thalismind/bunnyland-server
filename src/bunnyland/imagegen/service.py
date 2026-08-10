@@ -24,6 +24,7 @@ from relics import Entity
 
 from bunnyland import telemetry
 from bunnyland.foundation.history.mechanics import WorldHistoryRecordComponent
+from bunnyland.foundation.media.service import sniff_video_extension
 from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 
 from ..core.components import CharacterComponent
@@ -34,6 +35,7 @@ from .client import ComfyClient
 from .comfyui import ComfyUIImageGenerator
 from .components import (
     EventImageComponent,
+    EventVideoComponent,
     ImageRequestComponent,
     PortraitImageComponent,
 )
@@ -42,6 +44,9 @@ from .events import (
     ImageGenerationCompletedEvent,
     ImageGenerationFailedEvent,
     ImageGenerationStartedEvent,
+    VideoGenerationCompletedEvent,
+    VideoGenerationFailedEvent,
+    VideoGenerationStartedEvent,
 )
 from .generators import ImageGenerator, ImageGeneratorProfile, ImageGeneratorRequest
 from .media import (
@@ -50,10 +55,11 @@ from .media import (
     SEGMENT_EVENTS,
     SEGMENT_PORTRAITS,
     SEGMENT_SPRITES,
+    SEGMENT_VIDEOS,
     MediaStore,
 )
 from .prompt import ImagePromptRequest, PromptEnhancer, PromptExampleSource
-from .spec import GeneratedPrompt, ImagePurpose, PromptStyle
+from .spec import GeneratedPrompt, ImagePurpose, MediaKind, PromptStyle
 from .store import WorkflowTemplateStore
 from .subject import subject_for_entity, subject_for_event
 
@@ -78,6 +84,7 @@ class ImageGenJob:
     job_id: str
     entity_id: str
     purpose: ImagePurpose
+    media: MediaKind = MediaKind.IMAGE
     generator: str = "comfyui"
     profile_name: str = ""
     template_name: str = ""
@@ -110,6 +117,7 @@ class ImageGenService:
         config: ImageGenConfig,
         *,
         generators: dict[ImagePurpose, ImageGenerator] | None = None,
+        video_generator: ImageGenerator | None = None,
         client: ComfyClient | None = None,
         templates: WorkflowTemplateStore | None = None,
         enhancer: PromptEnhancer,
@@ -126,7 +134,10 @@ class ImageGenService:
                 raise TypeError("ImageGenService requires generators or a ComfyUI client/templates")
             comfy = ComfyUIImageGenerator(client, templates)
             generators = {purpose: comfy for purpose in ImagePurpose}
+            if config.video_template:
+                video_generator = comfy
         self._generators = dict(generators)
+        self._video_generator = video_generator
         self._client = client
         self._templates = templates
         self._enhancer = enhancer
@@ -156,6 +167,12 @@ class ImageGenService:
         return self._media
 
     @property
+    def video_enabled(self) -> bool:
+        """Whether an explicit ComfyUI event-video template is configured."""
+
+        return self._video_generator is not None and bool(self._config.video_template)
+
+    @property
     def idle(self) -> bool:
         return not self._busy and self._queue.empty()
 
@@ -170,14 +187,23 @@ class ImageGenService:
         extra: str = "",
         alpha: bool = False,
         force: bool = False,
+        media: MediaKind = MediaKind.IMAGE,
     ) -> ImageGenJob:
-        """Queue a job (or reuse an existing image). Returns immediately."""
+        """Queue a job (or reuse existing generated media). Returns immediately."""
         parsed = parse_entity_id(entity_id)
-        generator = self._generators[purpose]
+        if media is MediaKind.VIDEO:
+            if purpose is not ImagePurpose.EVENT or not self.video_enabled:
+                raise ImageGenError("video generation is not configured")
+            generator = self._video_generator
+            assert generator is not None
+            template_name = template_name or self._config.video_template
+        else:
+            generator = self._generators[purpose]
         job = ImageGenJob(
             job_id=uuid4().hex,
             entity_id=entity_id,
             purpose=purpose,
+            media=media,
             generator=generator.name,
             profile_name=template_name,
             template_name=template_name,
@@ -202,7 +228,7 @@ class ImageGenService:
                     telemetry.mark_span_ok(enqueue_span)
                     return job
                 entity = self._actor.world.get_entity(parsed)
-                existing = _existing_image_url(entity, purpose)
+                existing = _existing_media_url(entity, purpose, media)
                 if existing and not force:
                     job.status = "skipped"
                     job.url = existing
@@ -325,8 +351,18 @@ class ImageGenService:
                     if parsed is None or not self._actor.world.has_entity(parsed):
                         raise ImageGenError("entity no longer exists")
                     entity = self._actor.world.get_entity(parsed)
-                    generator = self._generators[job.purpose]
+                    generator = (
+                        self._video_generator
+                        if job.media is MediaKind.VIDEO
+                        else self._generators[job.purpose]
+                    )
+                    assert generator is not None
                     profile = generator.resolve_profile(job.purpose, job.profile_name)
+                    if profile.media is not job.media:
+                        raise ImageGenError(
+                            f"workflow {profile.name!r} produces {profile.media.value}, "
+                            f"not {job.media.value}"
+                        )
                     job.profile_name = profile.name
                     job.template_name = profile.name
                     subject = self._subject_for(entity, job.purpose)
@@ -369,7 +405,7 @@ class ImageGenService:
                     )
                     provider_span.set_attribute("image.output.bytes", len(data))
                     telemetry.mark_span_ok(provider_span)
-                do_alpha = self._alpha is not None and (
+                do_alpha = job.media is MediaKind.IMAGE and self._alpha is not None and (
                     alpha_requested or job.purpose is ImagePurpose.SPRITE
                 )
                 with telemetry.span(
@@ -380,12 +416,22 @@ class ImageGenService:
                         "image.alpha.applied": do_alpha,
                     },
                 ) as postprocess_span:
-                    url, alpha_url = await self._store_image(job.purpose, data, do_alpha)
+                    url, alpha_url = await self._store_media(
+                        job.purpose, job.media, data, do_alpha
+                    )
                     telemetry.mark_span_ok(postprocess_span)
                 async with self._actor._lock:
                     entity = self._actor.world.get_entity(parsed)
                     self._attach(
-                        entity, job.purpose, url, alpha_url, prompt, seed, profile, generator.name
+                        entity,
+                        job.purpose,
+                        job.media,
+                        url,
+                        alpha_url,
+                        prompt,
+                        seed,
+                        profile,
+                        generator.name,
                     )
                     _clear_request(entity)
                 job.status = "succeeded"
@@ -412,14 +458,19 @@ class ImageGenService:
 
     # -- helpers ---------------------------------------------------------------------
 
-    async def _store_image(
-        self, purpose: ImagePurpose, data: bytes, do_alpha: bool
+    async def _store_media(
+        self, purpose: ImagePurpose, media: MediaKind, data: bytes, do_alpha: bool
     ) -> tuple[str, str]:
         """Write the image (and any alpha variant) to disk and return their URLs.
 
         The alpha pass is CPU-heavy, so it runs in a worker thread, never on the event loop.
         Sprites become the transparent image directly; other purposes keep both variants.
         """
+        if media is MediaKind.VIDEO:
+            extension = sniff_video_extension(data)
+            if extension is None:
+                raise ImageGenError("ComfyUI returned an unsupported video container")
+            return self._write(SEGMENT_VIDEOS, data, extension), ""
         segment = _SEGMENT_BY_PURPOSE[purpose]
         if not do_alpha:
             telemetry.set_span_attributes(
@@ -437,8 +488,8 @@ class ImageGenService:
             return self._write(segment, alpha_bytes), ""
         return self._write(segment, data), self._write(SEGMENT_ALPHA, alpha_bytes)
 
-    def _write(self, segment: str, data: bytes) -> str:
-        name = self._media.new_name("png")
+    def _write(self, segment: str, data: bytes, extension: str = "png") -> str:
+        name = self._media.new_name(extension)
         self._media.write(segment, name, data)
         return self._media.url_for(segment, name)
 
@@ -468,6 +519,7 @@ class ImageGenService:
         self,
         entity: Entity,
         purpose: ImagePurpose,
+        media: MediaKind,
         url: str,
         alpha_url: str,
         prompt: GeneratedPrompt,
@@ -476,6 +528,21 @@ class ImageGenService:
         generator: str,
     ) -> None:
         epoch = self._actor.epoch
+        if media is MediaKind.VIDEO:
+            record = entity.get_component(WorldHistoryRecordComponent)
+            _set_component(
+                entity,
+                EventVideoComponent(
+                    url=url,
+                    prompt=prompt.prompt,
+                    seed=seed,
+                    template=profile.name,
+                    generator=generator,
+                    source_event_id=record.source_event_id,
+                    generated_at_epoch=epoch,
+                ),
+            )
+            return
         if purpose is ImagePurpose.SPRITE:
             _set_component(
                 entity,
@@ -520,6 +587,16 @@ class ImageGenService:
         )
 
     async def _publish_started(self, job: ImageGenJob) -> None:
+        if job.media is MediaKind.VIDEO:
+            await self._actor.bus.publish(
+                VideoGenerationStartedEvent(
+                    **self._event_base(job),
+                    entity_id=job.entity_id,
+                    generator=job.generator,
+                    template=job.template_name,
+                )
+            )
+            return
         await self._actor.bus.publish(
             ImageGenerationStartedEvent(
                 **self._event_base(job),
@@ -531,6 +608,17 @@ class ImageGenService:
         )
 
     async def _publish_completed(self, job: ImageGenJob, template_name: str) -> None:
+        if job.media is MediaKind.VIDEO:
+            await self._actor.bus.publish(
+                VideoGenerationCompletedEvent(
+                    **self._event_base(job),
+                    entity_id=job.entity_id,
+                    url=job.url,
+                    generator=job.generator,
+                    template=template_name,
+                )
+            )
+            return
         await self._actor.bus.publish(
             ImageGenerationCompletedEvent(
                 **self._event_base(job),
@@ -544,6 +632,16 @@ class ImageGenService:
         )
 
     async def _publish_failed(self, job: ImageGenJob) -> None:
+        if job.media is MediaKind.VIDEO:
+            await self._actor.bus.publish(
+                VideoGenerationFailedEvent(
+                    **self._event_base(job),
+                    entity_id=job.entity_id,
+                    generator=job.generator,
+                    reason=job.error or "unknown error",
+                )
+            )
+            return
         await self._actor.bus.publish(
             ImageGenerationFailedEvent(
                 **self._event_base(job),
@@ -568,7 +666,11 @@ class ImageGenError(RuntimeError):
     """A generation job could not be completed."""
 
 
-def _existing_image_url(entity: Entity, purpose: ImagePurpose) -> str:
+def _existing_media_url(entity: Entity, purpose: ImagePurpose, media: MediaKind) -> str:
+    if media is MediaKind.VIDEO:
+        if entity.has_component(EventVideoComponent):
+            return entity.get_component(EventVideoComponent).url
+        return ""
     if purpose is ImagePurpose.SPRITE:
         if entity.has_component(SpriteImageComponent):
             return entity.get_component(SpriteImageComponent).url
@@ -580,6 +682,12 @@ def _existing_image_url(entity: Entity, purpose: ImagePurpose) -> str:
     if entity.has_component(PortraitImageComponent):
         return entity.get_component(PortraitImageComponent).url
     return ""
+
+
+def _existing_image_url(entity: Entity, purpose: ImagePurpose) -> str:
+    """Compatibility wrapper for existing image-only integrations and tests."""
+
+    return _existing_media_url(entity, purpose, MediaKind.IMAGE)
 
 
 def _clear_request(entity: Entity) -> None:

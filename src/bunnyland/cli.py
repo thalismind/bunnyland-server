@@ -856,6 +856,7 @@ def _build_imagegen_service(actor, plugins, config_block=None, plugin_config=Non
             media_root=config_block.media_root,
             public_base_url=config_block.public_base_url.rstrip("/"),
             templates_path=config_block.templates_path,
+            video_template=config_block.video_template,
             workflows=config_block.workflows,
             prompt_style=config_block.prompt_style,
             enhancer=config_block.enhancer,

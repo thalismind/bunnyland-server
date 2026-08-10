@@ -104,7 +104,7 @@ from bunnyland.foundation.social.mechanics import SocialBond, create_obligation
 from bunnyland.foundation.social.queries import SOCIAL_PERSPECTIVE_QUERIES
 from bunnyland.foundation.storyteller.mechanics import IncidentComponent
 from bunnyland.imagegen.service import ImageGenJob
-from bunnyland.imagegen.spec import ImagePurpose
+from bunnyland.imagegen.spec import ImagePurpose, MediaKind
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.llm_agents.specs import BehaviorNodeSpec, BehaviorTreeSpec, ScriptSpec, ToolCallSpec
 from bunnyland.memory import InMemoryStore, install_memory
@@ -190,6 +190,7 @@ from bunnyland.server.v1_models import (
     GenerateImageRequest,
     GenerateItemRequest,
     GenerateRoomRequest,
+    GenerateVideoRequest,
     GenerateWorldRequest,
     RuntimePatchRequest,
 )
@@ -2170,6 +2171,7 @@ def test_health_reports_configured_feature_flags(scenario, monkeypatch):
         "character_chat": True,
         "character_sheets": True,
         "image_generation": True,
+        "video_generation": False,
         "allow_sleeping_character_chat": True,
     }
 
@@ -5374,6 +5376,45 @@ def test_v1_generation_jobs_normalize_status_and_refresh_absent_jobs(scenario):
     assert failed.json()["failure"]["code"] == "job_failed"
     assert absent.json()["status"] == "queued"
     assert absent_refreshed.json()["status"] == "queued"
+
+
+def test_v1_generation_video_job_uses_the_video_capability(scenario):
+    class FakeVideoService:
+        video_enabled = True
+
+        def __init__(self) -> None:
+            self.jobs: dict[str, ImageGenJob] = {}
+
+        async def start(self, entity_id: str, purpose: ImagePurpose, **kwargs) -> ImageGenJob:
+            assert purpose is ImagePurpose.EVENT
+            assert kwargs["media"] is MediaKind.VIDEO
+            job = ImageGenJob(
+                job_id="job-video",
+                entity_id=entity_id,
+                purpose=purpose,
+                media=MediaKind.VIDEO,
+                status="queued",
+            )
+            self.jobs[job.job_id] = job
+            return job
+
+        def job(self, job_id: str) -> ImageGenJob | None:
+            return self.jobs.get(job_id)
+
+    request = GenerateVideoRequest(kind="video", entity_id=str(scenario.character))
+    client = pytest.importorskip("fastapi.testclient").TestClient(
+        create_app(scenario.actor, imagegen=FakeVideoService(), with_admin=True),
+        headers=_ADMIN_HEADERS,
+    )
+
+    response = client.post(
+        "/v1/admin/world/generation-jobs",
+        json=request.model_dump(mode="json"),
+    )
+
+    assert response.status_code == 202
+    assert response.json()["kind"] == "video"
+    assert response.json()["result"]["job_id"] == "job-video"
 
 
 def test_v1_non_world_generation_job_is_stable_on_refresh(scenario, monkeypatch):
