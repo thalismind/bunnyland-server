@@ -31,7 +31,7 @@ from .prompt import (
 )
 from .service import ImageGenService
 from .spec import ImagePurpose, MediaKind
-from .store import WorkflowTemplateStore, default_templates
+from .store import WorkflowTemplateStore, default_comfy_templates
 
 
 def select_enhancer(config: ImageGenConfig, plugins: Sequence[Plugin] = ()) -> PromptEnhancer:
@@ -74,7 +74,7 @@ def build_image_service(
         if not config.server_url:
             raise ValueError("comfyui image generation requires COMFYUI_SERVER_URL")
         templates = WorkflowTemplateStore(
-            config.templates_path or None, defaults=default_templates(config.workflows)
+            config.templates_path or None, defaults=default_comfy_templates(config.workflows)
         )
         templates.load()
         client = build_comfy_client(config)

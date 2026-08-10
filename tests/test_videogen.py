@@ -284,7 +284,7 @@ def test_build_service_rejects_invalid_video_workflow_metadata(tmp_path, templat
         server_url="http://comfy.local",
         generator="in-memory",
         templates_path=str(path),
-        video_template="event-video",
+        video_template=template.name if template is not None else "missing-video",
     )
 
     with pytest.raises(ValueError, match=message):

@@ -3,7 +3,7 @@
   "purpose": "sprite",
   "prompt_style": "tag",
   "media": "image",
-  "description": "Anima (Qwen-CLIP + UNET); lowest VRAM; tag/score-based prompts.",
+  "description": "Anima (Qwen-CLIP + UNET + Bunnyland LoRA); lowest VRAM; tag/score-based prompts.",
   "default_negative": "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia",
   "width": 1024,
   "height": 1024,
@@ -91,7 +91,7 @@
         "scheduler": "simple",
         "denoise": 1,
         "model": [
-          "68",
+          "69",
           0
         ],
         "positive": [
@@ -133,6 +133,20 @@
       "class_type": "UNETLoader",
       "_meta": {
         "title": "Load Diffusion Model"
+      }
+    },
+    "69": {
+      "inputs": {
+        "lora_name": "testing/anima/bunnyland_vector_anima_v1_e20.safetensors",
+        "strength_model": 0.9,
+        "model": [
+          "68",
+          0
+        ]
+      },
+      "class_type": "LoraLoaderModelOnly",
+      "_meta": {
+        "title": "Load Bunnyland LoRA"
       }
     }
   },

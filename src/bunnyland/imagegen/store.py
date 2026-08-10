@@ -14,15 +14,15 @@ import logging
 import os
 from collections.abc import Iterable
 from importlib import resources
+from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import Any
 
 from .spec import ImagePurpose, WorkflowTemplate
 
 logger = logging.getLogger("bunnyland.imagegen")
 
 
-def load_templates_from(directory: Any) -> list[WorkflowTemplate]:
+def load_templates_from(directory: Traversable) -> list[WorkflowTemplate]:
     """Load every ``*.json`` workflow template in a Traversable/Path directory, sorted by name."""
     templates: list[WorkflowTemplate] = []
     for entry in sorted(directory.iterdir(), key=lambda item: item.name):
@@ -32,13 +32,17 @@ def load_templates_from(directory: Any) -> list[WorkflowTemplate]:
     return templates
 
 
-def _workflows_root() -> Any:
+def _workflows_root() -> Traversable:
     return resources.files("bunnyland.imagegen").joinpath("workflows")
 
 
 def available_families() -> list[str]:
     """The shipped workflow family names (subdirectories of ``imagegen/workflows/``)."""
-    return sorted(entry.name for entry in _workflows_root().iterdir() if entry.is_dir())
+    return sorted(
+        entry.name
+        for entry in _workflows_root().iterdir()
+        if entry.is_dir() and entry.name != "comfyui-video"
+    )
 
 
 def resolve_family(name: str) -> str:
@@ -55,8 +59,17 @@ def resolve_family(name: str) -> str:
 
 
 def default_templates(family: str = "anima") -> list[WorkflowTemplate]:
-    """The built-in templates for a workflow family (one per purpose), package data."""
+    """The built-in image templates for one ComfyUI model family."""
     return load_templates_from(_workflows_root().joinpath(resolve_family(family)))
+
+
+def default_comfy_templates(family: str = "anima") -> list[WorkflowTemplate]:
+    """All built-in ComfyUI templates: one image family plus ComfyUI video graphs."""
+    root = _workflows_root()
+    return [
+        *default_templates(family),
+        *load_templates_from(root.joinpath("comfyui-video")),
+    ]
 
 
 class WorkflowTemplateStore:
@@ -134,6 +147,7 @@ class WorkflowTemplateStore:
 __all__ = [
     "WorkflowTemplateStore",
     "available_families",
+    "default_comfy_templates",
     "default_templates",
     "load_templates_from",
     "resolve_family",
