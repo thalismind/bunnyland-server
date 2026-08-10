@@ -179,8 +179,12 @@ class BunnylandReplApp(App[None]):
                 self._show_generator_selector()
             return
         if self.show_intro:
-            self.push_screen(IntroSplash())
+            self.push_screen(IntroSplash(), callback=self._intro_finished)
+            return
         await self._start_backend()
+
+    def _intro_finished(self, _result: None) -> None:
+        self.run_worker(self._start_backend(), exclusive=True)
 
     def _show_chat_setup(self) -> None:
         self.push_screen(TerminalSetupScreen(), callback=self._chat_setup_selected)

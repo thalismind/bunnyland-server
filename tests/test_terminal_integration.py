@@ -141,6 +141,30 @@ async def test_terminal_player_clients_block_loading_until_content_warning_accep
             assert app._show_world_introduction() is False
 
 
+async def test_terminal_player_clients_finish_splash_before_content_warning():
+    from bunnyland.tui.splash import IntroSplash
+
+    for app in (
+        BunnylandTUI(FlaggedBackend(), show_intro=True),
+        BunnylandReplApp(FlaggedBackend(), show_intro=True),
+    ):
+        async with app.run_test() as pilot:
+            splash = next(
+                screen for screen in app.screen_stack if isinstance(screen, IntroSplash)
+            )
+            assert not any(
+                isinstance(screen, ContentWarningScreen) for screen in app.screen_stack
+            )
+
+            splash._finish()
+            await pilot.pause()
+
+            assert not any(isinstance(screen, IntroSplash) for screen in app.screen_stack)
+            assert any(
+                isinstance(screen, ContentWarningScreen) for screen in app.screen_stack
+            )
+
+
 async def test_terminal_player_clients_enter_unadorned_worlds_without_entry_screens():
     for app in (
         BunnylandTUI(PublicWorldBackend(title="  ", description="\n")),
