@@ -96,6 +96,85 @@ Use consistent names. If a quest says “Lantern Platform,” the room title, si
 exit label should not alternate among “light tower,” “beacon,” and “upper dock.” Colorful
 synonyms are good prose but poor navigation keys.
 
+## Gate room entry
+
+Add one `RoomGateComponent` to a destination room when normal movement through an `ExitTo`
+edge should require adult status, group membership, room ownership, administrator status, or
+a combination of those conditions. The component has these fields:
+
+| Field | Effect |
+|-------|--------|
+| `adults_only` | allows `LifeStageComponent.stage` values `adult` and `elder` |
+| `members_only` | requires membership in a group targeted by the room's `AllowsMembersOf` edges |
+| `owner_only` | requires an `OwnsHome` edge from the entering character to the room |
+| `admin_only` | requires `AdminComponent` on the entering character or its active controller |
+| `rejection_reason` | exact player-facing reason returned when any enabled check fails |
+
+In the world editor, select the room, add `RoomGateComponent`, enable the required flags, and
+write a useful rejection reason. For example, an adults-only tavern could use:
+
+```json
+{
+  "adults_only": true,
+  "members_only": false,
+  "owner_only": false,
+  "admin_only": false,
+  "rejection_reason": "The taproom is open to adults only."
+}
+```
+
+The server fails closed. A character without `LifeStageComponent` cannot enter an adults-only
+room, and a members-only room with no `AllowsMembersOf` target admits nobody. Enable the
+`lifesim` package and give characters explicit life stages when using adult gates.
+
+### Allow group or faction members
+
+Membership access needs two directed relationships:
+
+```text
+restricted room --AllowsMembersOf--> faction or group
+character -------MemberOfFaction---> the same faction
+```
+
+Create the `AllowsMembersOf` edge from the room to each accepted group. Multiple targets are
+alternatives: membership in any one of them satisfies this gate. The character's matching
+relationship may be any installed `MemberOf…` edge, such as `MemberOfFaction` or
+`MemberOfInstitution`, but it must target the same entity. A faction label, identity tag,
+standing score, or prose description alone does not grant entry.
+
+### Allow only the room owner
+
+Create an `OwnsHome` edge from the owner character to the gated room:
+
+```text
+owner character --OwnsHome--> gated room
+```
+
+`ClaimsRoom` does not count as ownership. Use the `lifesim` ownership handlers where possible
+so their single-owner and endpoint rules remain valid instead of manually creating conflicting
+owner edges.
+
+### Create an admin lounge
+
+Set `admin_only` on the lounge's `RoomGateComponent`, then add `AdminComponent` to each
+administrator character or to its active controller entity. Server API authorization and
+in-world authorization are separate: possessing the HTTP `world:admin` scope does not by
+itself add `AdminComponent` to the character being played.
+
+### Combine and test gates
+
+Enabled flags compose as AND conditions. A room with `adults_only` and `members_only` admits
+only adult members; it does not admit every adult plus every member. The one
+`rejection_reason` is used for any failed condition, so phrase it to describe the complete
+policy, for example `Only adult Ferrymen may enter the records room.`
+
+Test each gate with one character that should enter and one that should be rejected. For a
+combined gate, also test a character satisfying only each individual condition. Confirm that
+the rejection reason appears in the client and that the rejected character remains in the
+source room. Gate checks apply to the normal core `move` command; direct admin/editor
+containment patches are privileged world-authoring operations and do not represent player
+movement.
+
 ## Place contents with `Contains`
 
 Containment is an edge from container to contained entity:
