@@ -2,6 +2,7 @@
 
 from ...imagegen.components import (
     EventImageComponent,
+    EventVideoComponent,
     ImageRequestComponent,
     PortraitImageComponent,
 )
@@ -9,6 +10,9 @@ from ...imagegen.events import (
     ImageGenerationCompletedEvent,
     ImageGenerationFailedEvent,
     ImageGenerationStartedEvent,
+    VideoGenerationCompletedEvent,
+    VideoGenerationFailedEvent,
+    VideoGenerationStartedEvent,
 )
 from ...plugins.ids import IMAGEGEN, MEDIA
 from ...plugins.model import (
@@ -29,6 +33,7 @@ def _definition() -> Plugin:
             components=(
                 PortraitImageComponent,
                 EventImageComponent,
+                EventVideoComponent,
                 ImageRequestComponent,
             ),
         ),
@@ -37,6 +42,9 @@ def _definition() -> Plugin:
                 ImageGenerationStartedEvent,
                 ImageGenerationCompletedEvent,
                 ImageGenerationFailedEvent,
+                VideoGenerationStartedEvent,
+                VideoGenerationCompletedEvent,
+                VideoGenerationFailedEvent,
             ),
         ),
     )

@@ -47,6 +47,7 @@ from .models import (
     WorldPatchRequest,
     WorldRoomGenerationRequest,
     WorldSaveResponse,
+    WorldVideoGenerationRequest,
 )
 
 
@@ -368,6 +369,16 @@ class SceneImageJobRequest(V1Request):
     kind: Literal["scene_image"]
 
 
+class SceneVideoJobRequest(V1Request):
+    kind: Literal["scene_video"]
+
+
+SceneMediaJobRequest = Annotated[
+    SceneImageJobRequest | SceneVideoJobRequest,
+    Field(discriminator="kind"),
+]
+
+
 class ChatJobResult(V1Request):
     world_epoch: int
     character_id: str
@@ -440,7 +451,18 @@ JobResult = (
 
 class JobResource(WorldResource):
     id: str
-    kind: Literal["chat", "scene_image", "world", "room", "character", "item", "event", "image"]
+    kind: Literal[
+        "chat",
+        "scene_image",
+        "scene_video",
+        "world",
+        "room",
+        "character",
+        "item",
+        "event",
+        "image",
+        "video",
+    ]
     status: Literal["queued", "running", "succeeded", "failed"]
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -516,13 +538,20 @@ class GenerateImageRequest(WorldImageGenerationRequest):
     kind: Literal["image"] = "image"
 
 
+class GenerateVideoRequest(WorldVideoGenerationRequest):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["video"] = "video"
+
+
 GenerationJobRequest = Annotated[
     GenerateWorldRequest
     | GenerateRoomRequest
     | GenerateCharacterRequest
     | GenerateItemRequest
     | GenerateEventRequest
-    | GenerateImageRequest,
+    | GenerateImageRequest
+    | GenerateVideoRequest,
     Field(discriminator="kind"),
 ]
 
@@ -558,6 +587,7 @@ __all__ = [
     "GenerateCharacterRequest",
     "GenerateEventRequest",
     "GenerateImageRequest",
+    "GenerateVideoRequest",
     "GenerateItemRequest",
     "GenerateRoomRequest",
     "GenerateWorldRequest",
@@ -583,6 +613,8 @@ __all__ = [
     "RoomGenerationJobResult",
     "RuntimePatchRequest",
     "SceneImageJobRequest",
+    "SceneMediaJobRequest",
+    "SceneVideoJobRequest",
     "V1Request",
     "WorldGenerationJobResult",
     "PublicWorldResource",

@@ -1,4 +1,4 @@
-"""Pull image-generation results out of the recent-events feed (spec 27).
+"""Pull generated image and video results out of the recent-events feed (spec 27).
 
 Image generation completes asynchronously and announces itself with an
 ``ImageGenerationCompletedEvent`` (or ``...FailedEvent``) on the event bus. Those events
@@ -15,35 +15,47 @@ shape returned by ``recent_events()``) or the websocket wrapper ``{"type": "even
 
 from __future__ import annotations
 
-from typing import Any
+from pydantic import JsonValue
 
-from .events import ImageGenerationCompletedEvent, ImageGenerationFailedEvent
+from .events import (
+    ImageGenerationCompletedEvent,
+    ImageGenerationFailedEvent,
+    VideoGenerationCompletedEvent,
+    VideoGenerationFailedEvent,
+)
 
 _COMPLETED = ImageGenerationCompletedEvent.__name__
 _FAILED = ImageGenerationFailedEvent.__name__
+_VIDEO_COMPLETED = VideoGenerationCompletedEvent.__name__
+_VIDEO_FAILED = VideoGenerationFailedEvent.__name__
 
 
 def _newest(
-    messages: list[dict] | None,
+    messages: list[dict[str, JsonValue]] | None,
     *,
     event_type: str,
     purpose: str,
     require_url: bool,
-) -> dict[str, Any] | None:
+) -> dict[str, JsonValue] | None:
     """Return the newest matching event payload by ``world_epoch``, or ``None``."""
 
-    best: dict[str, Any] | None = None
+    best: dict[str, JsonValue] | None = None
     best_epoch = -1
     for message in messages or []:
         data = message.get("data", message)
+        if not isinstance(data, dict):
+            continue
         if data.get("event_type") != event_type:
             continue
         event = data.get("event") or {}
+        if not isinstance(event, dict):
+            continue
         if require_url and not event.get("url"):
             continue
         if purpose and event.get("purpose") != purpose:
             continue
-        epoch = int(event.get("world_epoch") or 0)
+        epoch_value = event.get("world_epoch")
+        epoch = int(epoch_value) if isinstance(epoch_value, int | float | str) else 0
         if best is None or epoch >= best_epoch:
             best = event
             best_epoch = epoch
@@ -51,19 +63,50 @@ def _newest(
 
 
 def latest_image_completion(
-    messages: list[dict] | None, *, purpose: str = "event"
-) -> dict[str, Any] | None:
+    messages: list[dict[str, JsonValue]] | None, *, purpose: str = "event"
+) -> dict[str, JsonValue] | None:
     """Newest ``ImageGenerationCompletedEvent`` payload for ``purpose`` (empty = any)."""
 
     return _newest(messages, event_type=_COMPLETED, purpose=purpose, require_url=True)
 
 
 def latest_image_failure(
-    messages: list[dict] | None, *, purpose: str = "event"
-) -> dict[str, Any] | None:
+    messages: list[dict[str, JsonValue]] | None, *, purpose: str = "event"
+) -> dict[str, JsonValue] | None:
     """Newest ``ImageGenerationFailedEvent`` payload for ``purpose`` (empty = any)."""
 
     return _newest(messages, event_type=_FAILED, purpose=purpose, require_url=False)
 
 
-__all__ = ["latest_image_completion", "latest_image_failure"]
+def latest_video_completion(
+    messages: list[dict[str, JsonValue]] | None,
+) -> dict[str, JsonValue] | None:
+    """Newest completed event-video payload."""
+
+    return _newest(
+        messages,
+        event_type=_VIDEO_COMPLETED,
+        purpose="event",
+        require_url=True,
+    )
+
+
+def latest_video_failure(
+    messages: list[dict[str, JsonValue]] | None,
+) -> dict[str, JsonValue] | None:
+    """Newest failed event-video payload."""
+
+    return _newest(
+        messages,
+        event_type=_VIDEO_FAILED,
+        purpose="event",
+        require_url=False,
+    )
+
+
+__all__ = [
+    "latest_image_completion",
+    "latest_image_failure",
+    "latest_video_completion",
+    "latest_video_failure",
+]

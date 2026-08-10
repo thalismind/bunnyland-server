@@ -555,6 +555,9 @@ async def test_backend_base_open_character_sheet_default():
     image = await _Stub().request_image(PLAYER)
     assert image.ok is False
     assert image.status == "unavailable"
+    video = await _Stub().request_video(PLAYER)
+    assert video.ok is False
+    assert video.status == "unavailable"
     assert await _Stub().allows_sleeping_character_chat() is False
 
 
@@ -563,8 +566,11 @@ def test_local_backend_image_capability_reflects_service():
 
     backend = LocalBackend(autorun=False)
     assert backend.supports_image_requests is False
-    backend.imagegen = object()
+    backend.imagegen = SimpleNamespace(video_enabled=False)
     assert backend.supports_image_requests is True
+    assert backend.supports_video_requests is False
+    backend.imagegen = SimpleNamespace(video_enabled=True)
+    assert backend.supports_video_requests is True
 
 
 async def test_local_backend_sleeping_chat_capability_reflects_service():
@@ -617,6 +623,32 @@ async def test_local_backend_request_image_reports_no_room_and_success(monkeypat
     assert queued.ok is True
     assert queued.status == "queued"
     assert queued.url == "http://image"
+
+
+async def test_local_backend_request_video_reports_unavailable_no_room_and_success(monkeypatch):
+    calls = []
+
+    async def request_scene_video(actor, imagegen, *, character_id):
+        calls.append((actor, imagegen, character_id))
+        if len(calls) == 1:
+            return None
+        return SimpleNamespace(status="queued", url="http://video")
+
+    monkeypatch.setattr("bunnyland.imagegen.scene.request_scene_video", request_scene_video)
+    backend = LocalBackend(generator="apartment-demo", autorun=False, client_id="local-client")
+    await backend.start()
+    try:
+        player = (await backend.fetch_character_list())[0].character_id
+        unavailable = await backend.request_video(player)
+        backend.imagegen = SimpleNamespace(video_enabled=True)
+        no_room = await backend.request_video(player)
+        queued = await backend.request_video(player)
+    finally:
+        await backend.close()
+
+    assert unavailable.status == "unavailable"
+    assert no_room.status == "no-room"
+    assert queued == ImageRequestResult(ok=True, status="queued", url="http://video")
 
 
 def test_parse_client_view_supports_filtered_structured_surface():
@@ -1606,9 +1638,11 @@ async def test_remote_backend_uses_claim_headers(monkeypatch, tmp_path):
         {"character_id": PLAYER, "command_id": "cmd-2", "command_type": "wait"}
     )
     image = await backend.request_image(PLAYER)
+    video = await backend.request_video(PLAYER)
 
     assert submitted.accepted is True
     assert image.ok is True
+    assert video.ok is True
     assert backend._client.requests == [
         (
             "GET",
@@ -1641,6 +1675,14 @@ async def test_remote_backend_uses_claim_headers(monkeypatch, tmp_path):
                 "json": {"kind": "scene_image"},
             },
         ),
+        (
+            "POST",
+            "https://server.example/play/claims/claim-1/jobs",
+            {
+                "headers": {"X-Bunnyland-Claim-Secret": "secret-1"},
+                "json": {"kind": "scene_video"},
+            },
+        ),
     ]
 
 
@@ -1658,16 +1700,27 @@ async def test_remote_backend_request_image_reports_unavailable_and_error():
             return self.responses.pop(0)
 
     backend = RemoteBackend("https://server.example", client_id="remote-client")
-    backend._client = Client([Response(status_code=409), Response(status_code=500)])
+    backend._client = Client(
+        [
+            Response(status_code=409),
+            Response(status_code=500),
+            Response(status_code=409),
+            Response(status_code=500),
+        ]
+    )
     backend._claims[PLAYER] = ControlClaim("controller:1", 1, "claim-1", "secret-1")
 
     unavailable = await backend.request_image(PLAYER)
     errored = await backend.request_image(PLAYER)
+    video_unavailable = await backend.request_video(PLAYER)
+    video_errored = await backend.request_video(PLAYER)
 
     assert unavailable.ok is False
     assert unavailable.status == "unavailable"
     assert errored.ok is False
     assert errored.status == "error"
+    assert video_unavailable.status == "unavailable"
+    assert video_errored.status == "error"
 
 
 async def test_remote_backend_claim_scoped_operations_require_a_claim():
@@ -1687,6 +1740,11 @@ async def test_remote_backend_claim_scoped_operations_require_a_claim():
     )
     assert await backend.recent_events(PLAYER) == []
     assert (await backend.request_image(PLAYER)) == ImageRequestResult(
+        ok=False,
+        status="error",
+        reason="a claim is required",
+    )
+    assert (await backend.request_video(PLAYER)) == ImageRequestResult(
         ok=False,
         status="error",
         reason="a claim is required",
@@ -2018,7 +2076,12 @@ async def test_remote_backend_runtime_sign_in_and_auth_required_detection(monkey
                 def raise_for_status(self): ...
 
                 def json(self):
-                    return {"character_sheets": True, "character_chat": True}
+                    return {
+                        "character_sheets": True,
+                        "character_chat": True,
+                        "image_generation": False,
+                        "video_generation": True,
+                    }
 
             return FeatureResponse()
 
@@ -2030,6 +2093,8 @@ async def test_remote_backend_runtime_sign_in_and_auth_required_detection(monkey
     with pytest.raises(RuntimeError, match="must be started"):
         await backend.sign_in("player", "password")
     await backend.start()
+    assert backend.supports_image_requests is False
+    assert backend.supports_video_requests is True
     await backend.sign_in(" player ", "password")
     assert client.login == {
         "username": "player",
@@ -2958,6 +3023,37 @@ async def test_image_activity_surfaces_scene_images_and_failures():
     assert app._event_image_failure_epoch == 12
 
 
+async def test_video_activity_surfaces_scene_clips_and_failures():
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+
+    def completed(epoch, url):
+        return {
+            "event_type": "VideoGenerationCompletedEvent",
+            "event": {"world_epoch": epoch, "purpose": "event", "url": url},
+        }
+
+    assert app._video_activity([completed(5, "/videos/a.mp4")], prime=True) == []
+    lines = app._video_activity([completed(7, "/videos/b.webm")], prime=False)
+    assert any("scene video ready" in line.plain and "b.webm" in line.plain for line in lines)
+    assert app._video_activity([completed(7, "/videos/b.webm")], prime=False) == []
+
+    def failed(epoch, reason=None):
+        event = {"world_epoch": epoch, "purpose": "event"}
+        if reason is not None:
+            event["reason"] = reason
+        return {"event_type": "VideoGenerationFailedEvent", "event": event}
+
+    assert any(
+        "video request failed: boom" in line.plain
+        for line in app._video_activity([failed(9, "boom")], prime=False)
+    )
+    assert any(
+        "video generation failed" in line.plain
+        for line in app._video_activity([failed(11)], prime=False)
+    )
+    assert app._video_activity([failed(12, "later")], prime=True) == []
+
+
 async def test_refresh_appends_scene_image_activity():
     backend = RecordingBackend(_snapshot())
     app = BunnylandTUI(backend)
@@ -2972,11 +3068,20 @@ async def test_refresh_appends_scene_image_activity():
                     "purpose": "event",
                     "url": "/public/media/events/z.png",
                 },
-            }
+            },
+            {
+                "event_type": "VideoGenerationCompletedEvent",
+                "event": {
+                    "world_epoch": 100,
+                    "purpose": "event",
+                    "url": "/public/media/videos/z.mp4",
+                },
+            },
         ]
         await app.refresh_world()
         await pilot.pause()
         assert any("scene image ready" in line.plain for line in app.activity_lines)
+        assert any("scene video ready" in line.plain for line in app.activity_lines)
 
 
 async def _open_help_with_key(app, pilot):
@@ -4876,10 +4981,24 @@ class _ImageBackend(RecordingBackend):
         return self._result
 
 
+class _VideoBackend(RecordingBackend):
+    supports_video_requests = True
+
+    def __init__(self, snapshot, result):
+        super().__init__(snapshot)
+        self._result = result
+        self.video_requests: list[str] = []
+
+    async def request_video(self, character_id):
+        self.video_requests.append(character_id)
+        return self._result
+
+
 async def test_app_hides_terminal_affordance_buttons_when_unsupported():
     app = BunnylandTUI(RecordingBackend(_snapshot()))
     async with app.run_test():
         assert not app.query("#request-image")
+        assert not app.query("#request-video")
         assert not app.query("#open-sheet")
 
 
@@ -4938,6 +5057,44 @@ async def test_app_request_image_unavailable_and_failure_paths():
         activity = app2.query_one("#activity", OptionList)
         prompts = _activity_prompts(activity)
         assert any("camera offline" in p for p in prompts)
+
+
+async def test_app_request_video_capability_and_result_paths():
+    from textual.widgets import OptionList
+
+    backend = _VideoBackend(_snapshot(), ImageRequestResult(ok=True, status="queued"))
+    app = BunnylandTUI(backend)
+    async with app.run_test() as pilot:
+        assert app.query("#request-video")
+        await app.action_request_video()
+        await _select_player(app, pilot)
+        await pilot.click("#request-video")
+        await pilot.pause()
+        prompts = _activity_prompts(app.query_one("#activity", OptionList))
+        assert any("Select a character before requesting a video" in p for p in prompts)
+        assert any("video requested" in p for p in prompts)
+        assert backend.video_requests == [PLAYER]
+
+    unsupported = BunnylandTUI(RecordingBackend(_snapshot()))
+    async with unsupported.run_test() as pilot:
+        await _select_player(unsupported, pilot)
+        await unsupported.action_request_video()
+        prompts = _activity_prompts(unsupported.query_one("#activity", OptionList))
+        assert any("Video requests are not available" in p for p in prompts)
+
+    for result, expected in (
+        (ImageRequestResult(ok=True, status="skipped"), "video ready"),
+        (
+            ImageRequestResult(ok=False, status="failed", reason="encoder offline"),
+            "encoder offline",
+        ),
+    ):
+        app = BunnylandTUI(_VideoBackend(_snapshot(), result))
+        async with app.run_test() as pilot:
+            await _select_player(app, pilot)
+            await app.action_request_video()
+            prompts = _activity_prompts(app.query_one("#activity", OptionList))
+            assert any(expected in p for p in prompts)
 
 
 async def test_app_open_sheet_without_player():

@@ -117,6 +117,16 @@ def sniff_image_extension(data: bytes) -> str | None:
     return None
 
 
+def sniff_video_extension(data: bytes) -> str | None:
+    """Return the supported video container identified by its leading bytes."""
+
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        return "mp4"
+    if data.startswith(b"\x1aE\xdf\xa3"):
+        return "webm"
+    return None
+
+
 def extension_for(name: str) -> str:
     return _check_name(name)[1]
 
@@ -141,4 +151,5 @@ __all__ = [
     "extension_for",
     "require_media_service",
     "sniff_image_extension",
+    "sniff_video_extension",
 ]

@@ -635,6 +635,7 @@ def test_cli_builds_imagegen_service_from_yaml_config(monkeypatch):
         ImageGenConfigBlock(
             server_url="http://comfy.local/",
             public_base_url="https://cdn.example.com/",
+            video_template="event-video",
         ),
         {"example.images": {"palette": "warm"}},
     )
@@ -643,6 +644,7 @@ def test_cli_builds_imagegen_service_from_yaml_config(monkeypatch):
     assert calls["actor"] is actor
     assert calls["config"].server_url == "http://comfy.local"
     assert calls["config"].public_base_url == "https://cdn.example.com"
+    assert calls["config"].video_template == "event-video"
     assert calls["plugin_config"] == {"example.images": {"palette": "warm"}}
 
 

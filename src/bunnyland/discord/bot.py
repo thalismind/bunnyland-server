@@ -60,9 +60,21 @@ from ..core.events import (
     WorldPauseStatusChangedEvent,
 )
 from ..core.world_actor import WorldActor
-from ..imagegen.affordance import ACK_EMOJI, DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
-from ..imagegen.events import ImageGenerationCompletedEvent, ImageGenerationFailedEvent
-from ..imagegen.scene import request_scene_image
+from ..imagegen.affordance import (
+    ACK_EMOJI,
+    DELIVER_EMOJI,
+    FAIL_EMOJI,
+    REQUEST_EMOJI,
+    VIDEO_DELIVER_EMOJI,
+    VIDEO_REQUEST_EMOJI,
+)
+from ..imagegen.events import (
+    ImageGenerationCompletedEvent,
+    ImageGenerationFailedEvent,
+    VideoGenerationCompletedEvent,
+    VideoGenerationFailedEvent,
+)
+from ..imagegen.scene import request_scene_image, request_scene_video
 
 if TYPE_CHECKING:
     from ..imagegen.service import ImageGenService
@@ -534,6 +546,7 @@ class DiscordBot:
         self._paused_reactions: dict[str, object] = {}
         # record entity id -> the Discord message that requested an image for it.
         self._image_messages: dict[str, object] = {}
+        self._video_messages: dict[str, object] = {}
         self._room_feed_channels: dict[str, tuple[int, ...]] = {}
         self._actor_rooms: dict[str, str] = {}
         self._delivered_room_feed_events: set[tuple[str, int]] = set()
@@ -547,6 +560,9 @@ class DiscordBot:
         if imagegen is not None:
             self.actor.bus.subscribe(ImageGenerationCompletedEvent, self._deliver_image)
             self.actor.bus.subscribe(ImageGenerationFailedEvent, self._image_failed)
+            if getattr(imagegen, "video_enabled", False):
+                self.actor.bus.subscribe(VideoGenerationCompletedEvent, self._deliver_video)
+                self.actor.bus.subscribe(VideoGenerationFailedEvent, self._video_failed)
         self._register_commands()
 
     def _character_for_user(self, discord_user_id: int):
@@ -761,12 +777,18 @@ class DiscordBot:
             return
         if getattr(user, "bot", False):
             return
-        if str(getattr(reaction, "emoji", "")) != REQUEST_EMOJI:
+        emoji = str(getattr(reaction, "emoji", ""))
+        if emoji not in {REQUEST_EMOJI, VIDEO_REQUEST_EMOJI}:
+            return
+        if emoji == VIDEO_REQUEST_EMOJI and not getattr(self.imagegen, "video_enabled", False):
             return
         try:
-            await self._request_scene_image(reaction.message, user)
+            if emoji == VIDEO_REQUEST_EMOJI:
+                await self._request_scene_video(reaction.message, user)
+            else:
+                await self._request_scene_image(reaction.message, user)
         except Exception:
-            logger.warning("Discord image request failed.", exc_info=True)
+            logger.warning("Discord media request failed.", exc_info=True)
 
     async def _request_scene_image(self, message, user) -> None:
         found = self._character_for_user(user.id)
@@ -803,6 +825,34 @@ class DiscordBot:
             delivery_span.set_attribute("discord.messages.count", 1)
             telemetry.mark_span_ok(delivery_span)
 
+    async def _request_scene_video(self, message, user) -> None:
+        found = self._character_for_user(user.id)
+        if found is None:
+            return
+        job = await request_scene_video(
+            self.actor, self.imagegen, character_id=found[0], requested_by=str(user.id)
+        )
+        if job is None:
+            return
+        if job.status == "skipped" and job.url:
+            await self._post_video(message, job.url)
+            await message.add_reaction(VIDEO_DELIVER_EMOJI)
+            return
+        self._video_messages[job.entity_id] = message
+        await message.add_reaction(ACK_EMOJI)
+
+    async def _deliver_video(self, event: VideoGenerationCompletedEvent) -> None:
+        message = self._video_messages.pop(event.entity_id, None)
+        if message is None:
+            return
+        await self._post_video(message, event.url)
+        await message.add_reaction(VIDEO_DELIVER_EMOJI)
+
+    async def _video_failed(self, event: VideoGenerationFailedEvent) -> None:
+        message = self._video_messages.pop(event.entity_id, None)
+        if message is not None:
+            await message.add_reaction(FAIL_EMOJI)
+
     async def _image_failed(self, event: ImageGenerationFailedEvent) -> None:
         message = self._image_messages.pop(event.entity_id, None)
         if message is None:
@@ -820,10 +870,16 @@ class DiscordBot:
             telemetry.mark_span_ok(delivery_span)
 
     async def _post_image(self, message, url: str) -> None:
+        await self._post_generated_media(message, url, kind="image")
+
+    async def _post_video(self, message, url: str) -> None:
+        await self._post_generated_media(message, url, kind="video")
+
+    async def _post_generated_media(self, message, url: str, *, kind: str) -> None:
         discord, _ = _require_discord()
         parts = urllib.parse.urlsplit(url).path.strip("/").split("/")
         if len(parts) != 5 or parts[:3] != ["v1", "public", "media"]:
-            raise ValueError("image URL is outside the public media surface")
+            raise ValueError(f"{kind} URL is outside the public media surface")
         namespace, name = parts[3:]
         data = self.imagegen.media.read(namespace, name)
         telemetry.set_span_attributes({"discord.delivery.bytes": len(data)})
@@ -1517,6 +1573,9 @@ class DiscordBot:
         if self.imagegen is not None:
             self.actor.bus.unsubscribe(ImageGenerationCompletedEvent, self._deliver_image)
             self.actor.bus.unsubscribe(ImageGenerationFailedEvent, self._image_failed)
+            if getattr(self.imagegen, "video_enabled", False):
+                self.actor.bus.unsubscribe(VideoGenerationCompletedEvent, self._deliver_video)
+                self.actor.bus.unsubscribe(VideoGenerationFailedEvent, self._video_failed)
         await self.client.close()
         moderation_service = getattr(self, "moderation_service", None)
         if getattr(self, "_close_moderation_store", False) and moderation_service is not None:

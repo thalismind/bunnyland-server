@@ -1,4 +1,4 @@
-# Requesting images
+# Requesting images and videos
 
 When a server has image generation turned on, Bunnyland illustrates itself. Characters get
 **portraits** automatically, and — if the world uses the toon client — a matching **sprite**.
@@ -19,6 +19,18 @@ The gesture is the same across every client — look for the camera, 📷:
 However you ask, you're requesting the same thing, and the result shows up attached to that
 event.
 
+When a server also advertises video generation, the movie-camera control, 🎬, requests a
+short clip based on up to the three most recent events in your current room:
+
+- **Discord** — react to a message with 🎬. The bot posts the completed clip and marks the
+  request with 🎞️.
+- **Web / Toon client** — press the 🎬 **Video** button. Toon plays the clip in the page;
+  the text-oriented web clients show a link to it.
+- **REPL / terminal** — run the `video` command; the completed clip appears as a media URL.
+
+Image and video generation are independent server features. A client only shows the camera
+for a feature the server has enabled.
+
 ## How event images work
 
 - The **first** request for an event generates the picture; everyone who looks afterwards
@@ -30,6 +42,10 @@ event.
 - Not every event has a picture — only the ones someone asked about. That keeps the world's
   illustrations meaningful instead of noisy.
 
-## Coming soon
+## How event videos work
 
-Event and interaction **videos** — coming soon! For now the camera makes still images.
+- A video summarizes up to the three newest durable events in the character's room in
+  chronological order. If there are no recent events, the current room becomes the scene.
+- Repeating the same request reuses its generated clip. A new sequence of recent events gets
+  its own clip.
+- Clips run through the same background queue as images and are served as MP4 or WebM media.

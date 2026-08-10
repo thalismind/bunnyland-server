@@ -343,6 +343,7 @@ class Backend(ABC):
     supports_character_sheets: bool = False
     supports_character_chat: bool = False
     supports_image_requests: bool = False
+    supports_video_requests: bool = False
 
     @abstractmethod
     async def start(self) -> None: ...
@@ -442,6 +443,10 @@ class Backend(ABC):
 
     async def request_image(self, character_id: str) -> ImageRequestResult:
         """Request an image of the character's current scene (the 📷 camera affordance)."""
+        return ImageRequestResult(ok=False, status="unavailable", reason="not available")
+
+    async def request_video(self, character_id: str) -> ImageRequestResult:
+        """Request a short clip of the character's recent scene events."""
         return ImageRequestResult(ok=False, status="unavailable", reason="not available")
 
     async def open_character_sheet(self, character_id: str) -> SheetOpenResult:
@@ -606,6 +611,10 @@ class LocalBackend(Backend):
     @property
     def supports_image_requests(self) -> bool:
         return self.imagegen is not None
+
+    @property
+    def supports_video_requests(self) -> bool:
+        return bool(self.imagegen is not None and getattr(self.imagegen, "video_enabled", False))
 
     def configure_world(self, *, seed: str, generator: str) -> None:
         """Update local generation inputs before ``start`` creates the world."""
@@ -895,6 +904,20 @@ class LocalBackend(Backend):
             )
         return ImageRequestResult(ok=True, status=job.status, url=job.url)
 
+    async def request_video(self, character_id: str) -> ImageRequestResult:
+        if not self.supports_video_requests:
+            return ImageRequestResult(
+                ok=False, status="unavailable", reason="video generation is not configured"
+            )
+        from ..imagegen.scene import request_scene_video
+
+        job = await request_scene_video(self.actor, self.imagegen, character_id=character_id)
+        if job is None:
+            return ImageRequestResult(
+                ok=False, status="no-room", reason="your character has no room to illustrate"
+            )
+        return ImageRequestResult(ok=True, status=job.status, url=job.url)
+
     async def claim(self, player_id: str, world: World) -> ControlClaim | None:
         """Hand the character to a single reusable web controller, bumping its generation
         so the offline dispatch stops driving it."""
@@ -1028,6 +1051,7 @@ class RemoteBackend(Backend):
     supports_character_sheets = True
     supports_character_chat = True
     supports_image_requests = True
+    supports_video_requests = False
 
     def __init__(
         self,
@@ -1128,6 +1152,8 @@ class RemoteBackend(Backend):
         self._client.headers["X-Bunnyland-Client-Id"] = self.client_id
         features = await self._fetch_features()
         self.supports_character_sheets = features.character_sheets
+        self.supports_image_requests = features.image_generation
+        self.supports_video_requests = features.video_generation
         if self.token_file is not None and self.token_file.exists():
             self._access_token = secure_read_text(self.token_file).strip()
             self._set_access_token(self._access_token)
@@ -1572,6 +1598,31 @@ class RemoteBackend(Backend):
         if res.status_code == 409:
             return ImageRequestResult(
                 ok=False, status="unavailable", reason="image generation is not available"
+            )
+        if not res.is_success:
+            return ImageRequestResult(
+                ok=False, status="error", reason=f"request failed ({res.status_code})"
+            )
+        body = res.json()
+        result = body.get("result") or {}
+        return ImageRequestResult(
+            ok=True,
+            status=body.get("status", ""),
+            url=result.get("url", ""),
+        )
+
+    async def request_video(self, character_id: str) -> ImageRequestResult:
+        claim = self._claim_for(character_id)
+        if claim is None or not claim.claim_id:
+            return ImageRequestResult(ok=False, status="error", reason="a claim is required")
+        res = await self._client.post(
+            f"{self.base}/play/claims/{urllib.parse.quote(claim.claim_id, safe='')}/jobs",
+            json={"kind": "scene_video"},
+            **self._claim_request_kwargs(character_id),
+        )
+        if res.status_code == 409:
+            return ImageRequestResult(
+                ok=False, status="unavailable", reason="video generation is not available"
             )
         if not res.is_success:
             return ImageRequestResult(

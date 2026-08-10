@@ -474,6 +474,22 @@ async def test_drain_events_surfaces_scene_image_and_failure():
     dlines = repl.drain_events([failed(11)])
     assert any("image generation failed" in line.plain for line in dlines)
 
+    video = {
+        "event_type": "VideoGenerationCompletedEvent",
+        "event": {"world_epoch": 12, "purpose": "event", "url": "/videos/scene.mp4"},
+    }
+    vlines = repl.drain_events([video])
+    assert any("scene video ready" in line.plain for line in vlines)
+    assert not repl.drain_events([video])
+    video_failure = {
+        "event_type": "VideoGenerationFailedEvent",
+        "event": {"world_epoch": 13, "purpose": "event"},
+    }
+    assert any(
+        "video generation failed" in line.plain
+        for line in repl.drain_events([video_failure])
+    )
+
 
 async def test_release_drops_the_current_player():
     repl = _repl()
@@ -1996,6 +2012,46 @@ async def test_dispatch_image_unavailable_when_not_supported():
     assert "Image requests are not available" in message.plain
 
 
+async def test_dispatch_video_covers_player_capability_and_result_paths():
+    from bunnyland.tui.backend import ImageRequestResult
+
+    class _VideoBackend(RecordingBackend):
+        supports_video_requests = True
+
+        def __init__(self, snapshot, result):
+            super().__init__(snapshot)
+            self.result = result
+            self.requested: list[str] = []
+
+        async def request_video(self, character_id):
+            self.requested.append(character_id)
+            return self.result
+
+    queued_backend = _VideoBackend(
+        _snapshot(), ImageRequestResult(ok=True, status="queued")
+    )
+    repl = BunnylandRepl(queued_backend)
+    assert "Pick a player first" in (await repl.dispatch("video")).plain
+    repl.player_id = PLAYER
+    assert "video requested" in (await repl.dispatch("video")).plain
+    assert queued_backend.requested == [PLAYER]
+
+    for result, expected in (
+        (ImageRequestResult(ok=True, status="skipped"), "video ready"),
+        (
+            ImageRequestResult(ok=False, status="failed", reason="encoder offline"),
+            "encoder offline",
+        ),
+    ):
+        current = BunnylandRepl(_VideoBackend(_snapshot(), result))
+        current.player_id = PLAYER
+        assert expected in (await current.dispatch("video")).plain
+
+    unsupported = _repl()
+    unsupported.player_id = PLAYER
+    assert "Video requests are not available" in (await unsupported.dispatch("video")).plain
+
+
 async def test_dispatch_open_remains_world_action():
     repl = _repl()
     message = await repl.dispatch("open target_id=an apple")
@@ -2008,16 +2064,19 @@ def test_terminal_repl_meta_commands_follow_backend_capabilities():
     class _BothBackend(RecordingBackend):
         supports_character_sheets = True
         supports_image_requests = True
+        supports_video_requests = True
 
     local = _repl()
     remote = BunnylandRepl(_BothBackend(_snapshot()))
 
     assert "sheet" not in local.meta_commands()
     assert "image" not in local.meta_commands()
+    assert "video" not in local.meta_commands()
     assert "sheet" in remote.meta_commands()
     assert "profile" in remote.meta_commands()
     assert "image" in remote.meta_commands()
     assert "img" in remote.meta_commands()
+    assert "video" in remote.meta_commands()
     assert "open" not in remote.meta_commands()
 
 

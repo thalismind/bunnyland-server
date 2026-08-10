@@ -163,7 +163,9 @@
           "title": "Command Id"
         },
         "parameters": {
-          "additionalProperties": true,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "title": "Parameters",
           "type": "object"
         },
@@ -174,7 +176,9 @@
         },
         "result_events": {
           "items": {
-            "additionalProperties": true,
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            },
             "type": "object"
           },
           "title": "Result Events",
@@ -1098,7 +1102,9 @@
         },
         "natural_patterns": {
           "items": {
-            "additionalProperties": true,
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            },
             "type": "object"
           },
           "title": "Natural Patterns",
@@ -1653,7 +1659,9 @@
     "ComponentPatchSpec": {
       "properties": {
         "fields": {
-          "additionalProperties": true,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "title": "Fields",
           "type": "object"
         },
@@ -1962,7 +1970,9 @@
           "type": "integer"
         },
         "json_schema": {
-          "additionalProperties": true,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "title": "Json Schema",
           "type": "object"
         },
@@ -2007,7 +2017,9 @@
     "EdgePatchSpec": {
       "properties": {
         "fields": {
-          "additionalProperties": true,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "title": "Fields",
           "type": "object"
         },
@@ -2158,6 +2170,11 @@
     },
     "FeatureStatusResponse": {
       "properties": {
+        "allow_sleeping_character_chat": {
+          "default": false,
+          "title": "Allow Sleeping Character Chat",
+          "type": "boolean"
+        },
         "character_chat": {
           "default": false,
           "title": "Character Chat",
@@ -2176,6 +2193,11 @@
         "mcp": {
           "default": false,
           "title": "Mcp",
+          "type": "boolean"
+        },
+        "video_generation": {
+          "default": false,
+          "title": "Video Generation",
           "type": "boolean"
         }
       },
@@ -2356,6 +2378,41 @@
       "title": "GenerateRoomRequest",
       "type": "object"
     },
+    "GenerateVideoRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "entity_id": {
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "extra": {
+          "default": "",
+          "title": "Extra",
+          "type": "string"
+        },
+        "force": {
+          "default": false,
+          "title": "Force",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "video",
+          "default": "video",
+          "title": "Kind",
+          "type": "string"
+        },
+        "template": {
+          "default": "",
+          "title": "Template",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id"
+      ],
+      "title": "GenerateVideoRequest",
+      "type": "object"
+    },
     "GenerateWorldRequest": {
       "additionalProperties": false,
       "properties": {
@@ -2450,6 +2507,15 @@
       },
       "title": "HTTPValidationError",
       "type": "object"
+    },
+    "IdentityKind": {
+      "enum": [
+        "discord",
+        "web",
+        "client"
+      ],
+      "title": "IdentityKind",
+      "type": "string"
     },
     "ImageJobResult": {
       "additionalProperties": false,
@@ -2590,12 +2656,14 @@
           "enum": [
             "chat",
             "scene_image",
+            "scene_video",
             "world",
             "room",
             "character",
             "item",
             "event",
-            "image"
+            "image",
+            "video"
           ],
           "title": "Kind",
           "type": "string"
@@ -2739,7 +2807,9 @@
           "type": "string"
         },
         "metadata": {
-          "additionalProperties": true,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "title": "Metadata",
           "type": "object"
         }
@@ -2748,6 +2818,237 @@
         "document"
       ],
       "title": "MemoryDocumentUpdateRequest",
+      "type": "object"
+    },
+    "ModerationActionCollection": {
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/ModerationActionResource"
+          },
+          "title": "Actions",
+          "type": "array"
+        }
+      },
+      "title": "ModerationActionCollection",
+      "type": "object"
+    },
+    "ModerationActionKind": {
+      "enum": [
+        "kick",
+        "suspend",
+        "ban",
+        "lift"
+      ],
+      "title": "ModerationActionKind",
+      "type": "string"
+    },
+    "ModerationActionRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ModerationActionKind"
+        },
+        "duration_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Seconds"
+        },
+        "reason": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/ModerationIdentityResource"
+        }
+      },
+      "required": [
+        "action",
+        "target",
+        "reason"
+      ],
+      "title": "ModerationActionRequest",
+      "type": "object"
+    },
+    "ModerationActionResource": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ModerationActionKind"
+        },
+        "administrator": {
+          "$ref": "#/$defs/ModerationIdentityResource"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Expires At"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/ModerationIdentityResource"
+        }
+      },
+      "required": [
+        "id",
+        "action",
+        "target",
+        "administrator",
+        "reason",
+        "created_at"
+      ],
+      "title": "ModerationActionResource",
+      "type": "object"
+    },
+    "ModerationClaimResource": {
+      "properties": {
+        "character_id": {
+          "title": "Character Id",
+          "type": "string"
+        },
+        "character_name": {
+          "title": "Character Name",
+          "type": "string"
+        },
+        "claim_id": {
+          "title": "Claim Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_id",
+        "character_id",
+        "character_name"
+      ],
+      "title": "ModerationClaimResource",
+      "type": "object"
+    },
+    "ModerationIdentityResource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/IdentityKind"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "title": "ModerationIdentityResource",
+      "type": "object"
+    },
+    "ModerationPlayerCollection": {
+      "properties": {
+        "players": {
+          "items": {
+            "$ref": "#/$defs/ModerationPlayerResource"
+          },
+          "title": "Players",
+          "type": "array"
+        }
+      },
+      "title": "ModerationPlayerCollection",
+      "type": "object"
+    },
+    "ModerationPlayerResource": {
+      "properties": {
+        "admin": {
+          "default": false,
+          "title": "Admin",
+          "type": "boolean"
+        },
+        "claims": {
+          "items": {
+            "$ref": "#/$defs/ModerationClaimResource"
+          },
+          "title": "Claims",
+          "type": "array"
+        },
+        "identity": {
+          "$ref": "#/$defs/ModerationIdentityResource"
+        },
+        "restriction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModerationRestrictionResource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "identity"
+      ],
+      "title": "ModerationPlayerResource",
+      "type": "object"
+    },
+    "ModerationRestrictionResource": {
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Expires At"
+        },
+        "kind": {
+          "$ref": "#/$defs/RestrictionKind"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "reason",
+        "created_at"
+      ],
+      "title": "ModerationRestrictionResource",
       "type": "object"
     },
     "OnInsufficientPoints": {
@@ -2836,6 +3137,39 @@
             }
           ],
           "title": "Instance"
+        },
+        "restriction_expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Restriction Expires At"
+        },
+        "restriction_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RestrictionKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restriction_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Restriction Reason"
         },
         "status": {
           "title": "Status",
@@ -2928,7 +3262,9 @@
           "default": "world"
         },
         "payload": {
-          "additionalProperties": true,
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "title": "Payload",
           "type": "object"
         },
@@ -2998,6 +3334,14 @@
       ],
       "title": "RemoveEdgePatchRequest",
       "type": "object"
+    },
+    "RestrictionKind": {
+      "enum": [
+        "suspended",
+        "banned"
+      ],
+      "title": "RestrictionKind",
+      "type": "string"
     },
     "RoomGenerationJobResult": {
       "additionalProperties": false,
@@ -3128,6 +3472,21 @@
         "kind"
       ],
       "title": "SceneImageJobRequest",
+      "type": "object"
+    },
+    "SceneVideoJobRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "scene_video",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "SceneVideoJobRequest",
       "type": "object"
     },
     "SetComponentPatchRequest": {

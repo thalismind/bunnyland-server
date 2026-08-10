@@ -29,7 +29,8 @@ bunnyland serve --module bunnyland_3d --module bunnyland_rl ...
   memory recall, and storyteller prose filtering.
 - `bunnyland.storyteller`: paced incidents and cross-pack event pressure.
 - `bunnyland.toonsim`: sprite/rendering metadata for 2D clients.
-- `bunnyland.imagegen`: provider-neutral image generation request, routing, and storage hooks.
+- `bunnyland.imagegen`: provider-neutral image generation plus optional ComfyUI event-video
+  request, routing, and storage hooks.
 - `bunnyland.mcp`: MCP-facing runtime integration.
 
 ## Builtin Sim Packs

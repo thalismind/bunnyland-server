@@ -16,22 +16,37 @@ from bunnyland.core import (
 from bunnyland.discord import assign_discord_controller
 from bunnyland.discord.bot import DiscordBot
 from bunnyland.foundation.history.mechanics import history_record_for_event
-from bunnyland.imagegen.affordance import ACK_EMOJI, DELIVER_EMOJI, FAIL_EMOJI, REQUEST_EMOJI
+from bunnyland.imagegen.affordance import (
+    ACK_EMOJI,
+    DELIVER_EMOJI,
+    FAIL_EMOJI,
+    REQUEST_EMOJI,
+    VIDEO_DELIVER_EMOJI,
+    VIDEO_REQUEST_EMOJI,
+)
 from bunnyland.imagegen.components import EventImageComponent
 from bunnyland.imagegen.config import ImageGenConfig
 from bunnyland.imagegen.events import (
     ImageGenerationCompletedEvent,
     ImageGenerationFailedEvent,
+    VideoGenerationCompletedEvent,
+    VideoGenerationFailedEvent,
 )
 from bunnyland.imagegen.media import MediaStore
 from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
 from bunnyland.imagegen.service import ImageGenService
+from bunnyland.imagegen.spec import ImagePurpose, MediaKind, WorkflowTemplate
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
 
 
 class _FakeClient:
     async def generate(self, graph, *, output_node_id=""):
         return b"PNG"
+
+
+class _VideoClient:
+    async def generate(self, graph, *, output_node_id=""):
+        return b"\x00\x00\x00\x18ftypmp42clip"
 
 
 class _ReactMessage:
@@ -65,6 +80,24 @@ def _service(actor, tmp_path):
     )
 
 
+def _video_service(actor, tmp_path):
+    video = WorkflowTemplate(
+        name="event-video",
+        purpose=ImagePurpose.EVENT,
+        media=MediaKind.VIDEO,
+        graph={},
+    )
+    return ImageGenService(
+        actor,
+        ImageGenConfig(server_url="http://comfy.local", video_template=video.name),
+        client=_VideoClient(),
+        templates=WorkflowTemplateStore(defaults=[*default_templates(), video]),
+        enhancer=StubPromptEnhancer(),
+        examples=CatalogExampleSource(),
+        media=MediaStore(tmp_path),
+    )
+
+
 def _bot(scenario, service):
     bot = _bot_for_scenario(scenario, imagegen=service, _image_messages={})
     scenario.actor.bus.subscribe(ImageGenerationCompletedEvent, bot._deliver_image)
@@ -90,12 +123,110 @@ async def test_camera_reaction_full_flow(tmp_path):
     await service.aclose()
 
 
+async def test_clapper_reaction_posts_generated_video(tmp_path):
+    scenario = build_scenario()
+    assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
+    service = _video_service(scenario.actor, tmp_path)
+    bot = _bot_for_scenario(
+        scenario,
+        imagegen=service,
+        _image_messages={},
+        _video_messages={},
+    )
+    scenario.actor.bus.subscribe(VideoGenerationCompletedEvent, bot._deliver_video)
+    scenario.actor.bus.subscribe(VideoGenerationFailedEvent, bot._video_failed)
+    message = _ReactMessage()
+
+    await bot._on_image_reaction(
+        _reaction(message, emoji=VIDEO_REQUEST_EMOJI), _DiscordObject(id=123, bot=False)
+    )
+    assert ACK_EMOJI in message.reactions
+    await service.wait_idle()
+    assert message.replied_files
+    assert message.replied_files[0].filename.endswith(".mp4")
+    assert VIDEO_DELIVER_EMOJI in message.reactions
+
+    reused = _ReactMessage()
+    await bot._on_image_reaction(
+        _reaction(reused, emoji=VIDEO_REQUEST_EMOJI), _DiscordObject(id=123, bot=False)
+    )
+    assert reused.replied_files
+    assert VIDEO_DELIVER_EMOJI in reused.reactions
+    assert ACK_EMOJI not in reused.reactions
+    await service.aclose()
+
+
+async def test_clapper_reaction_and_callbacks_cover_noop_and_failure_paths(
+    monkeypatch, tmp_path
+):
+    from datetime import UTC, datetime
+
+    scenario = build_scenario()
+    service = _video_service(scenario.actor, tmp_path)
+    bot = _bot_for_scenario(
+        scenario,
+        imagegen=service,
+        _image_messages={},
+        _video_messages={},
+    )
+    message = _ReactMessage()
+
+    await bot._on_image_reaction(
+        _reaction(message, emoji=VIDEO_REQUEST_EMOJI), _DiscordObject(id=777, bot=False)
+    )
+    assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
+
+    async def no_video(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("bunnyland.discord.bot.request_scene_video", no_video)
+    await bot._on_image_reaction(
+        _reaction(message, emoji=VIDEO_REQUEST_EMOJI), _DiscordObject(id=123, bot=False)
+    )
+    base = {"event_id": "video-event", "world_epoch": 0, "created_at": datetime.now(UTC)}
+    await bot._deliver_video(
+        VideoGenerationCompletedEvent(
+            **base,
+            entity_id="missing:1",
+            purpose="event",
+            url="/v1/public/media/videos/missing.mp4",
+            generator="comfyui",
+            template="event-video",
+        )
+    )
+    bot._video_messages["failed:1"] = message
+    await bot._video_failed(
+        VideoGenerationFailedEvent(
+            **base,
+            entity_id="failed:1",
+            purpose="event",
+            generator="comfyui",
+            reason="render failed",
+        )
+    )
+    assert message.reactions == [FAIL_EMOJI]
+    await bot._video_failed(
+        VideoGenerationFailedEvent(
+            **base,
+            entity_id="missing:2",
+            purpose="event",
+            generator="comfyui",
+            reason="already gone",
+        )
+    )
+    assert message.reactions == [FAIL_EMOJI]
+    await service.aclose()
+
+
 async def test_camera_reaction_ignores_non_camera(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
     bot = _bot(scenario, service)
     message = _ReactMessage()
     await bot._on_image_reaction(_reaction(message, emoji="👍"), _DiscordObject(id=123, bot=False))
+    await bot._on_image_reaction(
+        _reaction(message, emoji=VIDEO_REQUEST_EMOJI), _DiscordObject(id=123, bot=False)
+    )
     assert message.reactions == []
     await service.aclose()
 
@@ -168,7 +299,7 @@ async def test_camera_reaction_via_registered_event_and_init(monkeypatch, tmp_pa
     assign_discord_controller(scenario.actor, discord_user_id=123, character_name="Juniper")
     discord_module, _commands, clients = _install_fake_discord(monkeypatch)
     discord_module.File = lambda fp, filename=None: {"filename": filename}
-    service = _service(scenario.actor, tmp_path)
+    service = _service(scenario.actor, tmp_path / "images")
     # Real __init__ wires the bus subscriptions and registers the reaction event.
     bot = DiscordBot(scenario.actor, token="t", imagegen=service)
     assert bot.imagegen is service
@@ -182,7 +313,17 @@ async def test_camera_reaction_via_registered_event_and_init(monkeypatch, tmp_pa
     await service.wait_idle()
     assert message.replied_files and message.replied_files[0] is not None
     assert DELIVER_EMOJI in message.reactions
+    await bot.close()
+    assert client.closed is True
     await service.aclose()
+
+    video_service = _video_service(scenario.actor, tmp_path / "videos")
+    video_bot = DiscordBot(scenario.actor, token="t", imagegen=video_service)
+    video_client = clients[1]
+    assert video_bot.imagegen is video_service
+    await video_bot.close()
+    assert video_client.closed is True
+    await video_service.aclose()
 
 
 async def test_camera_reaction_container_not_a_room(tmp_path):

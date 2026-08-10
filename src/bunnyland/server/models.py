@@ -95,6 +95,7 @@ class FeatureStatusResponse(BaseModel):
     allow_sleeping_character_chat: bool = False
     character_sheets: bool = True
     image_generation: bool = False
+    video_generation: bool = False
 
 
 class CharacterChatStatusResponse(BaseModel):
@@ -720,6 +721,13 @@ class EventImageRequest(BaseModel):
     extra: str = ""
 
 
+class WorldVideoGenerationRequest(BaseModel):
+    entity_id: str
+    template: str = ""
+    extra: str = ""
+    force: bool = False
+
+
 class WorldImageGenerationResponse(BaseModel):
     ok: bool = True
     schema_version: int = 1
@@ -862,6 +870,7 @@ __all__ = [
     "WorldGeneratorInfo",
     "WorldImageGenerationRequest",
     "WorldImageGenerationResponse",
+    "WorldVideoGenerationRequest",
     "WorldGeneratorListResponse",
     "WorldItemGenerationRequest",
     "WorldItemGenerationResponse",

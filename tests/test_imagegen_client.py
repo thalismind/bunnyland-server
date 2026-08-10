@@ -13,7 +13,10 @@ from bunnyland.imagegen.client import (
     ComfyTimeoutError,
     HttpComfyClient,
     WebSocketComfyClient,
+    _extract_media_ref,
+    _fetch_view,
     _is_completion,
+    _submit,
     _ws_url,
     build_comfy_client,
 )
@@ -47,6 +50,7 @@ def test_config_from_env_reads_all_fields():
             "BUNNYLAND_MEDIA_DIR": "/srv/media",
             "BUNNYLAND_PUBLIC_BASE_URL": "https://play.example/",
             "BUNNYLAND_IMAGE_TEMPLATES": "/srv/templates.json",
+            "BUNNYLAND_VIDEO_TEMPLATE": "event-video",
             "BUNNYLAND_IMAGE_WORKFLOWS": "anima-my-server",
             "BUNNYLAND_IMAGE_PROMPT_STYLE": "tag",
             "BUNNYLAND_IMAGE_ENHANCER": "llm",
@@ -62,6 +66,7 @@ def test_config_from_env_reads_all_fields():
     assert config.timeout_seconds == 30.0
     assert config.media_root == "/srv/media"
     assert config.public_base_url == "https://play.example"
+    assert config.video_template == "event-video"
     assert config.workflows == "anima-my-server"
     assert config.prompt_style == "tag"
     assert config.enhancer == "llm"
@@ -192,6 +197,60 @@ async def test_http_client_skips_preview_image():
     client = HttpComfyClient(_config(), http_factory=lambda: http)
     await client.generate({"1": {}})
     assert http.view_params[0]["filename"] == "final.png"
+
+
+async def test_http_client_fetches_videohelper_output():
+    history = {
+        "pid-1": {
+            "outputs": {
+                "12": {
+                    "gifs": [
+                        {"filename": "scene.mp4", "subfolder": "video", "type": "output"}
+                    ]
+                }
+            }
+        }
+    }
+    http = _FakeHttp(history_sequence=[history], image_bytes=b"video")
+    client = HttpComfyClient(_config(), http_factory=lambda: http)
+    assert await client.generate({}, output_node_id="12") == b"video"
+    assert http.view_params == [
+        {"filename": "scene.mp4", "subfolder": "video", "type": "output"}
+    ]
+
+
+@pytest.mark.parametrize("payload", [{}, {"prompt_id": ""}, {"prompt_id": 3}])
+async def test_submit_requires_a_nonempty_string_prompt_id(payload):
+    class _SubmitHttp(_FakeHttp):
+        async def post(self, path, *, json):  # noqa: A002 - mirror httpx signature
+            return _Response(payload=payload)
+
+    http = _SubmitHttp(history_sequence=[])
+    with pytest.raises(ComfyError, match="did not include a prompt id"):
+        await _submit(http, {}, "client")
+
+
+def test_extract_media_ref_tolerates_malformed_outputs_and_native_video_refs():
+    assert _extract_media_ref({}, "") is None
+    assert _extract_media_ref({"outputs": {"9": "invalid"}}, "") is None
+    assert _extract_media_ref(
+        {
+            "outputs": {
+                "9": {
+                    "videos": [
+                        {},
+                        {"filename": "scene.webm"},
+                    ]
+                }
+            }
+        },
+        "",
+    ) == {"filename": "scene.webm"}
+
+
+async def test_fetch_view_requires_a_filename():
+    with pytest.raises(ComfyError, match="did not include a filename"):
+        await _fetch_view(_FakeHttp(history_sequence=[]), {})
 
 
 async def test_http_client_default_factory_imports_httpx(monkeypatch):

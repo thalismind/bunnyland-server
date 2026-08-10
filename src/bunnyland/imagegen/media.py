@@ -13,6 +13,7 @@ SEGMENT_PORTRAITS = "portraits"
 SEGMENT_ENTITIES = "entities"
 SEGMENT_SPRITES = "sprites"
 SEGMENT_EVENTS = "events"
+SEGMENT_VIDEOS = "videos"
 SEGMENT_ALPHA = "alpha"
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "SEGMENT_ALPHA",
     "SEGMENT_ENTITIES",
     "SEGMENT_EVENTS",
+    "SEGMENT_VIDEOS",
     "SEGMENT_PORTRAITS",
     "SEGMENT_SPRITES",
     "MediaError",

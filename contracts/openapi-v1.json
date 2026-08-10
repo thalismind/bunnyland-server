@@ -164,7 +164,9 @@
             "title": "Command Id"
           },
           "parameters": {
-            "additionalProperties": true,
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
             "title": "Parameters",
             "type": "object"
           },
@@ -175,7 +177,9 @@
           },
           "result_events": {
             "items": {
-              "additionalProperties": true,
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
               "type": "object"
             },
             "title": "Result Events",
@@ -1099,7 +1103,9 @@
           },
           "natural_patterns": {
             "items": {
-              "additionalProperties": true,
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
               "type": "object"
             },
             "title": "Natural Patterns",
@@ -1654,7 +1660,9 @@
       "ComponentPatchSpec": {
         "properties": {
           "fields": {
-            "additionalProperties": true,
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
             "title": "Fields",
             "type": "object"
           },
@@ -1963,7 +1971,9 @@
             "type": "integer"
           },
           "json_schema": {
-            "additionalProperties": true,
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
             "title": "Json Schema",
             "type": "object"
           },
@@ -2008,7 +2018,9 @@
       "EdgePatchSpec": {
         "properties": {
           "fields": {
-            "additionalProperties": true,
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
             "title": "Fields",
             "type": "object"
           },
@@ -2159,6 +2171,11 @@
       },
       "FeatureStatusResponse": {
         "properties": {
+          "allow_sleeping_character_chat": {
+            "default": false,
+            "title": "Allow Sleeping Character Chat",
+            "type": "boolean"
+          },
           "character_chat": {
             "default": false,
             "title": "Character Chat",
@@ -2177,6 +2194,11 @@
           "mcp": {
             "default": false,
             "title": "Mcp",
+            "type": "boolean"
+          },
+          "video_generation": {
+            "default": false,
+            "title": "Video Generation",
             "type": "boolean"
           }
         },
@@ -2357,6 +2379,41 @@
         "title": "GenerateRoomRequest",
         "type": "object"
       },
+      "GenerateVideoRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "extra": {
+            "default": "",
+            "title": "Extra",
+            "type": "string"
+          },
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "video",
+            "default": "video",
+            "title": "Kind",
+            "type": "string"
+          },
+          "template": {
+            "default": "",
+            "title": "Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_id"
+        ],
+        "title": "GenerateVideoRequest",
+        "type": "object"
+      },
       "GenerateWorldRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2451,6 +2508,15 @@
         },
         "title": "HTTPValidationError",
         "type": "object"
+      },
+      "IdentityKind": {
+        "enum": [
+          "discord",
+          "web",
+          "client"
+        ],
+        "title": "IdentityKind",
+        "type": "string"
       },
       "ImageJobResult": {
         "additionalProperties": false,
@@ -2591,12 +2657,14 @@
             "enum": [
               "chat",
               "scene_image",
+              "scene_video",
               "world",
               "room",
               "character",
               "item",
               "event",
-              "image"
+              "image",
+              "video"
             ],
             "title": "Kind",
             "type": "string"
@@ -2740,7 +2808,9 @@
             "type": "string"
           },
           "metadata": {
-            "additionalProperties": true,
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
             "title": "Metadata",
             "type": "object"
           }
@@ -2749,6 +2819,237 @@
           "document"
         ],
         "title": "MemoryDocumentUpdateRequest",
+        "type": "object"
+      },
+      "ModerationActionCollection": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ModerationActionResource"
+            },
+            "title": "Actions",
+            "type": "array"
+          }
+        },
+        "title": "ModerationActionCollection",
+        "type": "object"
+      },
+      "ModerationActionKind": {
+        "enum": [
+          "kick",
+          "suspend",
+          "ban",
+          "lift"
+        ],
+        "title": "ModerationActionKind",
+        "type": "string"
+      },
+      "ModerationActionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ModerationActionKind"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ModerationIdentityResource"
+          }
+        },
+        "required": [
+          "action",
+          "target",
+          "reason"
+        ],
+        "title": "ModerationActionRequest",
+        "type": "object"
+      },
+      "ModerationActionResource": {
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ModerationActionKind"
+          },
+          "administrator": {
+            "$ref": "#/components/schemas/ModerationIdentityResource"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ModerationIdentityResource"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "target",
+          "administrator",
+          "reason",
+          "created_at"
+        ],
+        "title": "ModerationActionResource",
+        "type": "object"
+      },
+      "ModerationClaimResource": {
+        "properties": {
+          "character_id": {
+            "title": "Character Id",
+            "type": "string"
+          },
+          "character_name": {
+            "title": "Character Name",
+            "type": "string"
+          },
+          "claim_id": {
+            "title": "Claim Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_id",
+          "character_id",
+          "character_name"
+        ],
+        "title": "ModerationClaimResource",
+        "type": "object"
+      },
+      "ModerationIdentityResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/IdentityKind"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "ModerationIdentityResource",
+        "type": "object"
+      },
+      "ModerationPlayerCollection": {
+        "properties": {
+          "players": {
+            "items": {
+              "$ref": "#/components/schemas/ModerationPlayerResource"
+            },
+            "title": "Players",
+            "type": "array"
+          }
+        },
+        "title": "ModerationPlayerCollection",
+        "type": "object"
+      },
+      "ModerationPlayerResource": {
+        "properties": {
+          "admin": {
+            "default": false,
+            "title": "Admin",
+            "type": "boolean"
+          },
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/ModerationClaimResource"
+            },
+            "title": "Claims",
+            "type": "array"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/ModerationIdentityResource"
+          },
+          "restriction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModerationRestrictionResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "identity"
+        ],
+        "title": "ModerationPlayerResource",
+        "type": "object"
+      },
+      "ModerationRestrictionResource": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RestrictionKind"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "reason",
+          "created_at"
+        ],
+        "title": "ModerationRestrictionResource",
         "type": "object"
       },
       "OnInsufficientPoints": {
@@ -2837,6 +3138,39 @@
               }
             ],
             "title": "Instance"
+          },
+          "restriction_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restriction Expires At"
+          },
+          "restriction_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RestrictionKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "restriction_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restriction Reason"
           },
           "status": {
             "title": "Status",
@@ -2929,7 +3263,9 @@
             "default": "world"
           },
           "payload": {
-            "additionalProperties": true,
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
             "title": "Payload",
             "type": "object"
           },
@@ -2999,6 +3335,14 @@
         ],
         "title": "RemoveEdgePatchRequest",
         "type": "object"
+      },
+      "RestrictionKind": {
+        "enum": [
+          "suspended",
+          "banned"
+        ],
+        "title": "RestrictionKind",
+        "type": "string"
       },
       "RoomGenerationJobResult": {
         "additionalProperties": false,
@@ -3129,6 +3473,21 @@
           "kind"
         ],
         "title": "SceneImageJobRequest",
+        "type": "object"
+      },
+      "SceneVideoJobRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "scene_video",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "SceneVideoJobRequest",
         "type": "object"
       },
       "SetComponentPatchRequest": {
@@ -4098,6 +4457,185 @@
         ]
       }
     },
+    "/v1/admin/moderation/actions": {
+      "get": {
+        "operationId": "v1_moderation_actions_v1_admin_moderation_actions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "target_kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/IdentityKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ModerationActionKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationActionCollection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "V1 Moderation Actions",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "v1_create_moderation_action_v1_admin_moderation_actions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModerationActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationActionResource"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "V1 Create Moderation Action",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/moderation/players": {
+      "get": {
+        "operationId": "v1_moderation_players_v1_admin_moderation_players_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationPlayerCollection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "V1 Moderation Players",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/v1/admin/world": {
       "get": {
         "operationId": "v1_admin_world_v1_admin_world_get",
@@ -4247,6 +4785,7 @@
                     "image": "#/components/schemas/GenerateImageRequest",
                     "item": "#/components/schemas/GenerateItemRequest",
                     "room": "#/components/schemas/GenerateRoomRequest",
+                    "video": "#/components/schemas/GenerateVideoRequest",
                     "world": "#/components/schemas/GenerateWorldRequest"
                   },
                   "propertyName": "kind"
@@ -4269,6 +4808,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/GenerateImageRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GenerateVideoRequest"
                   }
                 ],
                 "title": "Body"
@@ -5436,7 +5978,22 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SceneImageJobRequest"
+                "discriminator": {
+                  "mapping": {
+                    "scene_image": "#/components/schemas/SceneImageJobRequest",
+                    "scene_video": "#/components/schemas/SceneVideoJobRequest"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/SceneImageJobRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneVideoJobRequest"
+                  }
+                ],
+                "title": "Body"
               }
             }
           },

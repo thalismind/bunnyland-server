@@ -15,7 +15,10 @@ from .affordance import (
     REQUEST_COMMAND,
     REQUEST_EMOJI,
     REQUEST_LABEL,
-    VIDEO_COMING_SOON,
+    VIDEO_DELIVER_EMOJI,
+    VIDEO_REQUEST_COMMAND,
+    VIDEO_REQUEST_EMOJI,
+    VIDEO_REQUEST_LABEL,
 )
 from .client import (
     ComfyClient,
@@ -27,6 +30,7 @@ from .client import (
 )
 from .components import (
     EventImageComponent,
+    EventVideoComponent,
     ImageRequestComponent,
     PortraitImageComponent,
 )
@@ -35,6 +39,9 @@ from .events import (
     ImageGenerationCompletedEvent,
     ImageGenerationFailedEvent,
     ImageGenerationStartedEvent,
+    VideoGenerationCompletedEvent,
+    VideoGenerationFailedEvent,
+    VideoGenerationStartedEvent,
 )
 from .feed import latest_image_completion, latest_image_failure
 from .generators import (
@@ -57,7 +64,7 @@ from .prompt import (
     StubPromptEnhancer,
     VectorExampleSource,
 )
-from .scene import request_scene_image
+from .scene import request_scene_image, request_scene_video
 from .service import ImageGenError, ImageGenJob, ImageGenService
 from .spec import (
     GeneratedPrompt,
@@ -84,12 +91,16 @@ __all__ = [
     "REQUEST_COMMAND",
     "REQUEST_EMOJI",
     "REQUEST_LABEL",
-    "VIDEO_COMING_SOON",
+    "VIDEO_DELIVER_EMOJI",
+    "VIDEO_REQUEST_COMMAND",
+    "VIDEO_REQUEST_EMOJI",
+    "VIDEO_REQUEST_LABEL",
     "CatalogExampleSource",
     "ComfyClient",
     "ComfyError",
     "ComfyTimeoutError",
     "EventImageComponent",
+    "EventVideoComponent",
     "GeneratedPrompt",
     "HttpComfyClient",
     "ImageGenConfig",
@@ -103,6 +114,9 @@ __all__ = [
     "ImageGenerationCompletedEvent",
     "ImageGenerationFailedEvent",
     "ImageGenerationStartedEvent",
+    "VideoGenerationCompletedEvent",
+    "VideoGenerationFailedEvent",
+    "VideoGenerationStartedEvent",
     "ImagePromptRequest",
     "ImagePurpose",
     "ImageRequestComponent",
@@ -133,6 +147,7 @@ __all__ = [
     "resolve_family",
     "remove_edge_background",
     "request_scene_image",
+    "request_scene_video",
     "select_enhancer",
     "substitute",
 ]

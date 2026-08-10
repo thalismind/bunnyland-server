@@ -21,8 +21,11 @@ REQUEST_LABEL = "Request image"
 #: The command name used by text clients (REPL/TUI command palette).
 REQUEST_COMMAND = "image"
 
-#: Coming-soon affordance for event/interaction videos (not yet generated).
-VIDEO_COMING_SOON = "Event & interaction videos: coming soon!"
+#: The parallel event-video request gesture and labels.
+VIDEO_REQUEST_EMOJI = "🎬"
+VIDEO_DELIVER_EMOJI = "🎞️"
+VIDEO_REQUEST_LABEL = "Request video"
+VIDEO_REQUEST_COMMAND = "video"
 
 
 __all__ = [
@@ -32,5 +35,8 @@ __all__ = [
     "REQUEST_COMMAND",
     "REQUEST_EMOJI",
     "REQUEST_LABEL",
-    "VIDEO_COMING_SOON",
+    "VIDEO_DELIVER_EMOJI",
+    "VIDEO_REQUEST_COMMAND",
+    "VIDEO_REQUEST_EMOJI",
+    "VIDEO_REQUEST_LABEL",
 ]
