@@ -13,6 +13,11 @@ Textual conversation screen; successful activation refreshes the screen and enab
 Other unsupported controllers remain read-only and can be replaced with one of the world's
 existing LLM controllers by an administrator.
 
+The Textual conversation screen includes a **Separate reply paragraphs** option. When it
+is enabled, blank-line-separated paragraphs in a new agent reply appear as individual
+messages with a short visual delay. The saved conversation and the history sent back to
+the agent still contain one complete reply.
+
 ## Local Ollama
 
 Install the `tui` and `llm` extras and run Ollama locally. The default endpoint is

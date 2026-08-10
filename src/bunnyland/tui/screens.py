@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Literal
 
 from rich.text import Text
@@ -17,7 +18,12 @@ from textual.widgets.option_list import Option
 
 from ..character_chat_display import format_action_call
 from ..server.v1_models import CharacterProfileResource
-from ..terminal_chat import load_history, save_history
+from ..terminal_chat import (
+    PARAGRAPH_REVEAL_DELAY_SECONDS,
+    load_history,
+    save_history,
+    split_reply_paragraphs,
+)
 from ..terminal_config import TerminalConfig
 from .backend import Backend, CharacterChatAccess, CharacterChatJob
 
@@ -345,6 +351,7 @@ class ConversationScreen(ModalScreen[None]):
     #conversation-transcript-scroll { height: 1fr; margin: 1 0; }
     #conversation-status, #conversation-action { height: auto; min-height: 1; color: $text-muted; }
     #conversation-input { width: 1fr; }
+    #conversation-separate-paragraphs { margin-right: 1; }
     #conversation-controller-row { height: auto; margin-top: 1; }
     #conversation-controller { width: 1fr; margin-right: 1; }
     #conversation-buttons { height: auto; margin-top: 1; }
@@ -359,6 +366,7 @@ class ConversationScreen(ModalScreen[None]):
         self.state = load_history(backend.client_id, character_id)
         self._job: CharacterChatJob | None = None
         self._send_task: asyncio.Task | None = None
+        self._paragraph_visibility: dict[int, int] = {}
         self._access = CharacterChatAccess(writable=False, reason="Checking chat access…")
 
     def compose(self) -> ComposeResult:
@@ -386,6 +394,10 @@ class ConversationScreen(ModalScreen[None]):
                     disabled=True,
                 )
             with Horizontal(id="conversation-buttons"):
+                yield Checkbox(
+                    "Separate reply paragraphs",
+                    id="conversation-separate-paragraphs",
+                )
                 yield Button("Sheet", id="conversation-sheet")
                 yield Button("Close", id="conversation-close", variant="primary")
 
@@ -418,16 +430,55 @@ class ConversationScreen(ModalScreen[None]):
 
     def _render_transcript(self) -> None:
         transcript = Text()
+        separate_paragraphs = self.query_one(
+            "#conversation-separate-paragraphs", Checkbox
+        ).value
         for item in self.state.get("messages") or []:
             role = item.get("role")
             label = "You" if role == "user" else self.character_name
             style = "bold cyan" if role == "user" else "bold green"
-            if len(transcript):
-                transcript.append("\n\n")
-            transcript.append(f"{label}: ", style=style)
-            transcript.append(str(item.get("text") or ""))
+            text = str(item.get("text") or "")
+            paragraphs = (
+                split_reply_paragraphs(text)
+                if separate_paragraphs and role == "character"
+                else (text,)
+            )
+            visible = self._paragraph_visibility.get(id(item), len(paragraphs))
+            for paragraph in paragraphs[:visible]:
+                if len(transcript):
+                    transcript.append("\n\n")
+                transcript.append(f"{label}: ", style=style)
+                transcript.append(paragraph)
         self.query_one("#conversation-transcript", Static).update(transcript)
         self.query_one("#conversation-transcript-scroll", VerticalScroll).scroll_end(animate=False)
+
+    def _schedule_paragraph_reveal(self, message: dict[str, str]) -> None:
+        checkbox = self.query_one("#conversation-separate-paragraphs", Checkbox)
+        paragraphs = split_reply_paragraphs(message["text"])
+        if not checkbox.value or len(paragraphs) < 2:
+            return
+        key = id(message)
+        self._paragraph_visibility[key] = 1
+        for visible in range(2, len(paragraphs) + 1):
+            self.set_timer(
+                PARAGRAPH_REVEAL_DELAY_SECONDS * (visible - 1),
+                partial(self._reveal_paragraph, key, visible, len(paragraphs)),
+            )
+
+    def _reveal_paragraph(self, key: int, visible: int, total: int) -> None:
+        if key not in self._paragraph_visibility:
+            return
+        if visible >= total:
+            self._paragraph_visibility.pop(key)
+        else:
+            self._paragraph_visibility[key] = visible
+        self._render_transcript()
+
+    @on(Checkbox.Changed, "#conversation-separate-paragraphs")
+    def _separate_paragraphs_changed(self, event: Checkbox.Changed) -> None:
+        if not event.value:
+            self._paragraph_visibility.clear()
+        self._render_transcript()
 
     @on(Input.Submitted, "#conversation-input")
     def _submitted(self, event: Input.Submitted) -> None:
@@ -471,9 +522,11 @@ class ConversationScreen(ModalScreen[None]):
                 raise RuntimeError(self._job.failure or "Chat failed")
             reply = self._job.reply or "…"
             # The user message is already present, so append only the character response.
-            self.state.setdefault("messages", []).append({"role": "character", "text": reply})
+            reply_message = {"role": "character", "text": reply}
+            self.state.setdefault("messages", []).append(reply_message)
             self.state["messages"] = self.state["messages"][-24:]
             save_history(self.backend.client_id, self.character_id, self.state)
+            self._schedule_paragraph_reveal(reply_message)
             action = self._job.action
             if action.tool:
                 detail = action.reason or ", ".join(

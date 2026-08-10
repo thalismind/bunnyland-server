@@ -4,9 +4,23 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 HISTORY_LIMIT = 24
+PARAGRAPH_REVEAL_DELAY_SECONDS = 0.2
+
+
+def split_reply_paragraphs(reply: str) -> tuple[str, ...]:
+    """Split a reply on blank lines without changing its logical history entry."""
+
+    normalized = reply.replace("\r\n", "\n").replace("\r", "\n")
+    paragraphs = tuple(
+        paragraph.strip()
+        for paragraph in re.split(r"\n[ \t]*\n+", normalized)
+        if paragraph.strip()
+    )
+    return paragraphs or (normalized.strip(),)
 
 
 def terminal_data_dir() -> Path:
@@ -57,4 +71,12 @@ def append_exchange(state: dict, message: str, reply: str) -> None:
     state["messages"] = messages[-HISTORY_LIMIT:]
 
 
-__all__ = ["HISTORY_LIMIT", "append_exchange", "history_path", "load_history", "save_history"]
+__all__ = [
+    "HISTORY_LIMIT",
+    "PARAGRAPH_REVEAL_DELAY_SECONDS",
+    "append_exchange",
+    "history_path",
+    "load_history",
+    "save_history",
+    "split_reply_paragraphs",
+]

@@ -9,7 +9,11 @@ from textual.widgets import Checkbox, Input, Select, Static
 
 from bunnyland.server.models import CharacterChatActionResult, CharacterSummaryView
 from bunnyland.server.v1_models import CharacterProfileResource
-from bunnyland.terminal_chat import save_history
+from bunnyland.terminal_chat import (
+    PARAGRAPH_REVEAL_DELAY_SECONDS,
+    load_history,
+    save_history,
+)
 from bunnyland.tui.backend import (
     Backend,
     CharacterChatAccess,
@@ -421,6 +425,39 @@ async def test_conversation_screen_success_without_action_uses_ellipsis(monkeypa
     async with host.run_test():
         await screen._send("hello")
         assert "Juniper: …" in screen.query_one("#conversation-transcript", Static).render().plain
+
+
+async def test_conversation_screen_separates_reply_paragraphs_with_visual_delay(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    reply = "First thought.\n\nSecond thought.\n\nThird thought."
+    backend = ConversationBackend([_job("succeeded", reply=reply)])
+    screen = ConversationScreen(backend, "character:1", "Juniper")
+    host = ScreenHost(screen)
+    async with host.run_test() as pilot:
+        screen.query_one("#conversation-separate-paragraphs", Checkbox).value = True
+        await screen._send("hello")
+
+        transcript = screen.query_one("#conversation-transcript", Static)
+        assert transcript.render().plain.count("Juniper:") == 1
+        assert "Second thought." not in transcript.render().plain
+
+        saved = load_history(backend.client_id, "character:1")
+        assert saved["messages"][-1] == {"role": "character", "text": reply}
+
+        await pilot.pause(PARAGRAPH_REVEAL_DELAY_SECONDS + 0.05)
+        assert transcript.render().plain.count("Juniper:") == 2
+        assert "Second thought." in transcript.render().plain
+
+        await pilot.pause(PARAGRAPH_REVEAL_DELAY_SECONDS + 0.05)
+        assert transcript.render().plain.count("Juniper:") == 3
+        assert "Third thought." in transcript.render().plain
+
+        screen._reveal_paragraph(-1, 2, 3)
+        screen.query_one("#conversation-separate-paragraphs", Checkbox).value = False
+        await pilot.pause()
+        assert transcript.render().plain.count("Juniper:") == 1
 
 
 async def test_conversation_cancellation_before_submission_completes(monkeypatch, tmp_path):
