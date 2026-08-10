@@ -78,6 +78,7 @@ from .components import (
     RegionComponent,
     RestingComponent,
     RoomComponent,
+    RoomGateComponent,
     RoomSummaryComponent,
     SleepingComponent,
     StealthComponent,
@@ -119,6 +120,7 @@ from .ecs import (
     spawn_entity,
 )
 from .edges import (
+    AllowsMembersOf,
     ContainmentMode,
     Contains,
     ControlledBy,
@@ -249,6 +251,7 @@ __all__ = [
     "ActionOverrideEntry",
     "ActionOverrideKind",
     "ActionOverrideRoute",
+    "AllowsMembersOf",
     "AdminComponent",
     "ActionArgument",
     "ActionDefinition",
@@ -394,6 +397,7 @@ __all__ = [
     "RemoveHandler",
     "replace_single_edge_operations",
     "RoomComponent",
+    "RoomGateComponent",
     "RoomGeneratedEvent",
     "RoomLookedEvent",
     "RoomSummaryComponent",

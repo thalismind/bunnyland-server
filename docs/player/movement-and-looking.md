@@ -90,6 +90,11 @@ Movement follows an exit from your current room to the destination room. It fail
 there is no matching exit, if the exit is blocked by world state, or if your character is
 not currently in a room.
 
+Some rooms restrict entry to adults, members of one or more groups or factions, the room's
+owner, or administrators. These restrictions can be combined. When your character does
+not qualify, the failed move shows the room's authored rejection reason, such as `The
+Wardens' seal only opens for members.`
+
 Moving creates an in-world movement event and a short-lived movement noise in the
 destination room. Other systems can react to that. After the actor moves, clients should
 show the destination room so you can immediately choose the next interaction.
