@@ -50,3 +50,27 @@ withdraw-after-dark-consent
 Withdrawal never traps a character inside. Use the exit action normally, then acknowledge
 the warning again later if you decide to return. A character-level `adult` denial or a
 world-policy disablement always blocks entry and is never overridden by the sandbox.
+
+## Launch with LLM representatives
+
+The sandbox gives its five regional representatives deterministic behavioral controllers by
+default and leaves the four New Arrivals suspended for players to claim. Use the launcher to
+generate a fresh world, replace only those representative controllers with one reusable LLM
+controller, save it, and start the local API:
+
+```bash
+export OPENROUTER_API_KEY_FILE=/absolute/path/to/openrouter.key
+scripts/launch-sandbox-llm \
+  --character-model PROVIDER/MODEL \
+  --world artifacts/sandbox-world-llm.json
+```
+
+The default 30-second tick and `--act-every-ticks 6` interval let each representative act
+about once every three minutes. Use `--act-every-ticks 1` for every dispatch tick. Add
+`--character-chat` to enable the character-chat API. The server listens on
+`127.0.0.1:8765`, runs until interrupted, autosaves, and saves again on clean shutdown.
+
+Existing output is never replaced implicitly. Use `--reuse` to launch an already prepared
+world or `--force` to regenerate it. Use `--prepare-only` when another process will launch
+the saved world later. Ollama Cloud is available with `--llm-provider ollama` and its matching
+credential environment variables.
