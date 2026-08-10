@@ -5,11 +5,17 @@ from types import SimpleNamespace
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Checkbox, Input, Select, Static
+from textual.widgets import Button, Checkbox, Input, Select, Static
 
 from bunnyland.server.models import CharacterChatActionResult, CharacterSummaryView
 from bunnyland.server.v1_models import CharacterProfileResource
-from bunnyland.terminal_chat import save_history
+from bunnyland.terminal_chat import (
+    PARAGRAPH_REVEAL_DELAY_SECONDS,
+    history_path,
+    load_chat_preferences,
+    load_history,
+    save_history,
+)
 from bunnyland.tui.backend import (
     Backend,
     CharacterChatAccess,
@@ -34,8 +40,12 @@ def _profile() -> CharacterProfileResource:
             "world_epoch": 12,
             "character_id": "character:1",
             "character_name": "Juniper",
+            "portrait": {"url": "https://images.example/juniper.png"},
+            "room": {"id": "room:garden", "title": "Community Garden"},
+            "points": {"action": 4, "action_max": 5, "focus": 2, "focus_max": 3},
             "controller": {
                 "controller_id": "controller:llm",
+                "detail": "ollama/qwen",
                 "generation": 1,
                 "kind": "llm",
                 "name": "default",
@@ -94,6 +104,12 @@ def test_character_profile_renderer_includes_all_sections():
         "Relationships",
         "Injuries",
         "Notes",
+        "ID: character:1",
+        "Room: Community Garden",
+        "Controller: llm: default · ollama/qwen · controller:llm gen 1",
+        "Action Points: 4/5",
+        "Focus Points: 2/3",
+        "Portrait: https://images.example/juniper.png",
         "8/10",
         "bright",
         "healing",
@@ -106,7 +122,10 @@ def test_character_profile_renderer_includes_all_sections():
         character_id="character:2",
         character_name="Pib",
     )
-    assert render_character_profile(minimal).plain == "Pib\ncharacter"
+    assert render_character_profile(minimal).plain == (
+        "Pib\ncharacter\n\nDetails\nID: character:2\nRoom: —\nController: —"
+        "\nAction Points: 0/0\nFocus Points: 0/0"
+    )
 
     sparse = CharacterProfileResource.model_validate(
         {
@@ -114,14 +133,24 @@ def test_character_profile_renderer_includes_all_sections():
             "world_epoch": 0,
             "character_id": "character:3",
             "character_name": "Marlow",
+            "controller": {"controller_id": "controller:fallback", "generation": 2},
             "sheet": {"kind": "", "description": "Description only"},
         }
     )
-    assert "Description only" in render_character_profile(sparse).plain
-    appearance_only = sparse.model_copy(
-        update={"sheet": sparse.sheet.model_copy(update={"description": "", "appearance": "Hat"})}
+    sparse_text = render_character_profile(sparse).plain
+    assert "Description only" in sparse_text
+    assert (
+        "Controller: controller:fallback · controller:fallback gen 2" in sparse_text
     )
-    assert "Appearance: Hat" in render_character_profile(appearance_only).plain
+    appearance_only = sparse.model_copy(
+        update={
+            "room": sparse.room.model_copy(update={"id": "room:attic"}),
+            "sheet": sparse.sheet.model_copy(update={"description": "", "appearance": "Hat"}),
+        }
+    )
+    appearance_text = render_character_profile(appearance_only).plain
+    assert "Appearance: Hat" in appearance_text
+    assert "Room: room:attic" in appearance_text
 
 
 async def test_character_sheet_screen_renders_scrolls_and_closes():
@@ -421,6 +450,109 @@ async def test_conversation_screen_success_without_action_uses_ellipsis(monkeypa
     async with host.run_test():
         await screen._send("hello")
         assert "Juniper: …" in screen.query_one("#conversation-transcript", Static).render().plain
+
+
+async def test_conversation_screen_separates_reply_paragraphs_with_visual_delay(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    reply = "First thought.\n\nSecond thought.\n\nThird thought."
+    backend = ConversationBackend([_job("succeeded", reply=reply)])
+    screen = ConversationScreen(backend, "character:1", "Juniper")
+    host = ScreenHost(screen)
+    async with host.run_test() as pilot:
+        screen.query_one("#conversation-separate-paragraphs", Checkbox).value = True
+        await screen._send("hello")
+
+        transcript = screen.query_one("#conversation-transcript", Static)
+        assert transcript.render().plain.count("Juniper:") == 1
+        assert "Second thought." not in transcript.render().plain
+
+        saved = load_history(backend.client_id, "character:1")
+        assert saved["messages"][-1] == {"role": "character", "text": reply}
+
+        await pilot.pause(PARAGRAPH_REVEAL_DELAY_SECONDS + 0.05)
+        assert transcript.render().plain.count("Juniper:") == 2
+        assert "Second thought." in transcript.render().plain
+
+        await pilot.pause(PARAGRAPH_REVEAL_DELAY_SECONDS + 0.05)
+        assert transcript.render().plain.count("Juniper:") == 3
+        assert "Third thought." in transcript.render().plain
+
+        screen._reveal_paragraph(-1, 2, 3)
+        screen.query_one("#conversation-separate-paragraphs", Checkbox).value = False
+        await pilot.pause()
+        assert transcript.render().plain.count("Juniper:") == 1
+
+
+async def test_conversation_screen_matches_web_history_and_formatting_controls(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    save_history(
+        "client-1",
+        "character:1",
+        {"summary": "", "messages": [{"role": "character", "text": "**Earlier.**"}]},
+    )
+    save_history(
+        "client-1",
+        "character:2",
+        {"summary": "", "messages": [{"role": "character", "text": "Other."}]},
+    )
+    backend = ConversationBackend([_job("succeeded", reply="Session reply.")])
+    screen = ConversationScreen(backend, "character:1", "Juniper")
+    host = ScreenHost(screen)
+    async with host.run_test() as pilot:
+        markdown = screen.query_one("#conversation-markdown", Checkbox)
+        remember = screen.query_one("#conversation-remember-history", Checkbox)
+        paragraphs = screen.query_one("#conversation-separate-paragraphs", Checkbox)
+        clear = screen.query_one("#conversation-clear-history", Button)
+        transcript = screen.query_one("#conversation-transcript", Static)
+
+        assert markdown.value is True
+        assert remember.value is True
+        assert paragraphs.value is False
+        assert clear.disabled is False
+        assert "Earlier." in transcript.render().plain
+        assert "**Earlier.**" not in transcript.render().plain
+
+        markdown.value = False
+        paragraphs.value = True
+        await pilot.pause()
+        assert "**Earlier.**" in transcript.render().plain
+        preferences = load_chat_preferences()
+        assert preferences.markdown is False
+        assert preferences.separate_reply_paragraphs is True
+
+        await pilot.click("#conversation-clear-history")
+        assert history_path("client-1", "character:1").exists() is False
+        assert history_path("client-1", "character:2").exists() is True
+        assert clear.disabled is True
+        assert "Local chat history cleared." in screen.query_one(
+            "#conversation-status", Static
+        ).render().plain
+
+        remember.value = False
+        await pilot.pause()
+        assert history_path("client-1", "character:2").exists() is False
+        assert load_chat_preferences().remember_history is False
+
+        await screen._send("Session")
+        assert "You: Session" in transcript.render().plain
+        assert "Juniper: Session reply." in transcript.render().plain
+        assert history_path("client-1", "character:1").exists() is False
+
+        remember.value = True
+        await pilot.pause()
+        assert load_history("client-1", "character:1")["messages"] == [
+            {"role": "user", "text": "Session"},
+            {"role": "character", "text": "Session reply."},
+        ]
+
+        remember.value = False
+        await pilot.pause()
+        await screen.action_close()
+        assert history_path("client-1", "character:1").exists() is False
 
 
 async def test_conversation_cancellation_before_submission_completes(monkeypatch, tmp_path):

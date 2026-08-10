@@ -8,6 +8,15 @@ import pytest
 
 from bunnyland import chat
 from bunnyland.server.models import CharacterChatActionResult, CharacterSummaryView
+from bunnyland.terminal_chat import (
+    ChatPreferences,
+    chat_preferences_path,
+    clear_all_history,
+    clear_history,
+    history_path,
+    load_chat_preferences,
+    save_chat_preferences,
+)
 from bunnyland.tui.backend import (
     CharacterChatAccess,
     CharacterChatController,
@@ -67,6 +76,64 @@ def test_chat_client_save_history_ignores_write_error(tmp_path, monkeypatch):
     )
 
     chat.save_history("client", "character", {"summary": "", "messages": []})
+
+
+def test_chat_preferences_round_trip_defaults_and_invalid_values(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    assert load_chat_preferences() == ChatPreferences()
+
+    preferences = ChatPreferences(
+        markdown=False,
+        remember_history=False,
+        separate_reply_paragraphs=True,
+    )
+    save_chat_preferences(preferences)
+    assert load_chat_preferences() == preferences
+
+    path = chat_preferences_path()
+    path.write_text("[]", encoding="utf-8")
+    assert load_chat_preferences() == ChatPreferences()
+    path.write_text("not json", encoding="utf-8")
+    assert load_chat_preferences() == ChatPreferences()
+    path.write_text(
+        json.dumps(
+            {
+                "markdown": "yes",
+                "remember_history": 1,
+                "separate_reply_paragraphs": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert load_chat_preferences() == ChatPreferences()
+
+
+def test_chat_preferences_and_history_clear_ignore_filesystem_errors(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    chat.save_history("client", "one", {"summary": "", "messages": []})
+    chat.save_history("client", "two", {"summary": "", "messages": []})
+    clear_history("client", "one")
+    assert history_path("client", "one").exists() is False
+    assert history_path("client", "two").exists() is True
+    clear_all_history()
+    assert history_path("client", "two").exists() is False
+
+    monkeypatch.setattr(
+        chat.Path,
+        "write_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError()),
+    )
+    save_chat_preferences(ChatPreferences())
+    failing_history = history_path("client", "failure")
+    failing_history.parent.mkdir(parents=True, exist_ok=True)
+    failing_history.touch()
+    monkeypatch.setattr(
+        chat.Path,
+        "unlink",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError()),
+    )
+    clear_history("client", "one")
+    clear_all_history()
 
 
 def test_chat_client_persistent_client_id_reuses_existing(tmp_path, monkeypatch):
