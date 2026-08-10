@@ -76,7 +76,7 @@ from ..imagegen.media import (
     MediaStore,
 )
 from ..imagegen.scene import request_scene_image, request_scene_video
-from ..imagegen.spec import ImagePurpose, MediaKind
+from ..imagegen.spec import ImagePurpose
 from ..llm_agents import (
     ControllerDefinitionStore,
     action_library_names,
@@ -255,7 +255,9 @@ JOB_RESULT_ADAPTER = TypeAdapter(JobResult)
 
 if TYPE_CHECKING:
     from ..engine import GameLoop
+    from ..imagegen.backfill import ImageBackfillScheduler
     from ..imagegen.service import ImageGenService
+    from ..imagegen.video_service import VideoGenService
     from ..plugins.model import Plugin
     from .subscriptions import EventSubscription
 
@@ -544,6 +546,8 @@ def create_app(
     player_client_ids: str | list[str] | None = None,
     admin_client_ids: str | list[str] | None = None,
     imagegen: ImageGenService | None = None,
+    videogen: VideoGenService | None = None,
+    image_backfill: ImageBackfillScheduler | None = None,
     character_chat: CharacterChatService | None = None,
     open_character_chat: bool = True,
     character_sheets: bool = True,
@@ -592,10 +596,8 @@ def create_app(
             if mcp_session_manager is not None:
                 mcp_session_context = mcp_session_manager.run()
                 await mcp_session_context.__aenter__()
-            if imagegen is not None:
-                # Throttled portrait/sprite backfill runs beside the loop (not in the tick),
-                # filling in characters still missing an image, one request at a time.
-                imagegen.start_backfill()
+            if image_backfill is not None:
+                image_backfill.start()
             yield
         finally:
             actor.bus.unsubscribe(DomainEvent, onboarding.record_event)
@@ -607,8 +609,12 @@ def create_app(
                 await mcp_session_context.__aexit__(None, None, None)
             if mcp_event_bridge is not None:
                 mcp_event_bridge.close()
+            if image_backfill is not None:
+                await image_backfill.aclose()
             if imagegen is not None:
                 await imagegen.aclose()
+            if videogen is not None:
+                await videogen.aclose()
 
     trusted_origins = _configured_cors_origins(cors_origins)
     app = FastAPI(
@@ -815,6 +821,7 @@ def create_app(
     memory_store = memory_store or getattr(actor, "memory_store", None)
     media_store = (
         (getattr(imagegen, "media", None) if imagegen is not None else None)
+        or (getattr(videogen, "media", None) if videogen is not None else None)
         or getattr(actor, "media_service", None)
         or MediaStore(os.environ.get("BUNNYLAND_MEDIA_DIR", "media").strip() or "media")
     )
@@ -831,11 +838,10 @@ def create_app(
             raise HTTPException(status_code=409, detail="image generation is not configured")
         return imagegen
 
-    def _require_videogen() -> ImageGenService:
-        service = _require_imagegen()
-        if not getattr(service, "video_enabled", False):
+    def _require_videogen() -> VideoGenService:
+        if videogen is None:
             raise HTTPException(status_code=409, detail="video generation is not configured")
-        return service
+        return videogen
 
     def _require_memory_store():
         if memory_store is None:
@@ -1032,7 +1038,7 @@ def create_app(
             ),
             character_sheets=character_sheets,
             image_generation=imagegen is not None,
-            video_generation=imagegen is not None and getattr(imagegen, "video_enabled", False),
+            video_generation=videogen is not None,
         )
 
     @app.middleware("http")
@@ -2061,11 +2067,9 @@ def create_app(
         service = _require_videogen()
         job = await service.start(
             request.entity_id,
-            ImagePurpose.EVENT,
             template_name=request.template,
             extra=request.extra,
             force=request.force,
-            media=MediaKind.VIDEO,
         )
         return _image_response(job)
 
@@ -2136,8 +2140,9 @@ def create_app(
         data.pop("schema_version", None)
         return data
 
-    def _refresh_image_job_v1(job: JobResource) -> JobResource:
-        current = _require_imagegen().job(job.id)
+    def _refresh_media_job_v1(job: JobResource) -> JobResource:
+        service = _require_videogen() if "video" in job.kind else _require_imagegen()
+        current = service.job(job.id)
         if current is None:
             return job
         status = _job_status_v1(str(current.status))
@@ -2168,7 +2173,7 @@ def create_app(
 
     async def _refresh_generation_job_v1(job: JobResource) -> JobResource:
         if job.kind in {"image", "video"}:
-            return _refresh_image_job_v1(job)
+            return _refresh_media_job_v1(job)
         if job.kind != "world" or generation_job is None or generation_job.job_id != job.id:
             return job
         current = await _world_generation_status_response()
@@ -3118,7 +3123,7 @@ def create_app(
         owner = _claim_owner_for_request(request, normalized_client_id)
         claim_secret = _request_claim_secret(request, claim_secret)
         _claim_context_v1(claim_id, claim_secret, normalized_client_id, owner)
-        refreshed = [_refresh_image_job_v1(job) for job in player_job_registry.list_for(claim_id)]
+        refreshed = [_refresh_media_job_v1(job) for job in player_job_registry.list_for(claim_id)]
         for job in refreshed:
             player_job_registry.update(job)
         return refreshed
@@ -3138,7 +3143,7 @@ def create_app(
         job = player_job_registry.get(job_id, owner=claim_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job does not exist")
-        refreshed = _refresh_image_job_v1(job)
+        refreshed = _refresh_media_job_v1(job)
         player_job_registry.update(refreshed)
         return refreshed
 

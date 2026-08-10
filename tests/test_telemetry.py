@@ -1999,7 +1999,7 @@ class _TelemetryImageGenerator:
 
 
 def _telemetry_image_service(actor, tmp_path, generator, *, enhancer=None, alpha=None):
-    from bunnyland.imagegen.config import ImageGenConfig
+    from bunnyland.imagegen.config import MediaGenConfig
     from bunnyland.imagegen.media import MediaStore
     from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
     from bunnyland.imagegen.service import ImageGenService
@@ -2007,7 +2007,7 @@ def _telemetry_image_service(actor, tmp_path, generator, *, enhancer=None, alpha
 
     return ImageGenService(
         actor,
-        ImageGenConfig(),
+        MediaGenConfig(),
         generators={purpose: generator for purpose in ImagePurpose},
         enhancer=enhancer or StubPromptEnhancer(),
         examples=CatalogExampleSource(),

@@ -1,24 +1,25 @@
-"""Build a configured :class:`ImageGenService` from runtime config (spec 27).
-
-The service depends on runtime settings (the ComfyUI URL, the media directory, the chosen
-enhancer) that are only known at serve time, so it is assembled here rather than in a plugin.
-The enhancer is resolved by name: the built-in ``stub``/``llm`` enhancers, or any enhancer a
-plugin contributes via ``ContentContribution.prompt_enhancers``.
-"""
+"""Build independent image and video services with shared media-provider resources."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from pydantic import JsonValue
 
 from ..core.world_actor import WorldActor
 from ..plugins.loader import collect_prompt_enhancers
 from ..plugins.model import Plugin
+from .backfill import ImageBackfillScheduler
 from .client import build_comfy_client
-from .comfyui import ComfyUIImageGenerator
-from .config import ImageGenConfig
-from .generators import ImageGenerator, collect_image_generators
+from .comfyui import ComfyUIGenerator
+from .config import MediaGenConfig
+from .generators import (
+    ImageGenerator,
+    VideoGenerator,
+    collect_image_generators,
+    collect_video_generators,
+)
 from .in_memory import InMemoryImageGenerator
 from .media import MediaStore
 from .openrouter import OpenRouterImageGenerator
@@ -30,12 +31,22 @@ from .prompt import (
     StubPromptEnhancer,
 )
 from .service import ImageGenService
-from .spec import ImagePurpose, MediaKind
+from .spec import ImagePurpose
 from .store import WorkflowTemplateStore, default_comfy_templates
+from .video_service import VideoGenService
 
 
-def select_enhancer(config: ImageGenConfig, plugins: Sequence[Plugin] = ()) -> PromptEnhancer:
-    """Resolve the configured enhancer by name (built-in or plugin-provided)."""
+@dataclass(frozen=True)
+class MediaGenerationServices:
+    """Configured generation services and their optional backfill producer."""
+
+    media: MediaStore
+    image: ImageGenService | None = None
+    video: VideoGenService | None = None
+    backfill: ImageBackfillScheduler | None = None
+
+
+def select_enhancer(config: MediaGenConfig, plugins: Sequence[Plugin] = ()) -> PromptEnhancer:
     name = config.enhancer
     if name in ("", "stub"):
         return StubPromptEnhancer()
@@ -48,77 +59,102 @@ def select_enhancer(config: ImageGenConfig, plugins: Sequence[Plugin] = ()) -> P
     for enhancer in collect_prompt_enhancers(plugins):
         if getattr(enhancer, "name", "") == name:
             return enhancer
-    raise ValueError(f"unknown image enhancer {name!r}")
+    raise ValueError(f"unknown media enhancer {name!r}")
 
 
-def build_image_service(
+def build_media_services(
     actor: WorldActor,
-    config: ImageGenConfig,
+    config: MediaGenConfig,
     *,
     plugins: Sequence[Plugin] = (),
     plugin_config: Mapping[str, JsonValue] | None = None,
-) -> ImageGenService:
-    """Assemble the full image generation service from config and plugins."""
-    selected_names = {config.generator_for(purpose.value) for purpose in ImagePurpose}
-    if config.video_template:
-        selected_names.add("comfyui")
-    registry: dict[str, ImageGenerator] = collect_image_generators(plugins, config, plugin_config)
+) -> MediaGenerationServices:
+    """Assemble independently selected image and video services."""
 
+    image_names = {
+        config.image.generator_for(purpose.value)
+        for purpose in ImagePurpose
+        if config.image.generator_for(purpose.value)
+    }
+    if image_names and any(
+        not config.image.generator_for(purpose.value) for purpose in ImagePurpose
+    ):
+        raise ValueError("image generation requires a generator for every image purpose")
+    video_name = config.video.generator.strip()
+
+    image_registry: dict[str, ImageGenerator] = (
+        collect_image_generators(plugins, config, plugin_config) if image_names else {}
+    )
+    video_registry: dict[str, VideoGenerator] = (
+        collect_video_generators(plugins, config, plugin_config) if video_name else {}
+    )
     for builtin in ("comfyui", "in-memory", "openrouter"):
-        if builtin in registry:
+        if builtin in image_registry:
             raise ValueError(f"duplicate image generator {builtin!r}")
+    if "comfyui" in video_registry:
+        raise ValueError("duplicate video generator 'comfyui'")
 
-    templates = None
-    client = None
-    if "comfyui" in selected_names:
-        if not config.server_url:
-            raise ValueError("comfyui image generation requires COMFYUI_SERVER_URL")
+    if "comfyui" in image_names or video_name == "comfyui":
+        if not config.comfyui.server_url:
+            raise ValueError("comfyui generation requires COMFYUI_SERVER_URL")
         templates = WorkflowTemplateStore(
-            config.templates_path or None, defaults=default_comfy_templates(config.workflows)
+            config.comfyui.templates_path or None,
+            defaults=default_comfy_templates(config.comfyui.workflows),
         )
         templates.load()
-        client = build_comfy_client(config)
-        registry["comfyui"] = ComfyUIImageGenerator(client, templates)
-    if "in-memory" in selected_names:
-        registry["in-memory"] = InMemoryImageGenerator()
-    if "openrouter" in selected_names:
-        registry["openrouter"] = OpenRouterImageGenerator(
-            model=config.openrouter_image_model,
-            api_key=config.openrouter_api_key,
-            server_url=config.openrouter_server_url,
+        comfy = ComfyUIGenerator(build_comfy_client(config.comfyui), templates)
+        image_registry["comfyui"] = comfy
+        video_registry["comfyui"] = comfy
+    if "in-memory" in image_names:
+        image_registry["in-memory"] = InMemoryImageGenerator()
+    if "openrouter" in image_names:
+        image_registry["openrouter"] = OpenRouterImageGenerator(
+            model=config.image.openrouter_image_model,
+            api_key=config.image.openrouter_api_key,
+            server_url=config.image.openrouter_server_url,
         )
 
-    unknown = sorted(selected_names - registry.keys())
-    if unknown:
-        raise ValueError(f"unknown image generator {unknown[0]!r}")
-    routed = {
-        purpose: registry[config.generator_for(purpose.value)] for purpose in ImagePurpose
-    }
-    video_generator = None
-    if config.video_template:
-        assert templates is not None
-        video_template = templates.get(config.video_template)
-        if video_template is None:
-            raise ValueError(f"unknown video workflow template {config.video_template!r}")
-        if video_template.purpose is not ImagePurpose.EVENT:
-            raise ValueError("video workflow template must have purpose 'event'")
-        if video_template.media is not MediaKind.VIDEO:
-            raise ValueError("video workflow template must declare media 'video'")
-        video_generator = registry["comfyui"]
+    unknown_images = sorted(image_names - image_registry.keys())
+    if unknown_images:
+        raise ValueError(f"unknown image generator {unknown_images[0]!r}")
+    if video_name and video_name not in video_registry:
+        raise ValueError(f"unknown video generator {video_name!r}")
+
     media = MediaStore(config.media_root)
     actor.media_service = media
-    return ImageGenService(
-        actor,
-        config,
-        generators=routed,
-        video_generator=video_generator,
-        client=client,
-        templates=templates,
-        enhancer=select_enhancer(config, plugins),
-        examples=CatalogExampleSource(),
-        media=media,
-        alpha=remove_edge_background,
-    )
+    enhancer = select_enhancer(config, plugins)
+    examples = CatalogExampleSource()
+    image = None
+    backfill = None
+    if image_names:
+        image = ImageGenService(
+            actor,
+            config,
+            generators={
+                purpose: image_registry[config.image.generator_for(purpose.value)]
+                for purpose in ImagePurpose
+            },
+            enhancer=enhancer,
+            examples=examples,
+            media=media,
+            alpha=remove_edge_background,
+        )
+        backfill = ImageBackfillScheduler(
+            actor, image, config.image.backfill_interval_seconds
+        )
+    video = None
+    if video_name:
+        video_registry[video_name].resolve_video_profile(config.video.profile)
+        video = VideoGenService(
+            actor,
+            config,
+            generator=video_registry[video_name],
+            profile_name=config.video.profile,
+            enhancer=enhancer,
+            examples=examples,
+            media=media,
+        )
+    return MediaGenerationServices(media=media, image=image, video=video, backfill=backfill)
 
 
-__all__ = ["build_image_service", "select_enhancer"]
+__all__ = ["MediaGenerationServices", "build_media_services", "select_enhancer"]

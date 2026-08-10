@@ -14,14 +14,16 @@ from bunnyland.claims import ClaimSecretRegistry, add_claim
 from bunnyland.core import CharacterComponent, IdentityComponent, spawn_entity
 from bunnyland.core.events import DomainEvent
 from bunnyland.foundation.history.mechanics import record_world_history
+from bunnyland.imagegen.backfill import ImageBackfillScheduler
+from bunnyland.imagegen.comfyui import ComfyUIGenerator
 from bunnyland.imagegen.components import PortraitImageComponent
-from bunnyland.imagegen.config import ImageGenConfig
+from bunnyland.imagegen.config import ComfyUIConfig, ImageGenConfig, MediaGenConfig
 from bunnyland.imagegen.media import SEGMENT_PORTRAITS, SEGMENT_SPRITES, MediaStore
 from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
 from bunnyland.imagegen.service import ImageGenService
 from bunnyland.imagegen.spec import ImagePurpose
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
-from bunnyland.imagegen.wiring import build_image_service, select_enhancer
+from bunnyland.imagegen.wiring import build_media_services, select_enhancer
 from bunnyland.persistence import WorldMeta
 from bunnyland.server.app import MAX_UPLOAD_IMAGE_BYTES, create_app
 from bunnyland.server.auth import WORLD_ADMIN_SCOPE, WORLD_PLAY_SCOPE, TokenStore
@@ -43,22 +45,31 @@ class _FakeClient:
 
 
 def _service(actor, tmp_path):
+    config = MediaGenConfig(
+        comfyui=ComfyUIConfig(server_url="http://comfy.local"),
+        image=ImageGenConfig(generator="comfyui"),
+        media_root=str(tmp_path),
+    )
+    generator = ComfyUIGenerator(
+        _FakeClient(), WorkflowTemplateStore(defaults=default_templates())
+    )
     return ImageGenService(
         actor,
-        ImageGenConfig(server_url="http://comfy.local"),
-        client=_FakeClient(),
-        templates=WorkflowTemplateStore(defaults=default_templates()),
+        config,
+        generators={purpose: generator for purpose in ImagePurpose},
         enhancer=StubPromptEnhancer(),
         examples=CatalogExampleSource(),
         media=MediaStore(tmp_path),
     )
 
 
-def _app(actor, service):
+def _app(actor, service, backfill=None, videogen=None):
     return create_app(
         actor,
         meta=WorldMeta(seed="moss"),
         imagegen=service,
+        videogen=videogen,
+        image_backfill=backfill,
         allow_unauthenticated_embedding=True,
     )
 
@@ -598,8 +609,9 @@ async def test_media_route_serves_and_404(tmp_path):
 async def test_start_backfill_generates_missing_portrait(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
-    service.start_backfill(0.01)
-    service.start_backfill(0.01)  # idempotent: second call is a no-op
+    backfill = ImageBackfillScheduler(scenario.actor, service, 0.01)
+    backfill.start()
+    backfill.start()
     for _ in range(50):
         if scenario.actor.world.get_entity(scenario.character).has_component(
             PortraitImageComponent
@@ -607,77 +619,103 @@ async def test_start_backfill_generates_missing_portrait(tmp_path):
             break
         await asyncio.sleep(0.01)
     assert scenario.actor.world.get_entity(scenario.character).has_component(PortraitImageComponent)
+    await backfill.aclose()
     await service.aclose()
 
 
 async def test_lifespan_starts_backfill_and_closes(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
-    app = _app(scenario.actor, service)
+    backfill = ImageBackfillScheduler(scenario.actor, service, 0.01)
+
+    class CloseableVideo:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    videogen = CloseableVideo()
+    app = _app(scenario.actor, service, backfill, videogen)
     async with app.router.lifespan_context(app):
-        assert service._backfill is not None
+        assert backfill._task is not None
         async with _client(app) as client:
             assert (await client.get("/v1/public/health")).status_code == 204
-    assert service._backfill is None
+    assert backfill._task is None
+    assert videogen.closed is True
 
 
 # --- wiring --------------------------------------------------------------------------
 
 
-def test_cli_build_imagegen_service(monkeypatch, tmp_path, capsys):
-    from bunnyland.cli import _build_imagegen_service
+def test_cli_build_media_services(monkeypatch, tmp_path, capsys):
+    from bunnyland.cli import _build_media_services
 
     scenario = build_scenario()
     monkeypatch.setenv("COMFYUI_SERVER_URL", "http://comfy.local:8188")
+    monkeypatch.setenv("BUNNYLAND_IMAGE_GENERATOR", "comfyui")
     monkeypatch.setenv("BUNNYLAND_MEDIA_DIR", str(tmp_path))
-    service = _build_imagegen_service(scenario.actor, [])
-    assert isinstance(service, ImageGenService)
+    services = _build_media_services(scenario.actor, [])
+    assert services is not None
+    assert isinstance(services.image, ImageGenService)
     assert "Image generation enabled" in capsys.readouterr().out
 
 
-def test_cli_build_imagegen_service_disabled(monkeypatch):
-    from bunnyland.cli import _build_imagegen_service
+def test_cli_build_media_services_disabled(monkeypatch):
+    from bunnyland.cli import _build_media_services
 
     scenario = build_scenario()
     monkeypatch.delenv("COMFYUI_SERVER_URL", raising=False)
-    assert _build_imagegen_service(scenario.actor, []) is None
+    monkeypatch.delenv("BUNNYLAND_IMAGE_GENERATOR", raising=False)
+    assert _build_media_services(scenario.actor, []) is None
 
 
-def test_build_image_service_from_config(tmp_path):
+def test_build_media_services_from_config(tmp_path):
     scenario = build_scenario()
-    config = ImageGenConfig(server_url="http://comfy.local", media_root=str(tmp_path))
-    service = build_image_service(scenario.actor, config)
-    assert isinstance(service, ImageGenService)
+    config = MediaGenConfig(
+        comfyui=ComfyUIConfig(server_url="http://comfy.local"),
+        image=ImageGenConfig(generator="comfyui"),
+        media_root=str(tmp_path),
+    )
+    services = build_media_services(scenario.actor, config)
+    assert isinstance(services.image, ImageGenService)
 
 
 def test_build_image_service_selects_family(tmp_path):
     scenario = build_scenario()
-    config = ImageGenConfig(
-        server_url="http://comfy.local", media_root=str(tmp_path), workflows="anima-house"
+    config = MediaGenConfig(
+        comfyui=ComfyUIConfig(server_url="http://comfy.local", workflows="anima-house"),
+        image=ImageGenConfig(generator="comfyui"),
+        media_root=str(tmp_path),
     )
-    service = build_image_service(scenario.actor, config)
-    assert service._templates.for_purpose(ImagePurpose.PORTRAIT).default_negative.startswith(
+    service = build_media_services(scenario.actor, config).image
+    assert service is not None
+    generator = service._generators[ImagePurpose.PORTRAIT]
+    assert generator.templates.for_purpose(ImagePurpose.PORTRAIT).default_negative.startswith(
         "worst quality, low quality, score_1"
     )
 
 
 def test_build_image_service_unknown_family():
     scenario = build_scenario()
-    config = ImageGenConfig(server_url="http://comfy.local", workflows="bogus")
+    config = MediaGenConfig(
+        comfyui=ComfyUIConfig(server_url="http://comfy.local", workflows="bogus"),
+        image=ImageGenConfig(generator="comfyui"),
+    )
     with pytest.raises(ValueError, match="unknown workflow family"):
-        build_image_service(scenario.actor, config)
+        build_media_services(scenario.actor, config)
 
 
 def test_select_enhancer_stub():
-    assert select_enhancer(ImageGenConfig(server_url="x")).name == "stub"
-    assert select_enhancer(ImageGenConfig(server_url="x", enhancer="stub")).name == "stub"
+    assert select_enhancer(MediaGenConfig()).name == "stub"
+    assert select_enhancer(MediaGenConfig(enhancer="stub")).name == "stub"
 
 
 def test_select_enhancer_llm(monkeypatch):
     module = types.ModuleType("ollama")
     module.AsyncClient = lambda *a, **k: object()
     monkeypatch.setitem(sys.modules, "ollama", module)
-    enhancer = select_enhancer(ImageGenConfig(server_url="x", enhancer="llm"))
+    enhancer = select_enhancer(MediaGenConfig(enhancer="llm"))
     assert enhancer.name == "llm"
 
 
@@ -691,7 +729,7 @@ def test_select_enhancer_from_plugin():
         name="Custom",
         content=ContentContribution(prompt_enhancers=(custom,)),
     )
-    enhancer = select_enhancer(ImageGenConfig(server_url="x", enhancer="custom"), [plugin])
+    enhancer = select_enhancer(MediaGenConfig(enhancer="custom"), [plugin])
     assert enhancer is custom
 
 
@@ -705,5 +743,5 @@ def test_select_enhancer_unknown_with_nonmatching_plugin():
         name="Other",
         content=ContentContribution(prompt_enhancers=(other,)),
     )
-    with pytest.raises(ValueError, match="unknown image enhancer"):
-        select_enhancer(ImageGenConfig(server_url="x", enhancer="ghost"), [plugin])
+    with pytest.raises(ValueError, match="unknown media enhancer"):
+        select_enhancer(MediaGenConfig(enhancer="ghost"), [plugin])

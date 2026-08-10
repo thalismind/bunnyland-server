@@ -129,6 +129,13 @@ def collect_image_generators(plugins, config, plugin_config=None):
     return collect(plugins, config, plugin_config)
 
 
+def collect_video_generators(plugins, config, plugin_config=None):
+    """Instantiate plugin-contributed video generators with their owner configuration."""
+    from ..imagegen.generators import collect_video_generators as collect
+
+    return collect(plugins, config, plugin_config)
+
+
 def _instantiate(item):
     """Allow contributions to be classes (instantiated) or ready instances."""
     return item() if isinstance(item, type) else item
@@ -272,6 +279,7 @@ __all__ = [
     "apply_plugins",
     "collect_persona_fragments",
     "collect_image_generators",
+    "collect_video_generators",
     "collect_prompt_enhancers",
     "collect_prompt_filters",
     "collect_prompt_fragments",

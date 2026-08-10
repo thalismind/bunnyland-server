@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from conftest import build_scenario
 
 from bunnyland.core import spawn_entity
@@ -9,27 +11,32 @@ from bunnyland.core.components import DescriptionComponent, IdentityComponent
 from bunnyland.core.ecs import container_of
 from bunnyland.core.events import DomainEvent
 from bunnyland.foundation.history.mechanics import HistoryLocation, record_world_history
+from bunnyland.imagegen.backfill import (
+    ImageBackfillScheduler,
+    _first_missing_portrait,
+    _first_missing_sprite,
+)
+from bunnyland.imagegen.comfyui import ComfyUIGenerator
 from bunnyland.imagegen.components import (
     EventImageComponent,
     ImageRequestComponent,
     PortraitImageComponent,
 )
-from bunnyland.imagegen.config import ImageGenConfig
+from bunnyland.imagegen.config import ComfyUIConfig, ImageGenConfig, MediaGenConfig
 from bunnyland.imagegen.events import (
     ImageGenerationCompletedEvent,
     ImageGenerationFailedEvent,
 )
+from bunnyland.imagegen.generators import ImageGeneratorProfile
 from bunnyland.imagegen.media import SEGMENT_PORTRAITS, MediaStore
 from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
 from bunnyland.imagegen.service import (
     ImageGenService,
     _clear_request,
     _existing_image_url,
-    _first_missing_portrait,
-    _first_missing_sprite,
     _seed_for,
 )
-from bunnyland.imagegen.spec import ImagePurpose
+from bunnyland.imagegen.spec import ImagePurpose, MediaKind
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
 from bunnyland.imagegen.subject import subject_for_entity, subject_for_event
 from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
@@ -49,11 +56,18 @@ class _FakeClient:
 
 
 def _service(actor, tmp_path, *, client=None) -> ImageGenService:
+    config = MediaGenConfig(
+        comfyui=ComfyUIConfig(server_url="http://comfy.local"),
+        image=ImageGenConfig(generator="comfyui"),
+        media_root=str(tmp_path),
+    )
+    generator = ComfyUIGenerator(
+        client or _FakeClient(), WorkflowTemplateStore(defaults=default_templates())
+    )
     return ImageGenService(
         actor,
-        ImageGenConfig(server_url="http://comfy.local"),
-        client=client or _FakeClient(),
-        templates=WorkflowTemplateStore(defaults=default_templates()),
+        config,
+        generators={purpose: generator for purpose in ImagePurpose},
         enhancer=StubPromptEnhancer(),
         examples=CatalogExampleSource(),
         media=MediaStore(tmp_path),
@@ -65,9 +79,17 @@ async def test_config_prompt_style_overrides_template(tmp_path):
     # klein templates are natural; the config override forces tag output.
     service = ImageGenService(
         scenario.actor,
-        ImageGenConfig(server_url="http://comfy.local", prompt_style="tag"),
-        client=_FakeClient(),
-        templates=WorkflowTemplateStore(defaults=default_templates("klein")),
+        MediaGenConfig(
+            comfyui=ComfyUIConfig(server_url="http://comfy.local"),
+            image=ImageGenConfig(generator="comfyui"),
+            prompt_style="tag",
+        ),
+        generators={
+            purpose: ComfyUIGenerator(
+                _FakeClient(), WorkflowTemplateStore(defaults=default_templates("klein"))
+            )
+            for purpose in ImagePurpose
+        },
         enhancer=StubPromptEnhancer(),
         examples=CatalogExampleSource(),
         media=MediaStore(tmp_path),
@@ -321,23 +343,27 @@ async def test_failed_generation_emits_event_and_clears_request(tmp_path):
     assert not entity.has_component(ImageRequestComponent)
     failed = [e for e in events if isinstance(e, ImageGenerationFailedEvent)]
     assert failed and failed[0].reason == "boom"
-    # The failed character is parked so the backfill won't retry it forever.
-    assert str(scenario.character) in service._failed
-    assert await service.enqueue_one_missing() is None
+    backfill = ImageBackfillScheduler(scenario.actor, service, 0.01)
+    job = await backfill.enqueue_one_missing()
+    assert job is not None
+    await service.wait_idle()
+    assert await backfill.enqueue_one_missing() is None
+    assert str(scenario.character) in backfill._failed
     await service.aclose()
 
 
 async def test_backfill_recovers_after_failure_clears(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
-    service._failed.add(str(scenario.character))  # previously failed -> parked
-    assert await service.enqueue_one_missing() is None
-    # A successful generation discards the entity from the failed set.
-    service._failed.discard(str(scenario.character))
-    job = await service.enqueue_one_missing()
+    backfill = ImageBackfillScheduler(scenario.actor, service, 0.01)
+    backfill._failed.add(str(scenario.character))
+    assert await backfill.enqueue_one_missing() is None
+    backfill._failed.discard(str(scenario.character))
+    job = await backfill.enqueue_one_missing()
     assert job is not None
     await service.wait_idle()
-    assert str(scenario.character) not in service._failed
+    await backfill.enqueue_one_missing()
+    assert str(scenario.character) not in backfill._failed
     await service.aclose()
 
 
@@ -355,9 +381,11 @@ async def test_no_template_for_purpose_fails(tmp_path):
     scenario = build_scenario()
     service = ImageGenService(
         scenario.actor,
-        ImageGenConfig(server_url="http://comfy.local"),
-        client=_FakeClient(),
-        templates=WorkflowTemplateStore(),  # no defaults registered
+        MediaGenConfig(image=ImageGenConfig(generator="comfyui")),
+        generators={
+            purpose: ComfyUIGenerator(_FakeClient(), WorkflowTemplateStore())
+            for purpose in ImagePurpose
+        },
         enhancer=StubPromptEnhancer(),
         examples=CatalogExampleSource(),
         media=MediaStore(tmp_path),
@@ -366,6 +394,36 @@ async def test_no_template_for_purpose_fails(tmp_path):
     await service.wait_idle()
     assert job.status == "failed"
     assert "no workflow template" in job.error
+    await service.aclose()
+
+
+async def test_image_service_rejects_generator_video_profile(tmp_path):
+    scenario = build_scenario()
+
+    class VideoProfileGenerator:
+        name = "wrong-media"
+
+        def resolve_profile(self, purpose, profile_name=""):
+            del profile_name
+            return ImageGeneratorProfile(
+                name="video", purpose=purpose, media=MediaKind.VIDEO
+            )
+
+        async def generate(self, request):
+            raise AssertionError(request)
+
+    generator = VideoProfileGenerator()
+    service = ImageGenService(
+        scenario.actor,
+        MediaGenConfig(),
+        generators={purpose: generator for purpose in ImagePurpose},
+        enhancer=StubPromptEnhancer(),
+        examples=CatalogExampleSource(),
+        media=MediaStore(tmp_path),
+    )
+    job = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
+    await service.wait_idle()
+    assert job.error == "workflow 'video' produces video, not image"
     await service.aclose()
 
 
@@ -389,7 +447,8 @@ async def test_entity_vanishes_before_processing(tmp_path):
 async def test_enqueue_one_missing_picks_portrait(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
-    job = await service.enqueue_one_missing()
+    backfill = ImageBackfillScheduler(scenario.actor, service, 0.01)
+    job = await backfill.enqueue_one_missing()
     assert job is not None
     assert job.purpose is ImagePurpose.PORTRAIT
     await service.wait_idle()
@@ -412,7 +471,8 @@ async def test_enqueue_one_missing_returns_none_when_busy(tmp_path):
     await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
     await asyncio.sleep(0)  # let the worker pick the job up (now busy)
     assert service.idle is False
-    assert await service.enqueue_one_missing() is None
+    backfill = ImageBackfillScheduler(scenario.actor, service, 0.01)
+    assert await backfill.enqueue_one_missing() is None
     gate.set()
     await service.wait_idle()
     await service.aclose()
@@ -424,7 +484,8 @@ async def test_enqueue_one_missing_picks_sprite_when_portrait_done(tmp_path):
     entity.add_component(PortraitImageComponent(url="/public/media/portraits/x.png"))
     entity.add_component(SpriteImageComponent())  # empty url -> needs a sprite
     service = _service(scenario.actor, tmp_path)
-    job = await service.enqueue_one_missing()
+    backfill = ImageBackfillScheduler(scenario.actor, service, 0.01)
+    job = await backfill.enqueue_one_missing()
     assert job is not None
     assert job.purpose is ImagePurpose.SPRITE
     await service.wait_idle()
@@ -436,7 +497,78 @@ async def test_enqueue_one_missing_none_when_all_done(tmp_path):
     entity = scenario.actor.world.get_entity(scenario.character)
     entity.add_component(PortraitImageComponent(url="/public/media/portraits/x.png"))
     service = _service(scenario.actor, tmp_path)
-    assert await service.enqueue_one_missing() is None
+    backfill = ImageBackfillScheduler(scenario.actor, service, 0.01)
+    assert await backfill.enqueue_one_missing() is None
+
+
+async def test_backfill_scheduler_handles_immediate_failure_and_pending_jobs():
+    scenario = build_scenario()
+
+    class Service:
+        idle = True
+        status = "failed"
+
+        async def start(self, entity_id, purpose):
+            return SimpleNamespace(
+                job_id="failed-job",
+                entity_id=entity_id,
+                purpose=purpose,
+                status=self.status,
+            )
+
+        def job(self, job_id):
+            del job_id
+            return None
+
+    scheduler = ImageBackfillScheduler(scenario.actor, Service(), 0.01)
+    job = await scheduler.enqueue_one_missing()
+    assert job is not None
+    assert str(scenario.character) in scheduler._failed
+    scheduler._failed.clear()
+    scheduler._service.status = "skipped"
+    assert await scheduler.enqueue_one_missing() is not None
+    scheduler._pending["missing"] = "entity:missing"
+    scheduler._reconcile()
+    assert scheduler._pending == {"missing": "entity:missing"}
+    await scheduler.aclose()
+
+
+async def test_image_service_captures_parent_context(tmp_path, monkeypatch):
+    import asyncio
+
+    scenario = build_scenario()
+    gate = asyncio.Event()
+
+    class Generator:
+        name = "blocking"
+
+        def resolve_profile(self, purpose, profile_name=""):
+            del profile_name
+            return ImageGeneratorProfile(name=purpose.value, purpose=purpose)
+
+        async def generate(self, request):
+            del request
+            await gate.wait()
+            return b"PNG"
+
+    generator = Generator()
+    service = ImageGenService(
+        scenario.actor,
+        MediaGenConfig(),
+        generators={purpose: generator for purpose in ImagePurpose},
+        enhancer=StubPromptEnhancer(),
+        examples=CatalogExampleSource(),
+        media=MediaStore(tmp_path),
+    )
+    parent = object()
+    monkeypatch.setattr(
+        "bunnyland.imagegen.service.telemetry.capture_context", lambda: parent
+    )
+    job = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
+    assert service._parent_contexts[job.job_id] is parent
+    gate.set()
+    await service.wait_idle()
+    await service.aclose()
 
 
 def test_job_lookup(tmp_path):

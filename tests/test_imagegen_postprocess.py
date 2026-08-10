@@ -9,8 +9,9 @@ import pytest
 from conftest import build_scenario
 from PIL import Image
 
+from bunnyland.imagegen.comfyui import ComfyUIGenerator
 from bunnyland.imagegen.components import PortraitImageComponent
-from bunnyland.imagegen.config import ImageGenConfig
+from bunnyland.imagegen.config import ComfyUIConfig, ImageGenConfig, MediaGenConfig
 from bunnyland.imagegen.media import SEGMENT_ALPHA, SEGMENT_SPRITES, MediaStore
 from bunnyland.imagegen.postprocess import remove_edge_background
 from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
@@ -89,11 +90,16 @@ def test_remove_edge_background_requires_pillow(monkeypatch):
 
 
 def _service(actor, tmp_path, *, alpha):
+    generator = ComfyUIGenerator(
+        _StaticClient(), WorkflowTemplateStore(defaults=default_templates())
+    )
     return ImageGenService(
         actor,
-        ImageGenConfig(server_url="http://comfy.local"),
-        client=_StaticClient(),
-        templates=WorkflowTemplateStore(defaults=default_templates()),
+        MediaGenConfig(
+            comfyui=ComfyUIConfig(server_url="http://comfy.local"),
+            image=ImageGenConfig(generator="comfyui"),
+        ),
+        generators={purpose: generator for purpose in ImagePurpose},
         enhancer=StubPromptEnhancer(),
         examples=CatalogExampleSource(),
         media=MediaStore(tmp_path),

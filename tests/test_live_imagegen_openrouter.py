@@ -8,18 +8,18 @@ import pytest
 from conftest import build_scenario
 
 from bunnyland.imagegen.components import PortraitImageComponent
-from bunnyland.imagegen.config import ImageGenConfig
+from bunnyland.imagegen.config import ImageGenConfig, MediaGenConfig
 from bunnyland.imagegen.generators import ImageGeneratorRequest
 from bunnyland.imagegen.openrouter import OpenRouterImageGenerator
 from bunnyland.imagegen.spec import ImagePurpose
-from bunnyland.imagegen.wiring import build_image_service
+from bunnyland.imagegen.wiring import build_media_services
 
 pytestmark = pytest.mark.live_imagegen_openrouter
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
-def _live_config(tmp_path=None) -> ImageGenConfig:
+def _live_config(tmp_path=None) -> MediaGenConfig:
     if os.environ.get("BUNNYLAND_LIVE_IMAGEGEN_OPENROUTER") != "1":
         pytest.skip("set BUNNYLAND_LIVE_IMAGEGEN_OPENROUTER=1 to run live OpenRouter tests")
     api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
@@ -28,11 +28,13 @@ def _live_config(tmp_path=None) -> ImageGenConfig:
     model = os.environ.get("BUNNYLAND_LIVE_OPENROUTER_IMAGE_MODEL", "").strip()
     if not model:
         pytest.skip("set BUNNYLAND_LIVE_OPENROUTER_IMAGE_MODEL for live image tests")
-    return ImageGenConfig(
-        generator="openrouter",
-        openrouter_image_model=model,
-        openrouter_api_key=api_key,
-        openrouter_server_url=os.environ.get("OPENROUTER_SERVER_URL", "").strip(),
+    return MediaGenConfig(
+        image=ImageGenConfig(
+            generator="openrouter",
+            openrouter_image_model=model,
+            openrouter_api_key=api_key,
+            openrouter_server_url=os.environ.get("OPENROUTER_SERVER_URL", "").strip(),
+        ),
         media_root=str(tmp_path) if tmp_path is not None else "media",
     )
 
@@ -40,9 +42,9 @@ def _live_config(tmp_path=None) -> ImageGenConfig:
 async def test_live_openrouter_image_modality(tmp_path):
     config = _live_config(tmp_path)
     generator = OpenRouterImageGenerator(
-        model=config.openrouter_image_model,
-        api_key=config.openrouter_api_key,
-        server_url=config.openrouter_server_url,
+        model=config.image.openrouter_image_model,
+        api_key=config.image.openrouter_api_key,
+        server_url=config.image.openrouter_server_url,
     )
     data = await generator.generate(
         ImageGeneratorRequest(
@@ -60,7 +62,8 @@ async def test_live_openrouter_image_modality(tmp_path):
 async def test_live_openrouter_service_job(tmp_path):
     config = _live_config(tmp_path)
     scenario = build_scenario()
-    service = build_image_service(scenario.actor, config)
+    service = build_media_services(scenario.actor, config).image
+    assert service is not None
     job = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
     await service.wait_idle()
     assert job.status == "succeeded", job.error

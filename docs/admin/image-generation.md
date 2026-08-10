@@ -3,11 +3,13 @@
 Bunnyland can illustrate a world with ComfyUI, OpenRouter, or a plugin generator: character
 portraits, single-object renders, toon sprites, and on-request scene images for world events.
 An independently configured ComfyUI workflow can also produce short event-video clips.
-The simulation never blocks on this — generation runs on a background worker, one job at a
-time — and the engine only ever stores a small URL reference, never image bytes.
+The simulation never blocks on this — image and video generation each run through their own
+single-worker queue — and the engine only ever stores a small URL reference, never media bytes.
 
-Image generation is **off** until `COMFYUI_SERVER_URL` is set or a generator is explicitly
-selected. Existing ComfyUI-only configuration remains valid and selects `comfyui`.
+Each modality is **off** until its generator is explicitly selected. Setting
+`COMFYUI_SERVER_URL` only configures the shared client; use
+`BUNNYLAND_IMAGE_GENERATOR=comfyui`, `BUNNYLAND_VIDEO_GENERATOR=comfyui`, or both to submit
+work to ComfyUI's own queue.
 
 ## Prerequisites and boundary
 
@@ -41,6 +43,8 @@ imagegen:
     portrait: openrouter
     sprite: comfyui
   openrouter_image_model: google/gemini-3.1-flash-lite-image
+  video_generator: comfyui
+  video_profile: event-video
 ```
 
 For ComfyUI, set `COMFYUI_SERVER_URL` (the rest are optional):
@@ -52,15 +56,16 @@ COMFYUI_POLL_INTERVAL_SECONDS=1
 COMFYUI_TIMEOUT_SECONDS=120
 BUNNYLAND_MEDIA_DIR=/data/media             # where generated images and clips are written
 BUNNYLAND_IMAGE_WORKFLOWS=sdxl             # WHICH workflow family (model) to use for images
-BUNNYLAND_IMAGE_PROMPT_STYLE=              # force "tag" or "natural" (blank = family default)
-BUNNYLAND_IMAGE_TEMPLATES=/data/image-workflows.json  # optional per-template overrides
-BUNNYLAND_VIDEO_TEMPLATE=event-video         # built-in ComfyUI LTX 2.3 T2V; blank disables
-BUNNYLAND_IMAGE_ENHANCER=stub              # "stub" (offline) or "llm" (uses OLLAMA_*)
+BUNNYLAND_MEDIA_PROMPT_STYLE=              # force "tag" or "natural" (blank = family default)
+BUNNYLAND_MEDIA_TEMPLATES=/data/media-workflows.json  # optional per-template overrides
+BUNNYLAND_VIDEO_GENERATOR=comfyui            # image and video providers are selected separately
+BUNNYLAND_VIDEO_PROFILE=event-video          # built-in ComfyUI LTX 2.3 T2V profile
+BUNNYLAND_MEDIA_ENHANCER=stub              # "stub" (offline) or "llm" (uses OLLAMA_*)
 BUNNYLAND_IMAGE_BACKFILL_SECONDS=5         # cadence of the portrait/sprite backfill
 ```
 
 The prompt **enhancer** turns an entity or event into a model-ready prompt. The default
-`stub` enhancer is deterministic and needs no network; set `BUNNYLAND_IMAGE_ENHANCER=llm`
+`stub` enhancer is deterministic and needs no network; set `BUNNYLAND_MEDIA_ENHANCER=llm`
 to have an Ollama model write richer prompts (it reuses your `OLLAMA_HOST` /
 `OLLAMA_CLOUD_API_KEY`). Plugins can register additional enhancers by name.
 
@@ -113,14 +118,16 @@ to a different generator.
   regenerate.
 - **Event videos** — generated only when a player requests a clip of the latest events in
   their room. Video generation is advertised separately from images and remains off unless
-  `BUNNYLAND_VIDEO_TEMPLATE` names a valid ComfyUI video template.
+  `BUNNYLAND_VIDEO_GENERATOR` selects the video provider and
+  `BUNNYLAND_VIDEO_PROFILE` selects one of its profiles.
 
 Generated media **persists**: the reference is saved with the world, and nothing is
 regenerated once an entity or event has that image or clip.
 
 ## Enabling short ComfyUI videos
 
-Video generation requires `COMFYUI_SERVER_URL` and `BUNNYLAND_VIDEO_TEMPLATE`. The built-in
+ComfyUI video generation requires `COMFYUI_SERVER_URL`,
+`BUNNYLAND_VIDEO_GENERATOR=comfyui`, and `BUNNYLAND_VIDEO_PROFILE`. The built-in
 ComfyUI template `event-video` uses LTX 2.3 22B in text-to-video mode, generates synchronized
 audio, and produces a five-second 25 fps clip. It loads:
 
@@ -133,13 +140,14 @@ Set the built-in template directly:
 
 ```bash
 COMFYUI_SERVER_URL=http://localhost:8188
-BUNNYLAND_VIDEO_TEMPLATE=event-video
+BUNNYLAND_VIDEO_GENERATOR=comfyui
+BUNNYLAND_VIDEO_PROFILE=event-video
 ```
 
 The LTX graph is provider-specific: Bunnyland only resolves it through the ComfyUI generator.
 Selecting another provider for images does not send this graph to that provider.
 
-To override it or add another ComfyUI video graph, set `BUNNYLAND_IMAGE_TEMPLATES` to a JSON
+To override it or add another ComfyUI video graph, set `BUNNYLAND_MEDIA_TEMPLATES` to a JSON
 file. Template metadata must use `purpose: "event"` and `media: "video"`; the configured name
 must match exactly:
 
@@ -171,8 +179,9 @@ With a custom template file in place:
 
 ```bash
 COMFYUI_SERVER_URL=http://localhost:8188
-BUNNYLAND_IMAGE_TEMPLATES=/data/image-workflows.json
-BUNNYLAND_VIDEO_TEMPLATE=event-video
+BUNNYLAND_MEDIA_TEMPLATES=/data/media-workflows.json
+BUNNYLAND_VIDEO_GENERATOR=comfyui
+BUNNYLAND_VIDEO_PROFILE=event-video
 ```
 
 `GET /v1/public/features` reports `image_generation` and `video_generation` independently.
@@ -197,14 +206,14 @@ first `-`. So `BUNNYLAND_IMAGE_WORKFLOWS=anima-my-server` still uses the `anima`
 the suffix is just a label for templates you override (below).
 
 The enhancer formats prompts to the family's style (tag vs natural) automatically. To force
-a style regardless of family, set `BUNNYLAND_IMAGE_PROMPT_STYLE=tag` or `natural`.
+a style regardless of family, set `BUNNYLAND_MEDIA_PROMPT_STYLE=tag` or `natural`.
 
 ## Changing the model
 
 Each family is a directory of JSON files shipped inside the package at
 `bunnyland/imagegen/workflows/<family>/{portrait,entity,sprite,event}.json`. The simplest
 customization is to keep a family but point it at a different checkpoint — copy the template
-you want to change, edit the model field, and load it through `BUNNYLAND_IMAGE_TEMPLATES`
+you want to change, edit the model field, and load it through `BUNNYLAND_MEDIA_TEMPLATES`
 (a `{"templates": [...]}` file whose entries **shadow** the shipped defaults by `name`):
 
 - **SDXL/Illustrious/Pony**: change `ckpt_name` in the `CheckpointLoaderSimple` node (`10`).

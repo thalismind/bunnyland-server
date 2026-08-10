@@ -8,6 +8,7 @@ from bunnyland.imagegen.components import (
     EventVideoComponent,
     ImageRequestComponent,
     PortraitImageComponent,
+    VideoRequestComponent,
 )
 from bunnyland.imagegen.events import (
     ImageGenerationCompletedEvent,
@@ -35,6 +36,7 @@ def test_imagegen_plugin_registers_components_and_events():
         EventImageComponent,
         EventVideoComponent,
         ImageRequestComponent,
+        VideoRequestComponent,
     }
     assert set(plugin.commands.typed_events) == {
         ImageGenerationStartedEvent,

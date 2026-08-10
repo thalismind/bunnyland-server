@@ -907,21 +907,28 @@ def test_create_app_mounts_mcp_inside_existing_fastapi_app(
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
 
     # Pass an imagegen service so the player camera tool is wired into the MCP app too.
-    from bunnyland.imagegen.config import ImageGenConfig
+    from bunnyland.imagegen.comfyui import ComfyUIGenerator
+    from bunnyland.imagegen.config import ComfyUIConfig, ImageGenConfig, MediaGenConfig
     from bunnyland.imagegen.media import MediaStore
     from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
     from bunnyland.imagegen.service import ImageGenService
+    from bunnyland.imagegen.spec import ImagePurpose
     from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
 
     class _FakeComfy:
         async def generate(self, graph, *, output_node_id=""):
             return b"PNG"
 
+    generator = ComfyUIGenerator(
+        _FakeComfy(), WorkflowTemplateStore(defaults=default_templates())
+    )
     imagegen = ImageGenService(
         scenario.actor,
-        ImageGenConfig(server_url="http://comfy.local"),
-        client=_FakeComfy(),
-        templates=WorkflowTemplateStore(defaults=default_templates()),
+        MediaGenConfig(
+            comfyui=ComfyUIConfig(server_url="http://comfy.local"),
+            image=ImageGenConfig(generator="comfyui"),
+        ),
+        generators={purpose: generator for purpose in ImagePurpose},
         enhancer=StubPromptEnhancer(),
         examples=CatalogExampleSource(),
         media=MediaStore(tmp_path),

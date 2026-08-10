@@ -16,7 +16,9 @@ from .app import create_app
 from .auth import TokenStore, UserCredentialStore
 
 if TYPE_CHECKING:
+    from ..imagegen.backfill import ImageBackfillScheduler
     from ..imagegen.service import ImageGenService
+    from ..imagegen.video_service import VideoGenService
     from ..plugins.model import Plugin
     from ..worldgen import GenOptions
     from .character_chat import CharacterChatService
@@ -40,6 +42,8 @@ async def run_loop_with_api(
     cors_origins: str | list[str] | None = None,
     forwarded_allow_ips: str = "127.0.0.1",
     imagegen: ImageGenService | None = None,
+    videogen: VideoGenService | None = None,
+    image_backfill: ImageBackfillScheduler | None = None,
     character_chat: CharacterChatService | None = None,
     open_character_chat: bool = True,
     character_sheets: bool = True,
@@ -82,6 +86,8 @@ async def run_loop_with_api(
         admin_client_ids=admin_client_ids,
         cors_origins=cors_origins,
         imagegen=imagegen,
+        videogen=videogen,
+        image_backfill=image_backfill,
         character_chat=character_chat,
         open_character_chat=open_character_chat,
         character_sheets=character_sheets,

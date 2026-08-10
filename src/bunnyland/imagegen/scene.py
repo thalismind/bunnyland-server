@@ -23,7 +23,8 @@ from ..core.components import RoomComponent
 from ..core.ecs import container_of, entity_name, parse_entity_id
 from ..core.world_actor import WorldActor
 from .service import ImageGenJob, ImageGenService
-from .spec import ImagePurpose, MediaKind
+from .spec import ImagePurpose
+from .video_service import VideoGenJob, VideoGenService
 
 RECENT_VIDEO_EVENT_LIMIT = 3
 
@@ -74,11 +75,11 @@ async def request_scene_image(
 
 async def request_scene_video(
     actor: WorldActor,
-    service: ImageGenService,
+    service: VideoGenService,
     *,
     character_id: str | EntityId,
     requested_by: str = "",
-) -> ImageGenJob | None:
+) -> VideoGenJob | None:
     """Request a short clip of the latest events in the character's current room."""
 
     parsed = character_id if isinstance(character_id, EntityId) else parse_entity_id(character_id)
@@ -126,10 +127,8 @@ async def request_scene_video(
             record_id = str(record.id)
     return await service.start(
         record_id,
-        ImagePurpose.EVENT,
         requested_by=requested_by,
         target_id=str(parsed),
-        media=MediaKind.VIDEO,
     )
 
 

@@ -653,6 +653,7 @@ def _setup_discord_bot(
     meta: WorldMeta,
     claim_secrets: ClaimSecretRegistry,
     imagegen=None,
+    videogen=None,
 ):
     if not args.discord:
         return None
@@ -683,6 +684,7 @@ def _setup_discord_bot(
             allowed_bot_user_ids=allowed_bot_user_ids,
         ),
         imagegen=imagegen,
+        videogen=videogen,
         claim_secrets=claim_secrets,
         cooldown_seconds=max(
             0,
@@ -739,6 +741,8 @@ async def _run_serve_runtime(
     credentials: ServeCredentials,
     models: ServeModels,
     imagegen=None,
+    videogen=None,
+    image_backfill=None,
     character_chat=None,
     claim_secrets: ClaimSecretRegistry | None = None,
 ) -> int:
@@ -764,6 +768,8 @@ async def _run_serve_runtime(
         models,
         max_ticks,
         imagegen=imagegen,
+        videogen=videogen,
+        image_backfill=image_backfill,
         character_chat=character_chat,
         claim_secrets=claim_secrets,
     )
@@ -791,6 +797,8 @@ async def _run_api_runtime(
     models: ServeModels,
     max_ticks: int | None,
     imagegen=None,
+    videogen=None,
+    image_backfill=None,
     character_chat=None,
     claim_secrets: ClaimSecretRegistry | None = None,
 ) -> int:
@@ -820,6 +828,8 @@ async def _run_api_runtime(
                 cors_origins=getattr(args, "cors_origin", None),
                 forwarded_allow_ips=getattr(args, "forwarded_allow_ips", "127.0.0.1"),
                 imagegen=imagegen,
+                videogen=videogen,
+                image_backfill=image_backfill,
                 character_chat=character_chat,
                 open_character_chat=getattr(args, "open_character_chat", True),
                 character_sheets=getattr(args, "character_sheets", True),
@@ -834,30 +844,37 @@ async def _run_api_runtime(
         raise SystemExit(str(exc)) from exc
 
 
-def _build_imagegen_service(actor, plugins, config_block=None, plugin_config=None):
-    """Build image generation when a provider is selected or ComfyUI is configured."""
-    from .imagegen.config import ImageGenConfig
-    from .imagegen.wiring import build_image_service
+def _build_media_services(actor, plugins, config_block=None, plugin_config=None):
+    """Build independently configured image and video services."""
+    from .imagegen.config import ComfyUIConfig, ImageGenConfig, MediaGenConfig, VideoGenConfig
+    from .imagegen.wiring import build_media_services
 
     if config_block is None:
-        config = ImageGenConfig.from_env()
+        config = MediaGenConfig.from_env()
     else:
-        config = ImageGenConfig(
-            server_url=config_block.server_url.rstrip("/"),
-            generator=config_block.generator,
-            generators=dict(config_block.generators),
-            openrouter_image_model=config_block.openrouter_image_model,
-            openrouter_api_key=read_credential("OPENROUTER_API_KEY"),
-            openrouter_server_url=os.environ.get("OPENROUTER_SERVER_URL", "").strip(),
-            use_websocket=config_block.use_websocket,
-            poll_interval_seconds=config_block.poll_interval_seconds,
-            timeout_seconds=config_block.timeout_seconds,
-            backfill_interval_seconds=config_block.backfill_interval_seconds,
+        config = MediaGenConfig(
+            comfyui=ComfyUIConfig(
+                server_url=config_block.server_url.rstrip("/"),
+                use_websocket=config_block.use_websocket,
+                poll_interval_seconds=config_block.poll_interval_seconds,
+                timeout_seconds=config_block.timeout_seconds,
+                templates_path=config_block.templates_path,
+                workflows=config_block.workflows,
+            ),
+            image=ImageGenConfig(
+                generator=config_block.generator,
+                generators=dict(config_block.generators),
+                openrouter_image_model=config_block.openrouter_image_model,
+                openrouter_api_key=read_credential("OPENROUTER_API_KEY"),
+                openrouter_server_url=os.environ.get("OPENROUTER_SERVER_URL", "").strip(),
+                backfill_interval_seconds=config_block.backfill_interval_seconds,
+            ),
+            video=VideoGenConfig(
+                generator=config_block.video_generator,
+                profile=config_block.video_profile,
+            ),
             media_root=config_block.media_root,
             public_base_url=config_block.public_base_url.rstrip("/"),
-            templates_path=config_block.templates_path,
-            video_template=config_block.video_template,
-            workflows=config_block.workflows,
             prompt_style=config_block.prompt_style,
             enhancer=config_block.enhancer,
             model=config_block.model,
@@ -866,14 +883,17 @@ def _build_imagegen_service(actor, plugins, config_block=None, plugin_config=Non
         return None
     names = sorted(
         {
-            config.generator_for(purpose)
+            config.image.generator_for(purpose)
             for purpose in ("portrait", "entity", "sprite", "event")
         }
     )
-    print(f"Image generation enabled via {', '.join(names)}.")
+    if names and names != [""]:
+        print(f"Image generation enabled via {', '.join(names)}.")
+    if config.video.generator:
+        print(f"Video generation enabled via {config.video.generator}.")
     if plugin_config is None:
-        return build_image_service(actor, config, plugins=plugins)
-    return build_image_service(actor, config, plugins=plugins, plugin_config=plugin_config)
+        return build_media_services(actor, config, plugins=plugins)
+    return build_media_services(actor, config, plugins=plugins, plugin_config=plugin_config)
 
 
 _CONFIG_ARG_FLAGS: dict[str, tuple[str, ...]] = {
@@ -975,12 +995,15 @@ async def _serve(args) -> None:
     )
     telemetry.register_world_gauges(actor)
     _configure_actor_backends(actor, args, lifesim_natural_aging)
-    imagegen = _build_imagegen_service(
+    media_services = _build_media_services(
         actor,
         plugins,
         getattr(args, "imagegen_config", None),
         plugin_context.plugin_config,
     )
+    imagegen = media_services.image if media_services is not None else None
+    videogen = media_services.video if media_services is not None else None
+    image_backfill = media_services.backfill if media_services is not None else None
     agent = _build_serve_agent(args, credentials, models)
     autosave = _make_autosave(actor, args, meta)
     builder = PromptBuilder(
@@ -1011,6 +1034,7 @@ async def _serve(args) -> None:
         meta,
         claim_secrets,
         imagegen,
+        videogen,
     )
     ticks = await _run_serve_runtime(
         loop,
@@ -1023,6 +1047,8 @@ async def _serve(args) -> None:
         credentials,
         models,
         imagegen=imagegen,
+        videogen=videogen,
+        image_backfill=image_backfill,
         character_chat=character_chat,
         claim_secrets=claim_secrets,
     )

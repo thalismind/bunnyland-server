@@ -274,6 +274,12 @@ def test_bunnyland_config_renders_setup_env() -> None:
             generator="in-memory",
             generators={"portrait": "openrouter", "event": "in-memory"},
             openrouter_image_model="example/image",
+            video_generator="seedance",
+            video_profile="cinematic",
+            templates_path="/data/media-workflows.json",
+            prompt_style="natural",
+            enhancer="stub",
+            model="media-model",
         ),
     )
 
@@ -297,6 +303,12 @@ def test_bunnyland_config_renders_setup_env() -> None:
     assert env["BUNNYLAND_IMAGE_GENERATOR_PORTRAIT"] == "openrouter"
     assert env["BUNNYLAND_IMAGE_GENERATOR_EVENT"] == "in-memory"
     assert env["BUNNYLAND_IMAGE_OPENROUTER_MODEL"] == "example/image"
+    assert env["BUNNYLAND_VIDEO_GENERATOR"] == "seedance"
+    assert env["BUNNYLAND_VIDEO_PROFILE"] == "cinematic"
+    assert env["BUNNYLAND_MEDIA_TEMPLATES"] == "/data/media-workflows.json"
+    assert env["BUNNYLAND_MEDIA_PROMPT_STYLE"] == "natural"
+    assert env["BUNNYLAND_MEDIA_ENHANCER"] == "stub"
+    assert env["BUNNYLAND_MEDIA_MODEL"] == "media-model"
     assert "BUNNYLAND_TRUST_X_REAL_IP" not in env
     assert env["BUNNYLAND_SETUP_DRY_RUN"] == "1"
 
@@ -367,7 +379,12 @@ def test_config_wizard_review_lists_optional_services() -> None:
         BunnylandConfig(
             mcp=McpConfig(enabled=True),
             server=ServerConfig(character_chat=True),
-            imagegen=ImageGenConfigBlock(server_url="http://comfy.local:8188"),
+            imagegen=ImageGenConfigBlock(
+                server_url="http://comfy.local:8188",
+                generator="comfyui",
+                video_generator="seedance",
+                video_profile="cinematic",
+            ),
         )
     )
 
@@ -375,6 +392,7 @@ def test_config_wizard_review_lists_optional_services() -> None:
     assert "MCP endpoint      : enabled" in text
     assert "Character chat    : enabled" in text
     assert "Image generation  : http://comfy.local:8188" in text
+    assert "Video generation  : seedance/cinematic" in text
 
 
 def test_config_wizard_review_counts_custom_plugins() -> None:
@@ -441,6 +459,7 @@ def test_config_wizard_prompt_smoke_path(monkeypatch) -> None:
             "https://discord.gg/example",
             "n",
             "n",
+            "n",
         ]
     )
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
@@ -478,6 +497,7 @@ def test_config_wizard_prompt_full_ollama_path(monkeypatch) -> None:
             "",
             "",
             "",
+            "n",
             "n",
             "n",
         ]
@@ -525,6 +545,9 @@ def test_config_wizard_prompt_full_openrouter_path(monkeypatch) -> None:
             "http://comfy.local:8188",
             "flux2dev",
             "https://cdn.example.com/media",
+            "y",
+            "seedance",
+            "cinematic",
         ]
     )
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
@@ -540,6 +563,9 @@ def test_config_wizard_prompt_full_openrouter_path(monkeypatch) -> None:
     assert config.discord.user_id == 123
     assert config.mcp.enabled is True
     assert config.imagegen.workflows == "flux2dev"
+    assert config.imagegen.generator == "comfyui"
+    assert config.imagegen.video_generator == "seedance"
+    assert config.imagegen.video_profile == "cinematic"
 
 
 async def test_textual_config_wizard_saves_config() -> None:
@@ -646,6 +672,9 @@ async def test_textual_config_wizard_saves_live_services_and_addons() -> None:
         app.query_one("#character-chat", Select).value = "yes"
         app.query_one("#mcp-enabled", Select).value = "yes"
         app.query_one("#imagegen-enabled", Select).value = "yes"
+        app.query_one("#videogen-enabled", Select).value = "yes"
+        app.query_one("#video-generator", Input).value = "seedance"
+        app.query_one("#video-profile", Input).value = "cinematic"
         app.query_one("#comfy-url", Input).value = "http://comfy.local:8188"
         app.query_one("#image-workflows", Input).value = "flux2dev"
         app.query_one("#image-public-url", Input).value = "https://cdn.example.com/media"
@@ -663,6 +692,8 @@ async def test_textual_config_wizard_saves_live_services_and_addons() -> None:
     assert app.return_value.mcp.enabled is True
     assert app.return_value.imagegen.server_url == "http://comfy.local:8188"
     assert app.return_value.imagegen.workflows == "flux2dev"
+    assert app.return_value.imagegen.video_generator == "seedance"
+    assert app.return_value.imagegen.video_profile == "cinematic"
 
 
 async def test_textual_config_wizard_filters_and_selects_plugins() -> None:
@@ -857,6 +888,17 @@ async def test_textual_config_wizard_validation_branches() -> None:
             app.query_one("#llm-enabled", Select).__setattr__("value", "yes"),
             app.query_one("#llm-provider", Select).__setattr__("value", "openrouter"),
         ),
+    )
+    await assert_review_error(
+        "Video generator and profile",
+        lambda app: (
+            app.query_one("#videogen-enabled", Select).__setattr__("value", "yes"),
+            app.query_one("#video-generator", Input).__setattr__("value", ""),
+        ),
+    )
+    await assert_review_error(
+        "ComfyUI server URL",
+        lambda app: app.query_one("#videogen-enabled", Select).__setattr__("value", "yes"),
     )
     await assert_review_error(
         "Discord bot token",

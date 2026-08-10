@@ -104,7 +104,8 @@ from bunnyland.foundation.social.mechanics import SocialBond, create_obligation
 from bunnyland.foundation.social.queries import SOCIAL_PERSPECTIVE_QUERIES
 from bunnyland.foundation.storyteller.mechanics import IncidentComponent
 from bunnyland.imagegen.service import ImageGenJob
-from bunnyland.imagegen.spec import ImagePurpose, MediaKind
+from bunnyland.imagegen.spec import ImagePurpose
+from bunnyland.imagegen.video_service import VideoGenJob
 from bunnyland.llm_agents import ControllerDispatch, ScriptedAgent
 from bunnyland.llm_agents.specs import BehaviorNodeSpec, BehaviorTreeSpec, ScriptSpec, ToolCallSpec
 from bunnyland.memory import InMemoryStore, install_memory
@@ -5380,30 +5381,24 @@ def test_v1_generation_jobs_normalize_status_and_refresh_absent_jobs(scenario):
 
 def test_v1_generation_video_job_uses_the_video_capability(scenario):
     class FakeVideoService:
-        video_enabled = True
-
         def __init__(self) -> None:
-            self.jobs: dict[str, ImageGenJob] = {}
+            self.jobs: dict[str, VideoGenJob] = {}
 
-        async def start(self, entity_id: str, purpose: ImagePurpose, **kwargs) -> ImageGenJob:
-            assert purpose is ImagePurpose.EVENT
-            assert kwargs["media"] is MediaKind.VIDEO
-            job = ImageGenJob(
+        async def start(self, entity_id: str, **_kwargs) -> VideoGenJob:
+            job = VideoGenJob(
                 job_id="job-video",
                 entity_id=entity_id,
-                purpose=purpose,
-                media=MediaKind.VIDEO,
                 status="queued",
             )
             self.jobs[job.job_id] = job
             return job
 
-        def job(self, job_id: str) -> ImageGenJob | None:
+        def job(self, job_id: str) -> VideoGenJob | None:
             return self.jobs.get(job_id)
 
     request = GenerateVideoRequest(kind="video", entity_id=str(scenario.character))
     client = pytest.importorskip("fastapi.testclient").TestClient(
-        create_app(scenario.actor, imagegen=FakeVideoService(), with_admin=True),
+        create_app(scenario.actor, videogen=FakeVideoService(), with_admin=True),
         headers=_ADMIN_HEADERS,
     )
 
