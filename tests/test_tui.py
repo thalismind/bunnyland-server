@@ -3192,6 +3192,39 @@ async def test_action_form_boolean_field_initial_value_and_cancel_button():
         assert results[-1] is None
 
 
+@pytest.mark.parametrize(("selected", "expected"), [("true", True), ("false", False)])
+async def test_action_form_boolean_field_submits_boolean(selected, expected):
+    from textual.widgets import Select
+
+    field = FormField(key="acknowledged", label="Acknowledged", kind="boolean", required=True)
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    results = []
+
+    async with app.run_test() as pilot:
+        screen = ActionForm("Accept After Dark Warning", [field])
+        await _push_action_form(app, pilot, screen, callback=results.append)
+        screen.query_one("#field-acknowledged", Select).value = selected
+        screen.query_one("#form-submit").press()
+        await pilot.pause()
+
+        assert results[-1] == {"acknowledged": expected}
+        assert results[-1]["acknowledged"] is expected
+
+
+async def test_action_form_omits_blank_optional_boolean():
+    field = FormField(key="confirmed", label="Confirmed", kind="boolean", required=False)
+    app = BunnylandTUI(RecordingBackend(_snapshot()))
+    results = []
+
+    async with app.run_test() as pilot:
+        screen = ActionForm("Optional Confirmation", [field])
+        await _push_action_form(app, pilot, screen, callback=results.append)
+        screen.query_one("#form-submit").press()
+        await pilot.pause()
+
+        assert results[-1] == {}
+
+
 async def test_action_form_with_no_fields_submits_empty_payload():
     # A form with no fields has nothing to focus on mount and submits an empty payload.
     app = BunnylandTUI(RecordingBackend(_snapshot()))

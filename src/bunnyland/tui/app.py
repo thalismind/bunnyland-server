@@ -182,7 +182,7 @@ def _control_claim(value) -> ControlClaim | None:
     return None
 
 
-class ActionForm(ModalScreen[dict | None]):
+class ActionForm(ModalScreen[dict[str, str | bool] | None]):
     """Modal form that collects an action's arguments in one screen: a dropdown for
     target and boolean fields, a numeric input for numbers, and a text input otherwise.
     Dismisses with the payload dict, or ``None`` when cancelled.
@@ -256,14 +256,17 @@ class ActionForm(ModalScreen[dict | None]):
     def action_cancel(self) -> None:
         self.dismiss(None)
 
-    def _value_for(self, field: FormField) -> str | None:
+    def _value_for(self, field: FormField) -> str | bool | None:
         widget = self.query_one(f"#field-{field.key}")
         if isinstance(widget, Select):
-            return None if widget.value is Select.BLANK else str(widget.value)
+            if widget.is_blank():
+                return None
+            value = str(widget.value)
+            return value == "true" if field.kind == "boolean" else value
         return widget.value.strip() or None
 
     def _try_submit(self) -> None:
-        payload: dict = {}
+        payload: dict[str, str | bool] = {}
         for field in self.fields:
             value = self._value_for(field)
             if field.required and value is None:
