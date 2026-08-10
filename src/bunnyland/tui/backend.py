@@ -577,6 +577,7 @@ class LocalBackend(Backend):
         fallback_controller: str | None = None,
         timeout_seconds: int | None = None,
         chat_config: ResolvedTerminalChatConfig | None = None,
+        autonomous_llm: bool = False,
     ) -> None:
         self.seed = seed
         self.generator_name = generator
@@ -596,6 +597,7 @@ class LocalBackend(Backend):
         self.timeout_seconds = timeout_seconds
         self.imagegen = None
         self.chat_config = chat_config
+        self.autonomous_llm = autonomous_llm
         self.character_chat = None
 
     @property
@@ -649,7 +651,25 @@ class LocalBackend(Backend):
         if generator is None:
             names = ", ".join(sorted(registry)) or "(none)"
             raise SystemExit(f"unknown generator {self.generator_name!r}; available: {names}")
-        await generator.generate(self.actor, self.seed, GenOptions())
+        if self.autonomous_llm and not self.supports_character_chat:
+            raise RuntimeError("autonomous local LLMs require terminal chat configuration")
+        generation_options = GenOptions()
+        if self.autonomous_llm:
+            assert self.chat_config is not None
+            provider = (
+                "ollama"
+                if self.chat_config.provider in {"ollama-local", "ollama-cloud"}
+                else "openrouter"
+            )
+            generation_options = GenOptions(
+                llm=True,
+                provider=provider,
+                model=self.chat_config.model,
+                host=self.chat_config.ollama_host,
+                api_key=self.chat_config.api_key or None,
+                server_url=self.chat_config.openrouter_server_url,
+            )
+        await generator.generate(self.actor, self.seed, generation_options)
         self.meta = WorldMeta(seed=self.seed, generator=generator.name)
 
         builder = PromptBuilder(
@@ -657,14 +677,24 @@ class LocalBackend(Backend):
             fragment_providers=collect_prompt_fragments(plugins),
             persona_providers=collect_persona_fragments(plugins),
         )
-        dispatch = ControllerDispatch(self.actor, builder, ScriptedAgent([]))
+        terminal_agent = (
+            build_terminal_chat_agent(self.chat_config)
+            if self.supports_character_chat
+            else None
+        )
+        dispatch = ControllerDispatch(
+            self.actor,
+            builder,
+            terminal_agent if self.autonomous_llm else ScriptedAgent([]),
+        )
         if self.supports_character_chat:
             from ..server.character_chat import CharacterChatService
 
+            assert terminal_agent is not None
             self.character_chat = CharacterChatService(
                 self.actor,
                 builder,
-                build_terminal_chat_agent(self.chat_config),
+                terminal_agent,
             )
         self._loop = GameLoop(
             self.actor, dispatch, tick_seconds=self.tick_seconds, time_scale=self.time_scale

@@ -54,24 +54,29 @@ world-policy disablement always blocks entry and is never overridden by the sand
 ## Launch with LLM representatives
 
 The sandbox gives its five regional representatives deterministic behavioral controllers by
-default and leaves the four New Arrivals suspended for players to claim. Use the launcher to
-generate a fresh LLM-enabled world, save it, and start the local API. The sandbox generator
-itself assigns LLM controllers to the representatives only when LLM generation options are
-enabled:
+default and leaves the four New Arrivals suspended for players to claim. To generate the
+world in memory and play it entirely inside the offline terminal TUI, run:
+
+```bash
+scripts/launch-sandbox-tui-llm \
+  --chat-provider ollama-local \
+  --chat-model MODEL
+```
+
+This starts no HTTP server and writes no world file. The TUI hosts and ticks the world in
+its own process. `--llm` makes the sandbox generator assign LLM controllers to the regional
+representatives, while the New Arrivals remain available to claim. The representative
+controllers use the same provider, model, and endpoint as terminal character chat.
+
+For OpenRouter instead:
 
 ```bash
 export OPENROUTER_API_KEY_FILE=/absolute/path/to/openrouter.key
-scripts/launch-sandbox-llm \
-  --character-model PROVIDER/MODEL \
-  --world artifacts/sandbox-world-llm.json
+scripts/launch-sandbox-tui-llm \
+  --chat-provider openrouter \
+  --chat-model PROVIDER/MODEL
 ```
 
-The default 30-second tick and six-tick representative interval let each representative act
-about once every three minutes. Add `--character-chat` to enable the character-chat API. The
-server listens on `127.0.0.1:8765`, runs until interrupted, autosaves, and saves again on clean
-shutdown.
-
-Existing output is never replaced implicitly. Use `--reuse` to launch an already prepared
-world or `--force` to regenerate it. Use `--prepare-only` when another process will launch
-the saved world later. Ollama Cloud is available with `--llm-provider ollama` and its matching
-credential environment variables.
+You can omit the provider flags after saving terminal LLM settings on an earlier local TUI
+run. The generic equivalent is `uv run --extra tui --extra llm bunnyland tui --generator
+bunnyland-sandbox --llm`.

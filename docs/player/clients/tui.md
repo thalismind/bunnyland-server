@@ -41,8 +41,10 @@ uv run --all-extras bunnyland tui --list-generators
 ```
 
 Useful local options include `--seed`, `--generator`, `--claim-fallback`, and
-`--claim-timeout-minutes`. Before loading a local plugin world or joining a flagged remote
-world, the TUI requires you to accept its content warning. See
+`--claim-timeout-minutes`. Add `--llm` to pass the configured terminal provider and model to
+the local generator and autonomous character dispatcher; this remains entirely in-process
+and does not start an HTTP server. Before loading a local plugin world or joining a flagged
+remote world, the TUI requires you to accept its content warning. See
 [Content warnings](README.md#content-warnings) for saved and command-line ignore options.
 It then shows the world's title and welcome or message-of-the-day text. The introduction
 screen can remember a skip for that world/server pair or for every world/server; both

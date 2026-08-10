@@ -6,16 +6,17 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from .cli_defaults import OLLAMA_CLOUD_HOST
 from .content_warnings import normalize_content_flags
 from .credentials import read_credential
-from .llm_agents import DEFAULT_MODEL
+from .llm_agents import DEFAULT_MODEL, AgentDecision, ChatAgentReply
 from .plugins.policy import BoundaryScope
+from .prompts.builder import PromptContext
 
 TERMINAL_CONFIG_VERSION = 1
 LOCAL_OLLAMA_HOST = "http://127.0.0.1:11434"
@@ -221,8 +222,10 @@ def with_skipped_world_introduction(
     return config.model_copy(update={"skipped_world_introductions": scopes})
 
 
-def build_terminal_chat_agent(settings: ResolvedTerminalChatConfig):
-    """Create the provider used only by direct terminal character chat."""
+def build_terminal_chat_agent(
+    settings: ResolvedTerminalChatConfig,
+) -> _ConfiguredChatAgent | None:
+    """Create the configured provider used by terminal chat and local dispatch."""
 
     settings.validate_credentials()
     if not settings.enabled:
@@ -244,22 +247,69 @@ def build_terminal_chat_agent(settings: ResolvedTerminalChatConfig):
     return _ConfiguredChatAgent(agent, settings)
 
 
-class _ConfiguredChatAgent:
-    """Keep terminal chat on its selected provider/model despite controller metadata."""
-
-    def __init__(self, agent, settings: ResolvedTerminalChatConfig) -> None:
-        self._agent = agent
-        self._settings = settings
-
-    async def chat(
+class _ProviderTerminalAgent(Protocol):
+    async def decide(
         self,
-        messages: list[dict],
+        prompt: str,
+        context: PromptContext,
         *,
         character_id: str,
         model: str | None = None,
         provider: str | None = None,
-        tools: list[dict] | None = None,
-    ):
+        tools: list[dict[str, JsonValue]] | None = None,
+    ) -> AgentDecision: ...
+
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+        tools: list[dict[str, JsonValue]] | None = None,
+    ) -> ChatAgentReply: ...
+
+
+class _ConfiguredChatAgent:
+    """Keep terminal LLM work on its selected provider/model despite controller metadata."""
+
+    def __init__(
+        self,
+        agent: _ProviderTerminalAgent,
+        settings: ResolvedTerminalChatConfig,
+    ) -> None:
+        self._agent = agent
+        self._settings = settings
+
+    async def decide(
+        self,
+        prompt: str,
+        context: PromptContext,
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+        tools: list[dict[str, JsonValue]] | None = None,
+    ) -> AgentDecision:
+        del model, provider
+        return await self._agent.decide(
+            prompt,
+            context,
+            character_id=character_id,
+            model=self._settings.model,
+            provider=self._settings.provider,
+            tools=tools,
+        )
+
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        character_id: str,
+        model: str | None = None,
+        provider: str | None = None,
+        tools: list[dict[str, JsonValue]] | None = None,
+    ) -> ChatAgentReply:
         del model, provider
         return await self._agent.chat(
             messages,

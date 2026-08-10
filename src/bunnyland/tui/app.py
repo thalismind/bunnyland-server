@@ -1491,12 +1491,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--openrouter-server-url", default=None)
     parser.add_argument("--no-chat", action="store_true")
     parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="enable autonomous LLM characters in a locally hosted world",
+    )
+    parser.add_argument(
         "--ignore-content-flag",
         action="append",
         default=[],
         help="suppress a content flag; repeat or provide a comma-separated list",
     )
     args = parser.parse_args(argv)
+    if args.server and args.llm:
+        parser.error("--llm is available only for a locally hosted world")
     if args.list_generators:
         for line in format_generator_lines(available_generators()):
             print(line)
@@ -1539,6 +1546,8 @@ def main(argv: list[str] | None = None) -> int:
         openrouter_server_url=args.openrouter_server_url,
         no_chat=args.no_chat,
     )
+    if args.llm and not chat_settings.enabled:
+        parser.error("--llm requires terminal LLM configuration; remove --no-chat")
     if not args.server and (saved_chat is not None or explicit_chat):
         try:
             chat_settings.validate_credentials()
@@ -1552,6 +1561,8 @@ def main(argv: list[str] | None = None) -> int:
         "fallback_controller": args.claim_fallback,
         "timeout_seconds": timeout_seconds,
     }
+    if args.llm:
+        local_kwargs["autonomous_llm"] = True
     if saved_chat is not None or explicit_chat:
         local_kwargs["chat_config"] = chat_settings
     backend: Backend = (

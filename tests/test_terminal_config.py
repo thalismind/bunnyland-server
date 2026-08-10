@@ -233,6 +233,10 @@ async def test_terminal_agent_forces_selected_model_and_provider(monkeypatch):
             calls["chat"] = (messages, kwargs)
             return "reply"
 
+        async def decide(self, prompt, context, **kwargs):
+            calls["decide"] = (prompt, context, kwargs)
+            return "decision"
+
     import bunnyland.llm_agents as agents
 
     monkeypatch.setattr(agents, "OllamaAgent", FakeAgent)
@@ -258,6 +262,19 @@ async def test_terminal_agent_forces_selected_model_and_provider(monkeypatch):
     }
     assert calls["chat"][1]["model"] == "selected-model"
     assert calls["chat"][1]["provider"] == "ollama-local"
+    context = object()
+    decision = await agent.decide(
+        "prompt",
+        context,
+        character_id="c",
+        model="controller-model",
+        provider="controller-provider",
+        tools=[],
+    )
+    assert decision == "decision"
+    assert calls["decide"][1] is context
+    assert calls["decide"][2]["model"] == "selected-model"
+    assert calls["decide"][2]["provider"] == "ollama-local"
 
 
 def test_terminal_agent_builds_openrouter(monkeypatch):

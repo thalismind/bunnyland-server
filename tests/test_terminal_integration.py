@@ -789,6 +789,7 @@ def test_tui_and_repl_main_report_config_errors_and_forward_chat_settings(monkey
                     "ollama-local",
                     "--chat-model",
                     "llama3.2",
+                    "--llm",
                     "--ignore-content-flag",
                     "adult:violence,pvp",
                 ]
@@ -796,6 +797,7 @@ def test_tui_and_repl_main_report_config_errors_and_forward_chat_settings(monkey
             == 0
         )
         assert created[-1]["chat_config"].model == "llama3.2"
+        assert created[-1]["autonomous_llm"] is True
         assert created_apps[-1].ignored_content_flags == ("adult:violence", "pvp")
 
 
@@ -808,3 +810,17 @@ def test_tui_and_repl_main_report_missing_cloud_credentials(monkeypatch, tmp_pat
     for module in (tui_module, repl_module):
         with __import__("pytest").raises(SystemExit, match="OPENROUTER_API_KEY"):
             module.main(["--generator", "empty", "--chat-provider", "openrouter"])
+
+
+def test_tui_and_repl_reject_invalid_autonomous_llm_modes(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    import bunnyland.repl.app as repl_module
+    import bunnyland.tui.app as tui_module
+
+    for module in (tui_module, repl_module):
+        with __import__("pytest").raises(SystemExit) as remote_error:
+            module.main(["--server", "https://example.test", "--llm"])
+        assert remote_error.value.code == 2
+        with __import__("pytest").raises(SystemExit) as disabled_error:
+            module.main(["--generator", "empty", "--llm", "--no-chat"])
+        assert disabled_error.value.code == 2

@@ -405,6 +405,64 @@ async def test_local_backend_constructs_configured_chat_service(monkeypatch):
         await backend.close()
 
 
+@pytest.mark.parametrize(
+    ("terminal_provider", "environ", "controller_provider"),
+    [
+        ("ollama-local", {}, "ollama"),
+        ("openrouter", {"OPENROUTER_API_KEY": "secret"}, "openrouter"),
+    ],
+)
+async def test_local_backend_enables_generator_and_dispatch_llms(
+    monkeypatch, terminal_provider, environ, controller_provider
+):
+    import bunnyland.tui.backend as backend_module
+    from bunnyland.core import CharacterComponent, LLMControllerComponent
+    from bunnyland.core.edges import ControlledBy
+
+    agent = SimpleNamespace()
+    monkeypatch.setattr(backend_module, "build_terminal_chat_agent", lambda _settings: agent)
+    settings = resolve_terminal_chat_config(
+        None,
+        chat_provider=terminal_provider,
+        chat_model="local-model",
+        environ=environ,
+    )
+    backend = LocalBackend(
+        generator="bunnyland-sandbox",
+        autorun=False,
+        chat_config=settings,
+        autonomous_llm=True,
+    )
+
+    await backend.start()
+    try:
+        assert backend._loop.dispatch.agent is agent
+        controllers = []
+        for character in (
+            backend.actor.world.query().with_all([CharacterComponent]).execute_entities()
+        ):
+            for _edge, controller_id in character.get_relationships(ControlledBy):
+                controller = backend.actor.world.get_entity(controller_id)
+                if controller.has_component(LLMControllerComponent):
+                    controllers.append(controller.get_component(LLMControllerComponent))
+        assert len(controllers) == 5
+        assert {controller.provider for controller in controllers} == {controller_provider}
+        assert {controller.model for controller in controllers} == {"local-model"}
+    finally:
+        await backend.close()
+
+
+async def test_local_backend_rejects_autonomous_llms_without_configuration():
+    backend = LocalBackend(
+        generator="bunnyland-sandbox",
+        autorun=False,
+        autonomous_llm=True,
+    )
+
+    with pytest.raises(RuntimeError, match="require terminal chat configuration"):
+        await backend.start()
+
+
 async def test_local_chat_disabled_and_terminal_job_shortcuts():
     disabled = LocalBackend(chat_config=None)
     with pytest.raises(RuntimeError, match="disabled"):
