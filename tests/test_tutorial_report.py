@@ -11,6 +11,10 @@ import pytest
 
 from benchmarks.tutorial_comparison import SourceSelection, write_comparison
 from benchmarks.tutorial_report import (
+    ACTION_DESCRIPTION_EXAMPLES,
+    ACTION_DESCRIPTION_LENGTH_ROWS,
+    ACTION_DESCRIPTION_V4_COMMIT,
+    ACTION_DESCRIPTION_V5_COMMIT,
     MODEL_ARCHITECTURES,
     TUTORIAL_MAPS,
     CohortInput,
@@ -20,6 +24,7 @@ from benchmarks.tutorial_report import (
     LatencyRow,
     ParameterScatterMetadata,
     StudyFamilyRow,
+    _action_description_length_section,
     _fine_tune_comparison_rows,
     _spearman_rho,
     build_report,
@@ -125,6 +130,7 @@ def _source(path: Path) -> None:
 def _frontier_source(path: Path) -> None:
     models = (
         "anthropic/claude-haiku-4.5",
+        "anthropic/claude-opus-4.8",
         "anthropic/claude-opus-5",
         "openai/gpt-5.6-luna",
         "openai/gpt-5.6-sol",
@@ -133,7 +139,11 @@ def _frontier_source(path: Path) -> None:
         _result(
             model,
             "bell",
-            passed=model != "anthropic/claude-opus-5" or run == 1,
+            passed=model not in {
+                "anthropic/claude-opus-4.8",
+                "anthropic/claude-opus-5",
+            }
+            or run == 1,
             run=run,
         )
         for model in models
@@ -470,6 +480,96 @@ def test_build_report_writes_copy_ready_table_and_svg_diagrams(tmp_path):
     assert str(source.resolve()) not in typst
 
 
+def test_action_description_length_measurement_is_frozen_and_matched() -> None:
+    assert ACTION_DESCRIPTION_V4_COMMIT == (
+        "0abb32bd0b8da1f20c50fb838416cc85c61cb21b"
+    )
+    assert ACTION_DESCRIPTION_V5_COMMIT == (
+        "00c46639b8877646d02484621f8d1861e38314ec"
+    )
+    full, bell = ACTION_DESCRIPTION_LENGTH_ROWS
+    assert (
+        full.scope,
+        full.action_count,
+        full.v4_total_characters,
+        full.v5_total_characters,
+        full.v4_total_words,
+        full.v5_total_words,
+    ) == ("Full registered catalogue", 424, 13_293, 54_429, 1_750, 9_566)
+    assert (
+        bell.scope,
+        bell.action_count,
+        bell.v4_total_characters,
+        bell.v5_total_characters,
+        bell.v4_total_words,
+        bell.v5_total_words,
+    ) == ("Initial Bell action surface", 151, 4_660, 17_792, 632, 3_158)
+    assert bell.v5_total_characters / bell.v4_total_characters == pytest.approx(
+        3.8180257511
+    )
+    assert tuple(example.action for example in ACTION_DESCRIPTION_EXAMPLES) == (
+        "look",
+        "move",
+        "take",
+    )
+    assert ACTION_DESCRIPTION_EXAMPLES[0].v4_description == "Character action: look"
+    assert ACTION_DESCRIPTION_EXAMPLES[0].v5_description.startswith(
+        "Look around your current room"
+    )
+    assert ACTION_DESCRIPTION_EXAMPLES[2].v5_description.endswith(
+        "Look or inspect first to find items you can take."
+    )
+
+    assert _action_description_length_section(("v3", "v4")) == ""
+    section = _action_description_length_section(("v4", "v5"))
+    assert "same 424 registered action names" in section
+    assert "4,660 / 30.86" in section
+    assert "17,792 / 117.83" in section
+    assert "3.82 times as long" in section
+    assert "### Representative matched descriptions" in section
+    assert "| `move` | Move through an available exit" in section
+
+
+def test_v4_v5_report_exports_action_description_length_data(tmp_path) -> None:
+    v4 = tmp_path / "v4"
+    v5 = tmp_path / "v5"
+    output = tmp_path / "report"
+    _complete_bell_source(v4)
+    _complete_bell_source(v5)
+
+    build_report(
+        (),
+        output,
+        title="Description-length comparison",
+        cohorts=(CohortInput("v4", v4), CohortInput("v5", v5)),
+    )
+
+    data = json.loads((output / "paper-data.json").read_text(encoding="utf-8"))
+    measurement = data["action_description_length"]
+    assert measurement["catalogue_membership_matched"] is True
+    assert measurement["v4_commit"] == ACTION_DESCRIPTION_V4_COMMIT
+    assert measurement["v5_commit"] == ACTION_DESCRIPTION_V5_COMMIT
+    assert measurement["rows"][1]["action_count"] == 151
+    assert measurement["rows"][1]["v4_total_characters"] == 4_660
+    assert measurement["rows"][1]["v5_total_characters"] == 17_792
+    assert [example["action"] for example in measurement["examples"]] == [
+        "look",
+        "move",
+        "take",
+    ]
+    assert measurement["examples"][1]["v4_description"] == (
+        "Move through an available exit by direction or exit id."
+    )
+    markdown = (output / "report.md").read_text(encoding="utf-8")
+    typst = (output / "report.typ").read_text(encoding="utf-8")
+    assert "## V4-to-v5 action-description length" in markdown
+    assert "== V4-to-v5 action-description length" in typst
+    assert "Representative matched descriptions" in markdown
+    assert "Representative matched descriptions" in typst
+    assert "Pick up an item from the room or an open container" in markdown
+    assert "Pick up an item from the room or an open container" in typst
+
+
 def test_latency_provider_chart_splits_local_and_cloud():
     rows = (
         LatencyRow(
@@ -500,7 +600,7 @@ def test_latency_provider_chart_splits_local_and_cloud():
         ),
     )
 
-    svg = render_latency_provider_svg(rows)
+    svg = render_latency_provider_svg(rows, "v1–v5")
 
     assert "Decision latency by execution location" in svg
     assert "Local" in svg
@@ -509,6 +609,7 @@ def test_latency_provider_chart_splits_local_and_cloud():
     assert "Cloud" in svg
     assert "200 decisions" in svg
     assert "seconds, log scale" in svg
+    assert "All retained v1–v5 decisions" in svg
 
 
 def test_build_report_accepts_derived_comparison_artifact(tmp_path):
@@ -538,15 +639,38 @@ def test_frontier_report_prices_cached_tokens_and_recommends_luna(tmp_path):
     assert "## Frontier API cost and recommendation" in markdown
     assert "use **GPT-5.6 Luna**" in markdown
     assert "avoid **Claude Opus 5**" in markdown
+    assert "**Matched Opus checkpoint comparison (unlabeled):**" in markdown
+    assert "Claude Opus 4.8 passed 1/2 sessions" in markdown
     assert "preliminary" not in markdown
     assert "| `GPT-5.6 Luna` | 2/2 (100.0%) | 4/4 | $0.18 |" in markdown
     assert "| `Claude Opus 5` | 1/2 (50.0%) | 3/4 | $0.81 |" in markdown
     assert "two sessions per applicable model/version/tutorial cell" in markdown
+    paper_data = json.loads((output / "paper-data.json").read_text(encoding="utf-8"))
+    assert paper_data["opus_checkpoint_comparison"] == {
+        "cohorts": [""],
+        "opus_4_8": {
+            "sessions": 2,
+            "passes": 1,
+            "milestone_hits": 3,
+            "milestone_possible": 4,
+            "estimated_cost_usd": pytest.approx(0.805),
+            "passes_per_dollar": pytest.approx(1 / 0.805),
+        },
+        "opus_5": {
+            "sessions": 2,
+            "passes": 1,
+            "milestone_hits": 3,
+            "milestone_possible": 4,
+            "estimated_cost_usd": pytest.approx(0.805),
+            "passes_per_dollar": pytest.approx(1 / 0.805),
+        },
+    }
     chart = (
         output / "diagrams" / "frontier-api-cost-performance-chart.svg"
     ).read_text(encoding="utf-8")
     for model in (
         "anthropic/claude-haiku-4.5",
+        "anthropic/claude-opus-4.8",
         "anthropic/claude-opus-5",
         "openai/gpt-5.6-luna",
         "openai/gpt-5.6-sol",
@@ -885,13 +1009,14 @@ def test_kimi_family_chart_compares_capability_latency_and_efficiency():
         ),
     )
 
-    svg = render_kimi_family_svg(rows)
+    svg = render_kimi_family_svg(rows, "v1–v5")
 
     assert "Capability" in svg
     assert "Median latency" in svg
     assert "Token efficiency" in svg
     assert "code-specialized branch" in svg
     assert "K3 used OpenRouter" in svg
+    assert "All retained v1–v5 sessions" in svg
     for row in rows:
         assert f'data-model="{row.model}"' in svg
 

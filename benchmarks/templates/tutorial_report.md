@@ -88,6 +88,8 @@ tested model mix; matching model/tutorial rows provide the like-for-like compari
 
 {{COHORT_DELTAS}}
 
+{{ACTION_DESCRIPTION_LENGTH}}
+
 ## Additional analytical questions
 
 ### How broadly were cohort gains shared?

@@ -92,6 +92,115 @@ class TutorialAcceptancePolicy:
     role: str
 
 
+@dataclass(frozen=True)
+class ActionDescriptionLengthRow:
+    scope: str
+    action_count: int
+    v4_total_characters: int
+    v5_total_characters: int
+    v4_total_words: int
+    v5_total_words: int
+    v4_rendered_characters: int
+    v5_rendered_characters: int
+    v4_rendered_words: int
+    v5_rendered_words: int
+
+    @property
+    def v4_average_characters(self) -> float:
+        return self.v4_total_characters / self.action_count
+
+    @property
+    def v5_average_characters(self) -> float:
+        return self.v5_total_characters / self.action_count
+
+    @property
+    def character_increase_percent(self) -> float:
+        return 100 * (self.v5_total_characters / self.v4_total_characters - 1)
+
+    @property
+    def v4_average_words(self) -> float:
+        return self.v4_total_words / self.action_count
+
+    @property
+    def v5_average_words(self) -> float:
+        return self.v5_total_words / self.action_count
+
+    @property
+    def word_increase_percent(self) -> float:
+        return 100 * (self.v5_total_words / self.v4_total_words - 1)
+
+    @property
+    def v4_average_rendered_characters(self) -> float:
+        return self.v4_rendered_characters / self.action_count
+
+    @property
+    def v5_average_rendered_characters(self) -> float:
+        return self.v5_rendered_characters / self.action_count
+
+
+@dataclass(frozen=True)
+class ActionDescriptionExample:
+    action: str
+    v4_description: str
+    v5_description: str
+
+
+ACTION_DESCRIPTION_V4_COMMIT = "0abb32bd0b8da1f20c50fb838416cc85c61cb21b"
+ACTION_DESCRIPTION_V5_COMMIT = "00c46639b8877646d02484621f8d1861e38314ec"
+ACTION_DESCRIPTION_LENGTH_ROWS = (
+    ActionDescriptionLengthRow(
+        scope="Full registered catalogue",
+        action_count=424,
+        v4_total_characters=13_293,
+        v5_total_characters=54_429,
+        v4_total_words=1_750,
+        v5_total_words=9_566,
+        v4_rendered_characters=13_783,
+        v5_rendered_characters=54_919,
+        v4_rendered_words=1_823,
+        v5_rendered_words=9_639,
+    ),
+    ActionDescriptionLengthRow(
+        scope="Initial Bell action surface",
+        action_count=151,
+        v4_total_characters=4_660,
+        v5_total_characters=17_792,
+        v4_total_words=632,
+        v5_total_words=3_158,
+        v4_rendered_characters=5_069,
+        v5_rendered_characters=18_201,
+        v4_rendered_words=692,
+        v5_rendered_words=3_218,
+    ),
+)
+ACTION_DESCRIPTION_EXAMPLES = (
+    ActionDescriptionExample(
+        action="look",
+        v4_description="Character action: look",
+        v5_description=(
+            "Look around your current room and see who and what is here, along with "
+            "the exits you can take. Start here when you are unsure what to do next."
+        ),
+    ),
+    ActionDescriptionExample(
+        action="move",
+        v4_description="Move through an available exit by direction or exit id.",
+        v5_description=(
+            "Move into another room or area. Check the current room for available "
+            "exits, then move by direction (such as north) or by exit id."
+        ),
+    ),
+    ActionDescriptionExample(
+        action="take",
+        v4_description="Character action: take",
+        v5_description=(
+            "Pick up an item from the room or an open container and add it to your "
+            "inventory. Look or inspect first to find items you can take."
+        ),
+    ),
+)
+
+
 TUTORIAL_ACCEPTANCE_POLICIES = (
     TutorialAcceptancePolicy(
         tutorial="apple",
@@ -694,6 +803,13 @@ FRONTIER_PRICING: dict[str, FrontierPricing] = {
         output_per_million=5,
         cache_read_per_million=0.1,
         cache_write_per_million=1.25,
+    ),
+    "anthropic/claude-opus-4.8": FrontierPricing(
+        "Claude Opus 4.8",
+        input_per_million=5,
+        output_per_million=25,
+        cache_read_per_million=0.5,
+        cache_write_per_million=6.25,
     ),
     "anthropic/claude-opus-5": FrontierPricing(
         "Claude Opus 5",
@@ -2325,7 +2441,10 @@ def _kimi_family_rows(
     )
 
 
-def render_kimi_family_svg(rows: Sequence[KimiFamilyRow]) -> str:
+def render_kimi_family_svg(
+    rows: Sequence[KimiFamilyRow],
+    cohort_span: str = "supplied cohorts",
+) -> str:
     width, height = 1380, 700
     left, right, top, bottom = 90, 1335, 135, 510
     lines = _svg_start(width, height, "Kimi family gameplay comparison")
@@ -2344,7 +2463,8 @@ def render_kimi_family_svg(rows: Sequence[KimiFamilyRow]) -> str:
 
     lines.append(
         '<text class="small" x="24" y="52">'
-        "All retained v1–v4 sessions · lower latency is better; higher capability and "
+        f"All retained {escape(cohort_span)} sessions · lower latency is better; "
+        "higher capability and "
         "token efficiency are better.</text>"
     )
     lines.append(
@@ -2743,6 +2863,65 @@ def _frontier_ratio(
     return luna.passes_per_dollar / opus.passes_per_dollar
 
 
+def _matched_opus_checkpoint(
+    rows: Sequence[ModelRow],
+) -> tuple[tuple[str | None, ...], FrontierCostRow, FrontierCostRow] | None:
+    checkpoint_models = {
+        "anthropic/claude-opus-4.8",
+        "anthropic/claude-opus-5",
+    }
+    cohorts_by_model = {
+        model: {row.cohort for row in rows if row.model == model}
+        for model in checkpoint_models
+    }
+    shared_cohorts = cohorts_by_model["anthropic/claude-opus-4.8"] & cohorts_by_model[
+        "anthropic/claude-opus-5"
+    ]
+    if not shared_cohorts:
+        return None
+    matched = tuple(
+        row
+        for row in rows
+        if row.model in checkpoint_models and row.cohort in shared_cohorts
+    )
+    by_model = {row.model: row for row in _frontier_cost_rows(matched)}
+    opus_48 = by_model.get("anthropic/claude-opus-4.8")
+    opus_5 = by_model.get("anthropic/claude-opus-5")
+    if opus_48 is None or opus_5 is None or opus_48.sessions != opus_5.sessions:
+        return None
+    cohort_order = tuple(
+        dict.fromkeys(row.cohort for row in rows if row.cohort in shared_cohorts)
+    )
+    return cohort_order, opus_48, opus_5
+
+
+def _opus_checkpoint_comparison(rows: Sequence[ModelRow]) -> str:
+    matched = _matched_opus_checkpoint(rows)
+    if matched is None:
+        return ""
+    cohort_order, opus_48, opus_5 = matched
+    cohort_text = ", ".join(
+        "unlabeled" if cohort is None else f"`{cohort}`" for cohort in cohort_order
+    )
+    efficiency = (
+        opus_5.passes_per_dollar / opus_48.passes_per_dollar
+        if opus_48.passes_per_dollar and opus_5.passes_per_dollar
+        else None
+    )
+    efficiency_text = (
+        f" Opus 5 delivered **{efficiency:.1f}×** as many passes per dollar."
+        if efficiency is not None
+        else ""
+    )
+    return (
+        f"**Matched Opus checkpoint comparison ({cohort_text}):** Claude Opus 4.8 "
+        f"passed {opus_48.passes}/{opus_48.sessions} sessions for an estimated "
+        f"${opus_48.estimated_cost_usd:.2f}; Claude Opus 5 passed "
+        f"{opus_5.passes}/{opus_5.sessions} for ${opus_5.estimated_cost_usd:.2f}."
+        f"{efficiency_text} Only shared complete cohorts are compared here."
+    )
+
+
 def _frontier_cost_section(
     rows: Sequence[ModelRow],
     chart_path: str | None,
@@ -2785,24 +2964,32 @@ def _frontier_cost_section(
         if chart_path is not None
         else ""
     )
+    checkpoint_comparison = _opus_checkpoint_comparison(rows)
+    checkpoint_block = (
+        f"\n\n{checkpoint_comparison}" if checkpoint_comparison else ""
+    )
     return (
         "## Frontier API cost and recommendation\n\n"
-        "These four models were breadth-tested with two sessions per applicable "
+        "These frontier models were breadth-tested with two sessions per applicable "
         "model/version/tutorial cell and are not classified by the five-session "
         "possible/likely/consistent rubric. Costs are "
         "reconstructed from retained OpenRouter usage details and the model list prices "
-        "for [Claude Opus 5](https://openrouter.ai/anthropic/claude-opus-5), "
+        "for [Claude Opus 4.8](https://openrouter.ai/anthropic/claude-opus-4.8), "
+        "[Claude Opus 5](https://openrouter.ai/anthropic/claude-opus-5), "
         "[Claude Haiku 4.5](https://openrouter.ai/anthropic/claude-haiku-4.5), "
         "[GPT-5.6 Luna](https://openrouter.ai/openai/gpt-5.6-luna), and "
         "[GPT-5.6 Sol](https://openrouter.ai/openai/gpt-5.6-sol). They include observed "
         "cache reads and writes; they are estimates rather than invoice records.\n\n"
-        f"{recommendation}\n\n"
+        f"{recommendation}{checkpoint_block}\n\n"
         f"{_frontier_cost_table(cost_rows)}"
         f"{chart}"
     )
 
 
-def render_frontier_cost_svg(rows: Sequence[FrontierCostRow]) -> str:
+def render_frontier_cost_svg(
+    rows: Sequence[FrontierCostRow],
+    cohort_span: str = "supplied cohorts",
+) -> str:
     width, height = 1100, 650
     left, right, top, bottom = 100, 1040, 90, 440
     lines = _svg_start(width, height, "Frontier API cost versus authoritative pass rate")
@@ -2813,7 +3000,7 @@ def render_frontier_cost_svg(rows: Sequence[FrontierCostRow]) -> str:
         ".key{font-family:sans-serif;font-size:12px;fill:#17202a}",
     )
     lines.append(
-        '<text class="small" x="24" y="52">All retained v1–v4 frontier sessions · '
+        f'<text class="small" x="24" y="52">All retained {escape(cohort_span)} frontier sessions · '
         "estimated billed cost uses observed prompt caching</text>"
     )
     if not rows:
@@ -2920,7 +3107,10 @@ def render_frontier_cost_svg(rows: Sequence[FrontierCostRow]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_latency_provider_svg(rows: Sequence[LatencyRow]) -> str:
+def render_latency_provider_svg(
+    rows: Sequence[LatencyRow],
+    cohort_span: str = "supplied cohorts",
+) -> str:
     width, height = 1100, 410
     left, right, top, bottom = 190, 1040, 95, 270
     selected = tuple(row for row in rows if row.decisions and row.p99_seconds > 0)
@@ -2931,7 +3121,7 @@ def render_latency_provider_svg(rows: Sequence[LatencyRow]) -> str:
         ".value{font-family:sans-serif;font-size:11px;font-weight:700;fill:#17202a}",
     )
     lines.append(
-        '<text class="small" x="24" y="52">All retained v1–v4 decisions · '
+        f'<text class="small" x="24" y="52">All retained {escape(cohort_span)} decisions · '
         "percentiles computed across decisions, not per-model medians</text>"
     )
     if not selected:
@@ -3554,6 +3744,7 @@ def _write_paper_data(
         tutorial: _cohort_label(_latest_tutorial_cohort(results, tutorial)[1])
         for tutorial in TUTORIAL_MAPS
     }
+    matched_opus = _matched_opus_checkpoint(model_rows)
     payload: dict[str, JsonValue] = {
         "schema_version": 1,
         "title": title,
@@ -3671,6 +3862,32 @@ def _write_paper_data(
             }
             for row in _frontier_cost_rows(model_rows)
         ],
+        "opus_checkpoint_comparison": (
+            {
+                "cohorts": [cohort or "" for cohort in matched_opus[0]],
+                "opus_4_8": {
+                    "sessions": matched_opus[1].sessions,
+                    "passes": matched_opus[1].passes,
+                    "milestone_hits": matched_opus[1].milestone_hits,
+                    "milestone_possible": matched_opus[1].milestone_possible,
+                    "estimated_cost_usd": matched_opus[1].estimated_cost_usd,
+                    "passes_per_dollar": matched_opus[1].passes_per_dollar,
+                },
+                "opus_5": {
+                    "sessions": matched_opus[2].sessions,
+                    "passes": matched_opus[2].passes,
+                    "milestone_hits": matched_opus[2].milestone_hits,
+                    "milestone_possible": matched_opus[2].milestone_possible,
+                    "estimated_cost_usd": matched_opus[2].estimated_cost_usd,
+                    "passes_per_dollar": matched_opus[2].passes_per_dollar,
+                },
+            }
+            if matched_opus is not None
+            else {}
+        ),
+        "action_description_length": _action_description_length_data(
+            tuple(item.cohort for item in results)
+        ),
         "figures": list(figure_paths),
         "appendices": [
             "comparison-table.md",
@@ -3914,6 +4131,120 @@ def _cohort_delta_table(
             f"{_delta_cell(row)} |"
         )
     return "\n".join(lines)
+
+
+def _has_v4_v5(cohorts: Sequence[str | None]) -> bool:
+    return {"v4", "v5"}.issubset(cohorts)
+
+
+def _action_description_length_section(cohorts: Sequence[str | None]) -> str:
+    if not _has_v4_v5(cohorts):
+        return ""
+    lines = [
+        "## V4-to-v5 action-description length",
+        "",
+        (
+            f"The frozen v4 (`{ACTION_DESCRIPTION_V4_COMMIT[:8]}`) and v5 "
+            f"(`{ACTION_DESCRIPTION_V5_COMMIT[:8]}`) catalogues contain the same 424 "
+            "registered action names. Their initial Bell surfaces also contain the same "
+            "151 context-relevant actions, leaving 273 actions discovery-only in both "
+            "versions. Length therefore measures the description rewrite rather than a "
+            "catalogue-membership change. Characters are Unicode code points; words are "
+            "whitespace-delimited."
+        ),
+        "",
+        "| Scope | Actions | v4 characters (total / mean) | "
+        "v5 characters (total / mean) | Change | v4 words (total / mean) | "
+        "v5 words (total / mean) |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in ACTION_DESCRIPTION_LENGTH_ROWS:
+        lines.append(
+            f"| {row.scope} | {row.action_count} | "
+            f"{row.v4_total_characters:,} / {row.v4_average_characters:.2f} | "
+            f"{row.v5_total_characters:,} / {row.v5_average_characters:.2f} | "
+            f"+{row.character_increase_percent:.1f}% | "
+            f"{row.v4_total_words:,} / {row.v4_average_words:.2f} | "
+            f"{row.v5_total_words:,} / {row.v5_average_words:.2f} |"
+        )
+    lines.extend(
+        (
+            "",
+            "Provider-rendered tool descriptions append the unchanged action examples. "
+            "Across the full catalogue they grew from 13,783 to 54,919 characters; on "
+            "the initial Bell surface they grew from 5,069 to 18,201 characters. The "
+            "experimentally relevant Bell descriptions were therefore 3.82 times as "
+            "long before examples and 3.59 times as long after examples. This quantifies "
+            "a prompt-size mechanism but does not isolate causality because v5 includes "
+            "other server changes."
+        )
+    )
+    lines.extend(
+        (
+            "",
+            "### Representative matched descriptions",
+            "",
+            (
+                "These exact descriptions come from foundational actions on the matched "
+                "initial Bell surface. They show the rewrite adding situational guidance, "
+                "prerequisites, and expected outcomes."
+            ),
+            "",
+            "| Action | v4 description | v5 description |",
+            "| --- | --- | --- |",
+        )
+    )
+    for example in ACTION_DESCRIPTION_EXAMPLES:
+        lines.append(
+            f"| `{example.action}` | {example.v4_description} | "
+            f"{example.v5_description} |"
+        )
+    return "\n".join(lines)
+
+
+def _action_description_length_data(
+    cohorts: Sequence[str | None],
+) -> dict[str, JsonValue]:
+    if not _has_v4_v5(cohorts):
+        return {}
+    return {
+        "v4_commit": ACTION_DESCRIPTION_V4_COMMIT,
+        "v5_commit": ACTION_DESCRIPTION_V5_COMMIT,
+        "catalogue_membership_matched": True,
+        "word_definition": "whitespace-delimited",
+        "character_definition": "Unicode code points",
+        "rows": [
+            {
+                "scope": row.scope,
+                "action_count": row.action_count,
+                "v4_total_characters": row.v4_total_characters,
+                "v4_average_characters": row.v4_average_characters,
+                "v5_total_characters": row.v5_total_characters,
+                "v5_average_characters": row.v5_average_characters,
+                "character_increase_percent": row.character_increase_percent,
+                "v4_total_words": row.v4_total_words,
+                "v4_average_words": row.v4_average_words,
+                "v5_total_words": row.v5_total_words,
+                "v5_average_words": row.v5_average_words,
+                "word_increase_percent": row.word_increase_percent,
+                "v4_rendered_characters": row.v4_rendered_characters,
+                "v4_average_rendered_characters": row.v4_average_rendered_characters,
+                "v5_rendered_characters": row.v5_rendered_characters,
+                "v5_average_rendered_characters": row.v5_average_rendered_characters,
+                "v4_rendered_words": row.v4_rendered_words,
+                "v5_rendered_words": row.v5_rendered_words,
+            }
+            for row in ACTION_DESCRIPTION_LENGTH_ROWS
+        ],
+        "examples": [
+            {
+                "action": example.action,
+                "v4_description": example.v4_description,
+                "v5_description": example.v5_description,
+            }
+            for example in ACTION_DESCRIPTION_EXAMPLES
+        ],
+    }
 
 
 def _change_breadth_rows(
@@ -4290,6 +4621,81 @@ def _performance_leaderboards(
 
 def _typst_text(value: str) -> str:
     return f"#text({json.dumps(value, ensure_ascii=False)})"
+
+
+def _typst_action_description_length_block(
+    cohorts: Sequence[str | None],
+) -> tuple[str, ...]:
+    if not _has_v4_v5(cohorts):
+        return ()
+    cells = [
+        "[*Scope*]",
+        "[*Actions*]",
+        "[*v4 chars total / mean*]",
+        "[*v5 chars total / mean*]",
+        "[*Change*]",
+        "[*v4 words total / mean*]",
+        "[*v5 words total / mean*]",
+    ]
+    for row in ACTION_DESCRIPTION_LENGTH_ROWS:
+        values = (
+            row.scope,
+            str(row.action_count),
+            f"{row.v4_total_characters:,} / {row.v4_average_characters:.2f}",
+            f"{row.v5_total_characters:,} / {row.v5_average_characters:.2f}",
+            f"+{row.character_increase_percent:.1f}%",
+            f"{row.v4_total_words:,} / {row.v4_average_words:.2f}",
+            f"{row.v5_total_words:,} / {row.v5_average_words:.2f}",
+        )
+        cells.extend(f"[{_typst_text(value)}]" for value in values)
+    example_cells = ["[*Action*]", "[*v4 description*]", "[*v5 description*]"]
+    for example in ACTION_DESCRIPTION_EXAMPLES:
+        example_cells.extend(
+            f"[{_typst_text(value)}]"
+            for value in (
+                example.action,
+                example.v4_description,
+                example.v5_description,
+            )
+        )
+    return (
+        "== V4-to-v5 action-description length",
+        _typst_text(
+            f"The frozen v4 ({ACTION_DESCRIPTION_V4_COMMIT[:8]}) and v5 "
+            f"({ACTION_DESCRIPTION_V5_COMMIT[:8]}) catalogues contain the same 424 "
+            "registered actions. Their initial Bell surfaces contain the same 151 "
+            "actions, so length measures the description rewrite rather than catalogue "
+            "membership. Characters are Unicode code points and words are "
+            "whitespace-delimited."
+        ),
+        "#set text(size: 7pt)",
+        "#table(",
+        "  columns: (1.5fr, 0.6fr, 1.2fr, 1.2fr, 0.7fr, 1.2fr, 1.2fr),",
+        "  " + ",\n  ".join(cells),
+        ")",
+        "#set text(size: 9pt)",
+        _typst_text(
+            "Provider-rendered tool descriptions, including unchanged examples, grew "
+            "from 13,783 to 54,919 characters across the full catalogue and from 5,069 "
+            "to 18,201 on the initial Bell surface. Bell descriptions were 3.82 times "
+            "as long before examples and 3.59 times as long after examples. This "
+            "quantifies a prompt-size mechanism but does not isolate causality because "
+            "v5 includes other server changes."
+        ),
+        "=== Representative matched descriptions",
+        _typst_text(
+            "These exact descriptions come from foundational actions on the matched "
+            "initial Bell surface. They show the rewrite adding situational guidance, "
+            "prerequisites, and expected outcomes."
+        ),
+        "#set text(size: 7pt)",
+        "#table(",
+        "  columns: (0.55fr, 1.35fr, 3fr),",
+        "  " + ",\n  ".join(example_cells),
+        ")",
+        "#set text(size: 9pt)",
+        "#pagebreak()",
+    )
 
 
 def _typst_table(
@@ -5018,6 +5424,9 @@ def _typst_report(
             "",
             *delta_block,
             "#pagebreak()",
+            *_typst_action_description_length_block(
+                tuple(row.cohort for row in rows)
+            ),
             *_typst_analysis_block(
                 change_breadth_rows,
                 bottlenecks,
@@ -5111,6 +5520,18 @@ def build_report(
     )
     if not results:
         raise ValueError("report inputs contain no completed sessions")
+    cohort_order = tuple(
+        dict.fromkeys(
+            cohort for cohort, _source in labeled_sources if cohort is not None
+        )
+    )
+    cohort_span = (
+        cohort_order[0]
+        if len(cohort_order) == 1
+        else f"{cohort_order[0]}–{cohort_order[-1]}"
+        if cohort_order
+        else "unlabeled"
+    )
     replacements = _replacement_mapping(sources)
     difficulty_rows = _difficulty_rows(results)
     scatter_metadata = _parameter_scatter_metadata(labeled_sources)
@@ -5137,7 +5558,7 @@ def build_report(
     if latency is not None and latency.provider_rows:
         latency_chart = diagrams / "latency-provider-percentiles-chart.svg"
         latency_chart.write_text(
-            render_latency_provider_svg(latency.provider_rows),
+            render_latency_provider_svg(latency.provider_rows, cohort_span),
             encoding="utf-8",
         )
         latency_chart_path = str(latency_chart.relative_to(output))
@@ -5157,7 +5578,10 @@ def build_report(
     kimi_chart_path: str | None = None
     if len(kimi_rows) >= 2:
         kimi_chart = diagrams / "kimi-family-comparison-chart.svg"
-        kimi_chart.write_text(render_kimi_family_svg(kimi_rows), encoding="utf-8")
+        kimi_chart.write_text(
+            render_kimi_family_svg(kimi_rows, cohort_span),
+            encoding="utf-8",
+        )
         kimi_chart_path = str(kimi_chart.relative_to(output))
     family_chart_paths: list[str] = []
     for family in STUDY_FAMILIES:
@@ -5198,15 +5622,10 @@ def build_report(
     if frontier_cost_rows:
         frontier_chart = diagrams / "frontier-api-cost-performance-chart.svg"
         frontier_chart.write_text(
-            render_frontier_cost_svg(frontier_cost_rows),
+            render_frontier_cost_svg(frontier_cost_rows, cohort_span),
             encoding="utf-8",
         )
         frontier_chart_path = str(frontier_chart.relative_to(output))
-    cohort_order = tuple(
-        dict.fromkeys(
-            cohort for cohort, _source in labeled_sources if cohort is not None
-        )
-    )
     aggregate_deltas, model_deltas = _cohort_delta_rows(results, cohort_order)
     change_breadth_rows = _change_breadth_rows(model_deltas)
     coverage = _coverage_analysis(results, labeled_sources)
@@ -5259,6 +5678,10 @@ def build_report(
         .replace(
             "{{COHORT_DELTAS}}",
             _cohort_delta_table(aggregate_deltas, model_deltas),
+        )
+        .replace(
+            "{{ACTION_DESCRIPTION_LENGTH}}",
+            _action_description_length_section(cohort_order),
         )
         .replace(
             "{{CHANGE_BREADTH_TABLE}}",
