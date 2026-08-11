@@ -4,12 +4,20 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from conftest import build_scenario
 
-from bunnyland.core import spawn_entity
+from bunnyland.core import (
+    ContainmentMode,
+    Contains,
+    EventVisibility,
+    event_base,
+    parse_entity_id,
+    spawn_entity,
+)
 from bunnyland.core.components import DescriptionComponent, IdentityComponent
 from bunnyland.core.ecs import container_of
-from bunnyland.core.events import DomainEvent
+from bunnyland.core.events import DomainEvent, SpeechSaidEvent
 from bunnyland.foundation.history.mechanics import HistoryLocation, record_world_history
 from bunnyland.imagegen.backfill import (
     ImageBackfillScheduler,
@@ -20,6 +28,7 @@ from bunnyland.imagegen.comfyui import ComfyUIGenerator
 from bunnyland.imagegen.components import (
     EventImageComponent,
     ImageRequestComponent,
+    MediaSceneSnapshotComponent,
     PortraitImageComponent,
 )
 from bunnyland.imagegen.config import ComfyUIConfig, ImageGenConfig, MediaGenConfig
@@ -30,6 +39,7 @@ from bunnyland.imagegen.events import (
 from bunnyland.imagegen.generators import ImageGeneratorProfile
 from bunnyland.imagegen.media import SEGMENT_PORTRAITS, MediaStore
 from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
+from bunnyland.imagegen.scene import request_scene_image
 from bunnyland.imagegen.service import (
     ImageGenService,
     _clear_request,
@@ -39,6 +49,8 @@ from bunnyland.imagegen.service import (
 from bunnyland.imagegen.spec import ImagePurpose, MediaKind
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
 from bunnyland.imagegen.subject import subject_for_entity, subject_for_event
+from bunnyland.persistence import WorldMeta, load_world, save_world
+from bunnyland.plugins import PluginRegistry, bunnyland_plugins
 from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 
 
@@ -326,6 +338,148 @@ async def test_start_event_attaches_event_image(tmp_path):
     assert image.url.startswith("/v1/public/media/events/")
     assert image.source_event_id == "evt-7"
     await service.aclose()
+
+
+async def test_scene_image_focuses_exact_public_event_with_room_and_appearance(tmp_path):
+    scenario = build_scenario()
+    world = scenario.actor.world
+    room = world.get_entity(scenario.room_a)
+    character = world.get_entity(scenario.character)
+    room.add_component(
+        DescriptionComponent(
+            short="a castle dungeon",
+            long="A castle dungeon with rough stone walls and iron-barred cells.",
+        )
+    )
+    character.add_component(
+        DescriptionComponent(
+            short="a rabbit adventurer",
+            appearance="grey fur, long ears, and a weathered red scarf",
+        )
+    )
+    torch = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="Iron Torch", kind="prop"),
+            DescriptionComponent(short="a smoking wall torch"),
+        ],
+    )
+    room.add_relationship(
+        Contains(mode=ContainmentMode.ROOM_CONTENT),
+        torch.id,
+    )
+    service = _service(scenario.actor, tmp_path)
+    private = SpeechSaidEvent(
+        **event_base(
+            1,
+            event_id="private-event",
+            visibility=EventVisibility.PRIVATE,
+            actor_id=str(character.id),
+            room_id=str(room.id),
+        ),
+        text="a hidden thought",
+    )
+    primary = SpeechSaidEvent(
+        **event_base(
+            2,
+            event_id="lever-event",
+            visibility=EventVisibility.ROOM,
+            actor_id=str(character.id),
+            room_id=str(room.id),
+        ),
+        text="Juniper pulls the rusted gate lever",
+    )
+    await scenario.actor.bus.publish(private)
+    await scenario.actor.bus.publish(primary)
+
+    with pytest.raises(ValueError, match="unknown or expired"):
+        await request_scene_image(
+            scenario.actor,
+            service,
+            character_id=character.id,
+            event_id=private.event_id,
+        )
+    job = await request_scene_image(
+        scenario.actor,
+        service,
+        character_id=character.id,
+        event_id=primary.event_id,
+    )
+    assert job is not None
+    await service.wait_idle()
+
+    record_id = parse_entity_id(job.entity_id)
+    assert record_id is not None
+    record = world.get_entity(record_id)
+    snapshot = record.get_component(MediaSceneSnapshotComponent).snapshot
+    image = record.get_component(EventImageComponent)
+    assert snapshot.primary_event_id == primary.event_id
+    assert snapshot.room.title == "Mosslit Burrow"
+    assert "castle dungeon" in snapshot.room.description
+    assert snapshot.characters[0].appearance == (
+        "grey fur, long ears, and a weathered red scarf"
+    )
+    assert [item.name for item in snapshot.objects] == ["Iron Torch"]
+    assert "juniper_pulls_the_rusted_gate_lever" in image.prompt
+    assert "castle_dungeon" in image.prompt
+    assert "weathered_red_scarf" in image.prompt
+    assert "iron_torch" in image.prompt
+    assert image.source_event_id == primary.event_id
+    assert image.prompt_style == "tag"
+    assert image.enhancer == "stub"
+    assert image.prompt_fallback is False
+    path = tmp_path / "media-snapshot-world.json"
+    save_world(scenario.actor, path, meta=WorldMeta(seed="media-snapshot"))
+    loaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+    loaded_snapshot = loaded.world.get_entity(record_id).get_component(
+        MediaSceneSnapshotComponent
+    ).snapshot
+    assert loaded_snapshot == snapshot
+    await service.aclose()
+
+
+async def test_scene_image_rejects_non_room_container(tmp_path):
+    scenario = build_scenario()
+    service = _service(scenario.actor, tmp_path)
+    assert await request_scene_image(
+        scenario.actor, service, character_id="invalid"
+    ) is None
+    stray = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Stray", kind="character")],
+    )
+    assert await request_scene_image(
+        scenario.actor, service, character_id=stray.id
+    ) is None
+    box = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Box", kind="container")],
+    )
+    boxed = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Boxed", kind="character")],
+    )
+    box.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), boxed.id)
+    assert await request_scene_image(
+        scenario.actor, service, character_id=boxed.id
+    ) is None
+
+
+async def test_scene_image_reports_unresolvable_history_record(tmp_path, monkeypatch):
+    scenario = build_scenario()
+    service = _service(scenario.actor, tmp_path)
+    monkeypatch.setattr(
+        "bunnyland.imagegen.scene.record_world_history",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "bunnyland.imagegen.scene.history_record_for_event",
+        lambda *args, **kwargs: None,
+    )
+    with pytest.raises(RuntimeError, match="media history record could not be resolved"):
+        await request_scene_image(
+            scenario.actor, service, character_id=scenario.character
+        )
 
 
 # --- service: failures ---------------------------------------------------------------

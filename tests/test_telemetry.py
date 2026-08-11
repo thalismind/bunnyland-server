@@ -2168,7 +2168,11 @@ async def test_image_provider_and_enhancer_failures_are_error_spans_and_redacted
 
 @pytestmark_otel
 async def test_ollama_image_prompt_attempt_records_usage_under_enhancement(otel_capture):
-    from bunnyland.imagegen.prompt import ImagePromptRequest, LLMPromptEnhancer
+    from bunnyland.imagegen.prompt import (
+        ImagePromptRequest,
+        LLMPromptEnhancer,
+        OllamaMediaPromptClient,
+    )
     from bunnyland.imagegen.spec import ImagePurpose, PromptStyle
 
     span_exporter, reader = otel_capture
@@ -2182,9 +2186,10 @@ async def test_ollama_image_prompt_attempt_records_usage_under_enhancement(otel_
                 "eval_count": 2,
             }
 
-    enhancer = LLMPromptEnhancer.__new__(LLMPromptEnhancer)
-    enhancer._client = _Client()
-    enhancer._model = "image-model"
+    client = OllamaMediaPromptClient.__new__(OllamaMediaPromptClient)
+    client._client = _Client()
+    client.model = "image-model"
+    enhancer = LLMPromptEnhancer(client=client)
     request = ImagePromptRequest(
         subject="private subject text",
         style=PromptStyle.NATURAL,
@@ -2209,7 +2214,11 @@ async def test_ollama_image_prompt_attempt_records_usage_under_enhancement(otel_
 
 @pytestmark_otel
 async def test_ollama_image_prompt_attempt_marks_provider_failure(otel_capture):
-    from bunnyland.imagegen.prompt import ImagePromptRequest, LLMPromptEnhancer
+    from bunnyland.imagegen.prompt import (
+        ImagePromptRequest,
+        LLMPromptEnhancer,
+        OllamaMediaPromptClient,
+    )
     from bunnyland.imagegen.spec import ImagePurpose, PromptStyle
 
     private = "private provider credential detail"
@@ -2220,21 +2229,22 @@ async def test_ollama_image_prompt_attempt_marks_provider_failure(otel_capture):
             del kwargs
             raise RuntimeError(private)
 
-    enhancer = LLMPromptEnhancer.__new__(LLMPromptEnhancer)
-    enhancer._client = _Client()
-    enhancer._model = "image-model"
-    with pytest.raises(RuntimeError, match="private provider"):
-        await enhancer.enhance(
-            ImagePromptRequest(
-                subject="subject",
-                style=PromptStyle.TAG,
-                purpose=ImagePurpose.SPRITE,
-            )
+    client = OllamaMediaPromptClient.__new__(OllamaMediaPromptClient)
+    client._client = _Client()
+    client.model = "image-model"
+    enhancer = LLMPromptEnhancer(client=client)
+    result = await enhancer.enhance(
+        ImagePromptRequest(
+            subject="subject",
+            style=PromptStyle.TAG,
+            purpose=ImagePurpose.SPRITE,
         )
+    )
 
     attempt = _spans_by_name(span_exporter)["llm.provider.attempt"]
     assert _span_status_name(attempt) == "ERROR"
     assert private not in _serialized_spans(span_exporter)
+    assert result.fallback is True
 
 
 @pytestmark_otel

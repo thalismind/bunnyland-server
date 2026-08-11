@@ -11,6 +11,7 @@ from bunnyland.imagegen.events import (
 from bunnyland.imagegen.feed import (
     latest_image_completion,
     latest_image_failure,
+    latest_media_event_id,
     latest_video_completion,
     latest_video_failure,
 )
@@ -142,3 +143,31 @@ def test_malformed_feed_entries_are_ignored():
         }},
     ]
     assert latest_video_completion(malformed)["world_epoch"] == {}
+
+
+def test_latest_media_event_id_accepts_only_newest_public_or_room_event():
+    messages = [
+        {"data": "bad"},
+        {"event_type": 7, "event": {}},
+        {"event_type": "ImageGenerationCompletedEvent", "event": {
+            "event_id": "media", "world_epoch": 20, "visibility": "room",
+        }},
+        {"event_type": "SpeechToldEvent", "event": {
+            "event_id": "directed", "world_epoch": 10, "visibility": "directed",
+        }},
+        {"event_type": "SpeechSaidEvent", "event": "bad"},
+        {"event_type": "SpeechSaidEvent", "event": {
+            "event_id": 4, "world_epoch": 4, "visibility": "room",
+        }},
+        {"event_type": "SpeechSaidEvent", "event": {
+            "event_id": "bad-epoch", "world_epoch": "5", "visibility": "room",
+        }},
+        {"event_type": "SpeechSaidEvent", "event": {
+            "event_id": "new", "world_epoch": 7, "visibility": "room",
+        }},
+        {"type": "event", "data": {"event_type": "DoorOpenedEvent", "event": {
+            "event_id": "old", "world_epoch": 3, "visibility": "public",
+        }}},
+    ]
+    assert latest_media_event_id(messages) == "new"
+    assert latest_media_event_id(None) == ""

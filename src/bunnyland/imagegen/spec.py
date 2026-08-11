@@ -12,9 +12,8 @@ from __future__ import annotations
 
 import copy
 from enum import StrEnum
-from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue
 
 #: Literal tokens recognised inside template graph strings.
 PROMPT_TOKEN = "%PROMPT%"
@@ -73,7 +72,7 @@ class WorkflowTemplate(BaseModel):
     default_negative: str = ""
     width: int = 1024
     height: int = 1024
-    graph: dict[str, Any] = Field(default_factory=dict)
+    graph: dict[str, JsonValue] = Field(default_factory=dict)
     slots: tuple[SubstitutionSlot, ...] = ()
     #: The node whose output is the result; empty means "let the client discover it".
     output_node_id: str = ""
@@ -88,9 +87,14 @@ class GeneratedPrompt(BaseModel):
     prompt: str
     negative: str = ""
     tags: tuple[str, ...] = ()
+    enhancer: str = ""
+    fallback: bool = False
+    grounding_fact_ids: tuple[str, ...] = ()
 
 
-def _values(*, prompt: str, negative: str, seed: int, width: int, height: int) -> dict[str, Any]:
+def _values(
+    *, prompt: str, negative: str, seed: int, width: int, height: int
+) -> dict[str, JsonValue]:
     return {
         PROMPT_TOKEN: prompt,
         NEGATIVE_TOKEN: negative,
@@ -100,7 +104,7 @@ def _values(*, prompt: str, negative: str, seed: int, width: int, height: int) -
     }
 
 
-def _replace_tokens(value: Any, str_values: dict[str, str]) -> Any:
+def _replace_tokens(value: JsonValue, str_values: dict[str, str]) -> JsonValue:
     """Recursively replace literal ``%TOKEN%`` substrings in every string leaf."""
 
     if isinstance(value, str):
@@ -114,7 +118,11 @@ def _replace_tokens(value: Any, str_values: dict[str, str]) -> Any:
     return value
 
 
-def _apply_slot(graph: dict[str, Any], slot: SubstitutionSlot, values: dict[str, Any]) -> None:
+def _apply_slot(
+    graph: dict[str, JsonValue],
+    slot: SubstitutionSlot,
+    values: dict[str, JsonValue],
+) -> None:
     """Write ``values[slot.token]`` into the addressed node field, keeping its type."""
 
     if slot.token not in values:
@@ -142,7 +150,7 @@ def substitute(
     negative: str | None = None,
     width: int | None = None,
     height: int | None = None,
-) -> dict[str, Any]:
+) -> dict[str, JsonValue]:
     """Return a runnable copy of ``template.graph`` with the prompt and seed filled in.
 
     Literal ``%TOKEN%`` replacement runs first over every string field; explicit

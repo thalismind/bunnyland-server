@@ -739,6 +739,11 @@ class WorldImageGenerationResponse(BaseModel):
     generator: str = "comfyui"
     url: str = ""
     alpha_url: str = ""
+    source_event_id: str = ""
+    snapshot_epoch: int | None = None
+    prompt_style: str = ""
+    enhancer: str = ""
+    prompt_fallback: bool = False
     error: str | None = None
 
 

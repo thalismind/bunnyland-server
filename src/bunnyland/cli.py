@@ -868,10 +868,12 @@ def _build_media_services(actor, plugins, config_block=None, plugin_config=None)
                 openrouter_api_key=read_credential("OPENROUTER_API_KEY"),
                 openrouter_server_url=os.environ.get("OPENROUTER_SERVER_URL", "").strip(),
                 backfill_interval_seconds=config_block.backfill_interval_seconds,
+                prompt_enhancer=config_block.image_prompt_enhancer,
             ),
             video=VideoGenConfig(
                 generator=config_block.video_generator,
                 profile=config_block.video_profile,
+                prompt_enhancer=config_block.video_prompt_enhancer,
             ),
             media_root=config_block.media_root,
             public_base_url=config_block.public_base_url.rstrip("/"),

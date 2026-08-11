@@ -46,6 +46,7 @@ class ImageGenConfig:
     openrouter_api_key: str = ""
     openrouter_server_url: str = ""
     backfill_interval_seconds: float = 5.0
+    prompt_enhancer: str = ""
 
     def generator_for(self, purpose: str) -> str:
         return self.generators.get(purpose, "").strip() or self.generator
@@ -57,6 +58,7 @@ class VideoGenConfig:
 
     generator: str = ""
     profile: str = ""
+    prompt_enhancer: str = ""
 
 
 @dataclass(frozen=True)
@@ -115,8 +117,17 @@ class MediaGenConfig:
                 backfill_interval_seconds=_env_float(
                     environ, "BUNNYLAND_IMAGE_BACKFILL_SECONDS", 5.0
                 ),
+                prompt_enhancer=environ.get(
+                    "BUNNYLAND_IMAGE_PROMPT_ENHANCER", ""
+                ).strip(),
             ),
-            video=VideoGenConfig(generator=video_selected, profile=video_profile),
+            video=VideoGenConfig(
+                generator=video_selected,
+                profile=video_profile,
+                prompt_enhancer=environ.get(
+                    "BUNNYLAND_VIDEO_PROMPT_ENHANCER", ""
+                ).strip(),
+            ),
             media_root=environ.get("BUNNYLAND_MEDIA_DIR", "media").strip(),
             public_base_url=environ.get("BUNNYLAND_PUBLIC_BASE_URL", "")
             .strip()

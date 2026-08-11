@@ -1968,7 +1968,8 @@ async def test_dispatch_image_when_supported():
             super().__init__(snapshot)
             self.requested: list[str] = []
 
-        async def request_image(self, character_id):
+        async def request_image(self, character_id, event_id=""):
+            del event_id
             self.requested.append(character_id)
             return ImageRequestResult(ok=True, status="queued")
 
@@ -1989,7 +1990,8 @@ async def test_dispatch_image_requires_player_and_surfaces_failure():
     class _ImageBackend(RecordingBackend):
         supports_image_requests = True
 
-        async def request_image(self, character_id):
+        async def request_image(self, character_id, event_id=""):
+            del event_id
             return ImageRequestResult(
                 ok=False,
                 status="failed",
@@ -2023,7 +2025,8 @@ async def test_dispatch_video_covers_player_capability_and_result_paths():
             self.result = result
             self.requested: list[str] = []
 
-        async def request_video(self, character_id):
+        async def request_video(self, character_id, event_id=""):
+            del event_id
             self.requested.append(character_id)
             return self.result
 

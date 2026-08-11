@@ -553,6 +553,8 @@ class DiscordBot:
         # record entity id -> the Discord message that requested an image for it.
         self._image_messages: dict[str, object] = {}
         self._video_messages: dict[str, object] = {}
+        # Discord room-feed message id -> public source event id for exact media reactions.
+        self._media_event_messages: dict[int, str] = {}
         self._room_feed_channels: dict[str, tuple[int, ...]] = {}
         self._actor_rooms: dict[str, str] = {}
         self._delivered_room_feed_events: set[tuple[str, int]] = set()
@@ -665,14 +667,16 @@ class DiscordBot:
             if key in self._delivered_room_feed_events:
                 continue
             self._delivered_room_feed_events.add(key)
-            await self._send_room_feed_message(channel_id, message)
+            await self._send_room_feed_message(channel_id, message, event.event_id)
         self._update_actor_room_from_event(event)
 
     def _update_actor_room_from_event(self, event: DomainEvent) -> None:
         if isinstance(event, ActorMovedEvent) and event.actor_id:
             self._actor_rooms[event.actor_id] = event.to_room_id
 
-    async def _send_room_feed_message(self, channel_id: int, message: str) -> None:
+    async def _send_room_feed_message(
+        self, channel_id: int, message: str, event_id: str = ""
+    ) -> None:
         with telemetry.span(
             "discord.delivery",
             {"discord.delivery.kind": "room_feed", "discord.channel.id": channel_id},
@@ -693,7 +697,12 @@ class DiscordBot:
             chunks = split_discord_text(message)
             for chunk in chunks:
                 try:
-                    await channel.send(chunk)
+                    sent = await channel.send(chunk)
+                    sent_id = getattr(sent, "id", None)
+                    if isinstance(sent_id, int):
+                        if len(self._media_event_messages) >= 200:
+                            self._media_event_messages.pop(next(iter(self._media_event_messages)))
+                        self._media_event_messages[sent_id] = event_id
                 except Exception as exc:
                     delivery_span.record_exception(exc)
                     delivery_span.set_attribute("discord.delivery.outcome", "failed")
@@ -801,7 +810,13 @@ class DiscordBot:
         if found is None:
             return
         job = await request_scene_image(
-            self.actor, self.imagegen, character_id=found[0], requested_by=str(user.id)
+            self.actor,
+            self.imagegen,
+            character_id=found[0],
+            requested_by=str(user.id),
+            event_id=getattr(self, "_media_event_messages", {}).get(
+                getattr(message, "id", 0), ""
+            ),
         )
         if job is None:  # the character is not in a room to illustrate
             return
@@ -836,7 +851,13 @@ class DiscordBot:
         if found is None:
             return
         job = await request_scene_video(
-            self.actor, self.videogen, character_id=found[0], requested_by=str(user.id)
+            self.actor,
+            self.videogen,
+            character_id=found[0],
+            requested_by=str(user.id),
+            event_id=getattr(self, "_media_event_messages", {}).get(
+                getattr(message, "id", 0), ""
+            ),
         )
         if job is None:
             return

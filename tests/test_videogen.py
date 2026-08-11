@@ -13,10 +13,13 @@ from bunnyland.core import (
     CharacterComponent,
     ContainmentMode,
     Contains,
+    EventVisibility,
     IdentityComponent,
+    event_base,
     parse_entity_id,
     spawn_entity,
 )
+from bunnyland.core.events import SpeechSaidEvent
 from bunnyland.foundation.history.mechanics import record_world_history
 from bunnyland.foundation.media.service import sniff_video_extension
 from bunnyland.imagegen.comfyui import ComfyUIGenerator
@@ -56,7 +59,7 @@ class _InvalidVideoClient:
         return b"not-a-video"
 
 
-def _video_template() -> WorkflowTemplate:
+def _video_template(*, default_negative: str = "") -> WorkflowTemplate:
     return WorkflowTemplate(
         name="event-video",
         purpose=ImagePurpose.EVENT,
@@ -65,6 +68,7 @@ def _video_template() -> WorkflowTemplate:
         height=512,
         graph={"1": {"inputs": {"text": "%PROMPT%"}}},
         output_node_id="9",
+        default_negative=default_negative,
     )
 
 
@@ -132,18 +136,25 @@ async def _claim(client: httpx.AsyncClient, character_id: str) -> tuple[str, dic
 
 async def test_scene_video_combines_recent_room_events_and_persists_mp4(tmp_path):
     scenario = build_scenario()
-    for event_id, summary, epoch in (("evt-1", "Juniper waved", 1), ("evt-2", "A bell rang", 2)):
-        record_world_history(
-            scenario.actor.world,
-            source_event_id=event_id,
-            summary=summary,
-            event_type="test",
-            created_at_epoch=epoch,
-            location_id=str(scenario.room_a),
+    service = _service(scenario.actor, tmp_path, video=True)
+    for event_id, text, epoch in (
+        ("evt-1", "Juniper waved", 1),
+        ("evt-2", "A bell rang", 2),
+    ):
+        await scenario.actor.bus.publish(
+            SpeechSaidEvent(
+                **event_base(
+                    epoch,
+                    event_id=event_id,
+                    visibility=EventVisibility.ROOM,
+                    actor_id=str(scenario.character),
+                    room_id=str(scenario.room_a),
+                ),
+                text=text,
+            )
         )
     events = []
     scenario.actor.bus.subscribe(VideoGenerationCompletedEvent, events.append)
-    service = _service(scenario.actor, tmp_path, video=True)
 
     job = await request_scene_video(
         scenario.actor, service, character_id=scenario.character, requested_by="player"
@@ -155,7 +166,10 @@ async def test_scene_video_combines_recent_room_events_and_persists_mp4(tmp_path
     assert record_id is not None
     record = scenario.actor.world.get_entity(record_id)
     video = record.get_component(EventVideoComponent)
-    assert "Juniper waved Then, A bell rang" in video.prompt
+    assert "A bell rang" in video.prompt
+    assert "Juniper waved" in video.prompt
+    assert "Mosslit Burrow" in video.prompt
+    assert video.source_event_id == "evt-2"
     assert video.url.startswith("/v1/public/media/videos/")
     assert video.url.endswith(".mp4")
     assert service.media.read("videos", video.url.rsplit("/", 1)[-1]) == MP4_BYTES
@@ -167,6 +181,47 @@ async def test_scene_video_combines_recent_room_events_and_persists_mp4(tmp_path
     assert reused is not None
     assert reused.status == "skipped"
     assert reused.url == video.url
+    await service.aclose()
+
+
+async def test_video_profile_default_negative_is_used_when_enhancer_omits_it(tmp_path):
+    scenario = build_scenario()
+    requests = []
+
+    class CapturingGenerator:
+        name = "capturing-video"
+
+        def resolve_video_profile(self, profile_name=""):
+            return VideoGeneratorProfile(
+                name=profile_name or "event-video",
+                default_negative="watermark, text",
+            )
+
+        async def generate_video(self, request):
+            requests.append(request)
+            return MP4_BYTES
+
+    service = VideoGenService(
+        scenario.actor,
+        _config(tmp_path),
+        generator=CapturingGenerator(),
+        profile_name="event-video",
+        enhancer=StubPromptEnhancer(),
+        examples=CatalogExampleSource(),
+        media=MediaStore(tmp_path),
+    )
+    record = record_world_history(
+        scenario.actor.world,
+        source_event_id="default-negative",
+        summary="A gate opens",
+        event_type="test",
+        created_at_epoch=1,
+        location_id=str(scenario.room_a),
+    )
+    job = await service.start(str(record.id))
+    await service.wait_idle()
+    assert job.status == "succeeded"
+    assert requests[0].negative == "watermark, text"
     await service.aclose()
 
 
@@ -437,36 +492,23 @@ async def test_scene_video_rejects_invalid_locations_and_reuses_one_room_event(t
     box.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), boxed.id)
     assert await request_scene_video(scenario.actor, service, character_id=boxed.id) is None
 
-    record_world_history(
-        scenario.actor.world,
-        source_event_id="event-video:ignored",
-        summary="an old generated clip",
-        event_type="event-video",
-        created_at_epoch=3,
-        location_id=str(scenario.room_a),
+    event = SpeechSaidEvent(
+        **event_base(
+            2,
+            event_id="evt-single",
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+        ),
+        text="Juniper hopped",
     )
-    single = record_world_history(
-        scenario.actor.world,
-        source_event_id="evt-single",
-        summary="Juniper hopped",
-        event_type="test",
-        created_at_epoch=2,
-        location_id=str(scenario.room_a),
-    )
-    record_world_history(
-        scenario.actor.world,
-        source_event_id="evt-other-room",
-        summary="something elsewhere",
-        event_type="test",
-        created_at_epoch=4,
-        location_id=str(scenario.room_b),
-    )
+    await scenario.actor.bus.publish(event)
     job = await request_scene_video(
         scenario.actor, service, character_id=scenario.character
     )
     assert job is not None
-    assert job.entity_id == str(single.id)
     await service.wait_idle()
+    assert job.source_event_id == event.event_id
     await service.aclose()
 
 
@@ -581,6 +623,11 @@ async def test_video_feature_and_player_job_are_independently_optional(tmp_path,
             json={"kind": "scene_video"},
         )
         await enabled.wait_idle()
+        unknown_event = await client.post(
+            f"/v1/play/claims/{claim_id}/jobs",
+            headers=headers,
+            json={"kind": "scene_video", "event_id": "event:unknown"},
+        )
         async def no_scene_video(*_args, **_kwargs):
             return None
 
@@ -593,6 +640,8 @@ async def test_video_feature_and_player_job_are_independently_optional(tmp_path,
     assert features.json()["video_generation"] is True
     assert response.status_code == 202
     assert response.json()["kind"] == "scene_video"
+    assert unknown_event.status_code == 400
+    assert "unknown or expired" in unknown_event.json()["detail"]
     assert no_room.status_code == 400
     assert no_room.json()["detail"] == "character has no room to illustrate"
     await enabled.aclose()

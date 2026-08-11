@@ -311,6 +311,8 @@ FIELD_HELP_TEXT = {
     "image-templates-path": "Workflow template JSON path. Examples: /data/image-templates.json.",
     "image-prompt-style": "Prompt style override. Examples: tag, natural.",
     "image-enhancer": "Optional prompt/image enhancer. Examples: empty, ollama.",
+    "image-prompt-enhancer": "Optional image-only prompt enhancer override.",
+    "video-prompt-enhancer": "Optional video-only prompt enhancer override.",
     "image-model": "Model used for image prompt enhancement. Examples: deepseek-v4-flash.",
     "show-advanced": "Reveal low-frequency deployment/runtime fields. Examples: custom ports.",
 }
@@ -1280,6 +1282,16 @@ def build_textual_wizard_app(
                         yield Input(value=initial.imagegen.prompt_style, id="image-prompt-style")
                         yield field_label("Enhancer", "image-enhancer")
                         yield Input(value=initial.imagegen.enhancer, id="image-enhancer")
+                        yield field_label("Image prompt enhancer", "image-prompt-enhancer")
+                        yield Input(
+                            value=initial.imagegen.image_prompt_enhancer,
+                            id="image-prompt-enhancer",
+                        )
+                        yield field_label("Video prompt enhancer", "video-prompt-enhancer")
+                        yield Input(
+                            value=initial.imagegen.video_prompt_enhancer,
+                            id="video-prompt-enhancer",
+                        )
                         yield field_label("Image model", "image-model")
                         yield Input(value=initial.imagegen.model, id="image-model")
                         yield field_label("Event-video generation", "videogen-enabled")
@@ -1611,6 +1623,8 @@ def build_textual_wizard_app(
                     workflows=self._input("#image-workflows"),
                     prompt_style=self._input("#image-prompt-style"),
                     enhancer=self._input("#image-enhancer"),
+                    image_prompt_enhancer=self._input("#image-prompt-enhancer"),
+                    video_prompt_enhancer=self._input("#video-prompt-enhancer"),
                     model=self._input("#image-model"),
                     video_generator=video_generator if videogen_enabled else "",
                     video_profile=video_profile if videogen_enabled else "",

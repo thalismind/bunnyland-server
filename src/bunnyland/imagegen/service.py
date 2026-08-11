@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from uuid import uuid4
 
-from relics import Entity
+from relics import Component, Entity
 
 from bunnyland import telemetry
 from bunnyland.foundation.history.mechanics import WorldHistoryRecordComponent
@@ -32,6 +32,7 @@ from ..core.world_actor import WorldActor
 from .components import (
     EventImageComponent,
     ImageRequestComponent,
+    MediaSceneSnapshotComponent,
     PortraitImageComponent,
 )
 from .config import MediaGenConfig
@@ -49,7 +50,9 @@ from .media import (
     SEGMENT_SPRITES,
     MediaStore,
 )
-from .prompt import ImagePromptRequest, PromptEnhancer, PromptExampleSource
+from .prompt import ImagePromptEnhancer, ImagePromptRequest, PromptExampleSource
+from .scene_models import MediaSceneSnapshot
+from .scene_projection import MediaSceneProjection
 from .spec import GeneratedPrompt, ImagePurpose, MediaKind, PromptStyle
 from .subject import subject_for_entity, subject_for_event
 
@@ -82,6 +85,11 @@ class ImageGenJob:
     status: str = "queued"
     url: str = ""
     alpha_url: str = ""
+    source_event_id: str = ""
+    snapshot_epoch: int | None = None
+    prompt_style: str = ""
+    enhancer: str = ""
+    prompt_fallback: bool = False
     error: str | None = None
 
 
@@ -90,7 +98,7 @@ def _seed_for(entity_id: str) -> int:
     return int.from_bytes(sha256(entity_id.encode()).digest()[:4], "big")
 
 
-def _set_component(entity: Entity, component) -> None:
+def _set_component(entity: Entity, component: Component) -> None:
     if entity.has_component(type(component)):
         replace_component(entity, component)
     else:
@@ -106,9 +114,10 @@ class ImageGenService:
         config: MediaGenConfig,
         *,
         generators: dict[ImagePurpose, ImageGenerator],
-        enhancer: PromptEnhancer,
+        enhancer: ImagePromptEnhancer,
         examples: PromptExampleSource,
         media: MediaStore,
+        scene_projection: MediaSceneProjection | None = None,
         alpha: Callable[[bytes], bytes] | None = None,
     ) -> None:
         self._actor = actor
@@ -117,14 +126,17 @@ class ImageGenService:
         self._enhancer = enhancer
         self._examples = examples
         self._media = media
+        self._scene_projection = scene_projection or MediaSceneProjection(actor)
         self._alpha = alpha
-        self._queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
+        self._queue: asyncio.PriorityQueue[tuple[int, int, ImageGenJob]] = (
+            asyncio.PriorityQueue()
+        )
         self._seq = itertools.count()
         self._jobs: dict[str, ImageGenJob] = {}
         self._extras: dict[str, str] = {}
         self._alpha_jobs: set[str] = set()
         self._parent_contexts: dict[str, object] = {}
-        self._worker: asyncio.Task | None = None
+        self._worker: asyncio.Task[None] | None = None
         self._busy = False
 
     # -- public API ------------------------------------------------------------------
@@ -135,6 +147,10 @@ class ImageGenService:
     @property
     def media(self) -> MediaStore:
         return self._media
+
+    @property
+    def scene_projection(self) -> MediaSceneProjection:
+        return self._scene_projection
 
     @property
     def idle(self) -> bool:
@@ -279,6 +295,18 @@ class ImageGenService:
                     job.profile_name = profile.name
                     job.template_name = profile.name
                     subject = self._subject_for(entity, job.purpose)
+                    scene = (
+                        entity.get_component(MediaSceneSnapshotComponent).snapshot
+                        if job.purpose is ImagePurpose.EVENT
+                        and entity.has_component(MediaSceneSnapshotComponent)
+                        else None
+                    )
+                    if job.purpose is ImagePurpose.EVENT:
+                        record = entity.get_component(WorldHistoryRecordComponent)
+                        job.source_event_id = record.source_event_id
+                        job.snapshot_epoch = (
+                            scene.captured_at_epoch if scene is not None else None
+                        )
                 generation_span.set_attribute("image.profile", profile.name)
                 generation_span.set_attribute("image.width", profile.width)
                 generation_span.set_attribute("image.height", profile.height)
@@ -293,7 +321,19 @@ class ImageGenService:
                         "image.profile": profile.name,
                     },
                 ) as enhance_span:
-                    prompt = await self._enhance(subject, profile, job.purpose, extra)
+                    prompt = await self._enhance(
+                        subject, profile, job.purpose, extra, scene
+                    )
+                    job.prompt_style = prompt.style.value
+                    job.enhancer = prompt.enhancer
+                    job.prompt_fallback = prompt.fallback
+                    if not prompt.negative and profile.default_negative:
+                        prompt = prompt.model_copy(
+                            update={"negative": profile.default_negative}
+                        )
+                    enhance_span.set_attribute("media.prompt.style", prompt.style.value)
+                    enhance_span.set_attribute("media.prompt.fallback", prompt.fallback)
+                    enhance_span.set_attribute("media.prompt.chars", len(prompt.prompt))
                     telemetry.mark_span_ok(enhance_span)
                 with telemetry.span(
                     "image.provider.generate",
@@ -404,21 +444,28 @@ class ImageGenService:
         return subject_for_entity(entity)
 
     async def _enhance(
-        self, subject: str, profile: ImageGeneratorProfile, purpose: ImagePurpose, extra: str
+        self,
+        subject: str,
+        profile: ImageGeneratorProfile,
+        purpose: ImagePurpose,
+        extra: str,
+        scene: MediaSceneSnapshot | None,
     ) -> GeneratedPrompt:
         # An admin-configured prompt style overrides the template's own style.
         style = profile.prompt_style
         if self._config.prompt_style:
             style = PromptStyle(self._config.prompt_style)
-        examples = self._examples.examples_for(style, purpose, subject)
+        examples = self._examples.examples_for(
+            style, purpose, subject, media=MediaKind.IMAGE
+        )
         request = ImagePromptRequest(
             subject=subject,
             style=style,
             purpose=purpose,
-            media=profile.media,
+            scene=scene,
             extra=extra,
         )
-        return await self._enhancer.enhance(request, examples=examples)
+        return await self._enhancer.enhance_image(request, examples=examples)
 
     def _attach(
         self,
@@ -440,6 +487,10 @@ class ImageGenService:
                     generator=generator,
                     profile=profile.name,
                     prompt=prompt.prompt,
+                    negative_prompt=prompt.negative,
+                    prompt_style=prompt.style.value,
+                    enhancer=prompt.enhancer,
+                    prompt_fallback=prompt.fallback,
                     seed=seed,
                     generated_at_epoch=epoch,
                 ),
@@ -454,6 +505,10 @@ class ImageGenService:
                     url=url,
                     alpha_url=alpha_url,
                     prompt=prompt.prompt,
+                    negative_prompt=prompt.negative,
+                    prompt_style=prompt.style.value,
+                    enhancer=prompt.enhancer,
+                    prompt_fallback=prompt.fallback,
                     seed=seed,
                     template=profile.name,
                     generator=generator,
@@ -468,6 +523,10 @@ class ImageGenService:
                 url=url,
                 alpha_url=alpha_url,
                 prompt=prompt.prompt,
+                negative_prompt=prompt.negative,
+                prompt_style=prompt.style.value,
+                enhancer=prompt.enhancer,
+                prompt_fallback=prompt.fallback,
                 seed=seed,
                 template=profile.name,
                 generator=generator,

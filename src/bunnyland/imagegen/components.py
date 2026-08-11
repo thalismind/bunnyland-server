@@ -13,6 +13,8 @@ from __future__ import annotations
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from relics import Component
 
+from .scene_models import MediaSceneSnapshot
+
 
 @pydantic_dataclass(frozen=True)
 class PortraitImageComponent(Component):
@@ -21,6 +23,10 @@ class PortraitImageComponent(Component):
     url: str = ""
     alpha_url: str = ""
     prompt: str = ""
+    negative_prompt: str = ""
+    prompt_style: str = ""
+    enhancer: str = ""
+    prompt_fallback: bool = False
     seed: int = 0
     template: str = ""
     generator: str = "comfyui"
@@ -34,6 +40,10 @@ class EventImageComponent(Component):
     url: str = ""
     alpha_url: str = ""
     prompt: str = ""
+    negative_prompt: str = ""
+    prompt_style: str = ""
+    enhancer: str = ""
+    prompt_fallback: bool = False
     seed: int = 0
     template: str = ""
     generator: str = "comfyui"
@@ -47,11 +57,27 @@ class EventVideoComponent(Component):
 
     url: str = ""
     prompt: str = ""
+    negative_prompt: str = ""
+    prompt_style: str = ""
+    enhancer: str = ""
+    prompt_fallback: bool = False
     seed: int = 0
     template: str = ""
     generator: str = "comfyui"
     source_event_id: str = ""
     generated_at_epoch: int = 0
+
+
+@pydantic_dataclass(frozen=True)
+class MediaSceneSnapshotComponent(Component):
+    """Public render context captured once for an event's image and video.
+
+    A history-record entity represents one durable occurrence, so its media snapshot is
+    singleton presentation state.  Values are copied at request time rather than retained as
+    live entity references, allowing queued and regenerated media to depict the same moment.
+    """
+
+    snapshot: MediaSceneSnapshot
 
 
 @pydantic_dataclass(frozen=True)
@@ -75,6 +101,7 @@ __all__ = [
     "EventImageComponent",
     "EventVideoComponent",
     "ImageRequestComponent",
+    "MediaSceneSnapshotComponent",
     "PortraitImageComponent",
     "VideoRequestComponent",
 ]

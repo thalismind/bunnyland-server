@@ -169,6 +169,8 @@ class ImageGenConfigBlock:
     workflows: str = "anima"
     prompt_style: str = ""
     enhancer: str = ""
+    image_prompt_enhancer: str = ""
+    video_prompt_enhancer: str = ""
     model: str = DEFAULT_CHARACTER_MODEL
 
 
@@ -461,6 +463,16 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_IMAGE_WORKFLOWS", imagegen.workflows)
         _set_if(env, "BUNNYLAND_MEDIA_PROMPT_STYLE", imagegen.prompt_style)
         _set_if(env, "BUNNYLAND_MEDIA_ENHANCER", imagegen.enhancer)
+        _set_if(
+            env,
+            "BUNNYLAND_IMAGE_PROMPT_ENHANCER",
+            imagegen.image_prompt_enhancer,
+        )
+        _set_if(
+            env,
+            "BUNNYLAND_VIDEO_PROMPT_ENHANCER",
+            imagegen.video_prompt_enhancer,
+        )
         _set_if(env, "BUNNYLAND_MEDIA_MODEL", imagegen.model)
         if dry_run:
             env["BUNNYLAND_SETUP_DRY_RUN"] = "1"

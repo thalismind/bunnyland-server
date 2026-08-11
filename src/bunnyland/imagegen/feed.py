@@ -28,6 +28,35 @@ _COMPLETED = ImageGenerationCompletedEvent.__name__
 _FAILED = ImageGenerationFailedEvent.__name__
 _VIDEO_COMPLETED = VideoGenerationCompletedEvent.__name__
 _VIDEO_FAILED = VideoGenerationFailedEvent.__name__
+_MEDIA_EVENT_PREFIXES = ("ImageGeneration", "VideoGeneration")
+
+
+def latest_media_event_id(messages: list[dict[str, JsonValue]] | None) -> str:
+    """Newest public/room event id suitable for exact scene-media focus."""
+
+    latest = ""
+    latest_epoch = -1
+    for message in messages or []:
+        data = message.get("data", message)
+        if not isinstance(data, dict):
+            continue
+        event_type = data.get("event_type")
+        event = data.get("event")
+        if (
+            not isinstance(event_type, str)
+            or event_type.startswith(_MEDIA_EVENT_PREFIXES)
+            or not isinstance(event, dict)
+            or event.get("visibility") not in {"public", "room"}
+        ):
+            continue
+        event_id = event.get("event_id")
+        epoch = event.get("world_epoch")
+        if not isinstance(event_id, str) or not event_id or not isinstance(epoch, int):
+            continue
+        if epoch >= latest_epoch:
+            latest = event_id
+            latest_epoch = epoch
+    return latest
 
 
 def _newest(
@@ -107,6 +136,7 @@ def latest_video_failure(
 __all__ = [
     "latest_image_completion",
     "latest_image_failure",
+    "latest_media_event_id",
     "latest_video_completion",
     "latest_video_failure",
 ]

@@ -367,10 +367,12 @@ class CharacterChatReplyRequest(V1Request):
 
 class SceneImageJobRequest(V1Request):
     kind: Literal["scene_image"]
+    event_id: str = Field(default="", max_length=200)
 
 
 class SceneVideoJobRequest(V1Request):
     kind: Literal["scene_video"]
+    event_id: str = Field(default="", max_length=200)
 
 
 SceneMediaJobRequest = Annotated[
@@ -397,6 +399,11 @@ class ImageJobResult(V1Request):
     generator: str = "comfyui"
     url: str = ""
     alpha_url: str = ""
+    source_event_id: str = ""
+    snapshot_epoch: int | None = None
+    prompt_style: str = ""
+    enhancer: str = ""
+    prompt_fallback: bool = False
     error: str | None = None
 
 

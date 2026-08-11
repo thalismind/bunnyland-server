@@ -37,6 +37,7 @@ from ..imagegen.affordance import (
 from ..imagegen.feed import (
     latest_image_completion,
     latest_image_failure,
+    latest_media_event_id,
     latest_video_completion,
     latest_video_failure,
 )
@@ -202,6 +203,7 @@ class BunnylandRepl:
         self._event_image_failure_epoch = -1
         self._event_video_url = ""
         self._event_video_failure_epoch = -1
+        self._latest_media_event_id = ""
         self._refresh_task: asyncio.Task[None] | None = None
 
     # ── data ──────────────────────────────────────────────────────────────────
@@ -346,6 +348,7 @@ class BunnylandRepl:
     def drain_events(self, messages: list[dict]) -> list[Text]:
         """Render the not-yet-seen events the current player can perceive, then mark the
         whole window seen. ``messages`` are ``recent_events()`` payloads."""
+        self._latest_media_event_id = latest_media_event_id(messages)
         lines = self._events.drain_events(
             messages,
             player_id=self.player_id,
@@ -441,7 +444,9 @@ class BunnylandRepl:
             return Text("Pick a player first: play <name>.")
         if not self.backend.supports_image_requests:
             return Text("Image requests are not available for this session.", style="yellow")
-        result = await self.backend.request_image(self.player_id)
+        result = await self.backend.request_image(
+            self.player_id, self._latest_media_event_id
+        )
         if result.ok:
             note = "image ready" if result.status == "skipped" else "image requested"
             return Text(f"{REQUEST_EMOJI} {note}.", style="cyan")
@@ -452,7 +457,9 @@ class BunnylandRepl:
             return Text("Pick a player first: play <name>.")
         if not self.backend.supports_video_requests:
             return Text("Video requests are not available for this session.", style="yellow")
-        result = await self.backend.request_video(self.player_id)
+        result = await self.backend.request_video(
+            self.player_id, self._latest_media_event_id
+        )
         if result.ok:
             note = "video ready" if result.status == "skipped" else "video requested"
             return Text(f"{VIDEO_REQUEST_EMOJI} {note}.", style="cyan")

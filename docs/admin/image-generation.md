@@ -60,14 +60,20 @@ BUNNYLAND_MEDIA_PROMPT_STYLE=              # force "tag" or "natural" (blank = f
 BUNNYLAND_MEDIA_TEMPLATES=/data/media-workflows.json  # optional per-template overrides
 BUNNYLAND_VIDEO_GENERATOR=comfyui            # image and video providers are selected separately
 BUNNYLAND_VIDEO_PROFILE=event-video          # built-in ComfyUI LTX 2.3 T2V profile
-BUNNYLAND_MEDIA_ENHANCER=stub              # "stub" (offline) or "llm" (uses OLLAMA_*)
+BUNNYLAND_MEDIA_ENHANCER=structured          # "structured" (offline) or "llm" (uses OLLAMA_*)
+BUNNYLAND_IMAGE_PROMPT_ENHANCER=             # optional image-only enhancer override
+BUNNYLAND_VIDEO_PROMPT_ENHANCER=             # optional video-only enhancer override
+BUNNYLAND_MEDIA_MODEL=kimi-k2.7-code:cloud    # prompt-enhancement model
 BUNNYLAND_IMAGE_BACKFILL_SECONDS=5         # cadence of the portrait/sprite backfill
 ```
 
 The prompt **enhancer** turns an entity or event into a model-ready prompt. The default
-`stub` enhancer is deterministic and needs no network; set `BUNNYLAND_MEDIA_ENHANCER=llm`
-to have an Ollama model write richer prompts (it reuses your `OLLAMA_HOST` /
-`OLLAMA_CLOUD_API_KEY`). Plugins can register additional enhancers by name.
+`structured` enhancer is deterministic and needs no network; `stub` remains a compatibility
+name. Set `BUNNYLAND_MEDIA_ENHANCER=llm` to have an Ollama model write richer prompts (it
+reuses `OLLAMA_HOST` / `OLLAMA_CLOUD_API_KEY`). Image and video enhancers have separate
+async plugin contracts and selection variables; a shared implementation can implement both.
+An LLM provider or validation failure falls back to the structured renderer in the requested
+WD14-tag or natural-prose style instead of failing the media job.
 
 > **Discord avatars require a public URL.** Posting a character's portrait as a Discord
 > avatar needs an absolute, reachable image URL, so set `BUNNYLAND_PUBLIC_BASE_URL`
@@ -113,16 +119,26 @@ to a different generator.
   on an existing world gradually illustrates everyone without flooding ComfyUI.
 - **Toon sprites** — when the `toonsim` pack is enabled, characters also get a transparent
   sprite (the alpha background is removed automatically).
-- **Event images** — generated only when a player requests one (see the player guide). The
-  first request for an event is generated and then reused for everyone; admins can force a
-  regenerate.
-- **Event videos** — generated only when a player requests a clip of the latest events in
-  their room. Video generation is advertised separately from images and remains off unless
+- **Event images** — generated only when a player requests one (see the player guide). A
+  request may focus an exact visible event; otherwise it selects the latest eligible event in
+  the room. The first request for an event is generated and then reused for everyone; admins
+  can force a regenerate.
+- **Event videos** — generated only when a player requests a clip focused on an exact or
+  latest visible room event. Video generation is advertised separately from images and remains off unless
   `BUNNYLAND_VIDEO_GENERATOR` selects the video provider and
   `BUNNYLAND_VIDEO_PROFILE` selects one of its profiles.
 
-Generated media **persists**: the reference is saved with the world, and nothing is
-regenerated once an entity or event has that image or clip.
+At request time Bunnyland persists an immutable public scene snapshot with the history
+record. It contains the triggering public/room event, room identity and appearance,
+environment, visible character appearances and state, relevant objects/equipment, and a
+short lead-in event window. Directed/private events, memories, and operator state are never
+included. Both WD14-style tag prompts and natural-language prose prompts derive from this
+same snapshot; the triggering event is ordered first while the room context maintains visual
+continuity. Plugin media-fact providers can add typed public visual facts.
+
+Generated media **persists** along with prompt provenance: URL, positive and negative prompt,
+style, enhancer, fallback status, source event, snapshot epoch, generator, template, and seed.
+Nothing is regenerated once an entity or event has that image or clip unless forced.
 
 ## Enabling short ComfyUI videos
 

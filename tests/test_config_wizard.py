@@ -279,6 +279,8 @@ def test_bunnyland_config_renders_setup_env() -> None:
             templates_path="/data/media-workflows.json",
             prompt_style="natural",
             enhancer="stub",
+            image_prompt_enhancer="image-custom",
+            video_prompt_enhancer="video-custom",
             model="media-model",
         ),
     )
@@ -308,6 +310,8 @@ def test_bunnyland_config_renders_setup_env() -> None:
     assert env["BUNNYLAND_MEDIA_TEMPLATES"] == "/data/media-workflows.json"
     assert env["BUNNYLAND_MEDIA_PROMPT_STYLE"] == "natural"
     assert env["BUNNYLAND_MEDIA_ENHANCER"] == "stub"
+    assert env["BUNNYLAND_IMAGE_PROMPT_ENHANCER"] == "image-custom"
+    assert env["BUNNYLAND_VIDEO_PROMPT_ENHANCER"] == "video-custom"
     assert env["BUNNYLAND_MEDIA_MODEL"] == "media-model"
     assert "BUNNYLAND_TRUST_X_REAL_IP" not in env
     assert env["BUNNYLAND_SETUP_DRY_RUN"] == "1"

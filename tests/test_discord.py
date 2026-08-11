@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from datetime import UTC, datetime
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -2406,6 +2406,29 @@ async def test_discord_room_feed_posts_marked_room_activity(scenario):
     assert len(channel.messages) == 1
     assert "Juniper" in channel.messages[0]
     assert "Mosslit Burrow" in channel.messages[0]
+
+
+async def test_discord_room_feed_bounds_exact_event_message_mapping(scenario):
+    class IdentifiedChannel(_RoomFeedChannel):
+        next_id = 998
+
+        async def send(self, message):
+            self.messages.append(message)
+            sent_id = self.next_id
+            self.next_id += 1
+            return SimpleNamespace(id=sent_id)
+
+    channel = IdentifiedChannel()
+    bot = _bot_for_scenario(scenario, client=_RoomFeedClient({111: channel}))
+    bot._media_event_messages = {index: f"event-{index}" for index in range(199)}
+
+    await bot._send_room_feed_message(111, "A gate opens.", "event-first")
+    await bot._send_room_feed_message(111, "A bell rings.", "event-new")
+
+    assert len(bot._media_event_messages) == 200
+    assert 0 not in bot._media_event_messages
+    assert bot._media_event_messages[998] == "event-first"
+    assert bot._media_event_messages[999] == "event-new"
 
 
 async def test_discord_room_feed_skips_unmarked_room(scenario):

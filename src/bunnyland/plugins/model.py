@@ -78,8 +78,14 @@ class ContentContribution(BaseModel):
     persona_fragments: tuple[object, ...] = ()
     #: Async post-render text filters contributed by plugins.
     prompt_filters: tuple[object, ...] = ()
-    #: Image-prompt enhancers (``PromptEnhancer`` instances) for image generation (spec 27).
+    #: Legacy/shared prompt enhancers implementing both image and video contracts.
     prompt_enhancers: tuple[object, ...] = ()
+    #: Image-only prompt enhancers implementing ``ImagePromptEnhancer``.
+    image_prompt_enhancers: tuple[object, ...] = ()
+    #: Video-only prompt enhancers implementing ``VideoPromptEnhancer``.
+    video_prompt_enhancers: tuple[object, ...] = ()
+    #: Public visual fact providers used by event-focused media scene projections.
+    media_fact_providers: tuple[object, ...] = ()
     #: Named image-generator factories. Factories receive global and owner plugin config.
     image_generators: tuple[object, ...] = ()
     #: Named video-generator factories. Factories receive global and owner plugin config.

@@ -256,8 +256,8 @@ JOB_RESULT_ADAPTER = TypeAdapter(JobResult)
 if TYPE_CHECKING:
     from ..engine import GameLoop
     from ..imagegen.backfill import ImageBackfillScheduler
-    from ..imagegen.service import ImageGenService
-    from ..imagegen.video_service import VideoGenService
+    from ..imagegen.service import ImageGenJob, ImageGenService
+    from ..imagegen.video_service import VideoGenJob, VideoGenService
     from ..plugins.model import Plugin
     from .subscriptions import EventSubscription
 
@@ -866,7 +866,7 @@ def create_app(
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
 
-    def _image_response(job) -> WorldImageGenerationResponse:
+    def _image_response(job: ImageGenJob | VideoGenJob) -> WorldImageGenerationResponse:
         return WorldImageGenerationResponse(
             world_epoch=actor.epoch,
             job_id=job.job_id,
@@ -876,6 +876,11 @@ def create_app(
             generator=job.generator,
             url=job.url,
             alpha_url=job.alpha_url,
+            source_event_id=job.source_event_id,
+            snapshot_epoch=job.snapshot_epoch,
+            prompt_style=job.prompt_style,
+            enhancer=job.enhancer,
+            prompt_fallback=job.prompt_fallback,
             error=job.error,
         )
 
@@ -2075,21 +2080,33 @@ def create_app(
 
     async def _scene_image_request(
         character_id: str,
+        event_id: str = "",
     ) -> WorldImageGenerationResponse | None:
         # Shared by the player scene-image endpoint and the MCP camera tool. Both callers
         # guarantee imagegen is configured and the character exists; this returns None only
         # when there is no room to illustrate, which each caller renders as its own error.
         service = _require_imagegen()
-        job = await request_scene_image(actor, service, character_id=character_id)
+        try:
+            job = await request_scene_image(
+                actor, service, character_id=character_id, event_id=event_id
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if job is None:
             return None
         return _image_response(job)
 
     async def _scene_video_request(
         character_id: str,
+        event_id: str = "",
     ) -> WorldImageGenerationResponse | None:
         service = _require_videogen()
-        job = await request_scene_video(actor, service, character_id=character_id)
+        try:
+            job = await request_scene_video(
+                actor, service, character_id=character_id, event_id=event_id
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if job is None:
             return None
         return _image_response(job)
@@ -3093,9 +3110,9 @@ def create_app(
             )
         created = datetime.now(UTC)
         generated = (
-            await _scene_video_request(str(character.id))
+            await _scene_video_request(str(character.id), body.event_id)
             if body.kind == "scene_video"
-            else await _scene_image_request(str(character.id))
+            else await _scene_image_request(str(character.id), body.event_id)
         )
         if generated is None:
             raise HTTPException(status_code=400, detail="character has no room to illustrate")

@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from pydantic import JsonValue
 
 from ..core.world_actor import WorldActor
-from ..plugins.loader import collect_prompt_enhancers
+from ..plugins.loader import (
+    collect_image_prompt_enhancers,
+    collect_media_fact_providers,
+    collect_prompt_enhancers,
+    collect_video_prompt_enhancers,
+)
 from ..plugins.model import Plugin
 from .backfill import ImageBackfillScheduler
 from .client import build_comfy_client
@@ -26,10 +31,15 @@ from .openrouter import OpenRouterImageGenerator
 from .postprocess import remove_edge_background
 from .prompt import (
     CatalogExampleSource,
+    ImagePromptEnhancer,
     LLMPromptEnhancer,
     PromptEnhancer,
+    StructuredPromptEnhancer,
     StubPromptEnhancer,
+    VideoPromptEnhancer,
 )
+from .scene_models import MediaFactProvider
+from .scene_projection import MediaSceneProjection
 from .service import ImageGenService
 from .spec import ImagePurpose
 from .store import WorkflowTemplateStore, default_comfy_templates
@@ -48,7 +58,9 @@ class MediaGenerationServices:
 
 def select_enhancer(config: MediaGenConfig, plugins: Sequence[Plugin] = ()) -> PromptEnhancer:
     name = config.enhancer
-    if name in ("", "stub"):
+    if name in ("", "structured"):
+        return StructuredPromptEnhancer()
+    if name == "stub":
         return StubPromptEnhancer()
     if name == "llm":
         return LLMPromptEnhancer(
@@ -60,6 +72,42 @@ def select_enhancer(config: MediaGenConfig, plugins: Sequence[Plugin] = ()) -> P
         if getattr(enhancer, "name", "") == name:
             return enhancer
     raise ValueError(f"unknown media enhancer {name!r}")
+
+
+def _select_image_enhancer(
+    config: MediaGenConfig,
+    plugins: Sequence[Plugin],
+    name: str,
+) -> ImagePromptEnhancer:
+    if name == config.enhancer:
+        return select_enhancer(config, plugins)
+    if name in {"stub", "structured", "llm"}:
+        return select_enhancer(replace(config, enhancer=name), plugins)
+    for enhancer in (*collect_image_prompt_enhancers(plugins), *collect_prompt_enhancers(plugins)):
+        if getattr(enhancer, "name", "") != name:
+            continue
+        if not isinstance(enhancer, ImagePromptEnhancer):
+            raise TypeError(f"image prompt enhancer {name!r} has an invalid contract")
+        return enhancer
+    raise ValueError(f"unknown image prompt enhancer {name!r}")
+
+
+def _select_video_enhancer(
+    config: MediaGenConfig,
+    plugins: Sequence[Plugin],
+    name: str,
+) -> VideoPromptEnhancer:
+    if name == config.enhancer:
+        return select_enhancer(config, plugins)
+    if name in {"stub", "structured", "llm"}:
+        return select_enhancer(replace(config, enhancer=name), plugins)
+    for enhancer in (*collect_video_prompt_enhancers(plugins), *collect_prompt_enhancers(plugins)):
+        if getattr(enhancer, "name", "") != name:
+            continue
+        if not isinstance(enhancer, VideoPromptEnhancer):
+            raise TypeError(f"video prompt enhancer {name!r} has an invalid contract")
+        return enhancer
+    raise ValueError(f"unknown video prompt enhancer {name!r}")
 
 
 def build_media_services(
@@ -123,7 +171,26 @@ def build_media_services(
     media = MediaStore(config.media_root)
     actor.media_service = media
     enhancer = select_enhancer(config, plugins)
+    image_enhancer = (
+        _select_image_enhancer(config, plugins, config.image.prompt_enhancer)
+        if config.image.prompt_enhancer
+        else enhancer
+    )
+    video_enhancer = (
+        _select_video_enhancer(config, plugins, config.video.prompt_enhancer)
+        if config.video.prompt_enhancer
+        else enhancer
+    )
     examples = CatalogExampleSource()
+    raw_fact_providers = collect_media_fact_providers(plugins)
+    if any(not isinstance(provider, MediaFactProvider) for provider in raw_fact_providers):
+        raise TypeError("media fact providers must implement MediaFactProvider")
+    fact_providers = tuple(
+        provider
+        for provider in raw_fact_providers
+        if isinstance(provider, MediaFactProvider)
+    )
+    scenes = MediaSceneProjection(actor, fact_providers=fact_providers)
     image = None
     backfill = None
     if image_names:
@@ -134,9 +201,10 @@ def build_media_services(
                 purpose: image_registry[config.image.generator_for(purpose.value)]
                 for purpose in ImagePurpose
             },
-            enhancer=enhancer,
+            enhancer=image_enhancer,
             examples=examples,
             media=media,
+            scene_projection=scenes,
             alpha=remove_edge_background,
         )
         backfill = ImageBackfillScheduler(
@@ -150,9 +218,10 @@ def build_media_services(
             config,
             generator=video_registry[video_name],
             profile_name=config.video.profile,
-            enhancer=enhancer,
+            enhancer=video_enhancer,
             examples=examples,
             media=media,
+            scene_projection=scenes,
         )
     return MediaGenerationServices(media=media, image=image, video=video, backfill=backfill)
 

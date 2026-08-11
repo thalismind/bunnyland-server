@@ -32,6 +32,7 @@ from ..imagegen.affordance import (
 from ..imagegen.feed import (
     latest_image_completion,
     latest_image_failure,
+    latest_media_event_id,
     latest_video_completion,
     latest_video_failure,
 )
@@ -407,6 +408,7 @@ class BunnylandTUI(App[None]):
         self._event_image_failure_epoch = -1
         self._event_video_url = ""
         self._event_video_failure_epoch = -1
+        self._latest_media_event_id = ""
         self._refresh_error: str | None = None
         self._refresh_task: asyncio.Task[None] | None = None
         self._live_task: asyncio.Task | None = None
@@ -1023,6 +1025,7 @@ class BunnylandTUI(App[None]):
         return sorted(actions, key=lambda action: not _action_available(action))
 
     def _drain_activity(self, events: list[dict], *, prime: bool = False) -> None:
+        self._latest_media_event_id = latest_media_event_id(events)
         lines = self._events.drain_events(
             events,
             player_id=self.player_id,
@@ -1209,7 +1212,9 @@ class BunnylandTUI(App[None]):
         if not self.backend.supports_image_requests:
             self._append_activity(Text("Image requests are not available for this session."))
             return
-        result = await self.backend.request_image(self.player_id)
+        result = await self.backend.request_image(
+            self.player_id, self._latest_media_event_id
+        )
         if result.ok:
             note = "image ready" if result.status == "skipped" else "image requested"
             self._append_activity(Text(f"{REQUEST_EMOJI} {note}.", style="cyan"))
@@ -1224,7 +1229,9 @@ class BunnylandTUI(App[None]):
         if not self.backend.supports_video_requests:
             self._append_activity(Text("Video requests are not available for this session."))
             return
-        result = await self.backend.request_video(self.player_id)
+        result = await self.backend.request_video(
+            self.player_id, self._latest_media_event_id
+        )
         if result.ok:
             note = "video ready" if result.status == "skipped" else "video requested"
             self._append_activity(Text(f"{VIDEO_REQUEST_EMOJI} {note}.", style="cyan"))

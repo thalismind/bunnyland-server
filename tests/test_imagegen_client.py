@@ -56,6 +56,8 @@ def test_config_from_env_reads_all_fields():
             "BUNNYLAND_IMAGE_WORKFLOWS": "anima-my-server",
             "BUNNYLAND_MEDIA_PROMPT_STYLE": "tag",
             "BUNNYLAND_MEDIA_ENHANCER": "llm",
+            "BUNNYLAND_IMAGE_PROMPT_ENHANCER": "image-only",
+            "BUNNYLAND_VIDEO_PROMPT_ENHANCER": "video-only",
             "BUNNYLAND_MEDIA_MODEL": "flux",
             "OLLAMA_HOST": "https://ollama.com",
             "OLLAMA_CLOUD_API_KEY": "secret",
@@ -72,6 +74,8 @@ def test_config_from_env_reads_all_fields():
     assert config.comfyui.workflows == "anima-my-server"
     assert config.prompt_style == "tag"
     assert config.enhancer == "llm"
+    assert config.image.prompt_enhancer == "image-only"
+    assert config.video.prompt_enhancer == "video-only"
     assert config.model == "flux"
     assert config.api_key == "secret"
 

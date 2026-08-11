@@ -11,12 +11,19 @@ import pytest
 from conftest import build_scenario
 
 from bunnyland.claims import ClaimSecretRegistry, add_claim
-from bunnyland.core import CharacterComponent, IdentityComponent, spawn_entity
-from bunnyland.core.events import DomainEvent
+from bunnyland.core import (
+    CharacterComponent,
+    EventVisibility,
+    IdentityComponent,
+    event_base,
+    parse_entity_id,
+    spawn_entity,
+)
+from bunnyland.core.events import DomainEvent, SpeechSaidEvent
 from bunnyland.foundation.history.mechanics import record_world_history
 from bunnyland.imagegen.backfill import ImageBackfillScheduler
 from bunnyland.imagegen.comfyui import ComfyUIGenerator
-from bunnyland.imagegen.components import PortraitImageComponent
+from bunnyland.imagegen.components import MediaSceneSnapshotComponent, PortraitImageComponent
 from bunnyland.imagegen.config import ComfyUIConfig, ImageGenConfig, MediaGenConfig
 from bunnyland.imagegen.media import SEGMENT_PORTRAITS, SEGMENT_SPRITES, MediaStore
 from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
@@ -400,6 +407,43 @@ async def test_scene_image_endpoint_success(tmp_path):
     assert all(event.target_ids == (str(scenario.character),) for event in image_events)
 
 
+async def test_scene_image_endpoint_accepts_exact_visible_event_and_rejects_unknown(tmp_path):
+    scenario = build_scenario()
+    service = _service(scenario.actor, tmp_path)
+    event = SpeechSaidEvent(
+        **event_base(
+            3,
+            event_id="event:castle-gate",
+            visibility=EventVisibility.ROOM,
+            actor_id=str(scenario.character),
+            room_id=str(scenario.room_a),
+        ),
+        text="Juniper opens the castle gate",
+    )
+    await scenario.actor.bus.publish(event)
+    async with _client(_app(scenario.actor, service)) as client:
+        claim_id, headers = await _claim(client, str(scenario.character))
+        unknown = await client.post(
+            f"/v1/play/claims/{claim_id}/jobs",
+            headers=headers,
+            json={"kind": "scene_image", "event_id": "event:unknown"},
+        )
+        response = await client.post(
+            f"/v1/play/claims/{claim_id}/jobs",
+            headers=headers,
+            json={"kind": "scene_image", "event_id": event.event_id},
+        )
+        await service.wait_idle()
+    assert unknown.status_code == 400
+    assert response.status_code == 202
+    entity_id = parse_entity_id(response.json()["result"]["entity_id"])
+    assert entity_id is not None
+    snapshot = scenario.actor.world.get_entity(entity_id).get_component(
+        MediaSceneSnapshotComponent
+    ).snapshot
+    assert snapshot.primary_event_id == event.event_id
+
+
 async def test_scene_image_endpoint_unknown_character(tmp_path):
     scenario = build_scenario()
     service = _service(scenario.actor, tmp_path)
@@ -707,7 +751,7 @@ def test_build_image_service_unknown_family():
 
 
 def test_select_enhancer_stub():
-    assert select_enhancer(MediaGenConfig()).name == "stub"
+    assert select_enhancer(MediaGenConfig()).name == "structured"
     assert select_enhancer(MediaGenConfig(enhancer="stub")).name == "stub"
 
 

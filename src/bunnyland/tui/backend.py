@@ -441,11 +441,11 @@ class Backend(ABC):
         """Watch player updates until cancelled. Local backends remain polling-only."""
         return None
 
-    async def request_image(self, character_id: str) -> ImageRequestResult:
+    async def request_image(self, character_id: str, event_id: str = "") -> ImageRequestResult:
         """Request an image of the character's current scene (the 📷 camera affordance)."""
         return ImageRequestResult(ok=False, status="unavailable", reason="not available")
 
-    async def request_video(self, character_id: str) -> ImageRequestResult:
+    async def request_video(self, character_id: str, event_id: str = "") -> ImageRequestResult:
         """Request a short clip of the character's recent scene events."""
         return ImageRequestResult(ok=False, status="unavailable", reason="not available")
 
@@ -921,28 +921,38 @@ class LocalBackend(Backend):
     async def recent_events(self, character_id: str = "") -> list[dict]:
         return self._events.recent_messages() if self._events is not None else []
 
-    async def request_image(self, character_id: str) -> ImageRequestResult:
+    async def request_image(self, character_id: str, event_id: str = "") -> ImageRequestResult:
         if self.imagegen is None:
             return ImageRequestResult(
                 ok=False, status="unavailable", reason="image generation is not configured"
             )
         from ..imagegen.scene import request_scene_image
 
-        job = await request_scene_image(self.actor, self.imagegen, character_id=character_id)
+        job = await request_scene_image(
+            self.actor,
+            self.imagegen,
+            character_id=character_id,
+            event_id=event_id,
+        )
         if job is None:
             return ImageRequestResult(
                 ok=False, status="no-room", reason="your character has no room to illustrate"
             )
         return ImageRequestResult(ok=True, status=job.status, url=job.url)
 
-    async def request_video(self, character_id: str) -> ImageRequestResult:
+    async def request_video(self, character_id: str, event_id: str = "") -> ImageRequestResult:
         if not self.supports_video_requests:
             return ImageRequestResult(
                 ok=False, status="unavailable", reason="video generation is not configured"
             )
         from ..imagegen.scene import request_scene_video
 
-        job = await request_scene_video(self.actor, self.videogen, character_id=character_id)
+        job = await request_scene_video(
+            self.actor,
+            self.videogen,
+            character_id=character_id,
+            event_id=event_id,
+        )
         if job is None:
             return ImageRequestResult(
                 ok=False, status="no-room", reason="your character has no room to illustrate"
@@ -1617,13 +1627,13 @@ class RemoteBackend(Backend):
             attempt = 0 if ready else attempt + 1
             await asyncio.sleep(delay * random.uniform(0.8, 1.2))
 
-    async def request_image(self, character_id: str) -> ImageRequestResult:
+    async def request_image(self, character_id: str, event_id: str = "") -> ImageRequestResult:
         claim = self._claim_for(character_id)
         if claim is None or not claim.claim_id:
             return ImageRequestResult(ok=False, status="error", reason="a claim is required")
         res = await self._client.post(
             f"{self.base}/play/claims/{urllib.parse.quote(claim.claim_id, safe='')}/jobs",
-            json={"kind": "scene_image"},
+            json={"kind": "scene_image", **({"event_id": event_id} if event_id else {})},
             **self._claim_request_kwargs(character_id),
         )
         if res.status_code == 409:
@@ -1642,13 +1652,13 @@ class RemoteBackend(Backend):
             url=result.get("url", ""),
         )
 
-    async def request_video(self, character_id: str) -> ImageRequestResult:
+    async def request_video(self, character_id: str, event_id: str = "") -> ImageRequestResult:
         claim = self._claim_for(character_id)
         if claim is None or not claim.claim_id:
             return ImageRequestResult(ok=False, status="error", reason="a claim is required")
         res = await self._client.post(
             f"{self.base}/play/claims/{urllib.parse.quote(claim.claim_id, safe='')}/jobs",
-            json={"kind": "scene_video"},
+            json={"kind": "scene_video", **({"event_id": event_id} if event_id else {})},
             **self._claim_request_kwargs(character_id),
         )
         if res.status_code == 409:

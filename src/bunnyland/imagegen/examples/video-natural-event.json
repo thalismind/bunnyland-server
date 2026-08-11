@@ -1,0 +1,10 @@
+[
+  {
+    "prompt": "A five-second cinematic shot inside a warm timber tavern at night. Two rabbit travelers raise their mugs as a fox strikes the opening chord on a lute; the camera glides from the candlelit hearth into a medium view of the table while firelight flickers and tavern chatter, clinking pottery, and the lute fill the room.",
+    "negative": "static frame, abrupt cuts, inconsistent characters, warped motion, subtitles, watermark"
+  },
+  {
+    "prompt": "In a moonlit castle courtyard, three armored guards close in on a cloaked stranger beside a stone well. The stranger steps backward as cloaks and banners move in the wind; the camera slowly pushes toward the confrontation while boots scrape stone and distant bells echo.",
+    "negative": "static subjects, modern objects, character changes, jitter, text, watermark"
+  }
+]

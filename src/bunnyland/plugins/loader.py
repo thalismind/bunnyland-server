@@ -122,6 +122,21 @@ def collect_prompt_enhancers(plugins: Sequence[Plugin]) -> list:
     return list(collect_content_items(plugins, "prompt_enhancers"))
 
 
+def collect_image_prompt_enhancers(plugins: Sequence[Plugin]) -> list[object]:
+    """Gather image-only prompt enhancers in plugin order."""
+    return list(collect_content_items(plugins, "image_prompt_enhancers"))
+
+
+def collect_video_prompt_enhancers(plugins: Sequence[Plugin]) -> list[object]:
+    """Gather video-only prompt enhancers in plugin order."""
+    return list(collect_content_items(plugins, "video_prompt_enhancers"))
+
+
+def collect_media_fact_providers(plugins: Sequence[Plugin]) -> list[object]:
+    """Gather public visual fact providers for media scene projections."""
+    return list(collect_content_items(plugins, "media_fact_providers"))
+
+
 def collect_image_generators(plugins, config, plugin_config=None):
     """Instantiate plugin-contributed image generators with their owner configuration."""
     from ..imagegen.generators import collect_image_generators as collect
@@ -279,8 +294,11 @@ __all__ = [
     "apply_plugins",
     "collect_persona_fragments",
     "collect_image_generators",
+    "collect_image_prompt_enhancers",
     "collect_video_generators",
+    "collect_video_prompt_enhancers",
     "collect_prompt_enhancers",
+    "collect_media_fact_providers",
     "collect_prompt_filters",
     "collect_prompt_fragments",
     "discover_plugins",

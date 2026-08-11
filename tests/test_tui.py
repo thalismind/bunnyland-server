@@ -598,7 +598,8 @@ async def test_local_backend_request_image_reports_unconfigured_service():
 async def test_local_backend_request_image_reports_no_room_and_success(monkeypatch):
     calls = []
 
-    async def request_scene_image(actor, imagegen, *, character_id):
+    async def request_scene_image(actor, imagegen, *, character_id, event_id=""):
+        del event_id
         calls.append((actor, imagegen, character_id))
         if len(calls) == 1:
             return None
@@ -628,7 +629,8 @@ async def test_local_backend_request_image_reports_no_room_and_success(monkeypat
 async def test_local_backend_request_video_reports_unavailable_no_room_and_success(monkeypatch):
     calls = []
 
-    async def request_scene_video(actor, imagegen, *, character_id):
+    async def request_scene_video(actor, imagegen, *, character_id, event_id=""):
+        del event_id
         calls.append((actor, imagegen, character_id))
         if len(calls) == 1:
             return None
@@ -5009,7 +5011,8 @@ class _ImageBackend(RecordingBackend):
         self._result = result
         self.image_requests: list[str] = []
 
-    async def request_image(self, character_id):
+    async def request_image(self, character_id, event_id=""):
+        del event_id
         self.image_requests.append(character_id)
         return self._result
 
@@ -5022,7 +5025,8 @@ class _VideoBackend(RecordingBackend):
         self._result = result
         self.video_requests: list[str] = []
 
-    async def request_video(self, character_id):
+    async def request_video(self, character_id, event_id=""):
+        del event_id
         self.video_requests.append(character_id)
         return self._result
 

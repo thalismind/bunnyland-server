@@ -31,12 +31,37 @@ from bunnyland.imagegen.generators import (
 from bunnyland.imagegen.in_memory import InMemoryImageGenerator
 from bunnyland.imagegen.media import MediaStore
 from bunnyland.imagegen.openrouter import OpenRouterImageGenerator
-from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
+from bunnyland.imagegen.prompt import (
+    CatalogExampleSource,
+    ImagePromptRequest,
+    StubPromptEnhancer,
+    VideoPromptRequest,
+)
 from bunnyland.imagegen.service import ImageGenService
-from bunnyland.imagegen.spec import ImagePurpose
+from bunnyland.imagegen.spec import GeneratedPrompt, ImagePurpose
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
-from bunnyland.imagegen.wiring import build_media_services
+from bunnyland.imagegen.wiring import build_media_services, select_enhancer
 from bunnyland.plugins import ContentContribution, Plugin
+
+
+class _ImageOnlyEnhancer:
+    name = "image-only"
+
+    async def enhance_image(self, request: ImagePromptRequest, *, examples=()):
+        del examples
+        return GeneratedPrompt(style=request.style, prompt=request.subject)
+
+
+class _VideoOnlyEnhancer:
+    name = "video-only"
+
+    async def enhance_video(self, request: VideoPromptRequest, *, examples=()):
+        del examples
+        return GeneratedPrompt(style=request.style, prompt=request.subject)
+
+
+class _SharedEnhancer(_ImageOnlyEnhancer, _VideoOnlyEnhancer):
+    name = "shared"
 
 
 def _request(**overrides) -> ImageGeneratorRequest:
@@ -519,6 +544,213 @@ def test_wiring_supports_plugin_video_without_image_service(tmp_path):
     assert services.video is not None
     assert services.video._generator.name == "seedance"
     assert actor.media_service is services.media
+
+
+def test_wiring_selects_independent_modality_prompt_enhancers(tmp_path):
+    video_factory = _VideoFactory()
+    video_factory.name = "seedance"
+    image_enhancer = _ImageOnlyEnhancer()
+    video_enhancer = _VideoOnlyEnhancer()
+    plugin = Plugin(
+        id="example.media-adapters",
+        name="Media adapters",
+        content=ContentContribution(
+            image_prompt_enhancers=(image_enhancer,),
+            video_prompt_enhancers=(video_enhancer,),
+            video_generators=(video_factory,),
+        ),
+    )
+    config = MediaGenConfig(
+        image=ImageGenConfig(
+            generator="in-memory",
+            prompt_enhancer="image-only",
+        ),
+        video=VideoGenConfig(
+            generator="seedance",
+            profile="cinematic",
+            prompt_enhancer="video-only",
+        ),
+        media_root=str(tmp_path),
+    )
+    services = build_media_services(build_scenario().actor, config, plugins=[plugin])
+    assert services.image is not None and services.image._enhancer is image_enhancer
+    assert services.video is not None and services.video._enhancer is video_enhancer
+
+
+@pytest.mark.parametrize(
+    ("field", "name", "message"),
+    (
+        ("image", "bad-image", "invalid contract"),
+        ("image", "missing", "unknown image prompt enhancer"),
+        ("video", "bad-video", "invalid contract"),
+        ("video", "missing", "unknown video prompt enhancer"),
+    ),
+)
+def test_wiring_rejects_invalid_or_unknown_modality_enhancers(
+    tmp_path, field, name, message
+):
+    video_factory = _VideoFactory()
+    video_factory.name = "seedance"
+    invalid = SimpleNamespace(name=name)
+    plugin = Plugin(
+        id="example.bad-enhancer",
+        name="Bad enhancer",
+        content=ContentContribution(
+            image_prompt_enhancers=(invalid,)
+            if field == "image" and name.startswith("bad")
+            else (),
+            video_prompt_enhancers=(invalid,)
+            if field == "video" and name.startswith("bad")
+            else (),
+            video_generators=(video_factory,),
+        ),
+    )
+    config = MediaGenConfig(
+        image=ImageGenConfig(
+            generator="in-memory",
+            prompt_enhancer=name if field == "image" else "",
+        ),
+        video=VideoGenConfig(
+            generator="seedance",
+            profile="cinematic",
+            prompt_enhancer=name if field == "video" else "",
+        ),
+        media_root=str(tmp_path),
+    )
+    with pytest.raises((TypeError, ValueError), match=message):
+        build_media_services(build_scenario().actor, config, plugins=[plugin])
+
+
+def test_wiring_reuses_shared_builtin_enhancer_and_rejects_bad_fact_provider(tmp_path):
+    shared = build_media_services(
+        build_scenario().actor,
+        MediaGenConfig(
+            image=ImageGenConfig(
+                generator="in-memory",
+                prompt_enhancer="stub",
+            ),
+            enhancer="stub",
+            media_root=str(tmp_path),
+        ),
+    )
+    assert shared.image is not None and shared.image._enhancer.name == "stub"
+
+    independent_builtins = build_media_services(
+        build_scenario().actor,
+        MediaGenConfig(
+            image=ImageGenConfig(
+                generator="in-memory",
+                prompt_enhancer="stub",
+            ),
+            video=VideoGenConfig(
+                generator="",
+                prompt_enhancer="structured",
+            ),
+            enhancer="",
+            media_root=str(tmp_path / "independent"),
+        ),
+    )
+    assert independent_builtins.image is not None
+    assert independent_builtins.image._enhancer.name == "stub"
+
+    plugin = Plugin(
+        id="example.bad-facts",
+        name="Bad facts",
+        content=ContentContribution(media_fact_providers=(object(),)),
+    )
+    with pytest.raises(TypeError, match="media fact providers"):
+        build_media_services(
+            build_scenario().actor,
+            _media_config("in-memory", media_root=str(tmp_path)),
+            plugins=[plugin],
+        )
+
+
+def test_wiring_skips_nonmatching_plugin_enhancers_for_each_modality(tmp_path):
+    image_enhancer = _ImageOnlyEnhancer()
+    video_enhancer = _VideoOnlyEnhancer()
+    video_factory = _VideoFactory()
+    video_factory.name = "seedance"
+    plugin = Plugin(
+        id="example.prompt-order",
+        name="Prompt ordering",
+        content=ContentContribution(
+            image_prompt_enhancers=(SimpleNamespace(name="other-image"), image_enhancer),
+            video_prompt_enhancers=(SimpleNamespace(name="other-video"), video_enhancer),
+            video_generators=(video_factory,),
+        ),
+    )
+    services = build_media_services(
+        build_scenario().actor,
+        MediaGenConfig(
+            image=ImageGenConfig(
+                generator="in-memory",
+                prompt_enhancer="image-only",
+                ),
+                video=VideoGenConfig(
+                    generator="seedance",
+                prompt_enhancer="video-only",
+            ),
+            media_root=str(tmp_path),
+        ),
+        plugins=[plugin],
+    )
+    assert services.image is not None and services.image._enhancer is image_enhancer
+    assert services.video is not None and services.video._enhancer is video_enhancer
+
+
+def test_wiring_selects_legacy_shared_and_llm_enhancers(tmp_path, monkeypatch):
+    shared = _SharedEnhancer()
+    video_factory = _VideoFactory()
+    video_factory.name = "seedance"
+    plugin = Plugin(
+        id="example.shared-prompt",
+        name="Shared prompt",
+        content=ContentContribution(
+            prompt_enhancers=(SimpleNamespace(name="other"), shared),
+            video_generators=(video_factory,),
+        ),
+    )
+    assert select_enhancer(MediaGenConfig(), plugins=[plugin]).name == "structured"
+    assert select_enhancer(MediaGenConfig(enhancer="stub"), plugins=[plugin]).name == "stub"
+    assert select_enhancer(MediaGenConfig(enhancer="shared"), plugins=[plugin]) is shared
+    with pytest.raises(ValueError, match="unknown media enhancer"):
+        select_enhancer(MediaGenConfig(enhancer="missing"), plugins=[plugin])
+
+    captured = {}
+
+    def fake_llm(**options):
+        captured.update(options)
+        return shared
+
+    monkeypatch.setattr("bunnyland.imagegen.wiring.LLMPromptEnhancer", fake_llm)
+    assert select_enhancer(
+        MediaGenConfig(
+            enhancer="llm",
+            model="media-model",
+            host="https://ollama.example",
+            api_key="secret",
+        )
+    ) is shared
+    assert captured == {
+        "model": "media-model",
+        "host": "https://ollama.example",
+        "api_key": "secret",
+    }
+
+    services = build_media_services(
+        build_scenario().actor,
+        MediaGenConfig(
+            video=VideoGenConfig(
+                generator="seedance",
+                prompt_enhancer="shared",
+            ),
+            enhancer="shared",
+            media_root=str(tmp_path),
+        ),
+        plugins=[plugin],
+    )
+    assert services.video is not None and services.video._enhancer is shared
 
 
 def test_comfy_generator_rejects_profile_for_another_purpose():

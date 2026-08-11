@@ -91,6 +91,10 @@ class SpriteImageComponent(Component):
     generator: str = "comfyui"
     profile: str = ""
     prompt: str = ""
+    negative_prompt: str = ""
+    prompt_style: str = ""
+    enhancer: str = ""
+    prompt_fallback: bool = False
     seed: int = 0
     generated_at_epoch: int = 0
 

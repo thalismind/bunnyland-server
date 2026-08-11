@@ -637,6 +637,8 @@ def test_cli_builds_media_services_from_yaml_config(monkeypatch):
             public_base_url="https://cdn.example.com/",
             video_generator="comfyui",
             video_profile="event-video",
+            image_prompt_enhancer="structured",
+            video_prompt_enhancer="llm",
         ),
         {"example.images": {"palette": "warm"}},
     )
@@ -646,6 +648,8 @@ def test_cli_builds_media_services_from_yaml_config(monkeypatch):
     assert calls["config"].comfyui.server_url == "http://comfy.local"
     assert calls["config"].public_base_url == "https://cdn.example.com"
     assert calls["config"].video.profile == "event-video"
+    assert calls["config"].image.prompt_enhancer == "structured"
+    assert calls["config"].video.prompt_enhancer == "llm"
     assert calls["plugin_config"] == {"example.images": {"palette": "warm"}}
 
 

@@ -18,7 +18,11 @@ from bunnyland.foundation.media.service import sniff_video_extension
 from ..core.ecs import parse_entity_id, replace_component
 from ..core.events import EventVisibility, event_base
 from ..core.world_actor import WorldActor
-from .components import EventVideoComponent, VideoRequestComponent
+from .components import (
+    EventVideoComponent,
+    MediaSceneSnapshotComponent,
+    VideoRequestComponent,
+)
 from .config import MediaGenConfig
 from .events import (
     VideoGenerationCompletedEvent,
@@ -27,7 +31,9 @@ from .events import (
 )
 from .generators import VideoGenerator, VideoGeneratorProfile, VideoGeneratorRequest
 from .media import SEGMENT_VIDEOS, MediaStore
-from .prompt import ImagePromptRequest, PromptEnhancer, PromptExampleSource
+from .prompt import PromptExampleSource, VideoPromptEnhancer, VideoPromptRequest
+from .scene_models import MediaSceneSnapshot
+from .scene_projection import MediaSceneProjection
 from .spec import GeneratedPrompt, ImagePurpose, MediaKind, PromptStyle
 from .subject import subject_for_event
 
@@ -49,6 +55,11 @@ class VideoGenJob:
     status: str = "queued"
     url: str = ""
     alpha_url: str = ""
+    source_event_id: str = ""
+    snapshot_epoch: int | None = None
+    prompt_style: str = ""
+    enhancer: str = ""
+    prompt_fallback: bool = False
     error: str | None = None
 
 
@@ -62,9 +73,10 @@ class VideoGenService:
         *,
         generator: VideoGenerator,
         profile_name: str,
-        enhancer: PromptEnhancer,
+        enhancer: VideoPromptEnhancer,
         examples: PromptExampleSource,
         media: MediaStore,
+        scene_projection: MediaSceneProjection | None = None,
     ) -> None:
         self._actor = actor
         self._config = config
@@ -73,6 +85,7 @@ class VideoGenService:
         self._enhancer = enhancer
         self._examples = examples
         self._media = media
+        self._scene_projection = scene_projection or MediaSceneProjection(actor)
         self._queue: asyncio.Queue[VideoGenJob] = asyncio.Queue()
         self._jobs: dict[str, VideoGenJob] = {}
         self._extras: dict[str, str] = {}
@@ -83,6 +96,10 @@ class VideoGenService:
     @property
     def media(self) -> MediaStore:
         return self._media
+
+    @property
+    def scene_projection(self) -> MediaSceneProjection:
+        return self._scene_projection
 
     @property
     def idle(self) -> bool:
@@ -189,9 +206,29 @@ class VideoGenService:
                     job.profile_name = profile.name
                     job.template_name = profile.name
                     subject = subject_for_event(self._actor.world, entity)
+                    scene = (
+                        entity.get_component(MediaSceneSnapshotComponent).snapshot
+                        if entity.has_component(MediaSceneSnapshotComponent)
+                        else None
+                    )
+                    record = entity.get_component(WorldHistoryRecordComponent)
+                    job.source_event_id = record.source_event_id
+                    job.snapshot_epoch = scene.captured_at_epoch if scene is not None else None
                 job.status = "running"
                 seed = int.from_bytes(sha256(job.entity_id.encode()).digest()[:4], "big")
-                prompt = await self._enhance(subject, profile, extra)
+                prompt = await self._enhance(subject, profile, extra, scene)
+                job.prompt_style = prompt.style.value
+                job.enhancer = prompt.enhancer
+                job.prompt_fallback = prompt.fallback
+                if not prompt.negative and profile.default_negative:
+                    prompt = prompt.model_copy(update={"negative": profile.default_negative})
+                telemetry.set_span_attributes(
+                    {
+                        "media.prompt.style": prompt.style.value,
+                        "media.prompt.fallback": prompt.fallback,
+                        "media.prompt.chars": len(prompt.prompt),
+                    }
+                )
                 data = await self._generator.generate_video(
                     VideoGeneratorRequest(
                         prompt=prompt.prompt,
@@ -216,6 +253,10 @@ class VideoGenService:
                     component = EventVideoComponent(
                         url=url,
                         prompt=prompt.prompt,
+                        negative_prompt=prompt.negative,
+                        prompt_style=prompt.style.value,
+                        enhancer=prompt.enhancer,
+                        prompt_fallback=prompt.fallback,
                         seed=seed,
                         template=profile.name,
                         generator=self._generator.name,
@@ -245,18 +286,23 @@ class VideoGenService:
                 await self._publish_failed(job)
 
     async def _enhance(
-        self, subject: str, profile: VideoGeneratorProfile, extra: str
+        self,
+        subject: str,
+        profile: VideoGeneratorProfile,
+        extra: str,
+        scene: MediaSceneSnapshot | None,
     ) -> GeneratedPrompt:
         style = profile.prompt_style
         if self._config.prompt_style:
             style = PromptStyle(self._config.prompt_style)
-        examples = self._examples.examples_for(style, ImagePurpose.EVENT, subject)
-        return await self._enhancer.enhance(
-            ImagePromptRequest(
+        examples = self._examples.examples_for(
+            style, ImagePurpose.EVENT, subject, media=MediaKind.VIDEO
+        )
+        return await self._enhancer.enhance_video(
+            VideoPromptRequest(
                 subject=subject,
                 style=style,
-                purpose=ImagePurpose.EVENT,
-                media=MediaKind.VIDEO,
+                scene=scene,
                 extra=extra,
             ),
             examples=examples,

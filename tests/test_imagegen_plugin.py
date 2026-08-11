@@ -7,6 +7,7 @@ from bunnyland.imagegen.components import (
     EventImageComponent,
     EventVideoComponent,
     ImageRequestComponent,
+    MediaSceneSnapshotComponent,
     PortraitImageComponent,
     VideoRequestComponent,
 )
@@ -22,7 +23,10 @@ from bunnyland.imagegen.prompt import StubPromptEnhancer
 from bunnyland.plugins import (
     ContentContribution,
     Plugin,
+    collect_image_prompt_enhancers,
+    collect_media_fact_providers,
     collect_prompt_enhancers,
+    collect_video_prompt_enhancers,
 )
 from bunnyland.plugins.ids import IMAGEGEN
 
@@ -37,6 +41,7 @@ def test_imagegen_plugin_registers_components_and_events():
         EventVideoComponent,
         ImageRequestComponent,
         VideoRequestComponent,
+        MediaSceneSnapshotComponent,
     }
     assert set(plugin.commands.typed_events) == {
         ImageGenerationStartedEvent,
@@ -56,3 +61,21 @@ def test_collect_prompt_enhancers_gathers_from_plugins():
         content=ContentContribution(prompt_enhancers=(enhancer,)),
     )
     assert collect_prompt_enhancers([imagegen_plugin(), plugin]) == [enhancer]
+
+
+def test_collect_modality_enhancers_and_media_fact_providers():
+    image_enhancer = object()
+    video_enhancer = object()
+    fact_provider = object()
+    plugin = Plugin(
+        id="x.media",
+        name="Media",
+        content=ContentContribution(
+            image_prompt_enhancers=(image_enhancer,),
+            video_prompt_enhancers=(video_enhancer,),
+            media_fact_providers=(fact_provider,),
+        ),
+    )
+    assert collect_image_prompt_enhancers([plugin]) == [image_enhancer]
+    assert collect_video_prompt_enhancers([plugin]) == [video_enhancer]
+    assert collect_media_fact_providers([plugin]) == [fact_provider]
