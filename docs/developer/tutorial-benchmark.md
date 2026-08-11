@@ -236,6 +236,177 @@ scripts/benchmark-tutorials \
 
 Ollama Cloud defaults to `https://ollama.com`; `--host` can override it.
 
+### Matched DeepSeek V4 Flash checkpoint matrix
+
+Do not reconstruct the DeepSeek V4 Flash checkpoint comparison with ad hoc
+`benchmark-tutorials` commands. Its validity depends on matching each original source
+cohort's commit and settings exactly. Use the frozen runner:
+
+```bash
+scripts/benchmark-deepseek-v4-flash-checkpoint-matrix validate-reference
+scripts/benchmark-deepseek-v4-flash-checkpoint-matrix run \
+  --model deepseek-v4-flash:0731-cloud \
+  --output artifacts/benchmarks/tutorials/deepseek-v4-flash-0731-matched
+scripts/benchmark-deepseek-v4-flash-checkpoint-matrix validate-output \
+  --model deepseek-v4-flash:0731-cloud \
+  --output artifacts/benchmarks/tutorials/deepseek-v4-flash-0731-matched
+```
+
+The runner validates the original manifests before making provider calls, creates clean
+detached worktrees at the exact commits, refuses to overwrite an output directory, and
+validates each candidate manifest and its complete set of five unique terminal session
+records immediately after its run. The frozen cells are:
+
+| Run | Commit | Tutorials | Thinking trace | Repeat guard | Provider retries | Helpful memory |
+| --- | --- | --- | --- | --- | ---: | --- |
+| v1 | `fc3ec38` | Apple, Bell, Clover | retained | on | default (zero) | unavailable/off |
+| v2a | `3a662413` | Apple, Bell | retained | on | default (zero) | unavailable/off |
+| v2b | `3a662413` | Clover | retained | on | default (zero) | unavailable/off |
+| v3 | `a6dc9644` | Bell | omitted | off | 8 | off |
+| v4 | `0abb32bd` | Bell | omitted | off | 0 | off |
+
+Every cell uses Ollama Cloud at `https://ollama.com`, five sessions per tutorial, high
+thinking, provider-default temperature and output limits, a 3,600-second session timeout,
+a 60-turn limit, and 600 simulated seconds per turn. Trace retention is part of the frozen
+artifact configuration even though it does not alter the provider request. A result must
+not enter a checkpoint comparison unless `validate-output` passes for the complete output
+directory. Only parameter-mismatched attempts belong under an explicitly named
+`quarantine/` directory. Exact-parameter incomplete attempts belong under `incomplete/` or
+`in-progress/`; none of those paths may be supplied to a final `build-tutorial-report` run.
+
+#### v5 description-rewrite cohort
+
+The v5 cohort compares the retained v1–v4 Ollama Cloud roster on Bell using server and
+harness commit `00c46639b8877646d02484621f8d1861e38314ec`. That revision contains the
+core/foundation and simpack action-description rewrites from `30bab13` and `ea45eb6`.
+It deliberately copies every v4 setting: five sessions, Bell only, high thinking, omitted
+thinking traces, repetition guard off, zero provider-session retries, helpful-memory seed
+off, provider-default temperature and output limit, and the same runtime limits.
+
+```bash
+scripts/benchmark-deepseek-v4-flash-checkpoint-matrix run-v5 \
+  --output artifacts/benchmarks/tutorials/deepseek-v4-flash-v5-matched
+scripts/benchmark-deepseek-v4-flash-checkpoint-matrix validate-v5-output \
+  --output artifacts/benchmarks/tutorials/deepseek-v4-flash-v5-matched
+```
+
+`run-v5` always executes the complete frozen roster and does not accept a model override.
+To preserve the already validated two-checkpoint v5 bundle while adding the historical
+models, use the resumable extension command:
+
+```bash
+scripts/benchmark-deepseek-v4-flash-checkpoint-matrix extend-v5 \
+  --source artifacts/benchmarks/tutorials/deepseek-v4-flash-v5-exact-matched-2026-08-03 \
+  --output artifacts/benchmarks/tutorials/ollama-cloud-v5-exact-matched-2026-08-03
+```
+
+The exact roster contains both DeepSeek V4 Flash checkpoints plus the historical hosted
+identifiers `deepseek-v4-pro:cloud`, `gemma4:cloud`, `glm-5.2:cloud`,
+`gpt-oss:120b-cloud`, `gpt-oss:20b-cloud`, `kimi-k2.5`, `kimi-k2.6:cloud`,
+`kimi-k2.7-code:cloud`, `minimax-m2.7:cloud`, `minimax-m3:cloud`,
+`mistral-large-3:675b-cloud`, `nemotron-3-nano:30b-cloud`,
+`nemotron-3-super:cloud`, `nemotron-3-ultra:cloud`, `qwen3.5:397b-cloud`, and
+`qwen3.5:cloud`. The two Qwen identifiers remain distinct because both exact identifiers
+occur in retained evidence.
+
+The validated 2026-08-03 bundle contains 14 of those 18 cloud cells (70 sessions). Four
+identifiers could not produce a complete exact-protocol cell: `kimi-k2.5` returned a
+provider retirement response; `mistral-large-3:675b-cloud` returned an assistant message
+with neither content nor tool calls; and both `qwen3.5:397b-cloud` and `qwen3.5:cloud`
+returned no response. With provider-session retries frozen at zero, none was retried or
+substituted. Their exact-parameter partial attempts remain under `incomplete/` and the four
+cells are recorded as unavailable in `protocol.json`, not scored as failures.
+
+The runner validates that roster against the retained v1–v4 manifests, records the full
+treatment in `protocol.json`, proves both description commits are ancestors of the frozen
+revision, runs from a clean detached worktree, and requires five unique terminal records
+plus response records for every model. Expansion stages only new cells under `in-progress/`.
+After they validate, the runner copies the validated source into a separate promotion
+directory, adds the new cells, validates the complete bundle, and promotes it to the
+requested output. The source is never changed or copied into quarantine. Exact-parameter
+partial cells move to `incomplete/`; a cell moves to `quarantine/` only when its manifest
+proves parameter drift. The historical broad v5 collection is never a valid input.
+
+The local v5 companion panel uses the same Bell, five-session, high-thinking treatment and
+the v4 loopback endpoint `http://127.0.0.1:11435`:
+
+```bash
+scripts/benchmark-deepseek-v4-flash-checkpoint-matrix run-v5-local \
+  --output artifacts/benchmarks/tutorials/ollama-local-v5-exact-matched-2026-08-03
+scripts/benchmark-deepseek-v4-flash-checkpoint-matrix validate-v5-local-output \
+  --output artifacts/benchmarks/tutorials/ollama-local-v5-exact-matched-2026-08-03
+```
+
+To add newly installed eligible historical tags without rerunning or modifying valid cells:
+
+```bash
+scripts/benchmark-deepseek-v4-flash-checkpoint-matrix extend-v5-local \
+  --source artifacts/benchmarks/tutorials/ollama-local-v5-exact-matched-2026-08-03 \
+  --output artifacts/benchmarks/tutorials/ollama-local-v5-exact-matched-expanded-2026-08-04
+```
+
+Local eligibility is fail-closed. A retained historical identifier must be installed under
+the exact same tag and either advertise both tool and thinking support through Ollama's tags
+API or have a complete runtime-validated exact-treatment cell. The metadata-eligible subset
+is Hermes 4 14B Q8, Laguna XS 2.1, Ornith 9B and 35B, Qwen 3.5 4B and 9B, and Qwen 3.6
+35B A3B. One retained tag is not installed, and nine installed tags do not advertise both
+capabilities. Exact high-thinking attempts nevertheless completed for Bahushruth Qwen 3.6
+Q4, HauhauCS Qwen 3.5 4B Q4, Luffy Qwen 3.6 Q8, and Unsloth Qwen 3.6 UD-Q6_K. The final
+local panel therefore contains 11 cells and 55 sessions. The runner records the metadata
+exception and runtime outcome lists in `protocol.json`; it does not substitute related tags
+or lower thinking. It stages only new cells under `in-progress/`, preserves the source
+bundle, moves exact-parameter partial work to `incomplete/`, and reserves `quarantine/` for
+manifest-proven parameter drift.
+
+Historical local manifests did not use one thinking treatment for every model. The retained
+v4 Bell cells for RP-INK, RPMax 8B, Stheno 8B, and HauhauCS Gemma 4 left `thinking` unset.
+The retained Qwen 3.6 Q6/Q8 cells requested `thinking=high`. The Bahushruth Qwen 3.6,
+HauhauCS Qwen 3.5, and Luffy Qwen 3.6 evidence also requested `high`, but came from the
+nearby `c3f2729` all-tutorial backfills with one provider-session retry. In contrast, v5
+always sends the frozen v4 comparison treatment, including `thinking=high` and zero
+provider-session retries. On Ollama 0.32.4 a model without thinking capability may reject
+that request rather than silently ignoring it; such an exact-parameter attempt is incomplete,
+not a parameter-mismatched quarantine candidate.
+
+To verify current runtime behavior rather than excluding an installed historical tag from
+capability metadata alone, use the exact-attempt command. It defaults to every installed
+protocol-incompatible tag, preserves the complete frozen v5 treatment, continues after an
+individual provider failure, and records exact-parameter failures under `incomplete/`:
+
+```bash
+scripts/benchmark-deepseek-v4-flash-checkpoint-matrix attempt-v5-local \
+  --output artifacts/benchmarks/tutorials/ollama-local-v5-exact-attempts
+```
+
+The requested output is an attempt ledger, not a valid final cohort. Its `protocol.json`
+separates attempted, completed, and failed models. A completed cell must still be added to a
+new full local bundle and pass `validate-v5-local-output` before it enters a report.
+
+The 2026-08-04 exact ledger completed four of nine cells. RP-INK, RPMax, Stheno, and
+HauhauCS Gemma 4 rejected the high-thinking request, while Unsloth Qwen 3.6 Q8 could not
+start its local llama server. Those five exact-parameter partials are under `incomplete/`,
+not quarantine. The four completed cells listed above each contain five terminal sessions.
+
+After the exact-attempt ledger is complete, promote its validated cells without rerunning
+them or modifying either evidence source:
+
+```bash
+scripts/benchmark-deepseek-v4-flash-checkpoint-matrix promote-v5-local-attempts \
+  --source artifacts/benchmarks/tutorials/ollama-local-v5-exact-matched-expanded-laguna-2026-08-04 \
+  --attempts artifacts/benchmarks/tutorials/ollama-local-v5-exact-unsupported-attempts-2026-08-04 \
+  --output artifacts/benchmarks/tutorials/ollama-local-v5-exact-matched-expanded-runtime-2026-08-04
+scripts/benchmark-deepseek-v4-flash-checkpoint-matrix validate-v5-local-output \
+  --output artifacts/benchmarks/tutorials/ollama-local-v5-exact-matched-expanded-runtime-2026-08-04
+```
+
+Promotion fails closed unless the attempt ledger records the frozen complete attempted
+roster, the recorded completed and failed sets exactly partition that roster, every
+completed cell has five unique terminal sessions, and every source manifest matches the
+v5 treatment. The command copies only complete validated cells into an `in-progress/`
+promotion, validates the combined bundle, and then moves that bundle to the requested
+final path. It never moves or copies a valid source into `quarantine/`; quarantine remains
+reserved for manifest-proven parameter drift.
+
 ## Running with OpenRouter
 
 Set `OPENROUTER_API_KEY` in the environment and use the exact OpenRouter model id. The key is
@@ -256,6 +427,56 @@ scripts/benchmark-tutorials \
 `--thinking low|medium|high` maps to OpenRouter reasoning effort. Leave `--temperature`
 unset to preserve each model/provider default. OpenRouter defaults to
 `https://openrouter.ai/api/v1`; `--host` can override it.
+
+### Matched Claude Opus 4.8 and Opus 5 matrix
+
+Do not reconstruct the Opus comparison with ad hoc benchmark commands. The frozen runner
+validates the retained Opus 5 v1-v4 manifests before making a provider call, adds Opus 4.8
+to every applicable v1-v5 tutorial cell, and runs only the missing Opus 5 v5 cell:
+
+```bash
+scripts/benchmark-opus-checkpoint-matrix validate-reference
+scripts/benchmark-opus-checkpoint-matrix preflight
+scripts/benchmark-opus-checkpoint-matrix run \
+  --output artifacts/benchmarks/tutorials/claude-opus-4-8-vs-opus-5-v1-v5-exact
+scripts/benchmark-opus-checkpoint-matrix validate-output \
+  --output artifacts/benchmarks/tutorials/claude-opus-4-8-vs-opus-5-v1-v5-exact
+```
+
+For a measured budget checkpoint, `run` accepts repeatable frozen cell selectors such as
+`--only-cell claude-opus-5-v5`. A selected run validates and checkpoints only those exact
+cells under `in-progress/`; it does not promote an incomplete matrix. A later unfiltered
+`run` validates and skips completed cells before continuing the remaining plan.
+
+To publish a completed selected cell without treating the whole matrix as complete, use
+`promote-cell`. It validates the frozen matrix protocol and the source leaf, copies into a
+separate promotion directory, validates the copy, and only then moves it to the requested
+standalone final output. The incomplete matrix remains unchanged.
+
+Every model/version/tutorial cell has exactly two sessions, high thinking, provider-default
+temperature and output limits, omitted thinking-field retention, repetition guard off, a
+3,600-second session timeout, a 60-turn limit, and 600 simulated seconds per turn. The
+cohort-specific fields are:
+
+| Cohort | Commit | Tutorials | Provider retries | Helpful memory |
+| --- | --- | --- | ---: | --- |
+| v1 | `5b33e2a6` | Apple, Bell, Clover | unavailable/off | unavailable/off |
+| v2 | `3a662413` | Apple, Bell, Clover | unavailable/off | unavailable/off |
+| v3 | `a6dc9644` | Bell | 2 | off |
+| v4 | `0abb32bd` | Bell | 2 | off |
+| v5 | `00c46639` | Bell | 0 | off |
+
+The v5 retry count follows the validated v5 treatment, not the v3-v4 frontier setting. The
+runner also reproduces the retained dependency boundary: v1-v4 run with the shared locked
+OpenRouter SDK 0.9.1 environment, while v5 runs with its locked OpenRouter SDK 1.1.9
+environment; both use Python 3.12. Because SDK 1.1.9 moved the model catalogue payload from
+`response.data` to `response.result.data`, the runner applies a recorded v5-only catalogue
+adapter before generation. The adapter validates model ids and constructs the same metadata;
+it does not alter chat-generation requests. The runner refuses an existing final output,
+validates every manifest and exact session roster, and stops after the first failed billable
+cell. Exact-parameter partial work goes under `incomplete/`; the runner never places valid or
+merely incomplete data in quarantine. Only the promoted output that passes `validate-output`
+may enter the report matrix.
 
 ## Objectives and scoring
 

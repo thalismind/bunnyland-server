@@ -215,6 +215,26 @@ are skipped.
 
 Do not run `uv sync` unless the user explicitly asks for dependency syncing.
 
+### Exact comparison cohorts
+
+Checkpoint comparisons are valid only when every client-controlled setting matches the
+source cohort. Do not reconstruct a frozen comparison with ad hoc benchmark commands.
+
+- Treat the original manifests as the protocol: preserve the exact commit, tutorials,
+  session count, provider and host, thinking level, trace retention, repetition guard,
+  provider retries, seed behavior, timeouts, turn limits, temperature, output limit, and
+  schema version. Preserve intentional differences between tutorial versions.
+- Use the comparison's checked-in frozen runner and run its reference validation before
+  making provider calls. For DeepSeek V4 Flash, use
+  `scripts/benchmark-deepseek-v4-flash-checkpoint-matrix`.
+- Do not aggregate or publish a candidate until output validation confirms both its
+  manifests and the complete set of unique terminal session records.
+- Put only artifacts whose recorded experiment parameters differ from the frozen protocol
+  under `quarantine/`. Keep exact-parameter partial or runtime-failed cells under
+  `in-progress/` or `incomplete/`, and never copy a validated source bundle into
+  quarantine. Never supply quarantined, incomplete, or in-progress paths to a final report
+  or paper build.
+
 ## 8. Generated And Dirty Files
 
 The worktree may already be dirty.
