@@ -20,7 +20,7 @@ from typing import Protocol, Self, cast
 
 from pydantic import JsonValue, TypeAdapter
 
-from .config import ImageGenConfig
+from .config import ComfyUIConfig
 
 logger = logging.getLogger("bunnyland.imagegen")
 
@@ -80,7 +80,7 @@ _WebSocketConnect = Callable[[str], Awaitable[_WebSocketConnection]]
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
-def _open_http(config: ImageGenConfig, http_factory: _HttpFactory | None) -> _HttpClient:
+def _open_http(config: ComfyUIConfig, http_factory: _HttpFactory | None) -> _HttpClient:
     """Open an httpx-like async client, using the injected factory when provided."""
     if http_factory is not None:
         return http_factory()
@@ -176,7 +176,7 @@ class HttpComfyClient:
 
     def __init__(
         self,
-        config: ImageGenConfig,
+        config: ComfyUIConfig,
         *,
         http_factory: _HttpFactory | None = None,
         client_id: str = DEFAULT_CLIENT_ID,
@@ -217,7 +217,7 @@ class WebSocketComfyClient:
 
     def __init__(
         self,
-        config: ImageGenConfig,
+        config: ComfyUIConfig,
         *,
         ws_connect: _WebSocketConnect,
         http_factory: _HttpFactory | None = None,
@@ -274,7 +274,7 @@ def _import_ws_connect() -> _WebSocketConnect | None:
 
 
 def build_comfy_client(
-    config: ImageGenConfig,
+    config: ComfyUIConfig,
     *,
     http_factory: _HttpFactory | None = None,
     ws_connect: _WebSocketConnect | None = None,

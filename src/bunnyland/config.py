@@ -154,7 +154,7 @@ class WebConfig:
 @dataclass(frozen=True)
 class ImageGenConfigBlock:
     server_url: str = ""
-    generator: str = "comfyui"
+    generator: str = ""
     generators: dict[str, str] = Field(default_factory=dict)
     openrouter_image_model: str = ""
     use_websocket: bool = True
@@ -164,7 +164,8 @@ class ImageGenConfigBlock:
     media_root: str = "media"
     public_base_url: str = ""
     templates_path: str = ""
-    video_template: str = ""
+    video_generator: str = ""
+    video_profile: str = ""
     workflows: str = "anima"
     prompt_style: str = ""
     enhancer: str = ""
@@ -336,9 +337,9 @@ class BunnylandConfig:
             "discord_token": discord.token,
             "imagegen_config": imagegen
             if (
-                imagegen.server_url
-                or imagegen.generator != "comfyui"
+                bool(imagegen.generator)
                 or any(imagegen.generators.values())
+                or bool(imagegen.video_generator)
             )
             else None,
             "plugin_config": dict(self.plugins.config),
@@ -431,9 +432,9 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_DISCORD_COOLDOWN_SECONDS", discord.cooldown_seconds)
         _set_if(env, "COMFYUI_SERVER_URL", imagegen.server_url)
         imagegen_enabled = (
-            bool(imagegen.server_url)
-            or imagegen.generator != "comfyui"
+            bool(imagegen.generator)
             or any(imagegen.generators.values())
+            or bool(imagegen.video_generator)
         )
         if imagegen_enabled:
             _set_if(env, "BUNNYLAND_IMAGE_GENERATOR", imagegen.generator)
@@ -454,12 +455,13 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_IMAGE_BACKFILL_SECONDS", imagegen.backfill_interval_seconds)
         _set_if(env, "BUNNYLAND_MEDIA_DIR", imagegen.media_root)
         _set_if(env, "BUNNYLAND_PUBLIC_BASE_URL", imagegen.public_base_url)
-        _set_if(env, "BUNNYLAND_IMAGE_TEMPLATES", imagegen.templates_path)
-        _set_if(env, "BUNNYLAND_VIDEO_TEMPLATE", imagegen.video_template)
+        _set_if(env, "BUNNYLAND_MEDIA_TEMPLATES", imagegen.templates_path)
+        _set_if(env, "BUNNYLAND_VIDEO_GENERATOR", imagegen.video_generator)
+        _set_if(env, "BUNNYLAND_VIDEO_PROFILE", imagegen.video_profile)
         _set_if(env, "BUNNYLAND_IMAGE_WORKFLOWS", imagegen.workflows)
-        _set_if(env, "BUNNYLAND_IMAGE_PROMPT_STYLE", imagegen.prompt_style)
-        _set_if(env, "BUNNYLAND_IMAGE_ENHANCER", imagegen.enhancer)
-        _set_if(env, "BUNNYLAND_IMAGE_MODEL", imagegen.model)
+        _set_if(env, "BUNNYLAND_MEDIA_PROMPT_STYLE", imagegen.prompt_style)
+        _set_if(env, "BUNNYLAND_MEDIA_ENHANCER", imagegen.enhancer)
+        _set_if(env, "BUNNYLAND_MEDIA_MODEL", imagegen.model)
         if dry_run:
             env["BUNNYLAND_SETUP_DRY_RUN"] = "1"
         return env

@@ -78,6 +78,7 @@ from ..imagegen.scene import request_scene_image, request_scene_video
 
 if TYPE_CHECKING:
     from ..imagegen.service import ImageGenService
+    from ..imagegen.video_service import VideoGenService
 from ..llm_agents import DEFAULT_MODEL
 from ..llm_agents.dispatch import did_you_mean, resolve_reference_args
 from ..llm_agents.natural_language import parse_natural_command
@@ -515,6 +516,7 @@ class DiscordBot:
         pause_status: Callable[[], bool] | None = None,
         message_filters: DiscordMessageFilters | None = None,
         imagegen: ImageGenService | None = None,
+        videogen: VideoGenService | None = None,
         claim_secrets: ClaimSecretRegistry | None = None,
         cooldown_seconds: float = 0,
         moderation_service: ModerationService | None = None,
@@ -530,6 +532,10 @@ class DiscordBot:
         self.character_model = character_model
         self.message_filters = message_filters or DiscordMessageFilters()
         self.imagegen = imagegen
+        self.videogen = videogen
+        self._media = imagegen.media if imagegen is not None else (
+            videogen.media if videogen is not None else None
+        )
         self.claim_secrets = claim_secrets
         self.command_cooldown = DiscordCommandCooldown(cooldown_seconds)
         self.moderation_service = moderation_service
@@ -560,9 +566,9 @@ class DiscordBot:
         if imagegen is not None:
             self.actor.bus.subscribe(ImageGenerationCompletedEvent, self._deliver_image)
             self.actor.bus.subscribe(ImageGenerationFailedEvent, self._image_failed)
-            if getattr(imagegen, "video_enabled", False):
-                self.actor.bus.subscribe(VideoGenerationCompletedEvent, self._deliver_video)
-                self.actor.bus.subscribe(VideoGenerationFailedEvent, self._video_failed)
+        if videogen is not None:
+            self.actor.bus.subscribe(VideoGenerationCompletedEvent, self._deliver_video)
+            self.actor.bus.subscribe(VideoGenerationFailedEvent, self._video_failed)
         self._register_commands()
 
     def _character_for_user(self, discord_user_id: int):
@@ -773,14 +779,14 @@ class DiscordBot:
 
     async def _on_image_reaction(self, reaction, user) -> None:
         """Handle the 📷 image-request reaction: illustrate the reactor's current scene."""
-        if self.imagegen is None:
-            return
         if getattr(user, "bot", False):
             return
         emoji = str(getattr(reaction, "emoji", ""))
         if emoji not in {REQUEST_EMOJI, VIDEO_REQUEST_EMOJI}:
             return
-        if emoji == VIDEO_REQUEST_EMOJI and not getattr(self.imagegen, "video_enabled", False):
+        if emoji == VIDEO_REQUEST_EMOJI and self.videogen is None:
+            return
+        if emoji == REQUEST_EMOJI and self.imagegen is None:
             return
         try:
             if emoji == VIDEO_REQUEST_EMOJI:
@@ -830,7 +836,7 @@ class DiscordBot:
         if found is None:
             return
         job = await request_scene_video(
-            self.actor, self.imagegen, character_id=found[0], requested_by=str(user.id)
+            self.actor, self.videogen, character_id=found[0], requested_by=str(user.id)
         )
         if job is None:
             return
@@ -881,7 +887,14 @@ class DiscordBot:
         if len(parts) != 5 or parts[:3] != ["v1", "public", "media"]:
             raise ValueError(f"{kind} URL is outside the public media surface")
         namespace, name = parts[3:]
-        data = self.imagegen.media.read(namespace, name)
+        media = getattr(self, "_media", None)
+        if media is None and getattr(self, "imagegen", None) is not None:
+            media = self.imagegen.media
+        if media is None and getattr(self, "videogen", None) is not None:
+            media = self.videogen.media
+        if media is None:
+            raise RuntimeError("media generation is not configured")
+        data = media.read(namespace, name)
         telemetry.set_span_attributes({"discord.delivery.bytes": len(data)})
         await message.reply(file=discord.File(BytesIO(data), filename=name))
 
@@ -1573,9 +1586,9 @@ class DiscordBot:
         if self.imagegen is not None:
             self.actor.bus.unsubscribe(ImageGenerationCompletedEvent, self._deliver_image)
             self.actor.bus.unsubscribe(ImageGenerationFailedEvent, self._image_failed)
-            if getattr(self.imagegen, "video_enabled", False):
-                self.actor.bus.unsubscribe(VideoGenerationCompletedEvent, self._deliver_video)
-                self.actor.bus.unsubscribe(VideoGenerationFailedEvent, self._video_failed)
+        if getattr(self, "videogen", None) is not None:
+            self.actor.bus.unsubscribe(VideoGenerationCompletedEvent, self._deliver_video)
+            self.actor.bus.unsubscribe(VideoGenerationFailedEvent, self._video_failed)
         await self.client.close()
         moderation_service = getattr(self, "moderation_service", None)
         if getattr(self, "_close_moderation_store", False) and moderation_service is not None:

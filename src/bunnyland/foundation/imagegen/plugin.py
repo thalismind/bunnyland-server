@@ -5,6 +5,7 @@ from ...imagegen.components import (
     EventVideoComponent,
     ImageRequestComponent,
     PortraitImageComponent,
+    VideoRequestComponent,
 )
 from ...imagegen.events import (
     ImageGenerationCompletedEvent,
@@ -35,6 +36,7 @@ def _definition() -> Plugin:
                 EventImageComponent,
                 EventVideoComponent,
                 ImageRequestComponent,
+                VideoRequestComponent,
             ),
         ),
         commands=CommandContribution(

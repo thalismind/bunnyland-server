@@ -133,7 +133,7 @@ voice and style, while its factual and operational preservation rules remain man
 ## Image generators
 
 Plugins can contribute a named image generator factory through
-`ContentContribution.image_generators`. The factory receives the global `ImageGenConfig` and
+`ContentContribution.image_generators`. The factory receives the global `MediaGenConfig` and
 the contributing plugin's already validated YAML config. Its generator resolves a profile for
 the requested purpose and implements one uniformly async `generate` method returning PNG bytes.
 Provider workflow graphs and credentials stay inside the implementation; API requests never
@@ -168,6 +168,47 @@ plugin = Plugin(
 )
 ```
 
-Generator names are global. Duplicate registrations, configured unknown names, and unsupported
+Image generator names are global within the image registry. Duplicate registrations,
+configured unknown names, and unsupported
 profiles fail during startup or the job respectively; providers are never used as implicit
 fallbacks for one another.
+
+## Video generators
+
+Video providers are independent from image providers. Plugins contribute factories through
+`ContentContribution.video_generators`; the factory receives the shared `MediaGenConfig` and
+the owner's validated plugin configuration. A video generator resolves a named video profile
+and implements the uniformly async `generate_video` method, returning an encoded MP4 or WebM.
+
+```python
+from bunnyland.imagegen import VideoGeneratorProfile
+from bunnyland.plugins import ContentContribution, Plugin
+
+
+class SeedanceGenerator:
+    name = "seedance"
+
+    def resolve_video_profile(self, profile_name=""):
+        return VideoGeneratorProfile(name=profile_name or "cinematic")
+
+    async def generate_video(self, request):
+        return await seedance_video(request.prompt, request.seed)
+
+
+class SeedanceFactory:
+    name = "seedance"
+
+    def __call__(self, media_config, plugin_config):
+        return SeedanceGenerator()
+
+
+plugin = Plugin(
+    id="example.seedance-video",
+    name="Seedance Video",
+    content=ContentContribution(video_generators=(SeedanceFactory(),)),
+)
+```
+
+Image and video names occupy separate registries, so one implementation or factory may use the
+same name in both. Bunnyland gives the two services independent queues; a shared ComfyUI adapter
+submits both kinds of work to ComfyUI's own queue without duplicating client or workflow code.

@@ -56,9 +56,17 @@ class EventVideoComponent(Component):
 
 @pydantic_dataclass(frozen=True)
 class ImageRequestComponent(Component):
-    """Marks an entity or history record with a media generation request in flight."""
+    """Marks an entity or history record with an image request in flight."""
 
     purpose: str = ""
+    requested_at_epoch: int = 0
+    requested_by: str = ""
+
+
+@pydantic_dataclass(frozen=True)
+class VideoRequestComponent(Component):
+    """Marks a history record with a video request in flight."""
+
     requested_at_epoch: int = 0
     requested_by: str = ""
 
@@ -68,4 +76,5 @@ __all__ = [
     "EventVideoComponent",
     "ImageRequestComponent",
     "PortraitImageComponent",
+    "VideoRequestComponent",
 ]

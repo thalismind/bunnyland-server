@@ -10,6 +10,7 @@ from bunnyland.imagegen.spec import ImagePurpose, PromptStyle, WorkflowTemplate,
 from bunnyland.imagegen.store import (
     WorkflowTemplateStore,
     available_families,
+    default_comfy_templates,
     default_templates,
     load_templates_from,
     resolve_family,
@@ -38,6 +39,21 @@ def test_sdxl_family_substitutes_prompt_and_seed():
     assert graph["87"]["inputs"]["noise_seed"] == 7
 
 
+def test_anima_family_routes_every_purpose_through_bunnyland_lora():
+    for template in default_templates("anima"):
+        graph = substitute(template, prompt="a brave rabbit", seed=7)
+        assert graph["69"] == {
+            "inputs": {
+                "lora_name": "testing/anima/bunnyland_vector_anima_v1_e20.safetensors",
+                "strength_model": 0.9,
+                "model": ["68", 0],
+            },
+            "class_type": "LoraLoaderModelOnly",
+            "_meta": {"title": "Load Bunnyland LoRA"},
+        }
+        assert graph["66"]["inputs"]["model"] == ["69", 0]
+
+
 def test_every_family_ships_four_substitutable_purposes():
     for family in available_families():
         templates = default_templates(family)
@@ -46,6 +62,35 @@ def test_every_family_ships_four_substitutable_purposes():
             graph = substitute(template, prompt="a fox", seed=3)
             # Every family's output node exists in its substituted graph.
             assert template.output_node_id in graph
+
+
+def test_comfy_defaults_add_video_templates_outside_the_image_family():
+    templates = default_comfy_templates("anima")
+    assert {template.name for template in templates} == {
+        "portrait",
+        "entity",
+        "sprite",
+        "event",
+        "event-video",
+    }
+    video = next(template for template in templates if template.name == "event-video")
+    assert video.media.value == "video"
+    graph = substitute(
+        video,
+        prompt="a rabbit opens a glowing door",
+        negative=None,
+        seed=73,
+        width=960,
+        height=544,
+    )
+    assert graph["267:201"]["inputs"]["value"] is True
+    assert graph["267:266"]["inputs"]["value"] == "a rabbit opens a glowing door"
+    assert graph["267:247"]["inputs"]["text"] == video.default_negative
+    assert graph["267:216"]["inputs"]["noise_seed"] == 73
+    assert graph["267:237"]["inputs"]["noise_seed"] == 73
+    assert graph["267:257"]["inputs"]["value"] == 960
+    assert graph["267:258"]["inputs"]["value"] == 544
+    assert graph["267:236"]["inputs"]["ckpt_name"] == "ltx-2.3-22b-dev-fp8.safetensors"
 
 
 def test_available_families_and_resolution():

@@ -12,14 +12,21 @@ import pytest
 from conftest import build_scenario
 from PIL import Image
 
-from bunnyland.imagegen.comfyui import ComfyUIImageGenerator
+from bunnyland.imagegen.comfyui import ComfyUIGenerator
 from bunnyland.imagegen.components import PortraitImageComponent
-from bunnyland.imagegen.config import ImageGenConfig
+from bunnyland.imagegen.config import (
+    ComfyUIConfig,
+    ImageGenConfig,
+    MediaGenConfig,
+    VideoGenConfig,
+)
 from bunnyland.imagegen.events import ImageGenerationCompletedEvent
 from bunnyland.imagegen.generators import (
     ImageGeneratorProfile,
     ImageGeneratorRequest,
+    VideoGeneratorProfile,
     collect_image_generators,
+    collect_video_generators,
 )
 from bunnyland.imagegen.in_memory import InMemoryImageGenerator
 from bunnyland.imagegen.media import MediaStore
@@ -28,7 +35,7 @@ from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
 from bunnyland.imagegen.service import ImageGenService
 from bunnyland.imagegen.spec import ImagePurpose
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
-from bunnyland.imagegen.wiring import build_image_service
+from bunnyland.imagegen.wiring import build_media_services
 from bunnyland.plugins import ContentContribution, Plugin
 
 
@@ -44,6 +51,29 @@ def _request(**overrides) -> ImageGeneratorRequest:
     }
     values.update(overrides)
     return ImageGeneratorRequest(**values)
+
+
+def _media_config(
+    generator: str = "in-memory",
+    *,
+    generators: dict[str, str] | None = None,
+    media_root: str = "media",
+    server_url: str = "",
+    openrouter_image_model: str = "",
+    openrouter_api_key: str = "",
+    openrouter_server_url: str = "",
+) -> MediaGenConfig:
+    return MediaGenConfig(
+        comfyui=ComfyUIConfig(server_url=server_url),
+        image=ImageGenConfig(
+            generator=generator,
+            generators=generators or {},
+            openrouter_image_model=openrouter_image_model,
+            openrouter_api_key=openrouter_api_key,
+            openrouter_server_url=openrouter_server_url,
+        ),
+        media_root=media_root,
+    )
 
 
 def _png(width: int = 8, height: int = 6, color=(12, 34, 56)) -> bytes:
@@ -106,8 +136,9 @@ async def test_in_memory_completes_service_job_with_provenance(tmp_path):
     scenario = build_scenario()
     events = []
     scenario.actor.bus.subscribe(ImageGenerationCompletedEvent, events.append)
-    config = ImageGenConfig(generator="in-memory", media_root=str(tmp_path))
-    service = build_image_service(scenario.actor, config)
+    config = _media_config(media_root=str(tmp_path))
+    service = build_media_services(scenario.actor, config).image
+    assert service is not None
 
     job = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
     await service.wait_idle()
@@ -171,6 +202,53 @@ class _MismatchFactory:
         return _Generator("different")
 
 
+class _VideoGenerator:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def resolve_video_profile(self, profile_name=""):
+        return VideoGeneratorProfile(name=profile_name or "event-video")
+
+    async def generate_video(self, request):
+        del request
+        return b"video"
+
+
+class _VideoFactory:
+    name = "custom"
+
+    def __init__(self) -> None:
+        self.received = None
+
+    def __call__(self, config, plugin_config):
+        self.received = (config, plugin_config)
+        return _VideoGenerator(self.name)
+
+
+class _VideoCreateFactory:
+    name = "created"
+
+    def create(self, config, plugin_config):
+        del config, plugin_config
+        return _VideoGenerator(self.name)
+
+
+class _InvalidVideoFactory:
+    name = "broken"
+
+    def __call__(self, config, plugin_config):
+        del config, plugin_config
+        return object()
+
+
+class _MismatchVideoFactory:
+    name = "registered"
+
+    def __call__(self, config, plugin_config):
+        del config, plugin_config
+        return _VideoGenerator("different")
+
+
 def test_collect_plugin_generator_receives_validated_owner_config():
     factory = _Factory()
     plugin = Plugin(
@@ -178,7 +256,7 @@ def test_collect_plugin_generator_receives_validated_owner_config():
         name="Images",
         content=ContentContribution(image_generators=(factory,)),
     )
-    config = ImageGenConfig(generator="custom")
+    config = _media_config("custom")
     result = collect_image_generators(
         [plugin], config, {"example.images": {"palette": "warm"}}
     )
@@ -198,7 +276,7 @@ def test_collect_plugin_generators_rejects_duplicates():
         content=ContentContribution(image_generators=(_Factory(),)),
     )
     with pytest.raises(ValueError, match="duplicate image generator"):
-        collect_image_generators([first, second], ImageGenConfig(generator="custom"))
+        collect_image_generators([first, second], _media_config("custom"))
 
 
 @pytest.mark.parametrize(
@@ -215,7 +293,7 @@ def test_collect_plugin_generators_rejects_invalid_factories(factory, error, mes
         content=ContentContribution(image_generators=(factory,)),
     )
     with pytest.raises(error, match=message):
-        collect_image_generators([plugin], ImageGenConfig(generator="in-memory"))
+        collect_image_generators([plugin], _media_config())
 
 
 def test_collect_plugin_generators_supports_create_and_rejects_name_mismatch():
@@ -224,7 +302,7 @@ def test_collect_plugin_generators_supports_create_and_rejects_name_mismatch():
         name="Created",
         content=ContentContribution(image_generators=(_CreateFactory(),)),
     )
-    assert collect_image_generators([created], ImageGenConfig())["created"].name == "created"
+    assert collect_image_generators([created], _media_config())["created"].name == "created"
 
     mismatch = Plugin(
         id="example.mismatch",
@@ -232,7 +310,7 @@ def test_collect_plugin_generators_supports_create_and_rejects_name_mismatch():
         content=ContentContribution(image_generators=(_MismatchFactory(),)),
     )
     with pytest.raises(ValueError, match="returned generator 'different'"):
-        collect_image_generators([mismatch], ImageGenConfig())
+        collect_image_generators([mismatch], _media_config())
 
 
 def test_public_plugin_collector_delegates():
@@ -243,7 +321,75 @@ def test_public_plugin_collector_delegates():
         name="Images",
         content=ContentContribution(image_generators=(_Factory(),)),
     )
-    assert public_collect([plugin], ImageGenConfig())["custom"].name == "custom"
+    assert public_collect([plugin], _media_config())["custom"].name == "custom"
+
+
+def test_collect_plugin_video_generator_receives_owner_config_and_public_delegates():
+    from bunnyland.plugins import collect_video_generators as public_collect
+
+    factory = _VideoFactory()
+    plugin = Plugin(
+        id="example.video",
+        name="Video",
+        content=ContentContribution(video_generators=(factory,)),
+    )
+    config = _media_config()
+    result = collect_video_generators(
+        [plugin], config, {"example.video": {"model": "seedance"}}
+    )
+    assert result["custom"].name == "custom"
+    assert factory.received == (config, {"model": "seedance"})
+    assert public_collect([plugin], config)["custom"].name == "custom"
+
+
+def test_collect_plugin_video_generators_support_create_and_reject_invalid_contracts():
+    created = Plugin(
+        id="example.created-video",
+        name="Created Video",
+        content=ContentContribution(video_generators=(_VideoCreateFactory(),)),
+    )
+    assert collect_video_generators([created], _media_config())["created"].name == "created"
+
+    cases = [
+        (object(), ValueError, "has no name"),
+        (_InvalidVideoFactory(), TypeError, "invalid generator"),
+        (_MismatchVideoFactory(), ValueError, "returned generator 'different'"),
+    ]
+    for factory, error, message in cases:
+        plugin = Plugin(
+            id=f"example.{type(factory).__name__}",
+            name="Invalid Video",
+            content=ContentContribution(video_generators=(factory,)),
+        )
+        with pytest.raises(error, match=message):
+            collect_video_generators([plugin], _media_config())
+
+
+def test_collect_plugin_video_generators_reject_duplicates_but_namespaces_are_independent():
+    first_factory = _VideoFactory()
+    second_factory = _VideoFactory()
+    first = Plugin(
+        id="example.first-video",
+        name="First Video",
+        content=ContentContribution(video_generators=(first_factory,)),
+    )
+    second = Plugin(
+        id="example.second-video",
+        name="Second Video",
+        content=ContentContribution(video_generators=(second_factory,)),
+    )
+    with pytest.raises(ValueError, match="duplicate video generator"):
+        collect_video_generators([first, second], _media_config())
+
+    dual = Plugin(
+        id="example.dual",
+        name="Dual",
+        content=ContentContribution(
+            image_generators=(_Factory(),), video_generators=(_VideoFactory(),)
+        ),
+    )
+    assert collect_image_generators([dual], _media_config())["custom"].name == "custom"
+    assert collect_video_generators([dual], _media_config())["custom"].name == "custom"
 
 
 def test_wiring_applies_fallback_and_all_purpose_overrides(tmp_path):
@@ -254,8 +400,8 @@ def test_wiring_applies_fallback_and_all_purpose_overrides(tmp_path):
         name="Images",
         content=ContentContribution(image_generators=(custom,)),
     )
-    config = ImageGenConfig(
-        generator="in-memory",
+    config = _media_config(
+        "in-memory",
         generators={
             "portrait": "custom",
             "entity": "in-memory",
@@ -264,7 +410,8 @@ def test_wiring_applies_fallback_and_all_purpose_overrides(tmp_path):
         },
         media_root=str(tmp_path),
     )
-    service = build_image_service(scenario.actor, config, plugins=[plugin])
+    service = build_media_services(scenario.actor, config, plugins=[plugin]).image
+    assert service is not None
     assert service._generators[ImagePurpose.PORTRAIT].name == "custom"
     assert service._generators[ImagePurpose.ENTITY].name == "in-memory"
     assert service._generators[ImagePurpose.SPRITE].name == "custom"
@@ -273,7 +420,7 @@ def test_wiring_applies_fallback_and_all_purpose_overrides(tmp_path):
 
 def test_wiring_rejects_unknown_generator():
     with pytest.raises(ValueError, match="unknown image generator 'ghost'"):
-        build_image_service(build_scenario().actor, ImageGenConfig(generator="ghost"))
+        build_media_services(build_scenario().actor, _media_config("ghost"))
 
 
 def test_wiring_rejects_duplicate_builtin_and_missing_comfy_url():
@@ -285,13 +432,13 @@ def test_wiring_rejects_duplicate_builtin_and_missing_comfy_url():
         content=ContentContribution(image_generators=(duplicate,)),
     )
     with pytest.raises(ValueError, match="duplicate image generator 'comfyui'"):
-        build_image_service(
+        build_media_services(
             build_scenario().actor,
-            ImageGenConfig(generator="in-memory"),
+            _media_config(),
             plugins=[plugin],
         )
     with pytest.raises(ValueError, match="requires COMFYUI_SERVER_URL"):
-        build_image_service(build_scenario().actor, ImageGenConfig(generator="comfyui"))
+        build_media_services(build_scenario().actor, _media_config("comfyui"))
 
 
 def test_wiring_constructs_selected_openrouter(monkeypatch, tmp_path):
@@ -305,14 +452,15 @@ def test_wiring_constructs_selected_openrouter(monkeypatch, tmp_path):
             constructed.update(kwargs)
 
     monkeypatch.setattr(wiring, "OpenRouterImageGenerator", FakeOpenRouter)
-    config = ImageGenConfig(
-        generator="openrouter",
+    config = _media_config(
+        "openrouter",
         openrouter_image_model="example/image",
         openrouter_api_key="secret",
         openrouter_server_url="https://router.example",
         media_root=str(tmp_path),
     )
-    service = build_image_service(build_scenario().actor, config)
+    service = build_media_services(build_scenario().actor, config).image
+    assert service is not None
     assert service._generators[ImagePurpose.EVENT].name == "openrouter"
     assert constructed == {
         "model": "example/image",
@@ -321,18 +469,70 @@ def test_wiring_constructs_selected_openrouter(monkeypatch, tmp_path):
     }
 
 
+def test_wiring_validates_independent_video_registry_and_partial_image_routes(tmp_path):
+    actor = build_scenario().actor
+    partial = MediaGenConfig(
+        image=ImageGenConfig(generators={"portrait": "in-memory"}),
+        media_root=str(tmp_path),
+    )
+    with pytest.raises(ValueError, match="generator for every image purpose"):
+        build_media_services(actor, partial)
+
+    unknown = MediaGenConfig(
+        video=VideoGenConfig(generator="seedance", profile="event-video"),
+        media_root=str(tmp_path),
+    )
+    with pytest.raises(ValueError, match="unknown video generator 'seedance'"):
+        build_media_services(actor, unknown)
+
+    duplicate = _VideoFactory()
+    duplicate.name = "comfyui"
+    plugin = Plugin(
+        id="example.comfy-video",
+        name="Comfy Video",
+        content=ContentContribution(video_generators=(duplicate,)),
+    )
+    duplicate_config = MediaGenConfig(
+        comfyui=ComfyUIConfig(server_url="http://comfy.local"),
+        video=VideoGenConfig(generator="comfyui", profile="event-video"),
+        media_root=str(tmp_path),
+    )
+    with pytest.raises(ValueError, match="duplicate video generator 'comfyui'"):
+        build_media_services(actor, duplicate_config, plugins=[plugin])
+
+
+def test_wiring_supports_plugin_video_without_image_service(tmp_path):
+    factory = _VideoFactory()
+    factory.name = "seedance"
+    plugin = Plugin(
+        id="example.seedance",
+        name="Seedance",
+        content=ContentContribution(video_generators=(factory,)),
+    )
+    config = MediaGenConfig(
+        video=VideoGenConfig(generator="seedance", profile="cinematic"),
+        media_root=str(tmp_path),
+    )
+    services = build_media_services(actor := build_scenario().actor, config, plugins=[plugin])
+    assert services.image is None
+    assert services.backfill is None
+    assert services.video is not None
+    assert services.video._generator.name == "seedance"
+    assert actor.media_service is services.media
+
+
 def test_comfy_generator_rejects_profile_for_another_purpose():
     store = WorkflowTemplateStore(defaults=default_templates())
-    generator = ComfyUIImageGenerator(SimpleNamespace(), store)
+    generator = ComfyUIGenerator(SimpleNamespace(), store)
     with pytest.raises(ValueError, match="does not support purpose 'portrait'"):
         generator.resolve_profile(ImagePurpose.PORTRAIT, "event")
 
 
-def test_service_requires_a_generator_or_legacy_comfy_dependencies(tmp_path):
-    with pytest.raises(TypeError, match="requires generators or a ComfyUI client/templates"):
+def test_service_requires_explicit_generators(tmp_path):
+    with pytest.raises(TypeError, match="generators"):
         ImageGenService(
             build_scenario().actor,
-            ImageGenConfig(generator="in-memory"),
+            _media_config(),
             enhancer=StubPromptEnhancer(),
             examples=CatalogExampleSource(),
             media=MediaStore(tmp_path),
@@ -585,10 +785,10 @@ def test_openrouter_requires_model_and_credentials():
 
 
 def test_config_environment_activation_and_overrides():
-    assert ImageGenConfig.from_env({"BUNNYLAND_IMAGE_GENERATOR": "in-memory"}).generator == (
-        "in-memory"
-    )
-    config = ImageGenConfig.from_env(
+    enabled = MediaGenConfig.from_env({"BUNNYLAND_IMAGE_GENERATOR": "in-memory"})
+    assert enabled is not None
+    assert enabled.image.generator == "in-memory"
+    config = MediaGenConfig.from_env(
         {
             "BUNNYLAND_IMAGE_GENERATOR": "in-memory",
             "BUNNYLAND_IMAGE_GENERATOR_PORTRAIT": "openrouter",
@@ -599,9 +799,10 @@ def test_config_environment_activation_and_overrides():
             "OPENROUTER_API_KEY": "secret",
         }
     )
-    assert config.generator_for("portrait") == "openrouter"
-    assert config.generator_for("entity") == "comfyui"
-    assert config.generator_for("sprite") == "in-memory"
-    assert config.generator_for("event") == "openrouter"
-    assert config.openrouter_image_model == "example/image"
-    assert config.openrouter_api_key == "secret"
+    assert config is not None
+    assert config.image.generator_for("portrait") == "openrouter"
+    assert config.image.generator_for("entity") == "comfyui"
+    assert config.image.generator_for("sprite") == "in-memory"
+    assert config.image.generator_for("event") == "openrouter"
+    assert config.image.openrouter_image_model == "example/image"
+    assert config.image.openrouter_api_key == "secret"

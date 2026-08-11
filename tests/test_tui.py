@@ -566,10 +566,10 @@ def test_local_backend_image_capability_reflects_service():
 
     backend = LocalBackend(autorun=False)
     assert backend.supports_image_requests is False
-    backend.imagegen = SimpleNamespace(video_enabled=False)
+    backend.imagegen = SimpleNamespace()
     assert backend.supports_image_requests is True
     assert backend.supports_video_requests is False
-    backend.imagegen = SimpleNamespace(video_enabled=True)
+    backend.videogen = SimpleNamespace()
     assert backend.supports_video_requests is True
 
 
@@ -640,7 +640,7 @@ async def test_local_backend_request_video_reports_unavailable_no_room_and_succe
     try:
         player = (await backend.fetch_character_list())[0].character_id
         unavailable = await backend.request_video(player)
-        backend.imagegen = SimpleNamespace(video_enabled=True)
+        backend.videogen = SimpleNamespace()
         no_room = await backend.request_video(player)
         queued = await backend.request_video(player)
     finally:

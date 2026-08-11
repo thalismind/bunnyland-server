@@ -614,37 +614,38 @@ def test_cli_config_wizard_dispatches_to_config_wizard(monkeypatch):
     assert calls["args"] == ["--config", "bunnyland.yml"]
 
 
-def test_cli_builds_imagegen_service_from_yaml_config(monkeypatch):
+def test_cli_builds_media_services_from_yaml_config(monkeypatch):
     import bunnyland.imagegen.wiring as wiring
 
     calls = {}
 
-    def fake_build_image_service(actor, config, *, plugins, plugin_config):
+    def fake_build_media_services(actor, config, *, plugins, plugin_config):
         calls["actor"] = actor
         calls["config"] = config
         calls["plugins"] = plugins
         calls["plugin_config"] = plugin_config
         return "service"
 
-    monkeypatch.setattr(wiring, "build_image_service", fake_build_image_service)
+    monkeypatch.setattr(wiring, "build_media_services", fake_build_media_services)
     actor = WorldActor()
 
-    service = cli._build_imagegen_service(
+    service = cli._build_media_services(
         actor,
         [],
         ImageGenConfigBlock(
             server_url="http://comfy.local/",
             public_base_url="https://cdn.example.com/",
-            video_template="event-video",
+            video_generator="comfyui",
+            video_profile="event-video",
         ),
         {"example.images": {"palette": "warm"}},
     )
 
     assert service == "service"
     assert calls["actor"] is actor
-    assert calls["config"].server_url == "http://comfy.local"
+    assert calls["config"].comfyui.server_url == "http://comfy.local"
     assert calls["config"].public_base_url == "https://cdn.example.com"
-    assert calls["config"].video_template == "event-video"
+    assert calls["config"].video.profile == "event-video"
     assert calls["plugin_config"] == {"example.images": {"palette": "warm"}}
 
 

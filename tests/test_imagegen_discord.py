@@ -24,19 +24,26 @@ from bunnyland.imagegen.affordance import (
     VIDEO_DELIVER_EMOJI,
     VIDEO_REQUEST_EMOJI,
 )
+from bunnyland.imagegen.comfyui import ComfyUIGenerator
 from bunnyland.imagegen.components import EventImageComponent
-from bunnyland.imagegen.config import ImageGenConfig
+from bunnyland.imagegen.config import (
+    ComfyUIConfig,
+    ImageGenConfig,
+    MediaGenConfig,
+    VideoGenConfig,
+)
 from bunnyland.imagegen.events import (
     ImageGenerationCompletedEvent,
     ImageGenerationFailedEvent,
     VideoGenerationCompletedEvent,
     VideoGenerationFailedEvent,
 )
-from bunnyland.imagegen.media import MediaStore
+from bunnyland.imagegen.media import SEGMENT_VIDEOS, MediaStore
 from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
 from bunnyland.imagegen.service import ImageGenService
 from bunnyland.imagegen.spec import ImagePurpose, MediaKind, WorkflowTemplate
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
+from bunnyland.imagegen.video_service import VideoGenService
 
 
 class _FakeClient:
@@ -69,11 +76,17 @@ def _reaction(message, emoji=REQUEST_EMOJI):
 
 
 def _service(actor, tmp_path):
+    config = MediaGenConfig(
+        comfyui=ComfyUIConfig(server_url="http://comfy.local"),
+        image=ImageGenConfig(generator="comfyui"),
+    )
+    generator = ComfyUIGenerator(
+        _FakeClient(), WorkflowTemplateStore(defaults=default_templates())
+    )
     return ImageGenService(
         actor,
-        ImageGenConfig(server_url="http://comfy.local"),
-        client=_FakeClient(),
-        templates=WorkflowTemplateStore(defaults=default_templates()),
+        config,
+        generators={purpose: generator for purpose in ImagePurpose},
         enhancer=StubPromptEnhancer(),
         examples=CatalogExampleSource(),
         media=MediaStore(tmp_path),
@@ -87,11 +100,16 @@ def _video_service(actor, tmp_path):
         media=MediaKind.VIDEO,
         graph={},
     )
-    return ImageGenService(
+    return VideoGenService(
         actor,
-        ImageGenConfig(server_url="http://comfy.local", video_template=video.name),
-        client=_VideoClient(),
-        templates=WorkflowTemplateStore(defaults=[*default_templates(), video]),
+        MediaGenConfig(
+            comfyui=ComfyUIConfig(server_url="http://comfy.local"),
+            video=VideoGenConfig(generator="comfyui", profile=video.name),
+        ),
+        generator=ComfyUIGenerator(
+            _VideoClient(), WorkflowTemplateStore(defaults=[*default_templates(), video])
+        ),
+        profile_name=video.name,
         enhancer=StubPromptEnhancer(),
         examples=CatalogExampleSource(),
         media=MediaStore(tmp_path),
@@ -129,7 +147,7 @@ async def test_clapper_reaction_posts_generated_video(tmp_path):
     service = _video_service(scenario.actor, tmp_path)
     bot = _bot_for_scenario(
         scenario,
-        imagegen=service,
+        videogen=service,
         _image_messages={},
         _video_messages={},
     )
@@ -146,7 +164,21 @@ async def test_clapper_reaction_posts_generated_video(tmp_path):
     assert message.replied_files[0].filename.endswith(".mp4")
     assert VIDEO_DELIVER_EMOJI in message.reactions
 
+    fallback_name = service.media.new_name("mp4")
+    service.media.write(SEGMENT_VIDEOS, fallback_name, b"fallback")
+    bot._media = None
+    await bot._post_video(
+        message,
+        service.media.url_for(SEGMENT_VIDEOS, fallback_name),
+    )
+    assert message.replied_files[-1].filename == fallback_name
+
+    bot.videogen = None
+    with pytest.raises(RuntimeError, match="media generation is not configured"):
+        await bot._post_video(message, service.media.url_for(SEGMENT_VIDEOS, fallback_name))
+
     reused = _ReactMessage()
+    bot.videogen = service
     await bot._on_image_reaction(
         _reaction(reused, emoji=VIDEO_REQUEST_EMOJI), _DiscordObject(id=123, bot=False)
     )
@@ -165,7 +197,7 @@ async def test_clapper_reaction_and_callbacks_cover_noop_and_failure_paths(
     service = _video_service(scenario.actor, tmp_path)
     bot = _bot_for_scenario(
         scenario,
-        imagegen=service,
+        videogen=service,
         _image_messages={},
         _video_messages={},
     )
@@ -318,9 +350,9 @@ async def test_camera_reaction_via_registered_event_and_init(monkeypatch, tmp_pa
     await service.aclose()
 
     video_service = _video_service(scenario.actor, tmp_path / "videos")
-    video_bot = DiscordBot(scenario.actor, token="t", imagegen=video_service)
+    video_bot = DiscordBot(scenario.actor, token="t", videogen=video_service)
     video_client = clients[1]
-    assert video_bot.imagegen is video_service
+    assert video_bot.videogen is video_service
     await video_bot.close()
     assert video_client.closed is True
     await video_service.aclose()

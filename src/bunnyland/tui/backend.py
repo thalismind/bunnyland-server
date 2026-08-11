@@ -596,6 +596,7 @@ class LocalBackend(Backend):
         self.fallback_controller = fallback_controller
         self.timeout_seconds = timeout_seconds
         self.imagegen = None
+        self.videogen = None
         self.chat_config = chat_config
         self.autonomous_llm = autonomous_llm
         self.character_chat = None
@@ -616,7 +617,7 @@ class LocalBackend(Backend):
 
     @property
     def supports_video_requests(self) -> bool:
-        return bool(self.imagegen is not None and getattr(self.imagegen, "video_enabled", False))
+        return self.videogen is not None
 
     def configure_world(self, *, seed: str, generator: str) -> None:
         """Update local generation inputs before ``start`` creates the world."""
@@ -941,7 +942,7 @@ class LocalBackend(Backend):
             )
         from ..imagegen.scene import request_scene_video
 
-        job = await request_scene_video(self.actor, self.imagegen, character_id=character_id)
+        job = await request_scene_video(self.actor, self.videogen, character_id=character_id)
         if job is None:
             return ImageRequestResult(
                 ok=False, status="no-room", reason="your character has no room to illustrate"

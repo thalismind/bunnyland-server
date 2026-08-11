@@ -82,6 +82,8 @@ class ContentContribution(BaseModel):
     prompt_enhancers: tuple[object, ...] = ()
     #: Named image-generator factories. Factories receive global and owner plugin config.
     image_generators: tuple[object, ...] = ()
+    #: Named video-generator factories. Factories receive global and owner plugin config.
+    video_generators: tuple[object, ...] = ()
     #: Namespaced capabilities this plugin can satisfy during generation.
     generation_capabilities: tuple[str, ...] = ()
     #: Pure request normalizers run before generation enrichers.

@@ -7,7 +7,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from random import choice
 
@@ -296,6 +296,9 @@ FIELD_HELP_TEXT = {
     "image-generator-entity": "Optional entity generator override.",
     "image-generator-sprite": "Optional sprite generator override.",
     "image-generator-event": "Optional event generator override.",
+    "videogen-enabled": "Enable independent event-video generation.",
+    "video-generator": "Video generator name. Examples: comfyui, seedance.",
+    "video-profile": "Named profile offered by the selected video generator.",
     "image-openrouter-model": "OpenRouter image model required when OpenRouter is selected.",
     "comfy-url": "ComfyUI server URL reachable by the server container. Examples: http://comfy:8188.",
     "comfy-websocket": "Use ComfyUI websocket progress. Examples: enabled normal ComfyUI.",
@@ -398,8 +401,15 @@ def prompt_for_config() -> BunnylandConfig:
     if _confirm("Enable image generation via a ComfyUI server?"):
         imagegen = ImageGenConfigBlock(
             server_url=_prompt_required("ComfyUI server URL", "http://localhost:8188"),
+            generator="comfyui",
             workflows=_prompt("Workflow family", "anima"),
             public_base_url=_prompt("Public base URL for Discord avatars"),
+        )
+    if _confirm("Enable event-video generation?"):
+        imagegen = replace(
+            imagegen,
+            video_generator=_prompt_required("Video generator", "comfyui"),
+            video_profile=_prompt_required("Video profile", "event-video"),
         )
 
     return BunnylandConfig(
@@ -437,13 +447,18 @@ def review_lines(config: BunnylandConfig) -> list[str]:
         lines.append("  MCP endpoint      : enabled")
     if config.server.character_chat:
         lines.append("  Character chat    : enabled")
-    if config.imagegen.server_url or config.imagegen.generator != "comfyui":
+    if config.imagegen.generator:
         detail = (
             config.imagegen.server_url
             if config.imagegen.generator == "comfyui"
             else config.imagegen.generator
         )
         lines.append(f"  Image generation  : {detail}")
+    if config.imagegen.video_generator:
+        lines.append(
+            "  Video generation  : "
+            f"{config.imagegen.video_generator}/{config.imagegen.video_profile}"
+        )
     if config.plugins.enabled is None:
         lines.append("  Plugins           : default set")
     else:
@@ -1192,8 +1207,8 @@ def build_textual_wizard_app(
                         yield Select(
                             [("enabled", "yes"), ("disabled", "no")],
                             value=yes_no(
-                                bool(initial.imagegen.server_url)
-                                or initial.imagegen.generator != "comfyui"
+                                bool(initial.imagegen.generator)
+                                or any(initial.imagegen.generators.values())
                             ),
                             id="imagegen-enabled",
                             allow_blank=False,
@@ -1205,7 +1220,7 @@ def build_textual_wizard_app(
                                 ("In-memory", "in-memory"),
                                 ("OpenRouter", "openrouter"),
                             ],
-                            value=initial.imagegen.generator,
+                            value=initial.imagegen.generator or "comfyui",
                             id="image-generator",
                             allow_blank=False,
                         )
@@ -1267,6 +1282,23 @@ def build_textual_wizard_app(
                         yield Input(value=initial.imagegen.enhancer, id="image-enhancer")
                         yield field_label("Image model", "image-model")
                         yield Input(value=initial.imagegen.model, id="image-model")
+                        yield field_label("Event-video generation", "videogen-enabled")
+                        yield Select(
+                            [("enabled", "yes"), ("disabled", "no")],
+                            value=yes_no(bool(initial.imagegen.video_generator)),
+                            id="videogen-enabled",
+                            allow_blank=False,
+                        )
+                        yield field_label("Video generator", "video-generator")
+                        yield Input(
+                            value=initial.imagegen.video_generator or "comfyui",
+                            id="video-generator",
+                        )
+                        yield field_label("Video profile", "video-profile")
+                        yield Input(
+                            value=initial.imagegen.video_profile or "event-video",
+                            id="video-profile",
+                        )
                     yield Vertical(
                         Label("Review", classes="page-title"),
                         Static("", id="review"),
@@ -1400,6 +1432,7 @@ def build_textual_wizard_app(
                 discord_enabled = self._enabled("#discord-enabled")
                 mcp_enabled = self._enabled("#mcp-enabled")
                 imagegen_enabled = self._enabled("#imagegen-enabled")
+                videogen_enabled = self._enabled("#videogen-enabled")
 
                 if not domain or not data_dir:
                     self._fail("Domain and data directory are required.")
@@ -1432,6 +1465,8 @@ def build_textual_wizard_app(
                     self._fail("Discord bot token is required when Discord is enabled.")
                     return None
                 image_generator = self._select("#image-generator")
+                video_generator = self._input("#video-generator")
+                video_profile = self._input("#video-profile")
                 image_generator_overrides = {
                     purpose: self._input(f"#image-generator-{purpose}")
                     for purpose in ("portrait", "entity", "sprite", "event")
@@ -1461,6 +1496,16 @@ def build_textual_wizard_app(
                     and not self._input("#openrouter-api-key")
                 ):
                     self._fail("OpenRouter API key is required for image generation.")
+                    return None
+                if videogen_enabled and (not video_generator or not video_profile):
+                    self._fail("Video generator and profile are required for video generation.")
+                    return None
+                if (
+                    videogen_enabled
+                    and video_generator == "comfyui"
+                    and not self._input("#comfy-url")
+                ):
+                    self._fail("ComfyUI server URL is required for video generation.")
                     return None
                 themes = _parse_themes_text(self._input("#web-themes"))
 
@@ -1547,25 +1592,29 @@ def build_textual_wizard_app(
                     cors_origins=_csv_values(self._input("#cors-origins")),
                     forwarded_allow_ips=self._input("#forwarded-allow-ips"),
                 )
-                imagegen = ImageGenConfigBlock()
-                if imagegen_enabled:
-                    imagegen = ImageGenConfigBlock(
-                        server_url=self._input("#comfy-url"),
-                        generator=image_generator,
-                        generators=image_generator_overrides,
-                        openrouter_image_model=self._input("#image-openrouter-model"),
-                        use_websocket=self._enabled("#comfy-websocket"),
-                        poll_interval_seconds=self._float("#comfy-poll-seconds"),
-                        timeout_seconds=self._float("#comfy-timeout-seconds"),
-                        backfill_interval_seconds=self._float("#image-backfill-seconds"),
-                        media_root=self._input("#image-media-root"),
-                        public_base_url=self._input("#image-public-url"),
-                        templates_path=self._input("#image-templates-path"),
-                        workflows=self._input("#image-workflows"),
-                        prompt_style=self._input("#image-prompt-style"),
-                        enhancer=self._input("#image-enhancer"),
-                        model=self._input("#image-model"),
-                    )
+                imagegen = ImageGenConfigBlock(
+                    server_url=self._input("#comfy-url")
+                    if imagegen_enabled or videogen_enabled
+                    else "",
+                    generator=image_generator if imagegen_enabled else "",
+                    generators=image_generator_overrides if imagegen_enabled else {},
+                    openrouter_image_model=self._input("#image-openrouter-model")
+                    if imagegen_enabled
+                    else "",
+                    use_websocket=self._enabled("#comfy-websocket"),
+                    poll_interval_seconds=self._float("#comfy-poll-seconds"),
+                    timeout_seconds=self._float("#comfy-timeout-seconds"),
+                    backfill_interval_seconds=self._float("#image-backfill-seconds"),
+                    media_root=self._input("#image-media-root"),
+                    public_base_url=self._input("#image-public-url"),
+                    templates_path=self._input("#image-templates-path"),
+                    workflows=self._input("#image-workflows"),
+                    prompt_style=self._input("#image-prompt-style"),
+                    enhancer=self._input("#image-enhancer"),
+                    model=self._input("#image-model"),
+                    video_generator=video_generator if videogen_enabled else "",
+                    video_profile=video_profile if videogen_enabled else "",
+                )
             except ValueError as exc:
                 self._fail(str(exc))
                 return None

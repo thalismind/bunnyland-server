@@ -205,6 +205,13 @@ def _bot_for_scenario(scenario, **attrs):
     bot._room_feed_observers_attached = attrs.pop("room_feed_observers_attached", False)
     bot.claim_secrets = attrs.pop("claim_secrets", None)
     bot.imagegen = attrs.pop("imagegen", None)
+    bot.videogen = attrs.pop("videogen", None)
+    bot._media = attrs.pop(
+        "media",
+        bot.imagegen.media if hasattr(bot.imagegen, "media") else (
+            bot.videogen.media if hasattr(bot.videogen, "media") else None
+        ),
+    )
     bot.client = attrs.pop("client", _DiscordObject(user="bot-user"))
     for key, value in attrs.items():
         setattr(bot, key, value)

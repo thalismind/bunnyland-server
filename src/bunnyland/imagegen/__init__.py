@@ -1,12 +1,4 @@
-"""Pluggable image generation (spec 27).
-
-Turns entities and events into pictures through a purpose-selected generator, then stores the
-result on disk and references it from the ECS. Network-touching pieces and raster processing
-lazily import their optional dependencies, so importing this package never requires the
-``imagegen`` or ``llm`` extras.
-"""
-
-from __future__ import annotations
+"""Pluggable image and video generation."""
 
 from .affordance import (
     ACK_EMOJI,
@@ -20,6 +12,7 @@ from .affordance import (
     VIDEO_REQUEST_EMOJI,
     VIDEO_REQUEST_LABEL,
 )
+from .backfill import ImageBackfillScheduler
 from .client import (
     ComfyClient,
     ComfyError,
@@ -28,13 +21,15 @@ from .client import (
     WebSocketComfyClient,
     build_comfy_client,
 )
+from .comfyui import ComfyUIGenerator
 from .components import (
     EventImageComponent,
     EventVideoComponent,
     ImageRequestComponent,
     PortraitImageComponent,
+    VideoRequestComponent,
 )
-from .config import ImageGenConfig
+from .config import ComfyUIConfig, ImageGenConfig, MediaGenConfig, VideoGenConfig
 from .events import (
     ImageGenerationCompletedEvent,
     ImageGenerationFailedEvent,
@@ -49,7 +44,12 @@ from .generators import (
     ImageGeneratorFactory,
     ImageGeneratorProfile,
     ImageGeneratorRequest,
+    VideoGenerator,
+    VideoGeneratorFactory,
+    VideoGeneratorProfile,
+    VideoGeneratorRequest,
     collect_image_generators,
+    collect_video_generators,
 )
 from .in_memory import InMemoryImageGenerator
 from .media import MediaError, MediaStore
@@ -82,72 +82,88 @@ from .store import (
     load_templates_from,
     resolve_family,
 )
-from .wiring import build_image_service, select_enhancer
+from .video_service import VideoGenError, VideoGenJob, VideoGenService
+from .wiring import MediaGenerationServices, build_media_services, select_enhancer
 
 __all__ = [
     "ACK_EMOJI",
-    "DELIVER_EMOJI",
-    "FAIL_EMOJI",
-    "REQUEST_COMMAND",
-    "REQUEST_EMOJI",
-    "REQUEST_LABEL",
-    "VIDEO_DELIVER_EMOJI",
-    "VIDEO_REQUEST_COMMAND",
-    "VIDEO_REQUEST_EMOJI",
-    "VIDEO_REQUEST_LABEL",
     "CatalogExampleSource",
     "ComfyClient",
     "ComfyError",
     "ComfyTimeoutError",
+    "ComfyUIConfig",
+    "ComfyUIGenerator",
+    "DELIVER_EMOJI",
     "EventImageComponent",
     "EventVideoComponent",
+    "FAIL_EMOJI",
     "GeneratedPrompt",
     "HttpComfyClient",
+    "ImageBackfillScheduler",
     "ImageGenConfig",
     "ImageGenError",
     "ImageGenJob",
     "ImageGenService",
+    "ImageGenerationCompletedEvent",
+    "ImageGenerationFailedEvent",
+    "ImageGenerationStartedEvent",
     "ImageGenerator",
     "ImageGeneratorFactory",
     "ImageGeneratorProfile",
     "ImageGeneratorRequest",
-    "ImageGenerationCompletedEvent",
-    "ImageGenerationFailedEvent",
-    "ImageGenerationStartedEvent",
-    "VideoGenerationCompletedEvent",
-    "VideoGenerationFailedEvent",
-    "VideoGenerationStartedEvent",
     "ImagePromptRequest",
     "ImagePurpose",
     "ImageRequestComponent",
     "InMemoryImageGenerator",
     "LLMPromptEnhancer",
     "MediaError",
+    "MediaGenConfig",
+    "MediaGenerationServices",
     "MediaKind",
     "MediaStore",
-    "PortraitImageComponent",
     "OpenRouterImageGenerator",
+    "PortraitImageComponent",
     "PromptEnhancer",
     "PromptExampleSource",
     "PromptStyle",
+    "REQUEST_COMMAND",
+    "REQUEST_EMOJI",
+    "REQUEST_LABEL",
     "StubPromptEnhancer",
     "SubstitutionSlot",
+    "VIDEO_DELIVER_EMOJI",
+    "VIDEO_REQUEST_COMMAND",
+    "VIDEO_REQUEST_EMOJI",
+    "VIDEO_REQUEST_LABEL",
     "VectorExampleSource",
+    "VideoGenConfig",
+    "VideoGenError",
+    "VideoGenJob",
+    "VideoGenService",
+    "VideoGenerationCompletedEvent",
+    "VideoGenerationFailedEvent",
+    "VideoGenerationStartedEvent",
+    "VideoGenerator",
+    "VideoGeneratorFactory",
+    "VideoGeneratorProfile",
+    "VideoGeneratorRequest",
+    "VideoRequestComponent",
     "WebSocketComfyClient",
     "WorkflowTemplate",
     "WorkflowTemplateStore",
     "available_families",
     "build_comfy_client",
-    "build_image_service",
+    "build_media_services",
     "collect_image_generators",
+    "collect_video_generators",
     "default_templates",
     "latest_image_completion",
     "latest_image_failure",
     "load_templates_from",
-    "resolve_family",
     "remove_edge_background",
     "request_scene_image",
     "request_scene_video",
+    "resolve_family",
     "select_enhancer",
     "substitute",
 ]

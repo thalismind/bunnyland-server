@@ -20,54 +20,56 @@ from bunnyland.imagegen.client import (
     _ws_url,
     build_comfy_client,
 )
-from bunnyland.imagegen.config import ImageGenConfig
+from bunnyland.imagegen.config import ComfyUIConfig, MediaGenConfig
 
 
-def _config(**kw) -> ImageGenConfig:
+def _config(**kw) -> ComfyUIConfig:
     base = {
         "server_url": "http://comfy.local:8188",
         "poll_interval_seconds": 1.0,
         "timeout_seconds": 5.0,
     }
     base.update(kw)
-    return ImageGenConfig(**base)
+    return ComfyUIConfig(**base)
 
 
 # --- config -------------------------------------------------------------------------
 
 
 def test_config_from_env_disabled_without_server():
-    assert ImageGenConfig.from_env({}) is None
+    assert MediaGenConfig.from_env({}) is None
 
 
 def test_config_from_env_reads_all_fields():
-    config = ImageGenConfig.from_env(
+    config = MediaGenConfig.from_env(
         {
             "COMFYUI_SERVER_URL": "http://host:8188/",
+            "BUNNYLAND_IMAGE_GENERATOR": "comfyui",
             "COMFYUI_USE_WEBSOCKET": "no",
             "COMFYUI_POLL_INTERVAL_SECONDS": "2.5",
             "COMFYUI_TIMEOUT_SECONDS": "30",
             "BUNNYLAND_MEDIA_DIR": "/srv/media",
             "BUNNYLAND_PUBLIC_BASE_URL": "https://play.example/",
-            "BUNNYLAND_IMAGE_TEMPLATES": "/srv/templates.json",
-            "BUNNYLAND_VIDEO_TEMPLATE": "event-video",
+            "BUNNYLAND_MEDIA_TEMPLATES": "/srv/templates.json",
+            "BUNNYLAND_VIDEO_GENERATOR": "comfyui",
+            "BUNNYLAND_VIDEO_PROFILE": "event-video",
             "BUNNYLAND_IMAGE_WORKFLOWS": "anima-my-server",
-            "BUNNYLAND_IMAGE_PROMPT_STYLE": "tag",
-            "BUNNYLAND_IMAGE_ENHANCER": "llm",
-            "BUNNYLAND_IMAGE_MODEL": "flux",
+            "BUNNYLAND_MEDIA_PROMPT_STYLE": "tag",
+            "BUNNYLAND_MEDIA_ENHANCER": "llm",
+            "BUNNYLAND_MEDIA_MODEL": "flux",
             "OLLAMA_HOST": "https://ollama.com",
             "OLLAMA_CLOUD_API_KEY": "secret",
         }
     )
     assert config is not None
-    assert config.server_url == "http://host:8188"  # trailing slash stripped
-    assert config.use_websocket is False
-    assert config.poll_interval_seconds == 2.5
-    assert config.timeout_seconds == 30.0
+    assert config.comfyui.server_url == "http://host:8188"
+    assert config.comfyui.use_websocket is False
+    assert config.comfyui.poll_interval_seconds == 2.5
+    assert config.comfyui.timeout_seconds == 30.0
     assert config.media_root == "/srv/media"
     assert config.public_base_url == "https://play.example"
-    assert config.video_template == "event-video"
-    assert config.workflows == "anima-my-server"
+    assert config.video.profile == "event-video"
+    assert config.comfyui.workflows == "anima-my-server"
     assert config.prompt_style == "tag"
     assert config.enhancer == "llm"
     assert config.model == "flux"
@@ -75,12 +77,15 @@ def test_config_from_env_reads_all_fields():
 
 
 def test_config_from_env_defaults():
-    config = ImageGenConfig.from_env({"COMFYUI_SERVER_URL": "http://host:8188"})
-    assert config.use_websocket is True
-    assert config.poll_interval_seconds == 1.0
+    config = MediaGenConfig.from_env(
+        {"COMFYUI_SERVER_URL": "http://host:8188", "BUNNYLAND_IMAGE_GENERATOR": "comfyui"}
+    )
+    assert config is not None
+    assert config.comfyui.use_websocket is True
+    assert config.comfyui.poll_interval_seconds == 1.0
     assert config.media_root == "media"
     assert config.public_base_url == ""
-    assert config.workflows == "anima"
+    assert config.comfyui.workflows == "anima"
     assert config.prompt_style == ""
 
 
