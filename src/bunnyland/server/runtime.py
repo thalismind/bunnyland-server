@@ -46,6 +46,7 @@ async def run_loop_with_api(
     image_backfill: ImageBackfillScheduler | None = None,
     character_chat: CharacterChatService | None = None,
     open_character_chat: bool = True,
+    character_chat_media_tools: bool = False,
     character_sheets: bool = True,
     claim_secrets: ClaimSecretRegistry | None = None,
     moderation_service: ModerationService | None = None,
@@ -90,6 +91,7 @@ async def run_loop_with_api(
         image_backfill=image_backfill,
         character_chat=character_chat,
         open_character_chat=open_character_chat,
+        character_chat_media_tools=character_chat_media_tools,
         character_sheets=character_sheets,
         claim_secrets=claim_secrets,
     )

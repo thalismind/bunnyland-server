@@ -163,6 +163,16 @@
             ],
             "title": "Command Id"
           },
+          "media_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CharacterChatMediaJobReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "parameters": {
             "additionalProperties": {
               "$ref": "#/components/schemas/JsonValue"
@@ -235,6 +245,39 @@
           "text"
         ],
         "title": "CharacterChatHistoryMessage",
+        "type": "object"
+      },
+      "CharacterChatMediaJobReference": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "chat_image",
+              "chat_video"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "status": {
+            "default": "queued",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "CharacterChatMediaJobReference",
         "type": "object"
       },
       "CharacterChatReplyRequest": {
@@ -387,6 +430,11 @@
       "ChatJobRequest": {
         "additionalProperties": false,
         "properties": {
+          "allow_character_media": {
+            "default": false,
+            "title": "Allow Character Media",
+            "type": "boolean"
+          },
           "history": {
             "items": {
               "$ref": "#/components/schemas/CharacterChatHistoryMessage"
@@ -467,6 +515,68 @@
           "character_id"
         ],
         "title": "ChatJobResult",
+        "type": "object"
+      },
+      "ChatMediaJobRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "composition": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Composition",
+            "type": "string"
+          },
+          "focus": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Focus",
+            "type": "string"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/CharacterChatHistoryMessage"
+            },
+            "maxItems": 24,
+            "title": "History",
+            "type": "array"
+          },
+          "history_summary": {
+            "default": "",
+            "maxLength": 12000,
+            "title": "History Summary",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "chat_image",
+              "chat_video"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "mood": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Mood",
+            "type": "string"
+          },
+          "scene_action": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Scene Action",
+            "type": "string"
+          },
+          "style_notes": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Style Notes",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ChatMediaJobRequest",
         "type": "object"
       },
       "CheckpointRequest": {
@@ -2181,9 +2291,24 @@
             "title": "Character Chat",
             "type": "boolean"
           },
+          "character_chat_media_tools": {
+            "default": false,
+            "title": "Character Chat Media Tools",
+            "type": "boolean"
+          },
           "character_sheets": {
             "default": true,
             "title": "Character Sheets",
+            "type": "boolean"
+          },
+          "chat_image_generation": {
+            "default": false,
+            "title": "Chat Image Generation",
+            "type": "boolean"
+          },
+          "chat_video_generation": {
+            "default": false,
+            "title": "Chat Video Generation",
             "type": "boolean"
           },
           "image_generation": {
@@ -2526,6 +2651,16 @@
             "title": "Alpha Url",
             "type": "string"
           },
+          "enhanced_prompt": {
+            "default": "",
+            "title": "Enhanced Prompt",
+            "type": "string"
+          },
+          "enhancer": {
+            "default": "",
+            "title": "Enhancer",
+            "type": "string"
+          },
           "entity_id": {
             "title": "Entity Id",
             "type": "string"
@@ -2550,8 +2685,34 @@
             "title": "Job Id",
             "type": "string"
           },
+          "prompt_fallback": {
+            "default": false,
+            "title": "Prompt Fallback",
+            "type": "boolean"
+          },
+          "prompt_style": {
+            "default": "",
+            "title": "Prompt Style",
+            "type": "string"
+          },
           "purpose": {
             "title": "Purpose",
+            "type": "string"
+          },
+          "snapshot_epoch": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Epoch"
+          },
+          "source_event_id": {
+            "default": "",
+            "title": "Source Event Id",
             "type": "string"
           },
           "status": {
@@ -2656,6 +2817,8 @@
           "kind": {
             "enum": [
               "chat",
+              "chat_image",
+              "chat_video",
               "scene_image",
               "scene_video",
               "world",
@@ -3463,6 +3626,12 @@
       "SceneImageJobRequest": {
         "additionalProperties": false,
         "properties": {
+          "event_id": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Event Id",
+            "type": "string"
+          },
           "kind": {
             "const": "scene_image",
             "title": "Kind",
@@ -3478,6 +3647,12 @@
       "SceneVideoJobRequest": {
         "additionalProperties": false,
         "properties": {
+          "event_id": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Event Id",
+            "type": "string"
+          },
           "kind": {
             "const": "scene_video",
             "title": "Kind",
@@ -5204,6 +5379,127 @@
           }
         },
         "summary": "V1 Character Chat Job",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/v1/chat/characters/{character_id}/media-jobs": {
+      "post": {
+        "operationId": "v1_submit_chat_media_job_v1_chat_characters__character_id__media_jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "character_id",
+            "required": true,
+            "schema": {
+              "title": "Character Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Bunnyland-Client-Id",
+            "required": true,
+            "schema": {
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatMediaJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResource"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "V1 Submit Chat Media Job",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/v1/chat/characters/{character_id}/media-jobs/{job_id}": {
+      "get": {
+        "operationId": "v1_chat_media_job_v1_chat_characters__character_id__media_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "character_id",
+            "required": true,
+            "schema": {
+              "title": "Character Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Bunnyland-Client-Id",
+            "required": true,
+            "schema": {
+              "title": "X-Bunnyland-Client-Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResource"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "V1 Chat Media Job",
         "tags": [
           "chat"
         ]

@@ -595,6 +595,32 @@ async def test_entity_vanishes_before_processing(tmp_path):
     await service.aclose()
 
 
+async def test_entity_vanishes_after_generation_before_image_attach(tmp_path):
+    import asyncio
+
+    scenario = build_scenario()
+    generating = asyncio.Event()
+    release = asyncio.Event()
+
+    class _BlockingClient:
+        async def generate(self, graph, *, output_node_id=""):
+            del graph, output_node_id
+            generating.set()
+            await release.wait()
+            return b"PNG"
+
+    service = _service(scenario.actor, tmp_path, client=_BlockingClient())
+    job = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
+    await generating.wait()
+    scenario.actor.world.remove(scenario.character)
+    release.set()
+    await service.wait_idle()
+
+    assert job.status == "failed"
+    assert job.error == "entity no longer exists"
+    await service.aclose()
+
+
 # --- service: backfill picker --------------------------------------------------------
 
 

@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
+from relics import EntityId
 
 from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 
@@ -116,7 +117,12 @@ from .auth import (
     scope_granted,
 )
 from .body_limit import MaxBodySizeMiddleware
-from .character_chat import CharacterChatService
+from .character_chat import CharacterChatService, ChatOnlyTool
+from .chat_media import (
+    capture_chat_media_scene,
+    chat_media_prompt_context,
+    chat_media_tool,
+)
 from .client_ids import (
     ADMIN_CLIENT_IDS_ENV,
     CLIENT_ID_HEADER,
@@ -127,8 +133,12 @@ from .client_ids import (
 from .jobs import JobRegistry
 from .models import (
     IDENTIFIER_MAX_LENGTH,
+    CharacterChatActionResult,
+    CharacterChatHistoryMessage,
+    CharacterChatMediaJobReference,
     CharacterChatRequest,
     CharacterChatResponse,
+    ChatMediaCreativeDirection,
     ClaimReleaseResponse,
     CommandCancelResponse,
     CommandRequest,
@@ -190,6 +200,7 @@ from .v1_models import (
     CharacterProfileResource,
     CharacterResource,
     ChatJobRequest,
+    ChatMediaJobRequest,
     CheckpointRequest,
     ClaimCharacterResource,
     ClaimCommandRequest,
@@ -550,6 +561,7 @@ def create_app(
     image_backfill: ImageBackfillScheduler | None = None,
     character_chat: CharacterChatService | None = None,
     open_character_chat: bool = True,
+    character_chat_media_tools: bool = False,
     character_sheets: bool = True,
     claim_secrets: ClaimSecretRegistry | None = None,
     memory_store=None,
@@ -797,6 +809,7 @@ def create_app(
     # Chat records carry the authenticated subject that created them, so a reader cannot
     # fetch another account's job by guessing its id and spoofing the client-id header.
     character_chat_job_registry = JobRegistry()
+    chat_media_job_registry = JobRegistry()
     generation_job_registry = JobRegistry()
 
     async def _cancel_moderated_identity(identity: ModerationIdentity) -> None:
@@ -804,8 +817,10 @@ def create_app(
             removed = character_chat_job_registry.discard_matching(
                 attributes={"subject": identity.id}
             )
+            chat_media_job_registry.discard_matching(attributes={"subject": identity.id})
         elif identity.kind is IdentityKind.CLIENT:
             removed = character_chat_job_registry.discard_matching(owner=identity.id)
+            chat_media_job_registry.discard_matching(owner=identity.id)
         else:
             removed = set()
         for job_id in removed:
@@ -878,6 +893,7 @@ def create_app(
             alpha_url=job.alpha_url,
             source_event_id=job.source_event_id,
             snapshot_epoch=job.snapshot_epoch,
+            enhanced_prompt=job.enhanced_prompt,
             prompt_style=job.prompt_style,
             enhancer=job.enhancer,
             prompt_fallback=job.prompt_fallback,
@@ -1044,6 +1060,13 @@ def create_app(
             character_sheets=character_sheets,
             image_generation=imagegen is not None,
             video_generation=videogen is not None,
+            chat_image_generation=character_chat is not None and imagegen is not None,
+            chat_video_generation=character_chat is not None and videogen is not None,
+            character_chat_media_tools=(
+                character_chat is not None
+                and character_chat_media_tools
+                and (imagegen is not None or videogen is not None)
+            ),
         )
 
     @app.middleware("http")
@@ -1373,11 +1396,17 @@ def create_app(
         service: CharacterChatService,
         id: str,
         request: CharacterChatRequest,
+        *,
+        chat_tools: tuple[ChatOnlyTool, ...] = (),
     ) -> CharacterChatResponse:
         try:
             with telemetry.span("character.chat", {"character.id": id}) as span:
                 try:
-                    response = await service.chat(id, request)
+                    response = (
+                        await service.chat(id, request, chat_tools=chat_tools)
+                        if chat_tools
+                        else await service.chat(id, request)
+                    )
                 except Exception as exc:
                     span.record_exception(exc)
                     telemetry.mark_span_error(str(exc), span)
@@ -2376,6 +2405,135 @@ def create_app(
     def _chat_job_attributes(character_id: str, subject: str | None) -> dict[str, str | None]:
         return {"character_id": character_id, "subject": subject}
 
+    async def _start_chat_media_job(
+        *,
+        character_id: str,
+        kind: Literal["chat_image", "chat_video"],
+        direction: ChatMediaCreativeDirection,
+        history_summary: str,
+        history: list[CharacterChatHistoryMessage],
+        current_message: str,
+        client_id: str,
+        subject: str | None,
+        requester: Literal["player", "character"],
+    ) -> JobResource:
+        rate_key = subject if subject is not None else client_id
+        allowed, retry_after = scene_image_rate_limiter.check(rate_key)
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="chat media rate limit exceeded",
+                headers={"Retry-After": str(retry_after)},
+            )
+        service = _require_videogen() if kind == "chat_video" else _require_imagegen()
+        media_subject, scene = await capture_chat_media_scene(
+            actor,
+            service,
+            character_id,
+        )
+        extra = chat_media_prompt_context(
+            history_summary=history_summary,
+            history=history,
+            direction=direction,
+            current_message=current_message,
+        )
+        requested_by = f"chat:{requester}:{subject or client_id}"
+        if kind == "chat_video":
+            generated = await service.start_ephemeral(
+                character_id,
+                subject=media_subject,
+                scene=scene,
+                requested_by=requested_by,
+                extra=extra,
+            )
+        else:
+            generated = await service.start_ephemeral(
+                character_id,
+                subject=media_subject,
+                scene=scene,
+                requested_by=requested_by,
+                extra=extra,
+            )
+        now = datetime.now(UTC)
+        job = JobResource(
+            **_world_fields(),
+            id=generated.job_id,
+            kind=kind,
+            status=_job_status_v1(generated.status),
+            created_at=now,
+            updated_at=now,
+            result=JOB_RESULT_ADAPTER.validate_python(
+                _without_preview_fields(_image_response(generated))
+            ),
+        )
+        chat_media_job_registry.put(
+            job,
+            owner=client_id,
+            attributes=_chat_job_attributes(character_id, subject),
+        )
+        return job
+
+    def _character_media_tools(
+        *,
+        character_id: str,
+        body: ChatJobRequest,
+        client_id: str,
+        subject: str | None,
+    ) -> tuple[ChatOnlyTool, ...]:
+        if not character_chat_media_tools or not body.allow_character_media:
+            return ()
+
+        def build(kind: Literal["chat_image", "chat_video"]) -> ChatOnlyTool:
+            async def request_media(
+                _parsed_character_id: EntityId,
+                _request: CharacterChatRequest,
+                arguments: dict[str, JsonValue],
+            ) -> CharacterChatActionResult:
+                direction = ChatMediaCreativeDirection.model_validate(arguments)
+                try:
+                    job = await _start_chat_media_job(
+                        character_id=character_id,
+                        kind=kind,
+                        direction=direction,
+                        history_summary=body.history_summary,
+                        history=body.history,
+                        current_message=body.message,
+                        client_id=client_id,
+                        subject=subject,
+                        requester="character",
+                    )
+                except HTTPException as exc:
+                    return CharacterChatActionResult(
+                        status="rejected",
+                        reason=str(exc.detail),
+                    )
+                except (TypeError, ValueError) as exc:
+                    return CharacterChatActionResult(
+                        status="rejected",
+                        reason=str(exc),
+                    )
+                return CharacterChatActionResult(
+                    status="executed",
+                    reason=(
+                        "Illustration queued. Visual actions do not happen in Bunnyland "
+                        "and do not change world state."
+                    ),
+                    media_job=CharacterChatMediaJobReference(
+                        id=job.id,
+                        kind=kind,
+                        status=job.status,
+                    ),
+                )
+
+            return chat_media_tool(kind, request_media)
+
+        tools: list[ChatOnlyTool] = []
+        if imagegen is not None:
+            tools.append(build("chat_image"))
+        if videogen is not None:
+            tools.append(build("chat_video"))
+        return tuple(tools)
+
     def _chat_job_for_client(
         job_id: str, character_id: str, client_id: str, subject: str | None
     ) -> JobResource:
@@ -2417,6 +2575,7 @@ def create_app(
         job_id: str,
         body: ChatJobRequest,
         client_id: str,
+        subject: str | None,
     ) -> None:
         def _patch_job(**update) -> None:
             current = _chat_job(job_id)
@@ -2435,6 +2594,13 @@ def create_app(
                     message=body.message,
                     history_summary=body.history_summary,
                     history=body.history,
+                    allow_character_media=body.allow_character_media,
+                ),
+                chat_tools=_character_media_tools(
+                    character_id=character_id,
+                    body=body,
+                    client_id=client_id,
+                    subject=subject,
                 ),
             )
         except Exception as exc:
@@ -2566,6 +2732,7 @@ def create_app(
                         job.id,
                         body,
                         normalized_client_id,
+                        subject,
                     )
                 )
                 chat_tasks.add(task)
@@ -2617,6 +2784,69 @@ def create_app(
         return _chat_job_for_client(
             job_id, character_id, normalized_client_id, _request_subject(request)
         )
+
+    @chat_v1.post(
+        "/characters/{character_id}/media-jobs",
+        response_model=JobResource,
+        status_code=202,
+    )
+    async def v1_submit_chat_media_job(
+        character_id: str,
+        body: ChatMediaJobRequest,
+        request: Request,
+        response: Response,
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
+    ) -> JobResource:
+        if character_chat is None:
+            raise HTTPException(status_code=404, detail="character chat is not enabled")
+        normalized_client_id = _required_client_id(client_id)
+        subject = _request_subject(request)
+        try:
+            job = await _start_chat_media_job(
+                character_id=character_id,
+                kind=body.kind,
+                direction=ChatMediaCreativeDirection(
+                    focus=body.focus,
+                    scene_action=body.scene_action,
+                    mood=body.mood,
+                    composition=body.composition,
+                    style_notes=body.style_notes,
+                ),
+                history_summary=body.history_summary,
+                history=body.history,
+                current_message="",
+                client_id=normalized_client_id,
+                subject=subject,
+                requester="player",
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        response.headers["Location"] = (
+            f"/v1/chat/characters/{character_id}/media-jobs/{job.id}"
+        )
+        return job
+
+    @chat_v1.get(
+        "/characters/{character_id}/media-jobs/{job_id}",
+        response_model=JobResource,
+    )
+    async def v1_chat_media_job(
+        character_id: str,
+        job_id: str,
+        request: Request,
+        client_id: str = Header(alias=CLIENT_ID_HEADER),
+    ) -> JobResource:
+        normalized_client_id = _required_client_id(client_id)
+        job = chat_media_job_registry.get(
+            job_id,
+            owner=normalized_client_id,
+            attributes=_chat_job_attributes(character_id, _request_subject(request)),
+        )
+        if job is None:
+            raise HTTPException(status_code=404, detail="chat media job does not exist")
+        refreshed = _refresh_media_job_v1(job)
+        chat_media_job_registry.update(refreshed)
+        return refreshed
 
     @play_v1.get("/catalog", response_model=CatalogResource)
     async def v1_catalog() -> CatalogResource:

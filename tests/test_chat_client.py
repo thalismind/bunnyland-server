@@ -7,7 +7,11 @@ from unittest.mock import patch
 import pytest
 
 from bunnyland import chat
-from bunnyland.server.models import CharacterChatActionResult, CharacterSummaryView
+from bunnyland.server.models import (
+    CharacterChatActionResult,
+    CharacterChatMediaJobReference,
+    CharacterSummaryView,
+)
 from bunnyland.terminal_chat import (
     ChatPreferences,
     chat_preferences_path,
@@ -21,6 +25,7 @@ from bunnyland.tui.backend import (
     CharacterChatAccess,
     CharacterChatController,
     CharacterChatJob,
+    CharacterChatMediaJob,
     RemoteBackend,
 )
 
@@ -83,6 +88,7 @@ def test_chat_preferences_round_trip_defaults_and_invalid_values(tmp_path, monke
     assert load_chat_preferences() == ChatPreferences()
 
     preferences = ChatPreferences(
+        allow_character_media=True,
         markdown=False,
         remember_history=False,
         separate_reply_paragraphs=True,
@@ -98,6 +104,7 @@ def test_chat_preferences_round_trip_defaults_and_invalid_values(tmp_path, monke
     path.write_text(
         json.dumps(
             {
+                "allow_character_media": "yes",
                 "markdown": "yes",
                 "remember_history": 1,
                 "separate_reply_paragraphs": None,
@@ -106,6 +113,123 @@ def test_chat_preferences_round_trip_defaults_and_invalid_values(tmp_path, monke
         encoding="utf-8",
     )
     assert load_chat_preferences() == ChatPreferences()
+
+
+async def test_line_chat_uses_one_pending_marker_flow_for_images_and_videos(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    class MediaBackend(FakeChatBackend):
+        supports_character_chat_media_tools = True
+        supports_chat_image_requests = True
+        supports_chat_video_requests = True
+
+        def __init__(self):
+            super().__init__(jobs=[CharacterChatJob(
+                id="chat-1",
+                status="succeeded",
+                character_id="char:1",
+                reply="I imagined one too.",
+                action=CharacterChatActionResult(
+                    tool="request_chat_image",
+                    status="executed",
+                    media_job=CharacterChatMediaJobReference(
+                        id="media-character",
+                        kind="chat_image",
+                        status="queued",
+                    ),
+                ),
+            )])
+            self.media_requests = []
+
+        async def request_character_chat_media(
+            self,
+            character_id,
+            kind,
+            *,
+            focus="",
+            history_summary="",
+            history=None,
+        ):
+            del history_summary, history
+            self.media_requests.append((character_id, kind, focus))
+            return CharacterChatMediaJob(
+                id=f"media-{len(self.media_requests)}",
+                status="queued",
+                character_id=character_id,
+                kind=kind,
+                focus=focus,
+            )
+
+        async def poll_character_chat_media(self, job):
+            return CharacterChatMediaJob(
+                id=job.id,
+                status="succeeded",
+                character_id=job.character_id,
+                kind=job.kind,
+                focus=job.focus,
+                url=f"/media/{job.id}",
+            )
+
+    backend = MediaBackend()
+    with patch(
+        "builtins.input",
+        side_effect=[
+            "/allow-media on",
+            "/image Juniper smiling",
+            "/video Juniper twirling",
+            "Please imagine one too.",
+            "/quit",
+        ],
+    ):
+        assert await chat._run_cli(backend, "Juniper") == 0
+
+    output = capsys.readouterr().out
+    assert "Character-requested illustrations enabled." in output
+    assert "📷 pending · Juniper smiling" in output
+    assert "📷 ready · Juniper smiling · /media/media-1" in output
+    assert "🎬 pending · Juniper twirling" in output
+    assert "🎬 ready · Juniper twirling · /media/media-2" in output
+    assert "📷 pending" in output
+    assert "/media/media-character" in output
+    assert load_chat_preferences().allow_character_media is True
+
+
+async def test_line_chat_reports_disabled_invalid_and_failed_media_commands(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    disabled = FakeChatBackend()
+    with patch(
+        "builtins.input",
+        side_effect=["/image", "/video", "/allow-media on", "/quit"],
+    ):
+        assert await chat._run_cli(disabled, "Juniper") == 0
+    output = capsys.readouterr().out
+    assert "Chat image requests are not enabled" in output
+    assert "Chat video requests are not enabled" in output
+    assert "Character-requested illustrations are not enabled" in output
+
+    class FailedMediaBackend(FakeChatBackend):
+        supports_character_chat_media_tools = True
+        supports_chat_image_requests = True
+        supports_chat_video_requests = True
+
+        async def request_character_chat_media(self, *_args, **_kwargs):
+            raise RuntimeError("generator offline")
+
+    failed = FailedMediaBackend()
+    with patch(
+        "builtins.input",
+        side_effect=["/allow-media maybe", "/allow-media off", "/image", "/video", "/quit"],
+    ):
+        assert await chat._run_cli(failed, "Juniper") == 0
+    output = capsys.readouterr().out
+    assert "Usage: /allow-media on|off" in output
+    assert "Character-requested illustrations disabled." in output
+    assert "📷 failed · generator offline" in output
+    assert "🎬 failed · generator offline" in output
 
 
 def test_chat_preferences_and_history_clear_ignore_filesystem_errors(tmp_path, monkeypatch):
@@ -268,6 +392,10 @@ def test_chat_client_waits_for_async_job(monkeypatch):
 
 
 class FakeChatBackend:
+    supports_character_chat_media_tools = False
+    supports_chat_image_requests = False
+    supports_chat_video_requests = False
+
     def __init__(self, *args, available=True, jobs=None, access=None, **kwargs):
         self.args = args
         self.kwargs = kwargs
@@ -609,7 +737,7 @@ async def test_line_chat_keeps_history_readable_and_assigns_before_sending(
     assert "You: Are you there?" in output
     assert "Juniper: I was." in output
     assert "existing chat history is read-only" in output
-    assert "Meta: /activate, /controller <id>, /controllers, /help, /quit" in output
+    assert "/image [focus], /video [focus], /allow-media on|off" in output
     assert "controller:llm · default (ollama/qwen)" in output
     assert "That LLM controller is not assignable" in output
     assert "Juniper is now assigned to an LLM controller" in output

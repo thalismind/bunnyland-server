@@ -2173,6 +2173,9 @@ def test_health_reports_configured_feature_flags(scenario, monkeypatch):
         "character_sheets": True,
         "image_generation": True,
         "video_generation": False,
+        "chat_image_generation": True,
+        "chat_video_generation": False,
+        "character_chat_media_tools": False,
         "allow_sleeping_character_chat": True,
     }
 

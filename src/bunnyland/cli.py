@@ -832,6 +832,9 @@ async def _run_api_runtime(
                 image_backfill=image_backfill,
                 character_chat=character_chat,
                 open_character_chat=getattr(args, "open_character_chat", True),
+                character_chat_media_tools=getattr(
+                    args, "character_chat_media_tools", False
+                ),
                 character_sheets=getattr(args, "character_sheets", True),
                 claim_secrets=claim_secrets,
                 moderation_service=getattr(discord_bot, "moderation_service", None),
@@ -1416,6 +1419,16 @@ def main(argv: list[str] | None = None) -> int:
             "let any authenticated player chat with llm-controlled characters (default: "
             "enabled); --no-open-character-chat routes chat only to human controllers "
             "(env: BUNNYLAND_OPEN_CHARACTER_CHAT)"
+        ),
+    )
+    serve.add_argument(
+        "--character-chat-media-tools",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("BUNNYLAND_CHARACTER_CHAT_MEDIA_TOOLS") is True,
+        help=(
+            "let opted-in characters request chat-only images and videos; visual actions "
+            "never change world state (default: disabled; env: "
+            "BUNNYLAND_CHARACTER_CHAT_MEDIA_TOOLS)"
         ),
     )
     serve.add_argument(

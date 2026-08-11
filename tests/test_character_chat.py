@@ -45,14 +45,17 @@ from bunnyland.server import character_chat as character_chat_module
 from bunnyland.server.app import create_app
 from bunnyland.server.character_chat import (
     ALLOWED_CHAT_TOOLS,
+    MEDIA_ACTION_WARNING,
     CharacterChatService,
     PendingChatAction,
     build_character_chat_service,
 )
+from bunnyland.server.chat_media import chat_media_tool
 from bunnyland.server.client_ids import CLIENT_ID_HEADER
 from bunnyland.server.jobs import JobRegistry
 from bunnyland.server.models import (
     CharacterChatActionResult,
+    CharacterChatMediaJobReference,
     CharacterChatPendingResponse,
     CharacterChatRequest,
     CharacterChatResponse,
@@ -190,6 +193,74 @@ async def test_character_chat_no_tool_reply_does_not_submit_command():
     }
     assert tool_names == ALLOWED_CHAT_TOOLS
     assert "move" not in tool_names
+
+
+async def test_character_chat_media_tool_is_expressive_and_never_submits_world_action():
+    scenario = build_scenario()
+    install_core(scenario.actor)
+    command_events = []
+    scenario.actor.bus.subscribe(CommandExecutedEvent, command_events.append)
+    calls = []
+
+    async def request_media(character_id, request, arguments):
+        calls.append((character_id, request, arguments))
+        return CharacterChatActionResult(
+            status="executed",
+            reason="illustration queued",
+            media_job=CharacterChatMediaJobReference(
+                id="media-1",
+                kind="chat_image",
+            ),
+        )
+
+    agent = FakeChatAgent(
+        [
+            ChatAgentReply(
+                tool_call=ToolCall(
+                    "request_chat_image",
+                    {
+                        "focus": "my bright red scarf",
+                        "scene_action": "I leap over the moonlit table",
+                        "mood": "joyful",
+                    },
+                )
+            ),
+            ChatAgentReply(content="Imagine me flying over the table!"),
+        ]
+    )
+    service = chat_service(scenario, agent)
+    before_entities = len(list(scenario.actor.world.query().execute_entities()))
+
+    response = await service.chat(
+        str(scenario.character),
+        chat_request("Show me how this moment feels."),
+        chat_tools=(chat_media_tool("chat_image", request_media),),
+    )
+
+    tool = next(
+        schema["function"]
+        for schema in agent.calls[0]["tools"]
+        if schema["function"]["name"] == "request_chat_image"
+    )
+    assert MEDIA_ACTION_WARNING in tool["description"]
+    assert "does not happen in Bunnyland" in (
+        tool["parameters"]["properties"]["scene_action"]["description"]
+    )
+    assert calls[0][2]["scene_action"] == "I leap over the moonlit table"
+    assert response.action.media_job is not None
+    assert response.action.media_job.id == "media-1"
+    assert response.reply == "Imagine me flying over the table!"
+    assert command_events == []
+    assert len(list(scenario.actor.world.query().execute_entities())) == before_entities
+    assert MEDIA_ACTION_WARNING in agent.calls[1]["messages"][-1]["content"]
+    with pytest.raises(RuntimeError, match="require a character chat request"):
+        await service._submit_tool(
+            scenario.character,
+            str(scenario.controller),
+            scenario.generation,
+            ToolCall("request_chat_image", {"focus": "Juniper"}),
+            chat_tools=(chat_media_tool("chat_image", request_media),),
+        )
 
 
 @pytest.mark.asyncio

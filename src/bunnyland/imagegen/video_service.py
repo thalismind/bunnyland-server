@@ -57,10 +57,17 @@ class VideoGenJob:
     alpha_url: str = ""
     source_event_id: str = ""
     snapshot_epoch: int | None = None
+    enhanced_prompt: str = ""
     prompt_style: str = ""
     enhancer: str = ""
     prompt_fallback: bool = False
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class _EphemeralVideoInput:
+    subject: str
+    scene: MediaSceneSnapshot
 
 
 class VideoGenService:
@@ -89,6 +96,7 @@ class VideoGenService:
         self._queue: asyncio.Queue[VideoGenJob] = asyncio.Queue()
         self._jobs: dict[str, VideoGenJob] = {}
         self._extras: dict[str, str] = {}
+        self._ephemeral_inputs: dict[str, _EphemeralVideoInput] = {}
         self._parent_contexts: dict[str, object] = {}
         self._worker: asyncio.Task[None] | None = None
         self._busy = False
@@ -163,6 +171,49 @@ class VideoGenService:
         self._queue.put_nowait(job)
         return job
 
+    async def start_ephemeral(
+        self,
+        entity_id: str,
+        *,
+        subject: str,
+        scene: MediaSceneSnapshot,
+        template_name: str = "",
+        requested_by: str = "",
+        extra: str = "",
+    ) -> VideoGenJob:
+        """Queue chat-owned video without attaching state to the ECS entity."""
+
+        parsed = parse_entity_id(entity_id)
+        profile_name = template_name or self._profile_name
+        job = VideoGenJob(
+            job_id=uuid4().hex,
+            entity_id=entity_id,
+            generator=self._generator.name,
+            profile_name=profile_name,
+            template_name=profile_name,
+            requested_by=requested_by,
+            target_id=entity_id,
+        )
+        async with self._actor._lock:
+            if parsed is None or not self._actor.world.has_entity(parsed):
+                job.status = "failed"
+                job.error = "unknown entity"
+                self._jobs[job.job_id] = job
+                return job
+        self._jobs[job.job_id] = job
+        self._extras[job.job_id] = extra
+        self._ephemeral_inputs[job.job_id] = _EphemeralVideoInput(
+            subject=subject,
+            scene=scene,
+        )
+        await self._publish_started(job)
+        parent_context = telemetry.capture_context()
+        if parent_context is not None:
+            self._parent_contexts[job.job_id] = parent_context
+        self._ensure_worker()
+        self._queue.put_nowait(job)
+        return job
+
     async def wait_idle(self) -> None:
         await self._queue.join()
 
@@ -190,6 +241,7 @@ class VideoGenService:
     async def _process(self, job: VideoGenJob) -> None:
         parsed = parse_entity_id(job.entity_id)
         extra = self._extras.pop(job.job_id, "")
+        ephemeral = self._ephemeral_inputs.pop(job.job_id, None)
         parent_context = self._parent_contexts.pop(job.job_id, None)
         attributes = {
             "video.job_id": job.job_id,
@@ -198,25 +250,36 @@ class VideoGenService:
         }
         with telemetry.span("video.generate", attributes, parent_context=parent_context) as span:
             try:
-                async with self._actor._lock:
-                    if parsed is None or not self._actor.world.has_entity(parsed):
-                        raise VideoGenError("entity no longer exists")
-                    entity = self._actor.world.get_entity(parsed)
-                    profile = self._generator.resolve_video_profile(job.profile_name)
-                    job.profile_name = profile.name
-                    job.template_name = profile.name
-                    subject = subject_for_event(self._actor.world, entity)
-                    scene = (
-                        entity.get_component(MediaSceneSnapshotComponent).snapshot
-                        if entity.has_component(MediaSceneSnapshotComponent)
-                        else None
-                    )
-                    record = entity.get_component(WorldHistoryRecordComponent)
-                    job.source_event_id = record.source_event_id
-                    job.snapshot_epoch = scene.captured_at_epoch if scene is not None else None
+                profile = self._generator.resolve_video_profile(job.profile_name)
+                job.profile_name = profile.name
+                job.template_name = profile.name
+                if ephemeral is not None:
+                    subject = ephemeral.subject
+                    scene = ephemeral.scene
+                    job.snapshot_epoch = scene.captured_at_epoch
+                else:
+                    async with self._actor._lock:
+                        if parsed is None or not self._actor.world.has_entity(parsed):
+                            raise VideoGenError("entity no longer exists")
+                        entity = self._actor.world.get_entity(parsed)
+                        subject = subject_for_event(self._actor.world, entity)
+                        scene = (
+                            entity.get_component(MediaSceneSnapshotComponent).snapshot
+                            if entity.has_component(MediaSceneSnapshotComponent)
+                            else None
+                        )
+                        record = entity.get_component(WorldHistoryRecordComponent)
+                        job.source_event_id = record.source_event_id
+                        job.snapshot_epoch = (
+                            scene.captured_at_epoch if scene is not None else None
+                        )
                 job.status = "running"
-                seed = int.from_bytes(sha256(job.entity_id.encode()).digest()[:4], "big")
+                seed_key = (
+                    f"{job.entity_id}:{job.job_id}" if ephemeral is not None else job.entity_id
+                )
+                seed = int.from_bytes(sha256(seed_key.encode()).digest()[:4], "big")
                 prompt = await self._enhance(subject, profile, extra, scene)
+                job.enhanced_prompt = prompt.prompt
                 job.prompt_style = prompt.style.value
                 job.enhancer = prompt.enhancer
                 job.prompt_fallback = prompt.fallback
@@ -245,29 +308,30 @@ class VideoGenService:
                 name = self._media.new_name(extension)
                 self._media.write(SEGMENT_VIDEOS, name, data)
                 url = self._media.url_for(SEGMENT_VIDEOS, name)
-                async with self._actor._lock:
-                    if not self._actor.world.has_entity(parsed):
-                        raise VideoGenError("entity no longer exists")
-                    entity = self._actor.world.get_entity(parsed)
-                    record = entity.get_component(WorldHistoryRecordComponent)
-                    component = EventVideoComponent(
-                        url=url,
-                        prompt=prompt.prompt,
-                        negative_prompt=prompt.negative,
-                        prompt_style=prompt.style.value,
-                        enhancer=prompt.enhancer,
-                        prompt_fallback=prompt.fallback,
-                        seed=seed,
-                        template=profile.name,
-                        generator=self._generator.name,
-                        source_event_id=record.source_event_id,
-                        generated_at_epoch=self._actor.epoch,
-                    )
-                    if entity.has_component(EventVideoComponent):
-                        replace_component(entity, component)
-                    else:
-                        entity.add_component(component)
-                    self._clear_request(entity)
+                if ephemeral is None:
+                    async with self._actor._lock:
+                        if parsed is None or not self._actor.world.has_entity(parsed):
+                            raise VideoGenError("entity no longer exists")
+                        entity = self._actor.world.get_entity(parsed)
+                        record = entity.get_component(WorldHistoryRecordComponent)
+                        component = EventVideoComponent(
+                            url=url,
+                            prompt=prompt.prompt,
+                            negative_prompt=prompt.negative,
+                            prompt_style=prompt.style.value,
+                            enhancer=prompt.enhancer,
+                            prompt_fallback=prompt.fallback,
+                            seed=seed,
+                            template=profile.name,
+                            generator=self._generator.name,
+                            source_event_id=record.source_event_id,
+                            generated_at_epoch=self._actor.epoch,
+                        )
+                        if entity.has_component(EventVideoComponent):
+                            replace_component(entity, component)
+                        else:
+                            entity.add_component(component)
+                        self._clear_request(entity)
                 job.status = "succeeded"
                 job.url = url
                 await self._publish_completed(job)
@@ -279,7 +343,7 @@ class VideoGenService:
                 logger.warning("video generation failed for %s: %s", job.entity_id, exc)
                 job.status = "failed"
                 job.error = str(exc)
-                if parsed is not None:
+                if ephemeral is None and parsed is not None:
                     async with self._actor._lock:
                         if self._actor.world.has_entity(parsed):
                             self._clear_request(self._actor.world.get_entity(parsed))

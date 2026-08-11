@@ -14,6 +14,7 @@ PARAGRAPH_REVEAL_DELAY_SECONDS = 0.2
 
 @dataclass(frozen=True)
 class ChatPreferences:
+    allow_character_media: bool = False
     markdown: bool = True
     remember_history: bool = True
     separate_reply_paragraphs: bool = False
@@ -54,6 +55,11 @@ def load_chat_preferences() -> ChatPreferences:
         return ChatPreferences()
     defaults = ChatPreferences()
     return ChatPreferences(
+        allow_character_media=(
+            data["allow_character_media"]
+            if isinstance(data.get("allow_character_media"), bool)
+            else defaults.allow_character_media
+        ),
         markdown=(
             data["markdown"] if isinstance(data.get("markdown"), bool) else defaults.markdown
         ),

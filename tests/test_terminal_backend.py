@@ -12,6 +12,7 @@ from bunnyland.terminal_config import resolve_terminal_chat_config
 from bunnyland.tui.backend import (
     Backend,
     CharacterChatJob,
+    CharacterChatMediaJob,
     LocalBackend,
     RemoteBackend,
     persistent_client_id,
@@ -173,19 +174,19 @@ async def test_local_backend_surfaces_chat_service_errors():
         await backend.submit_character_chat("character:1", "Hello")
 
 
-def job_payload(*, status="queued", result=None, failure=None):
+def job_payload(*, kind="chat", status="queued", result=None, failure=None):
     now = datetime.now(UTC).isoformat()
     if result is not None:
         result = {
             "world_epoch": 42,
-            "character_id": "character:1",
+            **({"character_id": "character:1"} if kind == "chat" else {}),
             **result,
         }
     return {
         "world_id": "world-1",
         "world_epoch": 42,
         "id": "job-1",
-        "kind": "chat",
+        "kind": kind,
         "status": status,
         "created_at": now,
         "updated_at": now,
@@ -217,14 +218,63 @@ async def test_remote_backend_submits_and_polls_chat_job():
     backend = RemoteBackend("https://server.example", client_id="remote-client")
     backend._client = Client()
     history = [{"role": "user", "text": str(index)} for index in range(30)]
-    job = await backend.submit_character_chat("character:1", "Hello", history=history)
+    job = await backend.submit_character_chat(
+        "character:1", "Hello", history=history, allow_character_media=True
+    )
     assert job.pending
     assert len(requests[0][2]["json"]["history"]) == 24
+    assert requests[0][2]["json"]["allow_character_media"] is True
     completed = await backend.poll_character_chat(job)
     assert completed.complete
     assert completed.reply == "Hello."
     assert completed.action.tool == "say"
     assert requests[1][1].endswith("/chat/characters/character%3A1/jobs/job-1")
+
+
+async def test_remote_backend_submits_and_polls_private_chat_media_job():
+    requests = []
+
+    class Client:
+        async def post(self, url, **kwargs):
+            requests.append(("post", url, kwargs))
+            return Response(job_payload(kind="chat_video"))
+
+        async def get(self, url):
+            requests.append(("get", url, {}))
+            return Response(
+                job_payload(
+                    kind="chat_video",
+                    status="succeeded",
+                    result={
+                        "job_id": "job-1",
+                        "status": "succeeded",
+                        "entity_id": "character:1",
+                        "purpose": "event",
+                        "url": "/media/private.mp4",
+                    },
+                )
+            )
+
+    backend = RemoteBackend("https://server.example", client_id="remote-client")
+    backend._client = Client()
+    job = await backend.request_character_chat_media(
+        "character:1",
+        "chat_video",
+        focus="Juniper dancing under lanterns",
+        history=[{"role": "character", "text": str(index)} for index in range(30)],
+    )
+
+    assert job.pending
+    assert job.kind == "chat_video"
+    assert len(requests[0][2]["json"]["history"]) == 24
+    assert requests[0][2]["json"]["focus"] == "Juniper dancing under lanterns"
+    completed = await backend.poll_character_chat_media(job)
+    assert completed.status == "succeeded"
+    assert completed.url == "/media/private.mp4"
+    assert requests[1][1].endswith(
+        "/chat/characters/character%3A1/media-jobs/job-1"
+    )
+    assert await backend.poll_character_chat_media(completed) is completed
 
 
 async def test_remote_backend_preserves_pending_reply_and_failure():
@@ -316,6 +366,9 @@ async def test_remote_start_caches_validated_feature_flags_before_ui(monkeypatch
                     "character_chat": False,
                     "character_sheets": False,
                     "allow_sleeping_character_chat": False,
+                    "chat_image_generation": True,
+                    "chat_video_generation": True,
+                    "character_chat_media_tools": True,
                 }
             )
 
@@ -329,6 +382,9 @@ async def test_remote_start_caches_validated_feature_flags_before_ui(monkeypatch
     await backend.start()
     try:
         assert backend.supports_character_sheets is False
+        assert backend.supports_chat_image_requests is True
+        assert backend.supports_chat_video_requests is True
+        assert backend.supports_character_chat_media_tools is True
         assert await backend.character_chat_availability() == (
             False,
             "Character chat is not enabled on this server",
@@ -363,6 +419,12 @@ async def test_backend_default_character_operations_are_typed_failures():
     job = CharacterChatJob(id="job", status="succeeded", character_id="character:1")
     assert await backend.poll_character_chat(job) is job
     await backend.cancel_character_chat(job)
+    with pytest.raises(RuntimeError, match="Chat media"):
+        await backend.request_character_chat_media("character:1", "chat_image")
+    media_job = CharacterChatMediaJob(
+        id="media", status="succeeded", character_id="character:1", kind="chat_image"
+    )
+    assert await backend.poll_character_chat_media(media_job) is media_job
 
     backend.supports_character_chat = False
     assert await backend.character_chat_availability() == (

@@ -41,10 +41,21 @@ from bunnyland.imagegen.spec import ImagePurpose, MediaKind, WorkflowTemplate
 from bunnyland.imagegen.store import WorkflowTemplateStore, default_templates
 from bunnyland.imagegen.video_service import VideoGenJob, VideoGenService
 from bunnyland.imagegen.wiring import build_media_services
+from bunnyland.llm_agents.agent import ChatAgentReply
+from bunnyland.llm_agents.tools import ToolCall
 from bunnyland.persistence import WorldMeta
+from bunnyland.prompts.builder import PromptBuilder
 from bunnyland.server import app as server_app
 from bunnyland.server.app import create_app
+from bunnyland.server.character_chat import MEDIA_ACTION_WARNING, CharacterChatService
+from bunnyland.server.chat_media import (
+    CHAT_MEDIA_CONTEXT_CHARS,
+    capture_chat_media_scene,
+    chat_media_prompt_context,
+    chat_media_tool,
+)
 from bunnyland.server.client_ids import CLIENT_ID_HEADER
+from bunnyland.server.models import CharacterChatHistoryMessage, ChatMediaCreativeDirection
 
 MP4_BYTES = b"\x00\x00\x00\x18ftypmp42" + b"short-video"
 
@@ -182,6 +193,45 @@ async def test_scene_video_combines_recent_room_events_and_persists_mp4(tmp_path
     assert reused.status == "skipped"
     assert reused.url == video.url
     await service.aclose()
+
+
+async def test_ephemeral_chat_media_uses_one_pipeline_without_mutating_world(tmp_path):
+    scenario = build_scenario()
+    image = _image_service(scenario.actor, tmp_path)
+    video = _service(scenario.actor, tmp_path, video=True)
+    entity_count = len(list(scenario.actor.world.query().execute_entities()))
+    image_subject, image_scene = await capture_chat_media_scene(
+        scenario.actor, image, scenario.character
+    )
+    video_subject, video_scene = await capture_chat_media_scene(
+        scenario.actor, video, scenario.character
+    )
+
+    image_job = await image.start_ephemeral(
+        str(scenario.character),
+        subject=image_subject,
+        scene=image_scene,
+        extra="Visual focus: Juniper. Fictional scene action: Juniper dances.",
+    )
+    video_job = await video.start_ephemeral(
+        str(scenario.character),
+        subject=video_subject,
+        scene=video_scene,
+        extra="Visual focus: Juniper. Fictional scene action: Juniper dances.",
+    )
+    await image.wait_idle()
+    await video.wait_idle()
+
+    character = scenario.actor.world.get_entity(scenario.character)
+    assert image_job.status == "succeeded"
+    assert video_job.status == "succeeded"
+    assert not character.has_component(EventImageComponent)
+    assert not character.has_component(EventVideoComponent)
+    assert len(list(scenario.actor.world.query().execute_entities())) == entity_count
+    assert image_job.source_event_id == ""
+    assert video_job.source_event_id == ""
+    await image.aclose()
+    await video.aclose()
 
 
 async def test_video_profile_default_negative_is_used_when_enhancer_omits_it(tmp_path):
@@ -646,3 +696,421 @@ async def test_video_feature_and_player_job_are_independently_optional(tmp_path,
     assert no_room.json()["detail"] == "character has no room to illustrate"
     await enabled.aclose()
     await enabled_image.aclose()
+
+
+async def test_player_chat_image_and_video_share_private_media_job_pipeline(
+    tmp_path, monkeypatch
+):
+    scenario = build_scenario()
+    monkeypatch.setenv(server_app.SCENE_IMAGE_RATE_LIMIT_REQUESTS_ENV, "2")
+    image = _image_service(scenario.actor, tmp_path)
+    video = _service(scenario.actor, tmp_path, video=True)
+
+    class ChatService:
+        allow_sleeping_character_chat = False
+
+    app = create_app(
+        scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        imagegen=image,
+        videogen=video,
+        character_chat=ChatService(),
+        character_chat_media_tools=True,
+        allow_unauthenticated_embedding=True,
+    )
+    payload = {
+        "focus": "Juniper's delighted expression",
+        "history": [
+            {"role": "user", "text": "Shall we dance?"},
+            {"role": "character", "text": "Under these lanterns, absolutely."},
+        ],
+    }
+    async with _client(app) as client:
+        features = await client.get("/v1/public/features")
+        image_response = await client.post(
+            f"/v1/chat/characters/{scenario.character}/media-jobs",
+            json={"kind": "chat_image", **payload},
+        )
+        video_response = await client.post(
+            f"/v1/chat/characters/{scenario.character}/media-jobs",
+            json={
+                "kind": "chat_video",
+                "scene_action": "Juniper twirls; this is only an illustration.",
+                **payload,
+            },
+        )
+        limited = await client.post(
+            f"/v1/chat/characters/{scenario.character}/media-jobs",
+            json={"kind": "chat_image", **payload},
+        )
+        invalid = await client.post(
+            "/v1/chat/characters/not-a-character/media-jobs",
+            headers={CLIENT_ID_HEADER: "other-video-client"},
+            json={"kind": "chat_image", **payload},
+        )
+        await image.wait_idle()
+        await video.wait_idle()
+        image_job = await client.get(
+            f"/v1/chat/characters/{scenario.character}/media-jobs/"
+            f"{image_response.json()['id']}"
+        )
+        video_job = await client.get(
+            f"/v1/chat/characters/{scenario.character}/media-jobs/"
+            f"{video_response.json()['id']}"
+        )
+        wrong_owner = await client.get(
+            f"/v1/chat/characters/{scenario.character}/media-jobs/"
+            f"{image_response.json()['id']}",
+            headers={CLIENT_ID_HEADER: "other-video-client"},
+        )
+        missing = await client.get(
+            f"/v1/chat/characters/{scenario.character}/media-jobs/missing"
+        )
+
+    assert features.json()["chat_image_generation"] is True
+    assert features.json()["chat_video_generation"] is True
+    assert features.json()["character_chat_media_tools"] is True
+    assert image_response.status_code == 202
+    assert video_response.status_code == 202
+    assert image_response.headers["location"].endswith(image_response.json()["id"])
+    assert limited.status_code == 429
+    assert invalid.status_code == 400
+    assert invalid.json()["detail"] == "character does not exist"
+    assert wrong_owner.status_code == 404
+    assert missing.status_code == 404
+    assert image_job.json()["status"] == "succeeded"
+    assert image_job.json()["result"]["url"].endswith(".png")
+    assert image_job.json()["result"]["enhanced_prompt"]
+    assert video_job.json()["status"] == "succeeded"
+    assert video_job.json()["result"]["url"].endswith(".mp4")
+    assert video_job.json()["result"]["enhanced_prompt"]
+    assert not scenario.actor.world.get_entity(scenario.character).has_component(
+        EventImageComponent
+    )
+    assert not scenario.actor.world.get_entity(scenario.character).has_component(
+        EventVideoComponent
+    )
+    await image.aclose()
+    await video.aclose()
+
+    disabled = create_app(
+        scenario.actor,
+        imagegen=image,
+        allow_unauthenticated_embedding=True,
+    )
+    async with _client(disabled) as client:
+        unavailable = await client.post(
+            f"/v1/chat/characters/{scenario.character}/media-jobs",
+            json={"kind": "chat_image"},
+        )
+    assert unavailable.status_code == 404
+    assert unavailable.json()["detail"] == "character chat is not enabled"
+
+
+async def test_chat_media_context_validation_bounding_and_ephemeral_job_guards(
+    tmp_path, monkeypatch
+):
+    scenario = build_scenario()
+    image = _image_service(scenario.actor, tmp_path / "images")
+    video = _service(scenario.actor, tmp_path / "videos", video=True)
+    subject, scene = await capture_chat_media_scene(
+        scenario.actor, image, scenario.character
+    )
+    assert "Juniper" in subject
+
+    with pytest.raises(ValueError, match="character does not exist"):
+        await capture_chat_media_scene(scenario.actor, image, "not-an-id")
+    with pytest.raises(TypeError, match="not a character"):
+        await capture_chat_media_scene(scenario.actor, image, scenario.room_a)
+    stray = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Stray", kind="character"), CharacterComponent()],
+    )
+    with pytest.raises(ValueError, match="has no room"):
+        await capture_chat_media_scene(scenario.actor, image, stray.id)
+    box = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Box", kind="container")],
+    )
+    boxed = spawn_entity(
+        scenario.actor.world,
+        [IdentityComponent(name="Boxed", kind="character"), CharacterComponent()],
+    )
+    box.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), boxed.id)
+    with pytest.raises(ValueError, match="has no room"):
+        await capture_chat_media_scene(scenario.actor, image, boxed.id)
+
+    direction = ChatMediaCreativeDirection(
+        focus="Juniper",
+        scene_action="Juniper imagines dancing",
+        mood="joyful",
+        composition="wide shot",
+        style_notes="storybook",
+    )
+    context = chat_media_prompt_context(
+        history_summary="They discussed lanterns.",
+        history=[
+            CharacterChatHistoryMessage(role="user", text="Shall we dance?"),
+            CharacterChatHistoryMessage(role="character", text=" "),
+        ],
+        direction=direction,
+        current_message="Show me.",
+    )
+    assert MEDIA_ACTION_WARNING not in context
+    assert "Fictional scene action: Juniper imagines dancing" in context
+    assert "Conversation summary:" in context
+    assert "Human now: Show me." in context
+    no_transcript = chat_media_prompt_context(
+        history_summary="",
+        history=[],
+        direction=ChatMediaCreativeDirection(),
+    )
+    assert no_transcript == (
+        "Illustrate the private conversation below while preserving the trusted world scene."
+    )
+    bounded = chat_media_prompt_context(
+        history_summary="",
+        history=[
+            CharacterChatHistoryMessage(role="character", text=str(index) + "x" * 3_999)
+            for index in range(4)
+        ],
+        direction=ChatMediaCreativeDirection(),
+    )
+    assert len(bounded) <= CHAT_MEDIA_CONTEXT_CHARS
+    assert MEDIA_ACTION_WARNING not in bounded
+    with pytest.raises(ValueError, match="chat media kind"):
+        chat_media_tool("audio", lambda *_args: None)
+
+    for service in (image, video):
+        invalid = await service.start_ephemeral(
+            "missing:character",
+            subject="Nobody",
+            scene=scene,
+        )
+        assert invalid.status == "failed"
+        assert invalid.error == "unknown entity"
+
+    parent = object()
+    monkeypatch.setattr("bunnyland.telemetry.capture_context", lambda: parent)
+    monkeypatch.setattr(image, "_ensure_worker", lambda: None)
+    monkeypatch.setattr(video, "_ensure_worker", lambda: None)
+    queued_image = await image.start_ephemeral(
+        str(scenario.character), subject=subject, scene=scene
+    )
+    queued_video = await video.start_ephemeral(
+        str(scenario.character), subject=subject, scene=scene
+    )
+    assert image._parent_contexts[queued_image.job_id] is parent
+    assert video._parent_contexts[queued_video.job_id] is parent
+    await image.aclose()
+    await video.aclose()
+
+
+async def test_opted_in_character_chat_uses_the_same_media_job_pipeline(
+    tmp_path, monkeypatch
+):
+    scenario = build_scenario()
+    monkeypatch.setenv(server_app.SCENE_IMAGE_RATE_LIMIT_REQUESTS_ENV, "1")
+    image = _image_service(scenario.actor, tmp_path)
+
+    class MediaRequestingAgent:
+        def __init__(self):
+            self.calls = []
+
+        async def chat(
+            self,
+            messages,
+            *,
+            character_id,
+            model=None,
+            provider=None,
+            tools=None,
+        ):
+            del character_id, model, provider
+            self.calls.append((messages, tools or []))
+            if len(self.calls) % 2 == 1:
+                return ChatAgentReply(
+                    tool_call=ToolCall(
+                        "request_chat_image",
+                        {
+                            "focus": "Juniper's scarf",
+                            "scene_action": "Juniper imagines leaping over a lantern",
+                        },
+                    )
+                )
+            return ChatAgentReply(content="I pictured the leap for you.")
+
+    agent = MediaRequestingAgent()
+    chat = CharacterChatService(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        agent,
+    )
+    app = create_app(
+        scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        imagegen=image,
+        character_chat=chat,
+        character_chat_media_tools=True,
+        allow_unauthenticated_embedding=True,
+    )
+    async with _client(app) as client:
+        submitted = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={
+                "kind": "chat",
+                "message": "Show me how you imagine it.",
+                "allow_character_media": True,
+            },
+        )
+        outer = submitted.json()
+        for _attempt in range(40):
+            outer_response = await client.get(
+                f"/v1/chat/characters/{scenario.character}/jobs/{outer['id']}"
+            )
+            outer = outer_response.json()
+            if outer["status"] not in {"queued", "running"}:
+                break
+            await asyncio.sleep(0.01)
+        await image.wait_idle()
+        media = outer["result"]["action"]["media_job"]
+        media_response = await client.get(
+            f"/v1/chat/characters/{scenario.character}/media-jobs/{media['id']}"
+        )
+        limited_response = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={
+                "kind": "chat",
+                "message": "Show me another.",
+                "allow_character_media": True,
+            },
+        )
+        limited = limited_response.json()
+        for _attempt in range(40):
+            limited = (
+                await client.get(
+                    f"/v1/chat/characters/{scenario.character}/jobs/{limited['id']}"
+                )
+            ).json()
+            if limited["status"] not in {"queued", "running"}:
+                break
+            await asyncio.sleep(0.01)
+
+        async def invalid_scene(*_args, **_kwargs):
+            raise ValueError("scene is unavailable")
+
+        monkeypatch.setattr(server_app, "capture_chat_media_scene", invalid_scene)
+        alternate_headers = {CLIENT_ID_HEADER: "alternate-video-client"}
+        invalid_response = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            headers=alternate_headers,
+            json={
+                "kind": "chat",
+                "message": "Show me one more.",
+                "allow_character_media": True,
+            },
+        )
+        invalid = invalid_response.json()
+        for _attempt in range(40):
+            invalid = (
+                await client.get(
+                    f"/v1/chat/characters/{scenario.character}/jobs/{invalid['id']}",
+                    headers=alternate_headers,
+                )
+            ).json()
+            if invalid["status"] not in {"queued", "running"}:
+                break
+            await asyncio.sleep(0.01)
+
+    tool = next(
+        item["function"]
+        for item in agent.calls[0][1]
+        if item["function"]["name"] == "request_chat_image"
+    )
+    assert MEDIA_ACTION_WARNING in tool["description"]
+    assert outer["status"] == "succeeded"
+    assert outer["result"]["reply"] == "I pictured the leap for you."
+    assert media_response.json()["status"] == "succeeded"
+    assert media_response.json()["result"]["url"].endswith(".png")
+    assert media_response.json()["result"]["enhanced_prompt"]
+    assert limited["result"]["action"]["status"] == "rejected"
+    assert limited["result"]["action"]["reason"] == "chat media rate limit exceeded"
+    assert invalid["result"]["action"]["status"] == "rejected"
+    assert invalid["result"]["action"]["reason"] == "scene is unavailable"
+    assert not scenario.actor.world.get_entity(scenario.character).has_component(
+        EventImageComponent
+    )
+    await image.aclose()
+
+
+async def test_opted_in_character_can_request_video_when_only_video_is_enabled(tmp_path):
+    scenario = build_scenario()
+    video = _service(scenario.actor, tmp_path, video=True)
+
+    class VideoRequestingAgent:
+        def __init__(self):
+            self.calls = 0
+
+        async def chat(
+            self,
+            messages,
+            *,
+            character_id,
+            model=None,
+            provider=None,
+            tools=None,
+        ):
+            del messages, character_id, model, provider
+            self.calls += 1
+            if self.calls == 1:
+                names = {
+                    item["function"]["name"]
+                    for item in tools or []
+                    if item["function"]["name"].startswith("request_chat_")
+                }
+                assert names == {"request_chat_video"}
+                return ChatAgentReply(
+                    tool_call=ToolCall(
+                        "request_chat_video",
+                        {"focus": "Juniper", "scene_action": "Juniper waves"},
+                    )
+                )
+            return ChatAgentReply(content="Here is how I imagine the wave.")
+
+    chat = CharacterChatService(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        VideoRequestingAgent(),
+    )
+    app = create_app(
+        scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        videogen=video,
+        character_chat=chat,
+        character_chat_media_tools=True,
+        allow_unauthenticated_embedding=True,
+    )
+    async with _client(app) as client:
+        response = await client.post(
+            f"/v1/chat/characters/{scenario.character}/jobs",
+            json={"kind": "chat", "message": "Wave.", "allow_character_media": True},
+        )
+        outer = response.json()
+        for _attempt in range(40):
+            outer = (
+                await client.get(
+                    f"/v1/chat/characters/{scenario.character}/jobs/{outer['id']}"
+                )
+            ).json()
+            if outer["status"] not in {"queued", "running"}:
+                break
+            await asyncio.sleep(0.01)
+        media = outer["result"]["action"]["media_job"]
+        await video.wait_idle()
+        result = await client.get(
+            f"/v1/chat/characters/{scenario.character}/media-jobs/{media['id']}"
+        )
+
+    assert media["kind"] == "chat_video"
+    assert result.json()["result"]["url"].endswith(".mp4")
+    await video.aclose()

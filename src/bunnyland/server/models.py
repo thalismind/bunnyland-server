@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from ..content import ContentLibrary
 from ..core.claim_timeout import CLAIM_TIMEOUT_MAX_SECONDS, CLAIM_TIMEOUT_MIN_SECONDS
@@ -96,6 +96,9 @@ class FeatureStatusResponse(BaseModel):
     character_sheets: bool = True
     image_generation: bool = False
     video_generation: bool = False
+    chat_image_generation: bool = False
+    chat_video_generation: bool = False
+    character_chat_media_tools: bool = False
 
 
 class CharacterChatStatusResponse(BaseModel):
@@ -117,6 +120,23 @@ class CharacterChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     history_summary: str = Field(default="", max_length=12000)
     history: list[CharacterChatHistoryMessage] = Field(default_factory=list, max_length=24)
+    allow_character_media: bool = False
+
+
+class CharacterChatMediaJobReference(BaseModel):
+    id: str
+    kind: Literal["chat_image", "chat_video"]
+    status: Literal["queued", "running", "succeeded", "failed"] = "queued"
+
+
+class ChatMediaCreativeDirection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    focus: str = Field(default="", max_length=500)
+    scene_action: str = Field(default="", max_length=500)
+    mood: str = Field(default="", max_length=500)
+    composition: str = Field(default="", max_length=500)
+    style_notes: str = Field(default="", max_length=500)
 
 
 class CharacterChatActionResult(BaseModel):
@@ -126,6 +146,7 @@ class CharacterChatActionResult(BaseModel):
     status: Literal["none", "queued", "executed", "rejected", "unresolved", "failed"] = "none"
     reason: str = ""
     result_events: list[dict[str, JsonValue]] = Field(default_factory=list)
+    media_job: CharacterChatMediaJobReference | None = None
 
 
 class CharacterChatResponse(BaseModel):
@@ -741,6 +762,7 @@ class WorldImageGenerationResponse(BaseModel):
     alpha_url: str = ""
     source_event_id: str = ""
     snapshot_epoch: int | None = None
+    enhanced_prompt: str = ""
     prompt_style: str = ""
     enhancer: str = ""
     prompt_fallback: bool = False
