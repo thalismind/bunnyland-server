@@ -5,9 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Button, Checkbox, Input, Select, Static
+from textual.widgets import Button, Checkbox, Input, Link, Select, Static
 
-from bunnyland.server.models import CharacterChatActionResult, CharacterSummaryView
+from bunnyland.server.models import (
+    CharacterChatActionResult,
+    CharacterChatMediaJobReference,
+    CharacterSummaryView,
+)
 from bunnyland.server.v1_models import CharacterProfileResource
 from bunnyland.terminal_chat import (
     PARAGRAPH_REVEAL_DELAY_SECONDS,
@@ -21,6 +25,7 @@ from bunnyland.tui.backend import (
     CharacterChatAccess,
     CharacterChatController,
     CharacterChatJob,
+    CharacterChatMediaJob,
 )
 from bunnyland.tui.screens import (
     CharacterPickerScreen,
@@ -274,6 +279,9 @@ async def test_terminal_setup_rejects_empty_model_and_cancels():
 class ConversationBackend:
     client_id = "client-1"
     supports_character_chat = True
+    supports_character_chat_media_tools = False
+    supports_chat_image_requests = False
+    supports_chat_video_requests = False
 
     def __init__(
         self,
@@ -450,6 +458,109 @@ async def test_conversation_screen_success_without_action_uses_ellipsis(monkeypa
     async with host.run_test():
         await screen._send("hello")
         assert "Juniper: …" in screen.query_one("#conversation-transcript", Static).render().plain
+
+
+async def test_conversation_screen_polls_character_media_and_saves_opt_in(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    class MediaBackend(ConversationBackend):
+        supports_character_chat_media_tools = True
+        supports_chat_image_requests = True
+        supports_chat_video_requests = True
+
+        async def poll_character_chat_media(self, job):
+            return CharacterChatMediaJob(
+                id=job.id,
+                status="succeeded",
+                character_id=job.character_id,
+                kind=job.kind,
+                url="https://media.example/character.png",
+            )
+
+    backend = MediaBackend([
+        _job(
+            "succeeded",
+            reply="I pictured it.",
+            action=CharacterChatActionResult(
+                tool="request_chat_image",
+                status="executed",
+                media_job=CharacterChatMediaJobReference(
+                    id="media-character",
+                    kind="chat_image",
+                    status="queued",
+                ),
+            ),
+        )
+    ])
+    screen = ConversationScreen(backend, "character:1", "Juniper")
+    host = ScreenHost(screen)
+    async with host.run_test() as pilot:
+        allow = screen.query_one("#conversation-allow-character-media", Checkbox)
+        allow.value = True
+        await pilot.pause()
+        await screen._send("Picture it")
+        assert load_chat_preferences().allow_character_media is True
+        assert backend.submitted[0][2]["allow_character_media"] is True
+        assert screen.query_one("#conversation-media", Static).render().plain.startswith(
+            "📷 ready"
+        )
+        link = screen.query_one("#conversation-media-link", Link)
+        assert link.display is True
+        assert link.url == "https://media.example/character.png"
+
+
+async def test_conversation_screen_reports_and_cancels_media_requests(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    class FailedMediaBackend(ConversationBackend):
+        supports_chat_image_requests = True
+        supports_chat_video_requests = True
+
+        async def request_character_chat_media(self, *_args, **_kwargs):
+            raise RuntimeError("generator offline")
+
+    failed_screen = ConversationScreen(
+        FailedMediaBackend(), "character:1", "Juniper"
+    )
+    failed_host = ScreenHost(failed_screen)
+    async with failed_host.run_test():
+        await failed_screen._poll_media(
+            CharacterChatMediaJob(
+                id="failed",
+                status="failed",
+                character_id="character:1",
+                kind="chat_image",
+                failure="render failed",
+            )
+        )
+        assert failed_screen.query_one("#conversation-media-link", Link).display is False
+        await failed_screen._request_media("chat_video")
+        assert "🎬 failed · generator offline" in failed_screen.query_one(
+            "#conversation-media", Static
+        ).render().plain
+
+    class WaitingMediaBackend(ConversationBackend):
+        supports_chat_image_requests = True
+
+        async def request_character_chat_media(self, *_args, **_kwargs):
+            await asyncio.Event().wait()
+
+    waiting_screen = ConversationScreen(
+        WaitingMediaBackend(), "character:1", "Juniper"
+    )
+    waiting_host = ScreenHost(waiting_screen)
+    async with waiting_host.run_test() as pilot:
+        waiting_screen._start_media_request("chat_image")
+        task = waiting_screen._media_task
+        waiting_screen._start_media_request("chat_image")
+        assert waiting_screen._media_task is task
+        await pilot.pause()
+        await waiting_screen.action_close()
+        assert task is not None and task.cancelled()
 
 
 async def test_conversation_screen_separates_reply_paragraphs_with_visual_delay(

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
-from textual.widgets import Input, Select
+from textual.widgets import Input, Link, Select
 
 from bunnyland.chat import CharacterChatApp
 from bunnyland.repl.app import BunnylandReplApp
@@ -11,7 +12,7 @@ from bunnyland.server.models import CharacterSummaryView
 from bunnyland.server.v1_models import CharacterProfileResource, PublicWorldResource
 from bunnyland.terminal_config import TerminalConfig, should_skip_world_introduction
 from bunnyland.tui.app import BunnylandTUI
-from bunnyland.tui.backend import Backend, LocalBackend, SubmitResult
+from bunnyland.tui.backend import Backend, CharacterChatMediaJob, LocalBackend, SubmitResult
 from bunnyland.tui.generator_selector import GeneratorSelection, WorldGeneratorSelector
 from bunnyland.tui.model import World
 from bunnyland.tui.screens import (
@@ -88,6 +89,47 @@ class FlaggedBackend(EmptyBackend):
             title="Clover City",
             description="Mind the foxes after dark.",
             content_flags=["adult:violence", "pvp"],
+        )
+
+
+class ChatMediaBackend(EmptyBackend):
+    supports_chat_image_requests = True
+    supports_chat_video_requests = True
+    supports_character_chat_media_tools = True
+
+    def __init__(self):
+        super().__init__()
+        self.media_requests: list[tuple[str, str]] = []
+        self.release_media = asyncio.Event()
+
+    async def request_character_chat_media(
+        self,
+        character_id,
+        kind,
+        *,
+        focus="",
+        history_summary="",
+        history=None,
+    ):
+        del history_summary, history
+        self.media_requests.append((kind, focus))
+        return CharacterChatMediaJob(
+            id=f"job-{len(self.media_requests)}",
+            status="queued",
+            character_id=character_id,
+            kind=kind,
+            focus=focus,
+        )
+
+    async def poll_character_chat_media(self, job):
+        await self.release_media.wait()
+        return CharacterChatMediaJob(
+            id=job.id,
+            status="succeeded",
+            character_id=job.character_id,
+            kind=job.kind,
+            focus=job.focus,
+            url="/media/chat-result",
         )
 
 
@@ -434,6 +476,40 @@ async def test_standalone_chat_starts_with_character_picker(monkeypatch, tmp_pat
         await pilot.pause()
         assert any(isinstance(screen, CharacterPickerScreen) for screen in app.screen_stack)
     assert backend.closed is True
+
+
+async def test_terminal_chat_marks_pending_images_and_videos(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    for button_id, kind, icon in (
+        ("#conversation-image", "chat_image", "📷"),
+        ("#conversation-video", "chat_video", "🎬"),
+    ):
+        backend = ChatMediaBackend()
+        app = CharacterChatApp(backend, character="Juniper")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            conversation = next(
+                screen for screen in app.screen_stack if isinstance(screen, ConversationScreen)
+            )
+            assert "do not happen" in conversation.query_one(
+                "#conversation-media-warning"
+            ).render().plain
+            focus = conversation.query_one("#conversation-media-focus", Input)
+            focus.value = "Juniper dancing beneath lanterns"
+            await pilot.click(button_id)
+            await pilot.pause()
+            marker = conversation.query_one("#conversation-media").render().plain
+            assert marker.startswith(f"{icon} pending")
+            assert backend.media_requests == [
+                (kind, "Juniper dancing beneath lanterns")
+            ]
+            backend.release_media.set()
+            await pilot.pause(0.4)
+            marker = conversation.query_one("#conversation-media").render().plain
+            assert marker.startswith(f"{icon} ready")
+            link = conversation.query_one("#conversation-media-link", Link)
+            assert link.display is True
+            assert link.url == "/media/chat-result"
 
 
 class SetupLocalBackend(LocalBackend):

@@ -20,9 +20,12 @@ from .character_chat_display import format_action_call
 from .core.claim_timeout import normalize_claim_timeout
 from .terminal_chat import (
     HISTORY_LIMIT,
+    ChatPreferences,
     append_exchange,
     history_path,
+    load_chat_preferences,
     load_history,
+    save_chat_preferences,
     save_history,
 )
 from .terminal_config import (
@@ -32,7 +35,13 @@ from .terminal_config import (
     save_terminal_config,
 )
 from .terminal_generators import available_generators, format_generator_lines
-from .tui.backend import Backend, CharacterChatAccess, LocalBackend, RemoteBackend
+from .tui.backend import (
+    Backend,
+    CharacterChatAccess,
+    CharacterChatMediaJob,
+    LocalBackend,
+    RemoteBackend,
+)
 from .tui.generator_selector import (
     DEFAULT_LOCAL_GENERATOR,
     DEFAULT_LOCAL_SEED,
@@ -265,6 +274,23 @@ def _print_controller_choices(access: CharacterChatAccess) -> None:
     print("Use /controller <id> to assign one.")
 
 
+def _media_marker(job: CharacterChatMediaJob) -> str:
+    icon = "🎬" if job.kind == "chat_video" else "📷"
+    state = "pending" if job.pending else "failed" if job.status == "failed" else "ready"
+    focus = f" · {job.focus}" if job.focus else ""
+    result = f" · {job.url}" if job.url else ""
+    failure = f" · {job.failure}" if job.failure else ""
+    return f"{icon} {state}{focus}{result}{failure}"
+
+
+async def _poll_cli_media(backend: Backend, job: CharacterChatMediaJob) -> None:
+    print(_media_marker(job))
+    while job.pending:
+        await asyncio.sleep(0.25)
+        job = await backend.poll_character_chat_media(job)
+        print(_media_marker(job))
+
+
 async def _run_cli(backend: Backend, wanted: str) -> int:
     await backend.start()
     try:
@@ -288,7 +314,13 @@ async def _run_cli(backend: Backend, wanted: str) -> int:
                 raise SystemExit(f"no such character: {wanted!r}")
             character = characters[0]
         state = load_history(backend.client_id, character.character_id)
+        preferences = load_chat_preferences()
         print(f"Chatting with {character.name}. Ctrl-D or /quit exits.")
+        if backend.supports_chat_image_requests or backend.supports_chat_video_requests:
+            print(
+                "Illustrations are visual only: described actions do not happen in "
+                "Bunnyland or change the world."
+            )
         _print_cli_history(state, character.name)
         access = await backend.character_chat_access(character.character_id)
         if not access.writable:
@@ -306,7 +338,63 @@ async def _run_cli(backend: Backend, wanted: str) -> int:
             if message in {"/quit", "/exit"}:
                 break
             if message in {"/help", "/meta"}:
-                print("Meta: /activate, /controller <id>, /controllers, /help, /quit")
+                print(
+                    "Meta: /image [focus], /video [focus], /allow-media on|off, "
+                    "/activate, /controller <id>, /controllers, /help, /quit"
+                )
+                continue
+            if message == "/image" or message.startswith("/image "):
+                if not backend.supports_chat_image_requests:
+                    print("Chat image requests are not enabled on this server.")
+                    continue
+                try:
+                    media_job = await backend.request_character_chat_media(
+                        character.character_id,
+                        "chat_image",
+                        focus=message.removeprefix("/image").strip(),
+                        history_summary=str(state.get("summary") or ""),
+                        history=list(state.get("messages") or []),
+                    )
+                    await _poll_cli_media(backend, media_job)
+                except Exception as exc:
+                    print(f"📷 failed · {exc}")
+                continue
+            if message == "/video" or message.startswith("/video "):
+                if not backend.supports_chat_video_requests:
+                    print("Chat video requests are not enabled on this server.")
+                    continue
+                try:
+                    media_job = await backend.request_character_chat_media(
+                        character.character_id,
+                        "chat_video",
+                        focus=message.removeprefix("/video").strip(),
+                        history_summary=str(state.get("summary") or ""),
+                        history=list(state.get("messages") or []),
+                    )
+                    await _poll_cli_media(backend, media_job)
+                except Exception as exc:
+                    print(f"🎬 failed · {exc}")
+                continue
+            if message == "/allow-media" or message.startswith("/allow-media "):
+                setting = message.removeprefix("/allow-media").strip().lower()
+                if not backend.supports_character_chat_media_tools:
+                    print("Character-requested illustrations are not enabled on this server.")
+                    continue
+                if setting not in {"on", "off"}:
+                    print("Usage: /allow-media on|off")
+                    continue
+                preferences = ChatPreferences(
+                    allow_character_media=setting == "on",
+                    markdown=preferences.markdown,
+                    remember_history=preferences.remember_history,
+                    separate_reply_paragraphs=preferences.separate_reply_paragraphs,
+                )
+                save_chat_preferences(preferences)
+                print(
+                    "Character-requested illustrations enabled."
+                    if preferences.allow_character_media
+                    else "Character-requested illustrations disabled."
+                )
                 continue
             if message == "/controllers":
                 access = await backend.character_chat_access(character.character_id)
@@ -365,6 +453,7 @@ async def _run_cli(backend: Backend, wanted: str) -> int:
                     message,
                     history_summary=str(state.get("summary") or ""),
                     history=list(state.get("messages") or []),
+                    allow_character_media=preferences.allow_character_media,
                 )
                 while job.pending:
                     if job.reply:
@@ -390,6 +479,16 @@ async def _run_cli(backend: Backend, wanted: str) -> int:
                 else ""
             )
             print(f"{character.name}: {job.reply}{suffix}")
+            if job.action.media_job is not None:
+                await _poll_cli_media(
+                    backend,
+                    CharacterChatMediaJob(
+                        id=job.action.media_job.id,
+                        status=job.action.media_job.status,
+                        character_id=character.character_id,
+                        kind=job.action.media_job.kind,
+                    ),
+                )
             append_exchange(state, message, job.reply)
             save_history(backend.client_id, character.character_id, state)
         save_history(backend.client_id, character.character_id, state)

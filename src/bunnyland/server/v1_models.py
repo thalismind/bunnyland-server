@@ -22,6 +22,7 @@ from .models import (
     IDENTIFIER_MAX_LENGTH,
     CharacterChatActionResult,
     CharacterChatHistoryMessage,
+    ChatMediaCreativeDirection,
     ClientActionView,
     ClientCharacterSheetView,
     ClientChecklistItemView,
@@ -359,6 +360,13 @@ class ChatJobRequest(V1Request):
     message: str = Field(min_length=1, max_length=4000)
     history_summary: str = Field(default="", max_length=12000)
     history: list[CharacterChatHistoryMessage] = Field(default_factory=list, max_length=24)
+    allow_character_media: bool = False
+
+
+class ChatMediaJobRequest(ChatMediaCreativeDirection):
+    kind: Literal["chat_image", "chat_video"]
+    history_summary: str = Field(default="", max_length=12000)
+    history: list[CharacterChatHistoryMessage] = Field(default_factory=list, max_length=24)
 
 
 class CharacterChatReplyRequest(V1Request):
@@ -401,6 +409,7 @@ class ImageJobResult(V1Request):
     alpha_url: str = ""
     source_event_id: str = ""
     snapshot_epoch: int | None = None
+    enhanced_prompt: str = ""
     prompt_style: str = ""
     enhancer: str = ""
     prompt_fallback: bool = False
@@ -460,6 +469,8 @@ class JobResource(WorldResource):
     id: str
     kind: Literal[
         "chat",
+        "chat_image",
+        "chat_video",
         "scene_image",
         "scene_video",
         "world",
@@ -572,6 +583,7 @@ __all__ = [
     "CharacterProfileResource",
     "ChatJobRequest",
     "ChatJobResult",
+    "ChatMediaJobRequest",
     "CheckpointRequest",
     "ClaimCharacterResource",
     "ClaimCommandRequest",

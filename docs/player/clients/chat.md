@@ -20,6 +20,22 @@ files and keeps subsequent conversation only for the open session. Paragraph sep
 adds a short visual delay while preserving one complete reply in saved and agent-facing
 history.
 
+## Chat illustrations
+
+When the remote server enables chat image or video generation, the Textual conversation
+shows **📷 Image** and **🎬 Video** controls with an optional visual-focus field. The
+line-oriented client provides the equivalent `/image [focus]` and `/video [focus]`
+commands. Both clients immediately show `📷 pending` or `🎬 pending`, then replace that
+marker with the finished media URL or a failure.
+
+Servers may also expose an **Allow character illustrations** option. It is off by default
+for each terminal client; in line mode use `/allow-media on|off`. When enabled, a character
+can choose the focus, fictional scene action, mood, composition, and style of an image or
+video while chatting. Player and character requests use the same private chat-media jobs.
+
+These are illustrations only. Actions described in an image or video request do not happen
+in Bunnyland and do not change characters, rooms, items, events, or any other world state.
+
 ## Local Ollama
 
 Install the `tui` and `llm` extras and run Ollama locally. The default endpoint is

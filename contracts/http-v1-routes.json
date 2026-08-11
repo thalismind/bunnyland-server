@@ -22,8 +22,14 @@
       ]
     },
     "chat": {
-      "GET": ["/v1/chat/characters/{character_id}/jobs/{job_id}"],
-      "POST": ["/v1/chat/characters/{character_id}/jobs"]
+      "GET": [
+        "/v1/chat/characters/{character_id}/jobs/{job_id}",
+        "/v1/chat/characters/{character_id}/media-jobs/{job_id}"
+      ],
+      "POST": [
+        "/v1/chat/characters/{character_id}/jobs",
+        "/v1/chat/characters/{character_id}/media-jobs"
+      ]
     },
     "play": {
       "GET": [

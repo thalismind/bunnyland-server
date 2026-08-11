@@ -552,6 +552,7 @@ def test_config_wizard_prompt_full_openrouter_path(monkeypatch) -> None:
             "y",
             "seedance",
             "cinematic",
+            "y",
         ]
     )
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
@@ -564,6 +565,7 @@ def test_config_wizard_prompt_full_openrouter_path(monkeypatch) -> None:
     assert config.llm.provider == "openrouter"
     assert config.llm.openrouter_api_key == "sk-or"
     assert config.server.character_chat is True
+    assert config.server.character_chat_media_tools is True
     assert config.discord.user_id == 123
     assert config.mcp.enabled is True
     assert config.imagegen.workflows == "flux2dev"

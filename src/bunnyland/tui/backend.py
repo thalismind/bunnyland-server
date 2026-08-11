@@ -67,6 +67,7 @@ from ..server.v1_models import (
     CharacterProfileResource,
     ChatJobResult,
     ControllerAssignment,
+    ImageJobResult,
     JobResource,
     PublicWorldResource,
 )
@@ -284,6 +285,23 @@ class CharacterChatJob:
 
 
 @dataclass(frozen=True)
+class CharacterChatMediaJob:
+    """Backend-neutral state for one private chat illustration."""
+
+    id: str
+    status: str
+    character_id: str
+    kind: str
+    focus: str = ""
+    url: str = ""
+    failure: str = ""
+
+    @property
+    def pending(self) -> bool:
+        return self.status in {"queued", "running"}
+
+
+@dataclass(frozen=True)
 class CharacterChatController:
     """An existing LLM controller that an administrator may assign to a character."""
 
@@ -344,6 +362,9 @@ class Backend(ABC):
     supports_character_chat: bool = False
     supports_image_requests: bool = False
     supports_video_requests: bool = False
+    supports_chat_image_requests: bool = False
+    supports_chat_video_requests: bool = False
+    supports_character_chat_media_tools: bool = False
 
     @abstractmethod
     async def start(self) -> None: ...
@@ -524,8 +545,9 @@ class Backend(ABC):
         *,
         history_summary: str = "",
         history: list[dict] | None = None,
+        allow_character_media: bool = False,
     ) -> CharacterChatJob:
-        del character_id, message, history_summary, history
+        del character_id, message, history_summary, history, allow_character_media
         raise RuntimeError("Character chat is not available for this session")
 
     async def poll_character_chat(self, job: CharacterChatJob) -> CharacterChatJob:
@@ -533,6 +555,23 @@ class Backend(ABC):
 
     async def cancel_character_chat(self, job: CharacterChatJob) -> None:
         del job
+
+    async def request_character_chat_media(
+        self,
+        character_id: str,
+        kind: str,
+        *,
+        focus: str = "",
+        history_summary: str = "",
+        history: list[dict] | None = None,
+    ) -> CharacterChatMediaJob:
+        del character_id, kind, focus, history_summary, history
+        raise RuntimeError("Chat media is not available for this session")
+
+    async def poll_character_chat_media(
+        self, job: CharacterChatMediaJob
+    ) -> CharacterChatMediaJob:
+        return job
 
 
 def frontend_base_for_api(api_base: str) -> str:
@@ -803,6 +842,7 @@ class LocalBackend(Backend):
         *,
         history_summary: str = "",
         history: list[dict] | None = None,
+        allow_character_media: bool = False,
     ) -> CharacterChatJob:
         if self.character_chat is None:
             raise RuntimeError("Character chat is disabled for this local session")
@@ -813,6 +853,7 @@ class LocalBackend(Backend):
                 message=message,
                 history_summary=history_summary,
                 history=history or [],
+                allow_character_media=allow_character_media,
             ),
         )
         pending = response.action.status == "queued" and bool(response.action.command_id)
@@ -1195,6 +1236,9 @@ class RemoteBackend(Backend):
         self.supports_character_sheets = features.character_sheets
         self.supports_image_requests = features.image_generation
         self.supports_video_requests = features.video_generation
+        self.supports_chat_image_requests = features.chat_image_generation
+        self.supports_chat_video_requests = features.chat_video_generation
+        self.supports_character_chat_media_tools = features.character_chat_media_tools
         if self.token_file is not None and self.token_file.exists():
             self._access_token = secure_read_text(self.token_file).strip()
             self._set_access_token(self._access_token)
@@ -1439,6 +1483,7 @@ class RemoteBackend(Backend):
         *,
         history_summary: str = "",
         history: list[dict] | None = None,
+        allow_character_media: bool = False,
     ) -> CharacterChatJob:
         res = await self._client.post(
             f"{self.base}/chat/characters/{urllib.parse.quote(character_id, safe='')}/jobs",
@@ -1447,6 +1492,7 @@ class RemoteBackend(Backend):
                 "message": message,
                 "history_summary": history_summary,
                 "history": (history or [])[-24:],
+                "allow_character_media": allow_character_media,
             },
         )
         res.raise_for_status()
@@ -1464,6 +1510,64 @@ class RemoteBackend(Backend):
         return self._character_chat_job(
             JobResource.model_validate(res.json()),
             job.character_id,
+        )
+
+    @staticmethod
+    def _character_chat_media_job(
+        resource: JobResource,
+        character_id: str,
+        focus: str,
+    ) -> CharacterChatMediaJob:
+        result = resource.result
+        url = result.url if isinstance(result, ImageJobResult) else ""
+        failure = resource.failure.detail if resource.failure is not None else ""
+        return CharacterChatMediaJob(
+            id=resource.id,
+            status=resource.status,
+            character_id=character_id,
+            kind=resource.kind,
+            focus=focus,
+            url=url,
+            failure=failure,
+        )
+
+    async def request_character_chat_media(
+        self,
+        character_id: str,
+        kind: str,
+        *,
+        focus: str = "",
+        history_summary: str = "",
+        history: list[dict] | None = None,
+    ) -> CharacterChatMediaJob:
+        res = await self._client.post(
+            f"{self.base}/chat/characters/"
+            f"{urllib.parse.quote(character_id, safe='')}/media-jobs",
+            json={
+                "kind": kind,
+                "focus": focus,
+                "history_summary": history_summary,
+                "history": (history or [])[-24:],
+            },
+        )
+        res.raise_for_status()
+        return self._character_chat_media_job(
+            JobResource.model_validate(res.json()), character_id, focus
+        )
+
+    async def poll_character_chat_media(
+        self, job: CharacterChatMediaJob
+    ) -> CharacterChatMediaJob:
+        if not job.pending:
+            return job
+        res = await self._client.get(
+            f"{self.base}/chat/characters/"
+            f"{urllib.parse.quote(job.character_id, safe='')}/media-jobs/"
+            f"{urllib.parse.quote(job.id, safe='')}"
+        )
+        res.raise_for_status()
+        return self._character_chat_media_job(
+            JobResource.model_validate(res.json()), job.character_id, job.focus
         )
 
     async def fetch_room_projection(self, room_id: str, character_id: str) -> dict | None:

@@ -87,10 +87,17 @@ class ImageGenJob:
     alpha_url: str = ""
     source_event_id: str = ""
     snapshot_epoch: int | None = None
+    enhanced_prompt: str = ""
     prompt_style: str = ""
     enhancer: str = ""
     prompt_fallback: bool = False
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class _EphemeralImageInput:
+    subject: str
+    scene: MediaSceneSnapshot
 
 
 def _seed_for(entity_id: str) -> int:
@@ -134,6 +141,7 @@ class ImageGenService:
         self._seq = itertools.count()
         self._jobs: dict[str, ImageGenJob] = {}
         self._extras: dict[str, str] = {}
+        self._ephemeral_inputs: dict[str, _EphemeralImageInput] = {}
         self._alpha_jobs: set[str] = set()
         self._parent_contexts: dict[str, object] = {}
         self._worker: asyncio.Task[None] | None = None
@@ -236,6 +244,55 @@ class ImageGenService:
             telemetry.mark_span_ok(enqueue_span)
         return job
 
+    async def start_ephemeral(
+        self,
+        entity_id: str,
+        *,
+        subject: str,
+        scene: MediaSceneSnapshot,
+        template_name: str = "",
+        requested_by: str = "",
+        extra: str = "",
+    ) -> ImageGenJob:
+        """Queue chat-owned event media without attaching state to the ECS entity.
+
+        ``entity_id`` identifies the directed viewer for lifecycle events. The supplied
+        subject and immutable scene snapshot are used only by this job and are discarded
+        when processing begins.
+        """
+
+        parsed = parse_entity_id(entity_id)
+        generator = self._generators[ImagePurpose.EVENT]
+        job = ImageGenJob(
+            job_id=uuid4().hex,
+            entity_id=entity_id,
+            purpose=ImagePurpose.EVENT,
+            generator=generator.name,
+            profile_name=template_name,
+            template_name=template_name,
+            requested_by=requested_by,
+            target_id=entity_id,
+        )
+        async with self._actor._lock:
+            if parsed is None or not self._actor.world.has_entity(parsed):
+                job.status = "failed"
+                job.error = "unknown entity"
+                self._jobs[job.job_id] = job
+                return job
+        self._jobs[job.job_id] = job
+        self._extras[job.job_id] = extra
+        self._ephemeral_inputs[job.job_id] = _EphemeralImageInput(
+            subject=subject,
+            scene=scene,
+        )
+        await self._publish_started(job)
+        parent_context = telemetry.capture_context()
+        if parent_context is not None:
+            self._parent_contexts[job.job_id] = parent_context
+        self._ensure_worker()
+        self._queue.put_nowait((_EVENT_PRIORITY, next(self._seq), job))
+        return job
+
     async def wait_idle(self) -> None:
         """Wait until every queued job has finished (used by tests)."""
         await self._queue.join()
@@ -268,6 +325,7 @@ class ImageGenService:
         parent_context = self._parent_contexts.pop(job.job_id, None)
         parsed = parse_entity_id(job.entity_id)
         extra = self._extras.pop(job.job_id, "")
+        ephemeral = self._ephemeral_inputs.pop(job.job_id, None)
         alpha_requested = job.job_id in self._alpha_jobs
         self._alpha_jobs.discard(job.job_id)
         attributes = {
@@ -281,37 +339,43 @@ class ImageGenService:
             "image.generate", attributes, parent_context=parent_context
         ) as generation_span:
             try:
-                async with self._actor._lock:
-                    if parsed is None or not self._actor.world.has_entity(parsed):
-                        raise ImageGenError("entity no longer exists")
-                    entity = self._actor.world.get_entity(parsed)
-                    generator = self._generators[job.purpose]
-                    profile = generator.resolve_profile(job.purpose, job.profile_name)
-                    if profile.media is not MediaKind.IMAGE:
-                        raise ImageGenError(
-                            f"workflow {profile.name!r} produces {profile.media.value}, "
-                            "not image"
-                        )
-                    job.profile_name = profile.name
-                    job.template_name = profile.name
-                    subject = self._subject_for(entity, job.purpose)
-                    scene = (
-                        entity.get_component(MediaSceneSnapshotComponent).snapshot
-                        if job.purpose is ImagePurpose.EVENT
-                        and entity.has_component(MediaSceneSnapshotComponent)
-                        else None
+                generator = self._generators[job.purpose]
+                profile = generator.resolve_profile(job.purpose, job.profile_name)
+                if profile.media is not MediaKind.IMAGE:
+                    raise ImageGenError(
+                        f"workflow {profile.name!r} produces {profile.media.value}, not image"
                     )
-                    if job.purpose is ImagePurpose.EVENT:
-                        record = entity.get_component(WorldHistoryRecordComponent)
-                        job.source_event_id = record.source_event_id
-                        job.snapshot_epoch = (
-                            scene.captured_at_epoch if scene is not None else None
+                job.profile_name = profile.name
+                job.template_name = profile.name
+                if ephemeral is not None:
+                    subject = ephemeral.subject
+                    scene = ephemeral.scene
+                    job.snapshot_epoch = scene.captured_at_epoch
+                else:
+                    async with self._actor._lock:
+                        if parsed is None or not self._actor.world.has_entity(parsed):
+                            raise ImageGenError("entity no longer exists")
+                        entity = self._actor.world.get_entity(parsed)
+                        subject = self._subject_for(entity, job.purpose)
+                        scene = (
+                            entity.get_component(MediaSceneSnapshotComponent).snapshot
+                            if job.purpose is ImagePurpose.EVENT
+                            and entity.has_component(MediaSceneSnapshotComponent)
+                            else None
                         )
+                        if job.purpose is ImagePurpose.EVENT:
+                            record = entity.get_component(WorldHistoryRecordComponent)
+                            job.source_event_id = record.source_event_id
+                            job.snapshot_epoch = (
+                                scene.captured_at_epoch if scene is not None else None
+                            )
                 generation_span.set_attribute("image.profile", profile.name)
                 generation_span.set_attribute("image.width", profile.width)
                 generation_span.set_attribute("image.height", profile.height)
                 job.status = "running"
-                seed = _seed_for(job.entity_id)
+                seed = _seed_for(
+                    f"{job.entity_id}:{job.job_id}" if ephemeral is not None else job.entity_id
+                )
                 with telemetry.span(
                     "image.prompt.enhance",
                     {
@@ -324,6 +388,7 @@ class ImageGenService:
                     prompt = await self._enhance(
                         subject, profile, job.purpose, extra, scene
                     )
+                    job.enhanced_prompt = prompt.prompt
                     job.prompt_style = prompt.style.value
                     job.enhancer = prompt.enhancer
                     job.prompt_fallback = prompt.fallback
@@ -373,19 +438,22 @@ class ImageGenService:
                         job.purpose, data, do_alpha
                     )
                     telemetry.mark_span_ok(postprocess_span)
-                async with self._actor._lock:
-                    entity = self._actor.world.get_entity(parsed)
-                    self._attach(
-                        entity,
-                        job.purpose,
-                        url,
-                        alpha_url,
-                        prompt,
-                        seed,
-                        profile,
-                        generator.name,
-                    )
-                    _clear_request(entity)
+                if ephemeral is None:
+                    async with self._actor._lock:
+                        if parsed is None or not self._actor.world.has_entity(parsed):
+                            raise ImageGenError("entity no longer exists")
+                        entity = self._actor.world.get_entity(parsed)
+                        self._attach(
+                            entity,
+                            job.purpose,
+                            url,
+                            alpha_url,
+                            prompt,
+                            seed,
+                            profile,
+                            generator.name,
+                        )
+                        _clear_request(entity)
                 job.status = "succeeded"
                 job.url = url
                 job.alpha_url = alpha_url
@@ -401,7 +469,11 @@ class ImageGenService:
                 logger.warning("image generation failed for %s: %s", job.entity_id, exc)
                 job.status = "failed"
                 job.error = str(exc)
-                if parsed is not None and self._actor.world.has_entity(parsed):
+                if (
+                    ephemeral is None
+                    and parsed is not None
+                    and self._actor.world.has_entity(parsed)
+                ):
                     async with self._actor._lock:
                         _clear_request(self._actor.world.get_entity(parsed))
                 await self._publish_failed(job)

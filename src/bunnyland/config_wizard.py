@@ -413,6 +413,11 @@ def prompt_for_config() -> BunnylandConfig:
             video_generator=_prompt_required("Video generator", "comfyui"),
             video_profile=_prompt_required("Video profile", "event-video"),
         )
+    server_character_chat_media_tools = (
+        server_character_chat
+        and bool(imagegen.generator or imagegen.video_generator)
+        and _confirm("Let opted-in characters request private chat illustrations?", False)
+    )
 
     return BunnylandConfig(
         deployment=deployment,
@@ -423,6 +428,7 @@ def prompt_for_config() -> BunnylandConfig:
         mcp=mcp,
         server=ServerConfig(
             character_chat=server_character_chat,
+            character_chat_media_tools=server_character_chat_media_tools,
             forwarded_allow_ips="172.28.0.2",
         ),
         imagegen=imagegen,
@@ -857,6 +863,16 @@ def build_textual_wizard_app(
                             [("enabled", "yes"), ("disabled", "no")],
                             value=yes_no(initial.server.character_chat),
                             id="character-chat",
+                            allow_blank=False,
+                        )
+                        yield field_label(
+                            "Character chat media tools",
+                            "character-chat-media-tools",
+                        )
+                        yield Select(
+                            [("enabled", "yes"), ("disabled", "no")],
+                            value=yes_no(initial.server.character_chat_media_tools),
+                            id="character-chat-media-tools",
                             allow_blank=False,
                         )
                         yield field_label("Character sheets", "character-sheets")
@@ -1601,6 +1617,9 @@ def build_textual_wizard_app(
                     player_client_ids=_csv_values(self._input("#player-client-ids")),
                     admin_client_ids=_csv_values(self._input("#admin-client-ids")),
                     character_chat=character_chat,
+                    character_chat_media_tools=self._enabled(
+                        "#character-chat-media-tools"
+                    ),
                     cors_origins=_csv_values(self._input("#cors-origins")),
                     forwarded_allow_ips=self._input("#forwarded-allow-ips"),
                 )

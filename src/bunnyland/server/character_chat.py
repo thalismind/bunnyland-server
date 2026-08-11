@@ -59,7 +59,14 @@ CHAT_SYSTEM_PROMPT = (
     "Use the provider's native structured tool-call interface; never write tool calls as "
     "<invoke>, DSML, XML, JSON, or other message text. "
     "For important information your character should record, prefer take_note. For "
-    "searching memory or notes, use remember."
+    "searching memory or notes, use remember. Media tools only create fictional visual "
+    "illustrations. Actions described in a media request do not happen in Bunnyland and "
+    "never change any character, room, item, event, or other world state."
+)
+MEDIA_ACTION_WARNING = (
+    "Actions described here are visual direction for the generated image or video only. "
+    "They do not happen in Bunnyland and do not change any character, room, item, event, "
+    "or other world state."
 )
 ACTION_RESULT_TIMEOUT_SECONDS = 1.5
 CHAT_TRACE_TEXT_CHARS = 4096
@@ -83,6 +90,35 @@ class CharacterChatAgent(Protocol):
         provider: str | None = None,
         tools: list[dict[str, JsonValue]] | None = None,
     ) -> ChatAgentReply: ...
+
+
+class ChatOnlyToolHandler(Protocol):
+    async def __call__(
+        self,
+        character_id: EntityId,
+        request: CharacterChatRequest,
+        arguments: dict[str, JsonValue],
+    ) -> CharacterChatActionResult: ...
+
+
+@dataclass(frozen=True)
+class ChatOnlyTool:
+    """One request-scoped tool that never enters the ECS command pipeline."""
+
+    name: str
+    description: str
+    parameters: dict[str, JsonValue]
+    handler: ChatOnlyToolHandler
+
+    def tool_schema(self) -> dict[str, JsonValue]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }
 
 
 @dataclass
@@ -135,7 +171,13 @@ class CharacterChatService:
     def allowed_tools(self) -> list[str]:
         return sorted(definition.name for definition in self._allowed_definitions())
 
-    async def chat(self, character_id: str, request: CharacterChatRequest) -> CharacterChatResponse:
+    async def chat(
+        self,
+        character_id: str,
+        request: CharacterChatRequest,
+        *,
+        chat_tools: tuple[ChatOnlyTool, ...] = (),
+    ) -> CharacterChatResponse:
         chat_attributes = {
             "character.id": character_id,
             "chat.client_id": request.client_id,
@@ -190,7 +232,7 @@ class CharacterChatService:
                 span.set_attribute("chat.prompt", _trace_text(prompt))
             span.set_attribute("chat.messages.count", len(messages))
 
-        tools = self._allowed_tool_schemas()
+        tools = self._allowed_tool_schemas(chat_tools)
         reply = await self._call_agent(
             messages,
             character_id=character_id,
@@ -228,6 +270,8 @@ class CharacterChatService:
             str(controller_id),
             generation,
             reply.tool_call,
+            request,
+            chat_tools,
         )
         final = reply.content
         if action.status in {"executed", "rejected"}:
@@ -416,8 +460,13 @@ class CharacterChatService:
     def _chat_safe_tool_names(self) -> frozenset[str]:
         return frozenset(definition.name for definition in self._allowed_definitions())
 
-    def _allowed_tool_schemas(self) -> list[dict[str, JsonValue]]:
-        return [definition.tool_schema() for definition in self._allowed_definitions()]
+    def _allowed_tool_schemas(
+        self, chat_tools: tuple[ChatOnlyTool, ...] = ()
+    ) -> list[dict[str, JsonValue]]:
+        return [
+            *(definition.tool_schema() for definition in self._allowed_definitions()),
+            *(tool.tool_schema() for tool in chat_tools),
+        ]
 
     def _llm_controller(
         self, character_id: EntityId
@@ -454,9 +503,16 @@ class CharacterChatService:
         user_message: str,
         action: CharacterChatActionResult,
     ) -> list[dict[str, str]]:
+        action_kind = (
+            "a fictional media illustration request"
+            if action.media_job is not None
+            else "a game action"
+        )
+        media_warning = f"\n{MEDIA_ACTION_WARNING}" if action.media_job is not None else ""
         content = (
-            "The character chose a game action while responding. "
-            "Use only the action result below to ground the final in-character answer.\n\n"
+            f"The character chose {action_kind} while responding. "
+            "Use only the result below to ground the final in-character answer."
+            f"{media_warning}\n\n"
             f"Human message: {user_message}\n"
             f"Action status: {action.status}\n"
             f"Tool: {action.tool or ''}\n"
@@ -564,6 +620,8 @@ class CharacterChatService:
         controller_id: str,
         generation: int,
         call: ToolCall,
+        request: CharacterChatRequest | None = None,
+        chat_tools: tuple[ChatOnlyTool, ...] = (),
     ) -> CharacterChatActionResult:
         tool_attributes = {
             "character.id": str(character_id),
@@ -574,7 +632,14 @@ class CharacterChatService:
         if telemetry.content_capture_enabled():
             tool_attributes["chat.tool.arguments"] = _trace_json(call.arguments)
         with _chat_span("character.chat.tool", tool_attributes) as span:
-            action = await self._submit_tool_inner(character_id, controller_id, generation, call)
+            action = await self._submit_tool_inner(
+                character_id,
+                controller_id,
+                generation,
+                call,
+                request,
+                chat_tools,
+            )
             span.set_attribute("chat.action.status", action.status)
             span.set_attribute("command.id", action.command_id or "")
             if telemetry.content_capture_enabled():
@@ -588,8 +653,16 @@ class CharacterChatService:
         controller_id: str,
         generation: int,
         call: ToolCall,
+        request: CharacterChatRequest | None,
+        chat_tools: tuple[ChatOnlyTool, ...],
     ) -> CharacterChatActionResult:
         parameters = CHAT_PARAMETERS_ADAPTER.validate_python(call.arguments)
+        chat_tool = next((tool for tool in chat_tools if tool.name == call.name), None)
+        if chat_tool is not None:
+            if request is None:
+                raise RuntimeError("chat-only tools require a character chat request")
+            result = await chat_tool.handler(character_id, request, parameters)
+            return result.model_copy(update={"tool": call.name, "parameters": parameters})
         if call.name not in self._chat_safe_tool_names():
             return CharacterChatActionResult(
                 tool=call.name,
@@ -771,6 +844,8 @@ def _chat_span(name: str, attributes: dict[str, object] | None = None):
 __all__ = [
     "ALLOWED_CHAT_TOOLS",
     "CHAT_SYSTEM_PROMPT",
+    "MEDIA_ACTION_WARNING",
+    "ChatOnlyTool",
     "CharacterChatService",
     "build_character_chat_service",
 ]

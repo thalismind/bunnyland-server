@@ -15,7 +15,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Input, Label, OptionList, Select, Static
+from textual.widgets import Button, Checkbox, Input, Label, Link, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
 from ..character_chat_display import format_action_call
@@ -31,7 +31,7 @@ from ..terminal_chat import (
     split_reply_paragraphs,
 )
 from ..terminal_config import TerminalConfig
-from .backend import Backend, CharacterChatAccess, CharacterChatJob
+from .backend import Backend, CharacterChatAccess, CharacterChatJob, CharacterChatMediaJob
 
 WorldIntroductionSkip = Literal["none", "world", "all"]
 _MARKDOWN_CONSOLE = Console(width=1000, color_system=None)
@@ -394,8 +394,15 @@ class ConversationScreen(ModalScreen[None]):
         background: $surface; padding: 1 2;
     }
     #conversation-transcript-scroll { height: 1fr; margin: 1 0; }
-    #conversation-status, #conversation-action { height: auto; min-height: 1; color: $text-muted; }
+    #conversation-status, #conversation-action, #conversation-media {
+        height: auto; min-height: 1; color: $text-muted;
+    }
+    #conversation-media-link { height: auto; }
     #conversation-input { width: 1fr; }
+    #conversation-media-row { height: auto; margin-top: 1; }
+    #conversation-media-focus { width: 1fr; margin-right: 1; }
+    #conversation-image { margin-right: 1; }
+    #conversation-media-warning { height: auto; color: $text-muted; }
     #conversation-preferences { height: auto; margin-top: 1; }
     #conversation-preferences Checkbox { margin-right: 1; }
     #conversation-controller-row { height: auto; margin-top: 1; }
@@ -417,6 +424,7 @@ class ConversationScreen(ModalScreen[None]):
         )
         self._job: CharacterChatJob | None = None
         self._send_task: asyncio.Task | None = None
+        self._media_task: asyncio.Task | None = None
         self._paragraph_visibility: dict[int, int] = {}
         self._access = CharacterChatAccess(writable=False, reason="Checking chat access…")
 
@@ -427,9 +435,23 @@ class ConversationScreen(ModalScreen[None]):
                 yield Static("", id="conversation-transcript")
             yield Static("", id="conversation-status")
             yield Static("", id="conversation-action")
+            yield Static("", id="conversation-media")
+            yield Link("", url="", id="conversation-media-link")
             yield Input(
                 placeholder=f"Say something to {self.character_name}",
                 id="conversation-input",
+            )
+            with Horizontal(id="conversation-media-row"):
+                yield Input(
+                    placeholder="Visual focus, action, mood, or composition",
+                    id="conversation-media-focus",
+                )
+                yield Button("📷 Image", id="conversation-image")
+                yield Button("🎬 Video", id="conversation-video")
+            yield Static(
+                "Illustrative only: visual actions do not happen in Bunnyland or change "
+                "the world.",
+                id="conversation-media-warning",
             )
             with Horizontal(id="conversation-controller-row"):
                 yield Select(
@@ -460,12 +482,35 @@ class ConversationScreen(ModalScreen[None]):
                     value=self.preferences.separate_reply_paragraphs,
                     id="conversation-separate-paragraphs",
                 )
+                yield Checkbox(
+                    "Allow character illustrations",
+                    value=self.preferences.allow_character_media,
+                    id="conversation-allow-character-media",
+                )
             with Horizontal(id="conversation-buttons"):
                 yield Button("Clear history", id="conversation-clear-history")
                 yield Button("Sheet", id="conversation-sheet")
                 yield Button("Close", id="conversation-close", variant="primary")
 
     async def on_mount(self) -> None:
+        supports_media = (
+            self.backend.supports_chat_image_requests
+            or self.backend.supports_chat_video_requests
+        )
+        self.query_one("#conversation-media-row", Horizontal).display = supports_media
+        self.query_one("#conversation-media-warning", Static).display = (
+            supports_media or self.backend.supports_character_chat_media_tools
+        )
+        self.query_one("#conversation-image", Button).display = (
+            self.backend.supports_chat_image_requests
+        )
+        self.query_one("#conversation-video", Button).display = (
+            self.backend.supports_chat_video_requests
+        )
+        self.query_one("#conversation-allow-character-media", Checkbox).display = (
+            self.backend.supports_character_chat_media_tools
+        )
+        self.query_one("#conversation-media-link", Link).display = False
         self._render_transcript()
         await self._refresh_access()
 
@@ -574,6 +619,14 @@ class ConversationScreen(ModalScreen[None]):
             self._paragraph_visibility.clear()
         self._render_transcript()
 
+    @on(Checkbox.Changed, "#conversation-allow-character-media")
+    def _allow_character_media_changed(self, event: Checkbox.Changed) -> None:
+        self.preferences = replace(
+            self.preferences,
+            allow_character_media=event.value,
+        )
+        save_chat_preferences(self.preferences)
+
     @on(Button.Pressed, "#conversation-clear-history")
     def _clear_history_pressed(self, _event: Button.Pressed) -> None:
         clear_history(self.backend.client_id, self.character_id)
@@ -590,6 +643,68 @@ class ConversationScreen(ModalScreen[None]):
             return
         event.input.value = ""
         self._send_task = asyncio.create_task(self._send(message))
+
+    @on(Button.Pressed, "#conversation-image")
+    def _image_pressed(self, _event: Button.Pressed) -> None:
+        self._start_media_request("chat_image")
+
+    @on(Button.Pressed, "#conversation-video")
+    def _video_pressed(self, _event: Button.Pressed) -> None:
+        self._start_media_request("chat_video")
+
+    def _start_media_request(self, kind: str) -> None:
+        if self._media_task is not None:
+            return
+        self._media_task = asyncio.create_task(self._request_media(kind))
+
+    @staticmethod
+    def _media_marker(job: CharacterChatMediaJob) -> str:
+        icon = "🎬" if job.kind == "chat_video" else "📷"
+        state = "pending" if job.pending else "failed" if job.status == "failed" else "ready"
+        focus = f" · {job.focus}" if job.focus else ""
+        failure = f" · {job.failure}" if job.failure else ""
+        return f"{icon} {state}{focus}{failure}"
+
+    async def _poll_media(self, job: CharacterChatMediaJob) -> None:
+        media_view = self.query_one("#conversation-media", Static)
+        media_link = self.query_one("#conversation-media-link", Link)
+        media_link.display = False
+        media_view.update(self._media_marker(job))
+        while job.pending:
+            await asyncio.sleep(0.25)
+            job = await self.backend.poll_character_chat_media(job)
+            media_view.update(self._media_marker(job))
+        if job.status == "succeeded" and job.url:
+            medium = "video" if job.kind == "chat_video" else "image"
+            media_link.text = f"Open {medium} · {job.url}"
+            media_link.url = job.url
+            media_link.display = True
+
+    async def _request_media(self, kind: str) -> None:
+        focus_input = self.query_one("#conversation-media-focus", Input)
+        image_button = self.query_one("#conversation-image", Button)
+        video_button = self.query_one("#conversation-video", Button)
+        image_button.disabled = True
+        video_button.disabled = True
+        try:
+            job = await self.backend.request_character_chat_media(
+                self.character_id,
+                kind,
+                focus=focus_input.value.strip(),
+                history_summary=str(self.state.get("summary") or ""),
+                history=list(self.state.get("messages") or []),
+            )
+            focus_input.value = ""
+            await self._poll_media(job)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            icon = "🎬" if kind == "chat_video" else "📷"
+            self.query_one("#conversation-media", Static).update(f"{icon} failed · {exc}")
+        finally:
+            self._media_task = None
+            image_button.disabled = False
+            video_button.disabled = False
 
     async def _send(self, message: str) -> None:
         input_widget = self.query_one("#conversation-input", Input)
@@ -610,6 +725,7 @@ class ConversationScreen(ModalScreen[None]):
                 message,
                 history_summary=str(self.state.get("summary") or ""),
                 history=list(self.state.get("messages") or [])[:-1],
+                allow_character_media=self.preferences.allow_character_media,
             )
             while self._job.pending:
                 action = self._job.action
@@ -640,6 +756,15 @@ class ConversationScreen(ModalScreen[None]):
                 action_view.update(
                     f"{format_action_call(action.tool, action.parameters)}: "
                     f"{action.status}{suffix}"
+                )
+            if action.media_job is not None:
+                await self._poll_media(
+                    CharacterChatMediaJob(
+                        id=action.media_job.id,
+                        status=action.media_job.status,
+                        character_id=self.character_id,
+                        kind=action.media_job.kind,
+                    )
                 )
             status.update("")
             self._render_transcript()
@@ -694,6 +819,9 @@ class ConversationScreen(ModalScreen[None]):
         if self._send_task is not None:
             self._send_task.cancel()
             await asyncio.gather(self._send_task, return_exceptions=True)
+        if self._media_task is not None:
+            self._media_task.cancel()
+            await asyncio.gather(self._media_task, return_exceptions=True)
         if self.preferences.remember_history:
             save_history(self.backend.client_id, self.character_id, self.state)
         self.dismiss(None)

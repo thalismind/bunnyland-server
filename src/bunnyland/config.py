@@ -125,6 +125,7 @@ class ServerConfig:
     admin_client_ids: tuple[str, ...] = ()
     character_chat: bool = False
     open_character_chat: bool = True
+    character_chat_media_tools: bool = False
     allow_sleeping_character_chat: bool = False
     character_sheets: bool = True
     http_rate_limit_requests: int = 0
@@ -324,6 +325,7 @@ class BunnylandConfig:
             "mcp": self.mcp.enabled,
             "character_chat": server.character_chat,
             "open_character_chat": server.open_character_chat,
+            "character_chat_media_tools": server.character_chat_media_tools,
             "allow_sleeping_character_chat": server.allow_sleeping_character_chat,
             "character_sheets": server.character_sheets,
             "auth_users_file": server.auth_users_file,
@@ -393,6 +395,11 @@ class BunnylandConfig:
         _set_if(env, "BUNNYLAND_ENABLE_MCP", self.mcp.enabled)
         _set_if(env, "BUNNYLAND_ENABLE_CHARACTER_CHAT", server.character_chat)
         _set_if(env, "BUNNYLAND_OPEN_CHARACTER_CHAT", server.open_character_chat)
+        _set_if(
+            env,
+            "BUNNYLAND_CHARACTER_CHAT_MEDIA_TOOLS",
+            server.character_chat_media_tools,
+        )
         _set_if(env, "BUNNYLAND_ENABLE_CHARACTER_SHEETS", server.character_sheets)
         _set_if(
             env,
