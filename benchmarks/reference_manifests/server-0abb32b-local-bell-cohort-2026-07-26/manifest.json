@@ -1,0 +1,99 @@
+{
+  "benchmark": "ollama-tutorial-ladder-comparison",
+  "excluded_completed_sessions": 0,
+  "host": "http://127.0.0.1:11435",
+  "log_thinking": false,
+  "milestone_replacements": {
+    "left_apple_for_pip": "made_food_accessible_to_pip",
+    "looked_in_apple_crossing": "oriented_in_apple_crossing",
+    "looked_in_bell_green": "oriented_in_bell_green",
+    "looked_in_clover_city_lobby": "oriented_in_clover_city_lobby",
+    "observed_three_residents": "perceived_three_residents_across_facilities",
+    "saw_courier_scene": "perceived_courier_scene",
+    "waited_for_world_activity": "observed_world_activity"
+  },
+  "models": [
+    {
+      "family": "laguna",
+      "model": "laguna-xs-2.1:latest",
+      "parameter_count": 33400000000,
+      "parameter_size": "33.4B",
+      "quantization": "Q4_K_M"
+    },
+    {
+      "family": "qwen35",
+      "model": "qwen3.5:4b",
+      "parameter_count": 4700000000,
+      "parameter_size": "4.7B",
+      "quantization": "Q4_K_M"
+    },
+    {
+      "family": "qwen35",
+      "model": "qwen3.5:9b",
+      "parameter_count": 9700000000,
+      "parameter_size": "9.7B",
+      "quantization": "Q4_K_M"
+    },
+    {
+      "family": "qwen35moe",
+      "model": "qwen3.6:35b-a3b",
+      "parameter_count": 36000000000,
+      "parameter_size": "36.0B",
+      "quantization": "Q4_K_M"
+    },
+    {
+      "family": "qwen35moe",
+      "model": "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q6_K",
+      "parameter_count": 34700000000,
+      "parameter_size": "34.7B",
+      "quantization": "Q6_K"
+    },
+    {
+      "family": "qwen35moe",
+      "model": "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:Q8_0",
+      "parameter_count": 34700000000,
+      "parameter_size": "34.7B",
+      "quantization": "Q8_0"
+    }
+  ],
+  "notes": [
+    "Bell-only unseeded explicit-mail cohort against server commit 0abb32bd0b8da1f20c50fb838416cc85c61cb21b."
+  ],
+  "provider": "ollama-local",
+  "repeat_command_guard": false,
+  "schema_version": 6,
+  "session_timeout_seconds": 3600.0,
+  "sessions_per_model_tutorial": 5,
+  "sources": [
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-laguna-xs-2-1-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-qwen3-5-4b-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-qwen3-5-9b-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-qwen3-6-35b-a3b-q4-k-m-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-qwen3-6-35b-a3b-ud-q6-k-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-qwen3-6-35b-a3b-q8-0-2026-07-26",
+      "selected_models": []
+    }
+  ],
+  "temperature": null,
+  "thinking": "high",
+  "turn_limit": 60,
+  "tutorials": [
+    "bell"
+  ]
+}

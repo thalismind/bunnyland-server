@@ -1,0 +1,41 @@
+{
+  "benchmark": "ollama-tutorial-ladder",
+  "bunnyland_version": "1.0.0rc2",
+  "commit": "0abb32bd0b8da1f20c50fb838416cc85c61cb21b",
+  "generated_at": "2026-07-27T23:11:51.387396+00:00",
+  "host": "http://10.2.2.181:31434",
+  "log_thinking": false,
+  "max_output_tokens": null,
+  "milestone_replacements": {
+    "left_apple_for_pip": "made_food_accessible_to_pip",
+    "looked_in_apple_crossing": "oriented_in_apple_crossing",
+    "looked_in_bell_green": "oriented_in_bell_green",
+    "looked_in_clover_city_lobby": "oriented_in_clover_city_lobby",
+    "observed_three_residents": "perceived_three_residents_across_facilities",
+    "saw_courier_scene": "perceived_courier_scene",
+    "waited_for_world_activity": "observed_world_activity"
+  },
+  "models": [
+    {
+      "family": "qwen35",
+      "model": "ornith:9b",
+      "parameter_count": 9000000000,
+      "parameter_size": "9.0B",
+      "quantization": "Q4_K_M"
+    }
+  ],
+  "provider": "ollama-local",
+  "provider_session_retries": 0,
+  "repeat_command_guard": false,
+  "schema_version": 6,
+  "seed_helpful_memory": false,
+  "session_timeout_seconds": 3600.0,
+  "sessions_per_model_tutorial": 5,
+  "temperature": null,
+  "thinking": null,
+  "turn_game_seconds": 600.0,
+  "turn_limit": 60,
+  "tutorials": [
+    "bell"
+  ]
+}

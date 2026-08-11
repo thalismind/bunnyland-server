@@ -1,0 +1,221 @@
+{
+  "benchmark": "ollama-tutorial-ladder-comparison",
+  "excluded_completed_sessions": 0,
+  "host": "https://ollama.com",
+  "log_thinking": true,
+  "models": [
+    {
+      "family": "gptoss",
+      "model": "gpt-oss:20b-cloud",
+      "parameter_count": 20914757184,
+      "parameter_size": "20914757184",
+      "quantization": "MXFP4"
+    },
+    {
+      "family": "nemotron-3-nano",
+      "model": "nemotron-3-nano:30b-cloud",
+      "parameter_count": 32000000000,
+      "parameter_size": "32000000000",
+      "quantization": "FP8"
+    },
+    {
+      "family": "gemma4",
+      "model": "gemma4:cloud",
+      "parameter_count": 32682372656,
+      "parameter_size": "32682372656",
+      "quantization": "BF16"
+    },
+    {
+      "family": "gptoss",
+      "model": "gpt-oss:120b-cloud",
+      "parameter_count": 116829156672,
+      "parameter_size": "116829156672",
+      "quantization": "MXFP4"
+    },
+    {
+      "family": "nemotron_h_moe",
+      "model": "nemotron-3-super:cloud",
+      "parameter_count": 120000000000,
+      "parameter_size": "120000000000",
+      "quantization": "NVFP4"
+    },
+    {
+      "family": "minimax-m2",
+      "model": "minimax-m2.7:cloud",
+      "parameter_count": 229000000000,
+      "parameter_size": "229000000000",
+      "quantization": ""
+    },
+    {
+      "family": "deepseek4",
+      "model": "deepseek-v4-flash:cloud",
+      "parameter_count": 158000000000,
+      "parameter_size": "158000000000",
+      "quantization": "FP8"
+    },
+    {
+      "family": "qwen3.5",
+      "model": "qwen3.5:cloud",
+      "parameter_count": 397000000000,
+      "parameter_size": "397000000000",
+      "quantization": "BF16"
+    },
+    {
+      "family": "minimax-m3",
+      "model": "minimax-m3:cloud",
+      "parameter_count": 0,
+      "parameter_size": "0",
+      "quantization": ""
+    },
+    {
+      "family": "",
+      "model": "nemotron-3-ultra:cloud",
+      "parameter_count": 550000000000,
+      "parameter_size": "550000000000",
+      "quantization": ""
+    },
+    {
+      "family": "mistral3",
+      "model": "mistral-large-3:675b-cloud",
+      "parameter_count": 675000000000,
+      "parameter_size": "675000000000",
+      "quantization": "FP8"
+    },
+    {
+      "family": "glm5.2",
+      "model": "glm-5.2:cloud",
+      "parameter_count": 756162687872,
+      "parameter_size": "756162687872",
+      "quantization": ""
+    },
+    {
+      "family": "kimi-k2",
+      "model": "kimi-k2.6:cloud",
+      "parameter_count": 1042000000000,
+      "parameter_size": "1042000000000",
+      "quantization": "INT4"
+    },
+    {
+      "family": "kimi-k2",
+      "model": "kimi-k2.7-code:cloud",
+      "parameter_count": 1042000000000,
+      "parameter_size": "1042000000000",
+      "quantization": "INT4"
+    },
+    {
+      "family": "deepseek4",
+      "model": "deepseek-v4-pro:cloud",
+      "parameter_count": 1600000000000,
+      "parameter_size": "1600000000000",
+      "quantization": "FP8"
+    }
+  ],
+  "notes": [
+    "The interrupted first Mistral Large 3 attempts were superseded by five fresh runs per tutorial from the continuation source."
+  ],
+  "provider": "ollama-cloud",
+  "repeat_command_guard": true,
+  "schema_version": 5,
+  "session_timeout_seconds": 3600.0,
+  "sessions_per_model_tutorial": 5,
+  "sources": [
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-2026-07-23",
+      "selected_models": [
+        "gpt-oss:20b-cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-2026-07-23",
+      "selected_models": [
+        "nemotron-3-nano:30b-cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-2026-07-23",
+      "selected_models": [
+        "gemma4:cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-2026-07-23",
+      "selected_models": [
+        "gpt-oss:120b-cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-2026-07-23",
+      "selected_models": [
+        "nemotron-3-super:cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-2026-07-23",
+      "selected_models": [
+        "minimax-m2.7:cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-2026-07-23",
+      "selected_models": [
+        "deepseek-v4-flash:cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-2026-07-23",
+      "selected_models": [
+        "qwen3.5:cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-2026-07-23",
+      "selected_models": [
+        "minimax-m3:cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-2026-07-23",
+      "selected_models": [
+        "nemotron-3-ultra:cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-resume-2026-07-24",
+      "selected_models": [
+        "mistral-large-3:675b-cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-resume-2026-07-24",
+      "selected_models": [
+        "glm-5.2:cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-resume-2026-07-24",
+      "selected_models": [
+        "kimi-k2.6:cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-resume-2026-07-24",
+      "selected_models": [
+        "kimi-k2.7-code:cloud"
+      ]
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/cloud-registry-thinking-5x-resume-2026-07-24",
+      "selected_models": [
+        "deepseek-v4-pro:cloud"
+      ]
+    }
+  ],
+  "temperature": null,
+  "thinking": "high",
+  "turn_limit": 60,
+  "tutorials": [
+    "apple",
+    "bell",
+    "clover"
+  ]
+}

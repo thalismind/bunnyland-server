@@ -1,0 +1,117 @@
+{
+  "benchmark": "ollama-tutorial-ladder-comparison",
+  "excluded_completed_sessions": 0,
+  "host": "http://10.2.2.181:31434",
+  "log_thinking": true,
+  "milestone_replacements": {
+    "left_apple_for_pip": "made_food_accessible_to_pip",
+    "looked_in_apple_crossing": "oriented_in_apple_crossing",
+    "looked_in_bell_green": "oriented_in_bell_green",
+    "looked_in_clover_city_lobby": "oriented_in_clover_city_lobby",
+    "observed_three_residents": "perceived_three_residents_across_facilities",
+    "saw_courier_scene": "perceived_courier_scene",
+    "waited_for_world_activity": "observed_world_activity"
+  },
+  "models": [
+    {
+      "family": "qwen35",
+      "model": "qwen3.5:4b",
+      "parameter_count": 4700000000,
+      "parameter_size": "4.7B",
+      "quantization": "Q4_K_M"
+    },
+    {
+      "family": "qwen35",
+      "model": "qwen3.5:9b",
+      "parameter_count": 9700000000,
+      "parameter_size": "9.7B",
+      "quantization": "Q4_K_M"
+    },
+    {
+      "family": "qwen35moe",
+      "model": "qwen3.6:35b-a3b",
+      "parameter_count": 36000000000,
+      "parameter_size": "36.0B",
+      "quantization": "Q4_K_M"
+    },
+    {
+      "family": "qwen35moe",
+      "model": "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q6_K",
+      "parameter_count": 34700000000,
+      "parameter_size": "34.7B",
+      "quantization": "Q6_K"
+    },
+    {
+      "family": "qwen35moe",
+      "model": "hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:Q8_0",
+      "parameter_count": 34700000000,
+      "parameter_size": "34.7B",
+      "quantization": "Q8_0"
+    },
+    {
+      "family": "laguna",
+      "model": "laguna-xs-2.1:latest",
+      "parameter_count": 33400000000,
+      "parameter_size": "33.4B",
+      "quantization": "Q4_K_M"
+    }
+  ],
+  "notes": [
+    "Latest local cohort for server commit 3a662413; local models were run one at a time and unloaded between models."
+  ],
+  "provider": "ollama-local",
+  "repeat_command_guard": true,
+  "schema_version": 6,
+  "session_timeout_seconds": 3600.0,
+  "sessions_per_model_tutorial": 5,
+  "sources": [
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-qwen35-4b-apple-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-qwen35-4b-bell-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-qwen35-9b-apple-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-qwen35-9b-bell-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-qwen36-35b-a3b-q4-k-m-apple-bell-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-qwen36-35b-a3b-ud-q6-k-apple-bell-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-qwen36-35b-a3b-ud-q6-k-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-qwen36-35b-a3b-q8-0-apple-bell-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-qwen36-35b-a3b-q8-0-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-laguna-xs-2-1-apple-bell-clover-2026-07-25",
+      "selected_models": []
+    }
+  ],
+  "temperature": null,
+  "thinking": "high",
+  "turn_limit": 60,
+  "tutorials": [
+    "apple",
+    "bell",
+    "clover"
+  ]
+}

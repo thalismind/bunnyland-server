@@ -1,0 +1,198 @@
+{
+  "benchmark": "ollama-tutorial-ladder-comparison",
+  "excluded_completed_sessions": 0,
+  "host": "https://ollama.com",
+  "log_thinking": false,
+  "milestone_replacements": {
+    "left_apple_for_pip": "made_food_accessible_to_pip",
+    "looked_in_apple_crossing": "oriented_in_apple_crossing",
+    "looked_in_bell_green": "oriented_in_bell_green",
+    "looked_in_clover_city_lobby": "oriented_in_clover_city_lobby",
+    "observed_three_residents": "perceived_three_residents_across_facilities",
+    "saw_courier_scene": "perceived_courier_scene",
+    "waited_for_world_activity": "observed_world_activity"
+  },
+  "models": [
+    {
+      "family": "deepseek4",
+      "model": "deepseek-v4-flash:cloud",
+      "parameter_count": 158000000000,
+      "parameter_size": "158000000000",
+      "quantization": "FP8"
+    },
+    {
+      "family": "deepseek4",
+      "model": "deepseek-v4-pro:cloud",
+      "parameter_count": 1600000000000,
+      "parameter_size": "1600000000000",
+      "quantization": "FP8"
+    },
+    {
+      "family": "gemma4",
+      "model": "gemma4:cloud",
+      "parameter_count": 32682372656,
+      "parameter_size": "32682372656",
+      "quantization": "BF16"
+    },
+    {
+      "family": "glm5.2",
+      "model": "glm-5.2:cloud",
+      "parameter_count": 756162687872,
+      "parameter_size": "756162687872",
+      "quantization": ""
+    },
+    {
+      "family": "gptoss",
+      "model": "gpt-oss:120b-cloud",
+      "parameter_count": 116829156672,
+      "parameter_size": "116829156672",
+      "quantization": "MXFP4"
+    },
+    {
+      "family": "gptoss",
+      "model": "gpt-oss:20b-cloud",
+      "parameter_count": 20914757184,
+      "parameter_size": "20914757184",
+      "quantization": "MXFP4"
+    },
+    {
+      "family": "kimi-k2",
+      "model": "kimi-k2.6:cloud",
+      "parameter_count": 1042000000000,
+      "parameter_size": "1042000000000",
+      "quantization": "INT4"
+    },
+    {
+      "family": "kimi-k2",
+      "model": "kimi-k2.7-code:cloud",
+      "parameter_count": 1042000000000,
+      "parameter_size": "1042000000000",
+      "quantization": "INT4"
+    },
+    {
+      "family": "minimax-m2",
+      "model": "minimax-m2.7:cloud",
+      "parameter_count": 229000000000,
+      "parameter_size": "229000000000",
+      "quantization": ""
+    },
+    {
+      "family": "minimax-m3",
+      "model": "minimax-m3:cloud",
+      "parameter_count": 0,
+      "parameter_size": "0",
+      "quantization": ""
+    },
+    {
+      "family": "mistral3",
+      "model": "mistral-large-3:675b-cloud",
+      "parameter_count": 675000000000,
+      "parameter_size": "675000000000",
+      "quantization": "FP8"
+    },
+    {
+      "family": "nemotron-3-nano",
+      "model": "nemotron-3-nano:30b-cloud",
+      "parameter_count": 32000000000,
+      "parameter_size": "32000000000",
+      "quantization": "FP8"
+    },
+    {
+      "family": "nemotron_h_moe",
+      "model": "nemotron-3-super:cloud",
+      "parameter_count": 120000000000,
+      "parameter_size": "120000000000",
+      "quantization": "NVFP4"
+    },
+    {
+      "family": "",
+      "model": "nemotron-3-ultra:cloud",
+      "parameter_count": 550000000000,
+      "parameter_size": "550000000000",
+      "quantization": ""
+    },
+    {
+      "family": "qwen3.5",
+      "model": "qwen3.5:397b-cloud",
+      "parameter_count": 397000000000,
+      "parameter_size": "397000000000",
+      "quantization": "BF16"
+    }
+  ],
+  "notes": [
+    "Bell-only unseeded explicit-mail cohort against server commit 0abb32bd0b8da1f20c50fb838416cc85c61cb21b. Qwen 397B used discarded whole-session provider retries after transient Ollama Cloud HTTP 500 failures."
+  ],
+  "provider": "ollama-cloud",
+  "repeat_command_guard": false,
+  "schema_version": 6,
+  "session_timeout_seconds": 3600.0,
+  "sessions_per_model_tutorial": 5,
+  "sources": [
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-deepseek-v4-flash-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-deepseek-v4-pro-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-gemma4-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-glm-5-2-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-gpt-oss-120b-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-gpt-oss-20b-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-kimi-k2-6-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-kimi-k2-7-code-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-minimax-m2-7-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-minimax-m3-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-mistral-large-3-675b-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-nemotron-3-nano-30b-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-nemotron-3-super-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-nemotron-3-ultra-cloud-2026-07-26",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-0abb32b-bell-explicit-mail-qwen3-5-397b-cloud-2026-07-26-attempt4",
+      "selected_models": []
+    }
+  ],
+  "temperature": null,
+  "thinking": "high",
+  "turn_limit": 60,
+  "tutorials": [
+    "bell"
+  ]
+}

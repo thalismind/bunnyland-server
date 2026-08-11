@@ -68,7 +68,7 @@ OPUS_RUNS = (
         provider_session_retries=None,
         seed_helpful_memory=None,
         reference_manifest=(
-            "artifacts/benchmarks/tutorials/"
+            "benchmarks/reference_manifests/"
             "frontier-openrouter-v1-5b33e2a-claude-opus-5-2x-2026-07-26/manifest.json"
         ),
     ),
@@ -81,7 +81,7 @@ OPUS_RUNS = (
         provider_session_retries=None,
         seed_helpful_memory=None,
         reference_manifest=(
-            "artifacts/benchmarks/tutorials/"
+            "benchmarks/reference_manifests/"
             "frontier-openrouter-v2-3a66241-claude-opus-5-2x-2026-07-26/manifest.json"
         ),
     ),
@@ -94,7 +94,7 @@ OPUS_RUNS = (
         provider_session_retries=2,
         seed_helpful_memory=False,
         reference_manifest=(
-            "artifacts/benchmarks/tutorials/"
+            "benchmarks/reference_manifests/"
             "frontier-openrouter-v3-a6dc964-claude-opus-5-2x-2026-07-26/manifest.json"
         ),
     ),
@@ -107,7 +107,7 @@ OPUS_RUNS = (
         provider_session_retries=2,
         seed_helpful_memory=False,
         reference_manifest=(
-            "artifacts/benchmarks/tutorials/"
+            "benchmarks/reference_manifests/"
             "frontier-openrouter-v4-0abb32b-claude-opus-5-2x-2026-07-26/manifest.json"
         ),
     ),

@@ -1,0 +1,32 @@
+{
+  "benchmark": "ollama-tutorial-ladder",
+  "bunnyland_version": "1.0.0rc2",
+  "commit": "5b33e2a69301edbe1c650c1ee2bebb01aabd99e6",
+  "generated_at": "2026-07-27T16:29:33.283336+00:00",
+  "host": "https://ollama.com",
+  "log_thinking": false,
+  "max_output_tokens": null,
+  "models": [
+    {
+      "family": "kimi-k2",
+      "model": "kimi-k2.5",
+      "parameter_count": 1042000000000,
+      "parameter_size": "1042000000000",
+      "quantization": "INT4"
+    }
+  ],
+  "provider": "ollama-cloud",
+  "repeat_command_guard": false,
+  "schema_version": 5,
+  "session_timeout_seconds": 3600.0,
+  "sessions_per_model_tutorial": 5,
+  "temperature": null,
+  "thinking": "high",
+  "turn_game_seconds": 600.0,
+  "turn_limit": 60,
+  "tutorials": [
+    "apple",
+    "bell",
+    "clover"
+  ]
+}

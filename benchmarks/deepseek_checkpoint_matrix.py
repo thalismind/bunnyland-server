@@ -50,11 +50,11 @@ V5_MODELS = tuple(
     model for model in V5_CLOUD_PRE_RETIREMENT_MODELS if model not in V5_CLOUD_UNAVAILABLE_MODELS
 )
 V5_ROSTER_MANIFESTS = (
-    "artifacts/benchmarks/tutorials/cloud-full-15-model-comparison-2026-07-24/manifest.json",
-    "artifacts/benchmarks/tutorials/server-3a662413-cloud-full-cohort-2026-07-25/manifest.json",
-    "artifacts/benchmarks/tutorials/server-a6dc9644-cloud-bell-cohort-2026-07-25/manifest.json",
-    "artifacts/benchmarks/tutorials/server-0abb32b-cloud-bell-cohort-2026-07-26/manifest.json",
-    "artifacts/benchmarks/tutorials/v1-5b33e2a-kimi-k2-5-cloud-2026-07-27/manifest.json",
+    "benchmarks/reference_manifests/cloud-full-15-model-comparison-2026-07-24/manifest.json",
+    "benchmarks/reference_manifests/server-3a662413-cloud-full-cohort-2026-07-25/manifest.json",
+    "benchmarks/reference_manifests/server-a6dc9644-cloud-bell-cohort-2026-07-25/manifest.json",
+    "benchmarks/reference_manifests/server-0abb32b-cloud-bell-cohort-2026-07-26/manifest.json",
+    "benchmarks/reference_manifests/v1-5b33e2a-kimi-k2-5-cloud-2026-07-27/manifest.json",
 )
 HISTORICAL_OLLAMA_LOCAL_MODELS = (
     "LESSTHANSUPER/RP-INK-Qwen2.5-32b:Q5_K_S",
@@ -115,19 +115,19 @@ V5_LOCAL_MODELS = tuple(
     model for model in HISTORICAL_OLLAMA_LOCAL_MODELS if model not in V5_LOCAL_UNAVAILABLE_MODELS
 )
 V5_LOCAL_ROSTER_MANIFESTS = (
-    "artifacts/benchmarks/tutorials/server-3a662413-local-full-cohort-2026-07-25/manifest.json",
-    "artifacts/benchmarks/tutorials/server-0abb32b-local-bell-cohort-2026-07-26/manifest.json",
-    "artifacts/benchmarks/tutorials/v4-0abb32b-gemma4-31b-hauhaucs-balanced-q4-k-m-2026-07-27/manifest.json",
-    "artifacts/benchmarks/tutorials/v4-0abb32b-hermes-4-14b-q8-0-2026-07-28/manifest.json",
-    "artifacts/benchmarks/tutorials/v4-0abb32b-llama3-1-8b-arli-rpmax-v1-3-q8-0-2026-07-27/manifest.json",
-    "artifacts/benchmarks/tutorials/v4-0abb32b-llama3-1-8b-stheno-v3-4-q8-0-2026-07-27/manifest.json",
-    "artifacts/benchmarks/tutorials/v4-0abb32b-ornith-35b-2026-07-27/manifest.json",
-    "artifacts/benchmarks/tutorials/v4-0abb32b-ornith-9b-2026-07-27/manifest.json",
-    "artifacts/benchmarks/tutorials/v4-0abb32b-rp-ink-qwen2-5-32b-q5-k-s-2026-07-28/manifest.json",
-    "artifacts/benchmarks/tutorials/server-c3f2729-qwen3-5-4b-hauhaucs-aggressive-q4-k-m-2026-07-26/manifest.json",
-    "artifacts/benchmarks/tutorials/server-c3f2729-qwen3-5-9b-defiant-fable-q4-k-m-2026-07-26/manifest.json",
-    "artifacts/benchmarks/tutorials/server-c3f2729-qwen3-6-35b-a3b-bahushruth-abliterated-v4-q4-k-m-2026-07-26/manifest.json",
-    "artifacts/benchmarks/tutorials/server-c3f2729-qwen3-6-35b-a3b-genesis-hermes-v5-q8-0-2026-07-26/manifest.json",
+    "benchmarks/reference_manifests/server-3a662413-local-full-cohort-2026-07-25/manifest.json",
+    "benchmarks/reference_manifests/server-0abb32b-local-bell-cohort-2026-07-26/manifest.json",
+    "benchmarks/reference_manifests/v4-0abb32b-gemma4-31b-hauhaucs-balanced-q4-k-m-2026-07-27/manifest.json",
+    "benchmarks/reference_manifests/v4-0abb32b-hermes-4-14b-q8-0-2026-07-28/manifest.json",
+    "benchmarks/reference_manifests/v4-0abb32b-llama3-1-8b-arli-rpmax-v1-3-q8-0-2026-07-27/manifest.json",
+    "benchmarks/reference_manifests/v4-0abb32b-llama3-1-8b-stheno-v3-4-q8-0-2026-07-27/manifest.json",
+    "benchmarks/reference_manifests/v4-0abb32b-ornith-35b-2026-07-27/manifest.json",
+    "benchmarks/reference_manifests/v4-0abb32b-ornith-9b-2026-07-27/manifest.json",
+    "benchmarks/reference_manifests/v4-0abb32b-rp-ink-qwen2-5-32b-q5-k-s-2026-07-28/manifest.json",
+    "benchmarks/reference_manifests/server-c3f2729-qwen3-5-4b-hauhaucs-aggressive-q4-k-m-2026-07-26/manifest.json",
+    "benchmarks/reference_manifests/server-c3f2729-qwen3-5-9b-defiant-fable-q4-k-m-2026-07-26/manifest.json",
+    "benchmarks/reference_manifests/server-c3f2729-qwen3-6-35b-a3b-bahushruth-abliterated-v4-q4-k-m-2026-07-26/manifest.json",
+    "benchmarks/reference_manifests/server-c3f2729-qwen3-6-35b-a3b-genesis-hermes-v5-q8-0-2026-07-26/manifest.json",
 )
 V5_DESCRIPTION_COMMITS = (
     "30bab131448a449606a059edd1aedf56c726cbd9",

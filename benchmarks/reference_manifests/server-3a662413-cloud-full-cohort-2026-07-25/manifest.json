@@ -1,0 +1,256 @@
+{
+  "benchmark": "ollama-tutorial-ladder-comparison",
+  "excluded_completed_sessions": 0,
+  "host": "https://ollama.com",
+  "log_thinking": true,
+  "milestone_replacements": {
+    "left_apple_for_pip": "made_food_accessible_to_pip",
+    "looked_in_apple_crossing": "oriented_in_apple_crossing",
+    "looked_in_bell_green": "oriented_in_bell_green",
+    "looked_in_clover_city_lobby": "oriented_in_clover_city_lobby",
+    "observed_three_residents": "perceived_three_residents_across_facilities",
+    "saw_courier_scene": "perceived_courier_scene",
+    "waited_for_world_activity": "observed_world_activity"
+  },
+  "models": [
+    {
+      "family": "deepseek4",
+      "model": "deepseek-v4-flash:cloud",
+      "parameter_count": 158000000000,
+      "parameter_size": "158000000000",
+      "quantization": "FP8"
+    },
+    {
+      "family": "deepseek4",
+      "model": "deepseek-v4-pro:cloud",
+      "parameter_count": 1600000000000,
+      "parameter_size": "1600000000000",
+      "quantization": "FP8"
+    },
+    {
+      "family": "gemma4",
+      "model": "gemma4:cloud",
+      "parameter_count": 32682372656,
+      "parameter_size": "32682372656",
+      "quantization": "BF16"
+    },
+    {
+      "family": "glm5.2",
+      "model": "glm-5.2:cloud",
+      "parameter_count": 756162687872,
+      "parameter_size": "756162687872",
+      "quantization": ""
+    },
+    {
+      "family": "gptoss",
+      "model": "gpt-oss:20b-cloud",
+      "parameter_count": 20914757184,
+      "parameter_size": "20914757184",
+      "quantization": "MXFP4"
+    },
+    {
+      "family": "kimi-k2",
+      "model": "kimi-k2.6:cloud",
+      "parameter_count": 1042000000000,
+      "parameter_size": "1042000000000",
+      "quantization": "INT4"
+    },
+    {
+      "family": "kimi-k2",
+      "model": "kimi-k2.7-code:cloud",
+      "parameter_count": 1042000000000,
+      "parameter_size": "1042000000000",
+      "quantization": "INT4"
+    },
+    {
+      "family": "minimax-m2",
+      "model": "minimax-m2.7:cloud",
+      "parameter_count": 229000000000,
+      "parameter_size": "229000000000",
+      "quantization": ""
+    },
+    {
+      "family": "minimax-m3",
+      "model": "minimax-m3:cloud",
+      "parameter_count": 0,
+      "parameter_size": "0",
+      "quantization": ""
+    },
+    {
+      "family": "mistral3",
+      "model": "mistral-large-3:675b-cloud",
+      "parameter_count": 675000000000,
+      "parameter_size": "675000000000",
+      "quantization": "FP8"
+    },
+    {
+      "family": "nemotron_h_moe",
+      "model": "nemotron-3-super:cloud",
+      "parameter_count": 120000000000,
+      "parameter_size": "120000000000",
+      "quantization": "NVFP4"
+    },
+    {
+      "family": "",
+      "model": "nemotron-3-ultra:cloud",
+      "parameter_count": 550000000000,
+      "parameter_size": "550000000000",
+      "quantization": ""
+    },
+    {
+      "family": "nemotron-3-nano",
+      "model": "nemotron-3-nano:30b-cloud",
+      "parameter_count": 32000000000,
+      "parameter_size": "32000000000",
+      "quantization": "FP8"
+    },
+    {
+      "family": "gptoss",
+      "model": "gpt-oss:120b-cloud",
+      "parameter_count": 116829156672,
+      "parameter_size": "116829156672",
+      "quantization": "MXFP4"
+    },
+    {
+      "family": "qwen3.5",
+      "model": "qwen3.5:397b-cloud",
+      "parameter_count": 397000000000,
+      "parameter_size": "397000000000",
+      "quantization": "BF16"
+    }
+  ],
+  "notes": [
+    "Latest cloud cohort for server commit 3a662413; up to two cloud models ran concurrently and provider-failed attempts were discarded before scoring."
+  ],
+  "provider": "ollama-cloud",
+  "repeat_command_guard": true,
+  "schema_version": 6,
+  "session_timeout_seconds": 3600.0,
+  "sessions_per_model_tutorial": 5,
+  "sources": [
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-deepseek-v4-flash-cloud-apple-bell-2026-07-25",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-deepseek-v4-flash-cloud-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-deepseek-v4-pro-cloud-apple-bell-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-deepseek-v4-pro-cloud-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-gemma4-cloud-apple-bell-2026-07-25",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-gemma4-cloud-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-glm-5-2-cloud-apple-bell-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-glm-5-2-cloud-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-gpt-oss-20b-cloud-apple-bell-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-gpt-oss-20b-cloud-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-kimi-k2-6-cloud-apple-bell-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-kimi-k2-6-cloud-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-kimi-k2-7-code-cloud-apple-bell-2026-07-25",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-kimi-k2-7-code-cloud-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-minimax-m2-7-cloud-apple-bell-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-minimax-m2-7-cloud-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-minimax-m3-cloud-apple-bell-2026-07-25",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-minimax-m3-cloud-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-mistral-large-3-675b-cloud-apple-bell-2026-07-25",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-mistral-large-3-675b-cloud-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-nemotron-3-super-cloud-apple-bell-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-nemotron-3-super-cloud-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-nemotron-3-ultra-cloud-apple-bell-2026-07-25",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-nemotron-3-ultra-cloud-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-nemotron-nano-30b-cloud-apple-bell-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-nemotron-nano-30b-cloud-clover-2026-07-24",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-gpt-oss-120b-cloud-apple-bell-clover-retry5-2026-07-25",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-qwen35-cloud-apple-final-2026-07-25",
+      "selected_models": []
+    },
+    {
+      "path": "/home/ssube/code/gitea/thalis/bunnyland/bunnyland-server/artifacts/benchmarks/tutorials/server-3a662413-qwen35-cloud-bell-clover-retry8-2026-07-25",
+      "selected_models": []
+    }
+  ],
+  "temperature": null,
+  "thinking": "high",
+  "turn_limit": 60,
+  "tutorials": [
+    "apple",
+    "bell",
+    "clover"
+  ]
+}

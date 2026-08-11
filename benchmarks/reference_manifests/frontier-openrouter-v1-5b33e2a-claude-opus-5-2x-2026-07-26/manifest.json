@@ -1,0 +1,32 @@
+{
+  "benchmark": "ollama-tutorial-ladder",
+  "bunnyland_version": "1.0.0rc2",
+  "commit": "5b33e2a69301edbe1c650c1ee2bebb01aabd99e6",
+  "generated_at": "2026-07-27T01:14:59.633601+00:00",
+  "host": "https://openrouter.ai/api/v1",
+  "log_thinking": false,
+  "max_output_tokens": null,
+  "models": [
+    {
+      "family": "Claude",
+      "model": "anthropic/claude-opus-5",
+      "parameter_count": null,
+      "parameter_size": null,
+      "quantization": null
+    }
+  ],
+  "provider": "openrouter",
+  "repeat_command_guard": false,
+  "schema_version": 5,
+  "session_timeout_seconds": 3600.0,
+  "sessions_per_model_tutorial": 2,
+  "temperature": null,
+  "thinking": "high",
+  "turn_game_seconds": 600.0,
+  "turn_limit": 60,
+  "tutorials": [
+    "apple",
+    "bell",
+    "clover"
+  ]
+}
