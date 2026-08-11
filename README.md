@@ -98,6 +98,32 @@ contract and reproducibility details.
 
 ## 🚀 Quickstart
 
+For the recommended first playable session, install [`uv`](https://docs.astral.sh/uv/) and
+[Ollama](https://ollama.com/download), fetch the default local model once, then choose a
+terminal client:
+
+```bash
+ollama pull qwen3.5:9b
+scripts/quickstart-tui
+# or: scripts/quickstart-repl
+```
+
+Both scripts open the guided `apple-crossing` tutorial in-process, enable character chat
+and autonomous LLM dispatch through local Ollama, and require neither a Bunnyland server
+nor an API key. After Ollama, the model, and the Python dependencies are installed, play
+does not use a cloud service. The tutorial's courier remains deterministic so the first
+lesson cannot stall on model variance.
+
+The defaults are ordinary client options, so options appended to the command override
+them. For example, move up to the town tutorial or use the lower-resource model:
+
+```bash
+scripts/quickstart-tui --generator bell-green
+scripts/quickstart-repl --chat-model qwen3.5:4b  # lower-resource fallback
+```
+
+For a deterministic simulation without a player client or an LLM:
+
 ```bash
 uv sync                     # core install
 uv run bunnyland serve --ticks 5     # generate a world, simulate 5 rounds (offline)

@@ -1,12 +1,29 @@
 # Running your own game
 
-This is a quick start for semi-single-player Bunnyland: run a private server, get a client
-connected, and explore your own world instead of joining a shared community server. Start
-with the demo world; once it works, choose a client and generate a custom world. To learn
-any one client in depth, branch out to the [client guides](clients/README.md) this page
-points to.
+This is a quick start for semi-single-player Bunnyland: host a world in a terminal client
+or run a private server, then explore it instead of joining a shared community server. To
+learn any one client in depth, branch out to the [client guides](clients/README.md) this
+page points to.
 
-## Start the demo world
+## Start the local tutorial with LLMs
+
+From a `bunnyland-server` checkout, install [`uv`](https://docs.astral.sh/uv/) and
+[Ollama](https://ollama.com/download), fetch the default local model once, then choose the
+panel TUI or command-line REPL:
+
+```bash
+ollama pull qwen3.5:9b
+scripts/quickstart-tui
+# or: scripts/quickstart-repl
+```
+
+The client hosts Apple Crossing in-process and connects character chat and autonomous LLM
+dispatch directly to local Ollama. It needs no server, API key, or cloud account. Once the
+dependencies and model are present, play stays on your machine. Use `qwen3.5:4b` as a
+lower-resource fallback, or append `--generator bell-green` when you are ready for the town
+tutorial.
+
+## Start a private demo server
 
 From a `bunnyland-server` checkout, run one command:
 

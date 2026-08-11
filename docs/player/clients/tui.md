@@ -8,6 +8,13 @@ or connect to a running server over HTTP.
 
 ## Launch
 
+For a first local game with local Ollama and the Apple Crossing tutorial:
+
+```bash
+ollama pull qwen3.5:9b  # one-time model download
+scripts/quickstart-tui
+```
+
 Host a local world:
 
 ```bash

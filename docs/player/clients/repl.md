@@ -10,6 +10,13 @@ are playing, the connection, your action/focus points, and the world clock.
 
 ## Launch
 
+For a first local game with local Ollama and the Apple Crossing tutorial:
+
+```bash
+ollama pull qwen3.5:9b  # one-time model download
+scripts/quickstart-repl
+```
+
 Host a local world:
 
 ```bash

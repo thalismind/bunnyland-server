@@ -8,6 +8,23 @@ Player-facing examples in these guides use Discord message syntax. Engine notati
 the `!` because Discord has already stripped the prefix before dispatch; for example,
 engine logs or tests may show `say Hello` for the Discord message `!say Hello`.
 
+## Launch the local tutorial
+
+From a `bunnyland-server` checkout, install [`uv`](https://docs.astral.sh/uv/) and
+[Ollama](https://ollama.com/download), download the default local model once, and launch
+either terminal client:
+
+```bash
+ollama pull qwen3.5:9b
+scripts/quickstart-tui
+# or: scripts/quickstart-repl
+```
+
+These scripts host the guided Apple Crossing world inside the client and enable the local
+model for character chat and autonomous LLM dispatch. No Bunnyland server, cloud account,
+or API key is needed. Once the dependencies and model are present, the session stays on
+your machine. To try the larger town tutorial later, append `--generator bell-green`.
+
 ## First few turns
 
 A simple first play sequence looks like this:
