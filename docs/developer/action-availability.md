@@ -228,6 +228,10 @@ Agents should read `reason`, fix the issue, and resend rather than waiting for a
 
 ## Quick checklist for the frontend
 
+This is a reusable per-client integration checklist, not global release status. Apply it to
+every affected player client; current release blockers are tracked in the VPS repository's
+[release-readiness checklist](https://github.com/thalismind/bunnyland-vps/blob/main/releases/bunnyland-release-readiness.md).
+
 - [ ] Disable action buttons where `available === false`; tooltip = `unavailable_reason`.
 - [ ] Optionally style by specific flag (points / target / requirement).
 - [ ] Build argument pickers from `target_groups[argument.target_group]`.

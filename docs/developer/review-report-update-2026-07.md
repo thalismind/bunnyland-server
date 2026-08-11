@@ -5,6 +5,11 @@
 **Evidence cutoff:** July 16 hosted validation plus the v1.0 release-candidate hardening
 work described in the compatibility and technical-results records.
 
+> **Historical status:** This document preserves the July 20 risk assessment. Its active
+> checklist has been reconciled below; current controlled-preview and public-v1 decisions
+> live in the VPS repository's
+> [release-readiness checklist](https://github.com/thalismind/bunnyland-vps/blob/main/releases/bunnyland-release-readiness.md).
+
 This addendum reconciles the consolidated executive review with the server implementation from `804df40` through `ec487c0`. The architectural diagnosis has moved again: Bunnyland now has an executable World Contract, a plan-based mutation boundary across command handlers and non-handler phases, perspective-safe queries, hardened projections and traces, and the first reproducible Clover City systemic story. These are implemented and tested contracts, not proposed infrastructure.
 
 ## What is now implemented
@@ -23,7 +28,9 @@ This addendum reconciles the consolidated executive review with the server imple
 
 The report should no longer list mutation atomicity, universal handler-plan migration, non-handler transaction boundaries, the four v1 perspective queries, output-policy enforcement, room-projection authorization, honest gap semantics, trace redaction, or a fixed-snapshot receipt benchmark as missing foundations. Likewise, semantic ECS edges are now the persisted representation for the audited repeatable relationships, with compatibility migration rather than pack disablement.
 
-The release recommendation remains an invite-only controlled sandbox preview. The remaining risk is integrated and operational proof, not absence of a backend contract. Broad public write access should wait for the active gates below.
+At this document's evidence cutoff, the recommendation remained an invite-only controlled
+sandbox preview. The controlled preview has since shipped. Broad public-v1 readiness is
+governed by the canonical release-readiness checklist rather than this dated assessment.
 
 ## Report-to-code status
 
@@ -50,29 +57,24 @@ The release recommendation remains an invite-only controlled sandbox preview. Th
 | Real 40-WebSocket validation and soak | **Hosted stream gate passed; soak pending.** The exact deployed image passed 40 distinct authenticated streams, reconnect resynchronization, invalidation, and mid-stream revocation. The 72-hour release-candidate soak remains. |
 | Security/trace hardening and measured release gates | **Automated and operational gates implemented.** Claim/memory isolation, instruction-like memories, provider failures, request/rate limits, revocation, redaction, restore, and rollback have evidence. Ten fresh-player sessions and the 72-hour soak remain manual release gates. |
 
-## Updated implementation TODO
+## Reconciled July release TODO
 
-Completed review items are removed from the active queue: handler and non-handler transaction migration, trace redaction, room-projection authorization, honest history/gap semantics, perspective-query typing/policy enforcement, audited semantic-edge migration, and the fixed-snapshot receipt benchmark.
+Completed review items remain described above. The five formerly active entries now resolve
+as follows; this table is explanatory and is not a second release checklist.
 
-The remaining work is ordered by v1 release risk:
-
-1. [ ] Run ten fresh-player Apple Crossing sessions; require at least eight independent
-   completions under ten minutes and retest every blocker seen by two players.
-2. [ ] Run the immutable v1.0 release candidate for 72 hours with scheduled restart,
-   checkpoint, encrypted backup, clean-host restore, rollback, and revoked-token checks.
-3. [ ] Publish `relics-ecs==0.1.0`, replace the temporary Git dependency, and rerun the
-   clean wheel/sdist, dependency-audit, migration, SBOM, and provenance gates.
-4. [ ] Validate the browser adapter's deterministic Apple Crossing golden path and the
-   apple-consumed, letter-taken, ignored-quest, reconnect, and save/reload branches in its
-   client-owned contract run.
-5. [ ] Expand experience and controller scorecards only from observed onboarding or hosted
-   deployment failures; defer new sim-pack breadth and speculative infrastructure.
+| Original item | Current classification | Evidence or next action |
+| --- | --- | --- |
+| Ten fresh-player Apple Crossing sessions | **OPEN public-v1 blocker** | Run ten independent sessions, require eight completions under ten minutes, and attach the anonymized aggregate result to the canonical checklist. |
+| Immutable 72-hour candidate soak | **OPEN public-v1 blocker** | Complete the scheduled restart/checkpoint/backup/restore/rollback/revocation drill or record an explicit release-owner waiver. |
+| Publish Relics and replace the Git dependency | **PASS** | Server requires published `relics-ecs>=0.1.1,<0.2`; package metadata tests enforce the installed dependency. |
+| Browser-owned Apple Crossing branches | **PASS** | `scripts/playwright-apple-crossing` covers golden path, apple consumed, letter taken, ignored quest, reconnect, and save/reload; the release CI record is linked from the canonical checklist. |
+| Expand experience/controller scorecards from evidence | **BACKLOG/CONTINUOUS** | Governed by the experience implementation checklist and benchmark documentation; not an independent release gate. |
 
 ## Validation state
 
 The historical `ec487c0` aggregate reported 3,186 tests and 100% line and branch coverage.
-The current release candidate must satisfy the repository's warning-as-error aggregate,
+Every new release candidate must satisfy the repository's warning-as-error aggregate,
 Python 3.12–3.14 CI, package-install, compatibility, migration, security, and performance
 gates before that historical result can be treated as current. Bunnyland now has three
-demonstrated persistent systemic stories; v1 readiness depends on the Relics publication,
-72-hour operational soak, and measured fresh-player gate above.
+demonstrated persistent systemic stories. The current source gate and remaining public-v1
+manual gates are tracked only in the canonical release-readiness checklist.

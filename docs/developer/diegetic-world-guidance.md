@@ -165,6 +165,10 @@ Milestone analysis should report:
 
 Before shipping a tutorial or authored world:
 
+This checklist is evaluated separately for each world. Unchecked boxes are a review
+template, not global release status; release blockers belong in the VPS repository's
+[release-readiness checklist](https://github.com/thalismind/bunnyland-vps/blob/main/releases/bunnyland-release-readiness.md).
+
 - [ ] Every required destination has a persistent, consistently named clue.
 - [ ] Every multi-hop route can be reconstructed at its decision points.
 - [ ] Required objects remain inspectable until their state meaningfully changes.

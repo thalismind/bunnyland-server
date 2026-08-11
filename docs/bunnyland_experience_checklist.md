@@ -13,8 +13,12 @@ Current v1 evidence lives in the [playtesting guide](player/playtesting.md),
 [technical results](developer/technical-results.md), and
 [compatibility policy](developer/compatibility.md). Apple Crossing is the canonical first
 session. Its server milestones record connection, claim, first useful action, rejection,
-completion, and elapsed time without retaining private text. The ten-player completion gate
-and browser-owned branch journeys remain release work.
+completion, and elapsed time without retaining private text. This file is the canonical
+product roadmap, not the release decision record. The controlled-preview and public-v1
+gates live in the VPS repository's
+[release-readiness checklist](https://github.com/thalismind/bunnyland-vps/blob/main/releases/bunnyland-release-readiness.md).
+Unchecked work here is post-preview backlog unless a release owner explicitly promotes it
+into that checklist.
 
 ## How to Use This Checklist
 

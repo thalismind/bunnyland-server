@@ -122,6 +122,10 @@ their own command, not inside the default server gate.
 
 A change is ready for review when:
 
+This is a reusable per-change checklist. Unchecked boxes do not describe project release
+status; the canonical release decision lives in the VPS repository's
+[release-readiness checklist](https://github.com/thalismind/bunnyland-vps/blob/main/releases/bunnyland-release-readiness.md).
+
 - [ ] `scripts/test-all` passes (suite + coverage + no skipped e2e/playtest).
 - [ ] `uv run ruff check src tests` is clean.
 - [ ] `git diff --check` shows no whitespace errors.

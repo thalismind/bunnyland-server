@@ -152,6 +152,12 @@ short output cap can create a false incompatibility result.
 
 Primary local queue, in suggested order:
 
+**Checklist status (reviewed 2026-08-11):** this is an ongoing model-compatibility research
+queue. A checked candidate has recorded benchmark evidence; an unchecked candidate has not
+completed the declared matrix. Neither state is a Bunnyland runtime release blocker. Release
+decisions live in the VPS repository's
+[release-readiness checklist](https://github.com/thalismind/bunnyland-vps/blob/main/releases/bunnyland-release-readiness.md).
+
 - [ ] [`hermes3:8b-llama3.1-q8_0`](https://ollama.com/library/hermes3) — 8B
   Llama 3.1 roleplaying/function-calling control.
 - [x] [`NousResearch/Hermes-4-14B`](https://huggingface.co/NousResearch/Hermes-4-14B)
