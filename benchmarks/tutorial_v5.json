@@ -41,7 +41,7 @@
       "sessions": 5,
       "thinking": "high",
       "log_thinking": true,
-      "repeat_command_guard": false,
+      "repeat_command_guard": true,
       "provider_session_retries": 1,
       "models": ["kimi-k2.5"]
     },
@@ -51,7 +51,7 @@
       "sessions": 2,
       "thinking": "high",
       "log_thinking": true,
-      "repeat_command_guard": false,
+      "repeat_command_guard": true,
       "provider_session_retries": 2,
       "models": [
         "anthropic/claude-haiku-4.5",
@@ -65,7 +65,7 @@
       "sessions": 2,
       "thinking": "high",
       "log_thinking": true,
-      "repeat_command_guard": false,
+      "repeat_command_guard": true,
       "provider_session_retries": 2,
       "enabled": false,
       "disabled_reason": "Explicitly excluded from v5 while OpenRouter credits are insufficient.",
@@ -77,7 +77,7 @@
       "sessions": 5,
       "thinking": "high",
       "log_thinking": true,
-      "repeat_command_guard": false,
+      "repeat_command_guard": true,
       "provider_session_retries": 1,
       "models": ["moonshotai/kimi-k3"]
     },
@@ -87,7 +87,7 @@
       "sessions": 5,
       "thinking": "high",
       "log_thinking": true,
-      "repeat_command_guard": false,
+      "repeat_command_guard": true,
       "provider_session_retries": 0,
       "models": ["qwen/qwen3.7-flash", "qwen/qwen3.7-plus"]
     },
@@ -97,7 +97,7 @@
       "sessions": 5,
       "thinking": null,
       "log_thinking": true,
-      "repeat_command_guard": false,
+      "repeat_command_guard": true,
       "provider_session_retries": 0,
       "models": [
         "LESSTHANSUPER/RP-INK-Qwen2.5-32b:Q5_K_S",
@@ -110,12 +110,12 @@
       ]
     },
     {
-      "id": "ollama-local-high-no-guard",
+      "id": "ollama-local-high-guarded-derivatives",
       "provider": "ollama-local",
       "sessions": 5,
       "thinking": "high",
       "log_thinking": true,
-      "repeat_command_guard": false,
+      "repeat_command_guard": true,
       "provider_session_retries": 0,
       "models": [
         "hf.co/Bahushruth/Qwen3.6-35B-A3B-abliterated-v4-GGUF:Q4_K_M",

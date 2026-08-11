@@ -53,6 +53,10 @@ def load_cells(path: Path) -> tuple[dict[str, object], tuple[Cell, ...]]:
     config = _object(json.loads(path.read_text(encoding="utf-8")), "matrix")
     if _integer(config.get("schema_version"), "schema_version") != 1:
         raise ValueError("unsupported matrix schema")
+    if _integer(config.get("session_timeout"), "session_timeout") <= 0:
+        raise ValueError("session_timeout must be positive")
+    if _integer(config.get("turn_limit"), "turn_limit") <= 0:
+        raise ValueError("turn_limit must be positive")
     cells: list[Cell] = []
     seen: set[str] = set()
     for raw_group in _array(config.get("groups"), "groups"):
@@ -60,6 +64,8 @@ def load_cells(path: Path) -> tuple[dict[str, object], tuple[Cell, ...]]:
         group_id = _text(group.get("id"), "group.id")
         if group.get("log_thinking") is not True:
             raise ValueError(f"{group_id} must retain thinking traces")
+        if group.get("repeat_command_guard") is not True:
+            raise ValueError(f"{group_id} must enable the repeat-command guard")
         provider = _text(group.get("provider"), "group.provider")
         thinking_value = group.get("thinking")
         if thinking_value is not None and thinking_value not in {"low", "medium", "high"}:
@@ -164,6 +170,8 @@ def _validate_artifacts(
             "commit": expected_commit,
             "provider": cell.provider,
             "sessions_per_model_tutorial": cell.sessions,
+            "session_timeout_seconds": config.get("session_timeout"),
+            "turn_limit": config.get("turn_limit"),
             "tutorials": expected_tutorials,
             "thinking": cell.thinking,
             "temperature": config.get("temperature"),
@@ -171,6 +179,7 @@ def _validate_artifacts(
             "log_thinking": True,
             "repeat_command_guard": cell.repeat_guard,
             "provider_session_retries": cell.retries,
+            "seed_helpful_memory": False,
         }
         if model_ids != [cell.model]:
             errors.append(f"{cell.model}: manifest model ids are {model_ids!r}")

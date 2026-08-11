@@ -24,9 +24,9 @@ following, with no metadata-only exceptions:
 
 If any field changes, the result belongs to a different cohort. Do not merge it into the
 original cell, use it as a replacement session, or compare it as though only the server
-changed. `--log-thinking` is mandatory for every v5 command, including models that return
-no thinking field. The absence of provider-returned thinking is evidence; disabling
-retention is a configuration failure.
+changed. `--log-thinking` and `--repeat-command-guard` are mandatory for every v5 command,
+including models that return no thinking field. The absence of provider-returned thinking
+is evidence; disabling retention or the repeat guard is a configuration failure.
 
 Before inference, review and archive the complete planner output, verify that it contains
 exactly the historical 40-model panel, and compare its declared server commit with
