@@ -1,0 +1,12 @@
+[
+  {
+    "prompt": "masterpiece, best quality, score_7, safe, 2girls, 1boy, rabbit girl, rabbit ears, fox boy, tavern interior, sitting, raising mug, playing lute, wooden table, fireplace, candlelight, night, wide shot, detailed background",
+    "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, chromatic aberration, bad anatomy, text, watermark",
+    "tags": ["masterpiece", "best quality", "score_7", "safe", "2girls", "1boy", "rabbit girl", "rabbit ears", "fox boy", "tavern interior", "sitting", "raising mug", "playing lute", "wooden table", "fireplace", "candlelight", "night", "wide shot", "detailed background"]
+  },
+  {
+    "prompt": "masterpiece, best quality, score_7, safe, 3boys, armored rabbit, cloaked fox, castle courtyard, surrounding, stepping backward, stone well, moonlight, wind, banners, medium shot, dramatic shadows",
+    "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, chromatic aberration, bad anatomy, modern objects, text, watermark",
+    "tags": ["masterpiece", "best quality", "score_7", "safe", "3boys", "armored rabbit", "cloaked fox", "castle courtyard", "surrounding", "stepping backward", "stone well", "moonlight", "wind", "banners", "medium shot", "dramatic shadows"]
+  }
+]

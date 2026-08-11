@@ -420,10 +420,10 @@ async def test_scene_image_focuses_exact_public_event_with_room_and_appearance(t
         "grey fur, long ears, and a weathered red scarf"
     )
     assert [item.name for item in snapshot.objects] == ["Iron Torch"]
-    assert "juniper_pulls_the_rusted_gate_lever" in image.prompt
-    assert "castle_dungeon" in image.prompt
-    assert "weathered_red_scarf" in image.prompt
-    assert "iron_torch" in image.prompt
+    assert "juniper pulls the rusted gate lever" in image.prompt
+    assert "castle dungeon" in image.prompt
+    assert "weathered red scarf" in image.prompt
+    assert "iron torch" in image.prompt
     assert image.source_event_id == primary.event_id
     assert image.prompt_style == "tag"
     assert image.enhancer == "stub"

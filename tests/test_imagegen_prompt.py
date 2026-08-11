@@ -158,10 +158,15 @@ def test_tag_normalization_supports_weights_limits_and_rejects_bad_values():
 
 def test_default_catalog_ships_examples():
     catalog = default_catalog()
-    assert (MediaKind.IMAGE, PromptStyle.NATURAL, ImagePurpose.PORTRAIT) in catalog
-    assert (MediaKind.IMAGE, PromptStyle.TAG, ImagePurpose.SPRITE) in catalog
-    assert (MediaKind.VIDEO, PromptStyle.NATURAL, ImagePurpose.EVENT) in catalog
-    sprite = catalog[(MediaKind.IMAGE, PromptStyle.TAG, ImagePurpose.SPRITE)]
+    assert ("", MediaKind.IMAGE, PromptStyle.NATURAL, ImagePurpose.PORTRAIT) in catalog
+    assert ("anima", MediaKind.IMAGE, PromptStyle.TAG, ImagePurpose.SPRITE) in catalog
+    assert (
+        "ltx-2.3",
+        MediaKind.VIDEO,
+        PromptStyle.NATURAL,
+        ImagePurpose.EVENT,
+    ) in catalog
+    sprite = catalog[("anima", MediaKind.IMAGE, PromptStyle.TAG, ImagePurpose.SPRITE)]
     assert sprite[0].tags  # tag examples carry structured tags
 
 
@@ -169,7 +174,7 @@ def test_load_catalog_from_skips_non_json(tmp_path):
     (tmp_path / "natural-entity.json").write_text(json.dumps([{"prompt": "a chest"}]))
     (tmp_path / "readme.txt").write_text("ignore")
     catalog = load_catalog_from(tmp_path)
-    key = (MediaKind.IMAGE, PromptStyle.NATURAL, ImagePurpose.ENTITY)
+    key = ("", MediaKind.IMAGE, PromptStyle.NATURAL, ImagePurpose.ENTITY)
     assert list(catalog) == [key]
     assert catalog[key][0].style is PromptStyle.NATURAL
 
@@ -192,6 +197,27 @@ def test_catalog_example_source_exact_match_and_limit():
     assert all(e.style is PromptStyle.NATURAL for e in examples)
 
 
+def test_catalog_example_source_selects_workflow_prompt_model():
+    source = CatalogExampleSource(limit=1)
+    anima = source.examples_for(
+        PromptStyle.TAG,
+        ImagePurpose.EVENT,
+        "anything",
+        prompt_model="anima",
+    )
+    generic = source.examples_for(PromptStyle.TAG, ImagePurpose.EVENT, "anything")
+    ltx = source.examples_for(
+        PromptStyle.NATURAL,
+        ImagePurpose.EVENT,
+        "anything",
+        media=MediaKind.VIDEO,
+        prompt_model="ltx-2.3",
+    )
+    assert anima[0].prompt.startswith("masterpiece, best quality, score_7, safe")
+    assert generic[0].prompt.startswith("multiple characters")
+    assert ltx[0].prompt.startswith("Style: hand-painted cinematic fantasy.")
+
+
 def test_catalog_example_source_style_fallback():
     # A catalog with no exact (style, purpose) entry falls back to other examples of the style.
     catalog = {
@@ -203,6 +229,41 @@ def test_catalog_example_source_style_fallback():
     examples = source.examples_for(PromptStyle.TAG, ImagePurpose.PORTRAIT, "anything")
     assert examples
     assert all(e.style is PromptStyle.TAG for e in examples)
+    assert source.examples_for(
+        PromptStyle.TAG,
+        ImagePurpose.SPRITE,
+        "anything",
+        media=MediaKind.VIDEO,
+    ) == catalog[(PromptStyle.TAG, ImagePurpose.SPRITE)]
+
+
+def test_catalog_example_source_accepts_media_and_model_keys():
+    video = GeneratedPrompt(style=PromptStyle.NATURAL, prompt="generic video")
+    model_video = GeneratedPrompt(style=PromptStyle.NATURAL, prompt="model video")
+    source = CatalogExampleSource(
+        {
+            (MediaKind.VIDEO, PromptStyle.NATURAL, ImagePurpose.EVENT): [video],
+            (
+                "ltx-2.3",
+                MediaKind.VIDEO,
+                PromptStyle.NATURAL,
+                ImagePurpose.EVENT,
+            ): [model_video],
+        }
+    )
+    assert source.examples_for(
+        PromptStyle.NATURAL,
+        ImagePurpose.EVENT,
+        "x",
+        media=MediaKind.VIDEO,
+    ) == [video]
+    assert source.examples_for(
+        PromptStyle.NATURAL,
+        ImagePurpose.EVENT,
+        "x",
+        media=MediaKind.VIDEO,
+        prompt_model="ltx-2.3",
+    ) == [model_video]
 
 
 def test_default_catalog_covers_both_styles_for_every_purpose():
@@ -255,6 +316,18 @@ def test_vector_example_source_parses_results():
     # Missing metadata row is tolerated.
     assert examples[1].prompt == "1boy, fox"
     assert examples[1].tags == ()
+
+
+def test_vector_example_source_filters_by_prompt_model():
+    collection = _FakeCollection({"documents": [[]], "metadatas": [[]]})
+    VectorExampleSource(collection).examples_for(
+        PromptStyle.NATURAL,
+        ImagePurpose.EVENT,
+        "a rabbit",
+        media=MediaKind.VIDEO,
+        prompt_model="ltx-2.3",
+    )
+    assert collection.calls[0]["where"]["prompt_model"] == "ltx-2.3"
 
 
 def test_vector_example_source_uses_fallback_when_empty():
@@ -324,12 +397,13 @@ async def test_llm_enhancer_includes_examples_and_validates(monkeypatch):
     examples = [GeneratedPrompt(style=PromptStyle.NATURAL, prompt="example portrait line")]
     request = _request(PromptStyle.NATURAL, extra="moody lighting")
     result = await enhancer.enhance_image(request, examples=examples)
-    assert result.prompt == "enhanced rabbit"
+    assert result.prompt == "enhanced rabbit moody lighting."
     assert result.negative == "blurry"
     assert result.style is PromptStyle.NATURAL
     user_content = _FakeOllamaClient.last_messages[1]["content"]
     assert "example portrait line" in user_content
     assert "moody lighting" in user_content
+    assert '"prompt": "example portrait line"' in user_content
     assert _FakeOllamaClient.last_format == "json"
 
 
@@ -339,6 +413,40 @@ async def test_llm_enhancer_tag_system_prompt(monkeypatch):
     await enhancer.enhance_image(_request(PromptStyle.TAG))
     system_content = _FakeOllamaClient.last_messages[0]["content"]
     assert "WD14" in system_content or "danbooru" in system_content
+
+
+async def test_llm_enhancer_uses_model_specific_contracts(monkeypatch):
+    _install_fake_ollama(monkeypatch)
+    enhancer = LLMPromptEnhancer()
+    await enhancer.enhance_image(
+        _request(PromptStyle.TAG, prompt_model="anima"),
+        examples=[
+            GeneratedPrompt(
+                style=PromptStyle.TAG,
+                prompt="rabbit girl, grey fur",
+                negative="blurry, watermark",
+            )
+        ],
+    )
+    anima_system = _FakeOllamaClient.last_messages[0]["content"]
+    anima_user = _FakeOllamaClient.last_messages[1]["content"]
+    assert "Anima" in anima_system
+    assert "spaces rather than underscores" in anima_system
+    assert "grounding_fact_ids" not in anima_system
+    assert '"tags": ["rabbit girl", "grey fur"]' in anima_user
+    assert '"negative_tags": ["blurry", "watermark"]' in anima_user
+
+    await enhancer.enhance_video(
+        VideoPromptRequest(
+            subject="a gate rises",
+            style=PromptStyle.NATURAL,
+            prompt_model="ltx-2.3",
+        )
+    )
+    ltx_system = _FakeOllamaClient.last_messages[0]["content"]
+    assert "LTX 2.3" in ltx_system
+    assert "present-progressive" in ltx_system
+    assert "one continuous English paragraph" in ltx_system
 
 
 async def test_llm_enhancer_uses_host_and_api_key(monkeypatch):
@@ -554,6 +662,79 @@ async def test_llm_tag_and_video_success_and_object_response(monkeypatch):
     )
     assert video.prompt == "A gate rises through the rain"
     assert "text-to-video" in _ContentClient.last_messages[0]["content"]
+
+
+async def test_llm_model_formats_and_preserves_omitted_directions(monkeypatch):
+    _ContentClient.content = json.dumps(
+        {
+            "tags": ["rabbit girl", "brass scale", "(Grey Fur:1.25)"],
+            "negative_tags": ["bad anatomy"],
+        }
+    )
+    _ContentClient.object_response = False
+    _install_fake_ollama(monkeypatch, _ContentClient)
+    enhancer = LLMPromptEnhancer()
+    image = await enhancer.enhance_image(
+        _request(
+            PromptStyle.TAG,
+            ImagePurpose.EVENT,
+            prompt_model="anima",
+            extra="blue ribbon tied to the brass mail scale",
+        )
+    )
+    assert image.prompt.startswith("masterpiece, best quality, score_7, safe")
+    assert "blue ribbon tied" in image.prompt
+    assert "brass mail scale" in image.prompt
+    assert "(grey fur:1.25)" in image.prompt
+    assert "_" not in image.prompt.replace("score_7", "")
+    assert image.negative.startswith(
+        "worst quality, low quality, score_1, score_2, score_3, artist name"
+    )
+
+    _ContentClient.content = json.dumps(
+        {"prompt": "A rabbit is lifting a gate while rain is falling.", "negative": "jitter"}
+    )
+    video = await enhancer.enhance_video(
+        VideoPromptRequest(
+            subject="a gate rises",
+            style=PromptStyle.NATURAL,
+            prompt_model="ltx-2.3",
+            extra="a blue ribbon is tied to the brass mail scale",
+        )
+    )
+    assert video.prompt.endswith("a blue ribbon is tied to the brass mail scale.")
+
+    _ContentClient.content = json.dumps(
+        {
+            "prompt": (
+                "A rabbit is lifting a gate while a blue ribbon is tied to the brass "
+                "mail scale."
+            ),
+            "negative": "jitter",
+        }
+    )
+    preserved = await enhancer.enhance_video(
+        VideoPromptRequest(
+            subject="a gate rises",
+            style=PromptStyle.NATURAL,
+            prompt_model="ltx-2.3",
+            extra="a blue ribbon is tied to the brass mail scale",
+        )
+    )
+    assert preserved.prompt.count("a blue ribbon is tied") == 1
+
+    _ContentClient.content = json.dumps(
+        {"prompt": "A rabbit is lifting a gate.", "negative": "jitter"}
+    )
+    punctuated = await enhancer.enhance_video(
+        VideoPromptRequest(
+            subject="a gate rises",
+            style=PromptStyle.NATURAL,
+            prompt_model="ltx-2.3",
+            extra="The bell rings!",
+        )
+    )
+    assert punctuated.prompt.endswith("The bell rings!")
 
 
 async def test_llm_missing_response_content_uses_fallback(monkeypatch):

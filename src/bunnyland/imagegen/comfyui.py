@@ -58,6 +58,7 @@ class ComfyUIGenerator:
             name=template.name,
             purpose=template.purpose,
             prompt_style=template.prompt_style,
+            prompt_model=template.prompt_model,
             media=template.media,
             default_negative=template.default_negative,
             width=template.width,
@@ -80,6 +81,7 @@ class ComfyUIGenerator:
         return VideoGeneratorProfile(
             name=template.name,
             prompt_style=template.prompt_style,
+            prompt_model=template.prompt_model,
             default_negative=template.default_negative,
             width=template.width,
             height=template.height,

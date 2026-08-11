@@ -2,9 +2,10 @@
   "name": "portrait",
   "purpose": "portrait",
   "prompt_style": "tag",
+  "prompt_model": "anima",
   "media": "image",
   "description": "Anima (Qwen-CLIP + UNET + Bunnyland LoRA); lowest VRAM; tag/score-based prompts.",
-  "default_negative": "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia",
+  "default_negative": "worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, chromatic aberration",
   "width": 832,
   "height": 1216,
   "output_node_id": "46",
@@ -114,7 +115,7 @@
     },
     "67": {
       "inputs": {
-        "text": "%PROMPT%, masterpiece, best quality, score_7",
+        "text": "%PROMPT%",
         "clip": [
           "61",
           0

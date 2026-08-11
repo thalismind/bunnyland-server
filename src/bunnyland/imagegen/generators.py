@@ -17,6 +17,7 @@ class ImageGeneratorProfile(BaseModel):
     name: str
     purpose: ImagePurpose
     prompt_style: PromptStyle = PromptStyle.NATURAL
+    prompt_model: str = ""
     media: MediaKind = MediaKind.IMAGE
     default_negative: str = ""
     width: int = 1024
@@ -40,6 +41,7 @@ class VideoGeneratorProfile(BaseModel):
 
     name: str
     prompt_style: PromptStyle = PromptStyle.NATURAL
+    prompt_model: str = ""
     default_negative: str = ""
     width: int = 1024
     height: int = 576

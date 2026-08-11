@@ -296,7 +296,11 @@ class VideoGenService:
         if self._config.prompt_style:
             style = PromptStyle(self._config.prompt_style)
         examples = self._examples.examples_for(
-            style, ImagePurpose.EVENT, subject, media=MediaKind.VIDEO
+            style,
+            ImagePurpose.EVENT,
+            subject,
+            media=MediaKind.VIDEO,
+            prompt_model=profile.prompt_model,
         )
         return await self._enhancer.enhance_video(
             VideoPromptRequest(
@@ -304,6 +308,7 @@ class VideoGenService:
                 style=style,
                 scene=scene,
                 extra=extra,
+                prompt_model=profile.prompt_model,
             ),
             examples=examples,
         )

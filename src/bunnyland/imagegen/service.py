@@ -456,7 +456,11 @@ class ImageGenService:
         if self._config.prompt_style:
             style = PromptStyle(self._config.prompt_style)
         examples = self._examples.examples_for(
-            style, purpose, subject, media=MediaKind.IMAGE
+            style,
+            purpose,
+            subject,
+            media=MediaKind.IMAGE,
+            prompt_model=profile.prompt_model,
         )
         request = ImagePromptRequest(
             subject=subject,
@@ -464,6 +468,7 @@ class ImageGenService:
             purpose=purpose,
             scene=scene,
             extra=extra,
+            prompt_model=profile.prompt_model,
         )
         return await self._enhancer.enhance_image(request, examples=examples)
 

@@ -2,6 +2,7 @@
   "name": "event-video",
   "purpose": "event",
   "prompt_style": "natural",
+  "prompt_model": "ltx-2.3",
   "media": "video",
   "description": "LTX 2.3 22B text-to-video with generated audio and two-stage latent upscaling.",
   "default_negative": "pc game, console game, video game, cartoon, childish, ugly",

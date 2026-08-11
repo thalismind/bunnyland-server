@@ -42,6 +42,8 @@ def test_sdxl_family_substitutes_prompt_and_seed():
 def test_anima_family_routes_every_purpose_through_bunnyland_lora():
     for template in default_templates("anima"):
         graph = substitute(template, prompt="a brave rabbit", seed=7)
+        assert template.prompt_model == "anima"
+        assert graph["67"]["inputs"]["text"] == "a brave rabbit"
         assert graph["69"] == {
             "inputs": {
                 "lora_name": "testing/anima/bunnyland_vector_anima_v1_e20.safetensors",
@@ -75,6 +77,7 @@ def test_comfy_defaults_add_video_templates_outside_the_image_family():
     }
     video = next(template for template in templates if template.name == "event-video")
     assert video.media.value == "video"
+    assert video.prompt_model == "ltx-2.3"
     graph = substitute(
         video,
         prompt="a rabbit opens a glowing door",

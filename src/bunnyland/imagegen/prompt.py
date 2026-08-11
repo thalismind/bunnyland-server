@@ -31,6 +31,21 @@ STUB_ENHANCER_NAME = "stub"
 MAX_TAGS = 128
 MAX_TAG_CHARS = 80
 MAX_PROMPT_CHARS = 4000
+ANIMA_PROMPT_MODEL = "anima"
+LTX_2_3_PROMPT_MODEL = "ltx-2.3"
+
+_ANIMA_POSITIVE_PREFIX = ("masterpiece", "best quality", "score_7", "safe")
+_ANIMA_NEGATIVE_PREFIX = (
+    "worst quality",
+    "low quality",
+    "score_1",
+    "score_2",
+    "score_3",
+    "artist name",
+    "blurry",
+    "jpeg artifacts",
+    "chromatic aberration",
+)
 
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 _TAG_CHARS = re.compile(r"[^a-z0-9_]+")
@@ -41,10 +56,12 @@ _TAG_BREAK_WORDS = frozenset(
 )
 
 ExamplePromptCatalog = dict[
-    tuple[MediaKind, PromptStyle, ImagePurpose], list[GeneratedPrompt]
+    tuple[str, MediaKind, PromptStyle, ImagePurpose], list[GeneratedPrompt]
 ]
 ExamplePromptKey = (
-    tuple[MediaKind, PromptStyle, ImagePurpose] | tuple[PromptStyle, ImagePurpose]
+    tuple[str, MediaKind, PromptStyle, ImagePurpose]
+    | tuple[MediaKind, PromptStyle, ImagePurpose]
+    | tuple[PromptStyle, ImagePurpose]
 )
 
 _PURPOSE_HINT: dict[ImagePurpose, str] = {
@@ -65,6 +82,7 @@ class ImagePromptRequest(BaseModel):
     purpose: ImagePurpose
     scene: MediaSceneSnapshot | None = None
     extra: str = ""
+    prompt_model: str = ""
 
 
 class VideoPromptRequest(BaseModel):
@@ -76,6 +94,7 @@ class VideoPromptRequest(BaseModel):
     style: PromptStyle
     scene: MediaSceneSnapshot | None = None
     extra: str = ""
+    prompt_model: str = ""
 
 
 @runtime_checkable
@@ -120,6 +139,7 @@ class PromptExampleSource(Protocol):
         subject: str,
         *,
         media: MediaKind = MediaKind.IMAGE,
+        prompt_model: str = "",
     ) -> list[GeneratedPrompt]: ...
 
 
@@ -164,6 +184,46 @@ def normalize_tags(values: Sequence[str]) -> tuple[str, ...]:
         if len(tags) >= MAX_TAGS:
             break
     return tuple(tags)
+
+
+def _model_tags(
+    tags: Sequence[str], *, prompt_model: str, negative: bool = False
+) -> tuple[str, ...]:
+    if prompt_model != ANIMA_PROMPT_MODEL:
+        return normalize_tags(tags)
+    prefix = _ANIMA_NEGATIVE_PREFIX if negative else _ANIMA_POSITIVE_PREFIX
+    return normalize_tags((*prefix, *tags))
+
+
+def _render_tag(tag: str, prompt_model: str) -> str:
+    if prompt_model != ANIMA_PROMPT_MODEL:
+        return tag
+    weighted = _WEIGHTED_TAG.fullmatch(tag)
+    if weighted is not None:
+        value, weight = weighted.groups()
+        return f"({value.replace('_', ' ')}:{weight})"
+    if tag.startswith("score_"):
+        return tag
+    return tag.replace("_", " ")
+
+
+def _render_tags(tags: Sequence[str], prompt_model: str) -> str:
+    return ", ".join(_render_tag(tag, prompt_model) for tag in tags)
+
+
+def _append_direction(prompt: str, extra: str) -> str:
+    """Preserve an explicit direction verbatim when the model did not do so."""
+
+    direction = extra.strip()
+    if not direction:
+        return prompt[:MAX_PROMPT_CHARS]
+    if direction.casefold().rstrip(".") in prompt.casefold():
+        return prompt[:MAX_PROMPT_CHARS]
+    direction = direction[: MAX_PROMPT_CHARS - 1].rstrip()
+    if direction[-1] not in ".!?":
+        direction += "."
+    available = max(0, MAX_PROMPT_CHARS - len(direction) - 1)
+    return f"{prompt[:available].rstrip()} {direction}".strip()
 
 
 def _phrases(text: str) -> tuple[str, ...]:
@@ -348,10 +408,13 @@ class StructuredPromptEnhancer:
                 if request.scene is not None
                 else normalize_tags((request.purpose.value, *_tag_phrases(request.subject)))
             )
-            tags = normalize_tags((*tags, *_phrases(request.extra)))
+            tags = _model_tags(
+                (*tags, *_tag_phrases(request.extra)),
+                prompt_model=request.prompt_model,
+            )
             return GeneratedPrompt(
                 style=PromptStyle.TAG,
-                prompt=", ".join(tags),
+                prompt=_render_tags(tags, request.prompt_model),
                 tags=tags,
                 enhancer=self.name,
                 fallback=False,
@@ -362,11 +425,10 @@ class StructuredPromptEnhancer:
             if request.scene is not None
             else f"{_PURPOSE_HINT[request.purpose]}: {request.subject.strip()}".rstrip(": ")
         )
-        if request.extra:
-            prompt = f"{prompt} Additional direction: {request.extra.strip()}"
+        prompt = _append_direction(prompt, request.extra)
         return GeneratedPrompt(
             style=PromptStyle.NATURAL,
-            prompt=prompt[:MAX_PROMPT_CHARS],
+            prompt=prompt,
             enhancer=self.name,
             fallback=False,
             grounding_fact_ids=grounding,
@@ -386,11 +448,13 @@ class StructuredPromptEnhancer:
                 if request.scene is not None
                 else normalize_tags(("event_video", *_tag_phrases(request.subject)))
             )
-            tags = normalize_tags((*base_tags, "motion", "cinematic_camera"))
-            tags = normalize_tags((*tags, *_phrases(request.extra)))
+            tags = _model_tags(
+                (*base_tags, "motion", "cinematic_camera", *_tag_phrases(request.extra)),
+                prompt_model=request.prompt_model,
+            )
             return GeneratedPrompt(
                 style=PromptStyle.TAG,
-                prompt=", ".join(tags),
+                prompt=_render_tags(tags, request.prompt_model),
                 tags=tags,
                 enhancer=self.name,
                 fallback=False,
@@ -404,11 +468,10 @@ class StructuredPromptEnhancer:
                 "clear motion, a stable camera move, environmental movement, and matching audio."
             )
         )
-        if request.extra:
-            prompt = f"{prompt} Additional direction: {request.extra.strip()}"
+        prompt = _append_direction(prompt, request.extra)
         return GeneratedPrompt(
             style=PromptStyle.NATURAL,
-            prompt=prompt[:MAX_PROMPT_CHARS],
+            prompt=prompt,
             enhancer=self.name,
             fallback=False,
             grounding_fact_ids=grounding,
@@ -431,28 +494,71 @@ class StubPromptEnhancer(StructuredPromptEnhancer):
     name = STUB_ENHANCER_NAME
 
 
-def _system_prompt(style: PromptStyle, media: MediaKind) -> str:
+def _system_prompt(style: PromptStyle, media: MediaKind, prompt_model: str) -> str:
+    direction_rule = (
+        "If an Additional direction is present, it is mandatory: preserve every requested "
+        "visible, motion, camera, or audio detail and never negate or replace it. "
+    )
+    if prompt_model == ANIMA_PROMPT_MODEL:
+        return (
+            "Convert the structured game-world facts into an ordered Anima tag prompt. "
+            "Use lowercase Danbooru/Gelbooru-style tags with spaces rather than underscores, "
+            "except score tags. Order tags as quality/meta/safety, character counts and "
+            "identities, then general scene tags. Begin positive tags with masterpiece, best "
+            "quality, score_7, safe. Begin negative tags with worst quality, low quality, "
+            "score_1, score_2, score_3, artist name, blurry, jpeg artifacts, chromatic "
+            "aberration. Preserve the primary event, room, visible appearances, composition, "
+            f"and lighting. {direction_rule}Return ONLY JSON with keys tags (string array) "
+            "and negative_tags (string array). No prose."
+        )
+    if prompt_model == LTX_2_3_PROMPT_MODEL:
+        return (
+            "Write one continuous English paragraph for LTX 2.3 text-to-video. Strictly "
+            "include every requested visual, action, motion, camera, and audio element. Start "
+            "with the visual style only when known, then describe the scene chronologically "
+            "using active present-progressive verbs and temporal connectors such as as, then, "
+            "and while. Integrate specific ambient sounds and action audio alongside the "
+            "corresponding motion. Do not invent dialogue, characters, camera motion, cuts, or "
+            f"timestamps. {direction_rule}Return ONLY JSON with keys prompt and negative."
+        )
     if style is PromptStyle.TAG:
         return (
             "Convert structured game-world scene facts into ordered WD14/Danbooru-style "
             "image tags. Preserve the primary event, room setting, visible appearances, "
-            "composition, and lighting. Return ONLY JSON with keys tags (string array), "
-            "negative_tags (string array), and grounding_fact_ids (string array). No prose."
+            f"composition, and lighting. {direction_rule}Return ONLY JSON with keys tags "
+            "(string array) and negative_tags (string array). No prose."
         )
     if media is MediaKind.VIDEO:
         return (
             "Write a concise natural-language text-to-video prompt grounded only in the "
             "structured game-world facts. Foreground the primary event and describe temporal "
             "progression, subject/object motion, camera movement, environmental motion, and "
-            "matching audio while preserving room and character continuity. Return ONLY JSON "
-            "with prompt, negative, and grounding_fact_ids."
+            "matching audio while preserving room and character continuity. "
+            f"{direction_rule}Return ONLY JSON with prompt and negative."
         )
     return (
         "Write a concise natural-language diffusion image prompt grounded only in the "
         "structured game-world facts. Foreground the primary event while preserving the room "
-        "setting, visible appearances, relevant props, composition, and lighting. Return ONLY "
-        "JSON with prompt, negative, and grounding_fact_ids."
+        "setting, visible appearances, relevant props, composition, and lighting. "
+        f"{direction_rule}Return ONLY JSON with prompt and negative."
     )
+
+
+def _example_output(example: GeneratedPrompt, style: PromptStyle) -> str:
+    if style is PromptStyle.TAG:
+        tags = example.tags or tuple(
+            value.strip() for value in example.prompt.split(",") if value.strip()
+        )
+        negative_tags = tuple(
+            value.strip() for value in example.negative.split(",") if value.strip()
+        )
+        value: dict[str, JsonValue] = {
+            "tags": list(tags),
+            "negative_tags": list(negative_tags),
+        }
+    else:
+        value = {"prompt": example.prompt, "negative": example.negative}
+    return json.dumps(value, ensure_ascii=True)
 
 
 def _user_prompt(
@@ -461,21 +567,25 @@ def _user_prompt(
     scene: MediaSceneSnapshot | None,
     purpose: ImagePurpose,
     media: MediaKind,
+    style: PromptStyle,
     extra: str,
     examples: Sequence[GeneratedPrompt],
 ) -> str:
     lines = [f"Media: {media.value}", f"Purpose: {_PURPOSE_HINT[purpose]}"]
     if examples:
-        lines.append("Format examples:")
-        lines.extend(f"- {example.prompt}" for example in examples)
+        lines.append("Example outputs in the required JSON shape:")
+        lines.extend(_example_output(example, style) for example in examples)
     if scene is not None:
-        lines.append("Required grounding IDs: " + ", ".join(_grounding_ids(scene)))
+        lines.append(
+            "Provenance IDs (metadata only; never render them in the prompt): "
+            + ", ".join(_grounding_ids(scene))
+        )
         lines.append("Structured scene:")
         lines.append(scene.prompt_context())
     else:
         lines.append(f"Subject: {subject}")
     if extra:
-        lines.append(f"Additional direction: {extra}")
+        lines.append(f"Additional direction (mandatory): {extra}")
     return "\n".join(lines)
 
 
@@ -599,6 +709,7 @@ class LLMMediaPromptEnhancer:
                 purpose=request.purpose,
                 media=MediaKind.IMAGE,
                 extra=request.extra,
+                prompt_model=request.prompt_model,
                 examples=examples,
             )
         except PromptEnhancementError as exc:
@@ -620,6 +731,7 @@ class LLMMediaPromptEnhancer:
                 purpose=ImagePurpose.EVENT,
                 media=MediaKind.VIDEO,
                 extra=request.extra,
+                prompt_model=request.prompt_model,
                 examples=examples,
             )
         except PromptEnhancementError as exc:
@@ -646,15 +758,17 @@ class LLMMediaPromptEnhancer:
         purpose: ImagePurpose,
         media: MediaKind,
         extra: str,
+        prompt_model: str,
         examples: Sequence[GeneratedPrompt],
     ) -> GeneratedPrompt:
         data = await self._client.complete(
-            system_prompt=_system_prompt(style, media),
+            system_prompt=_system_prompt(style, media, prompt_model),
             user_prompt=_user_prompt(
                 subject=subject,
                 scene=scene,
                 purpose=purpose,
                 media=media,
+                style=style,
                 extra=extra,
                 examples=examples,
             ),
@@ -674,16 +788,24 @@ class LLMMediaPromptEnhancer:
             raw_negative = data.get("negative_tags", [])
             if not isinstance(raw_tags, list) or not isinstance(raw_negative, list):
                 raise PromptEnhancementError("tag response requires tag arrays")
-            tags = normalize_tags(tuple(value for value in raw_tags if isinstance(value, str)))
-            negative_tags = normalize_tags(
-                tuple(value for value in raw_negative if isinstance(value, str))
+            tags = _model_tags(
+                (
+                    *(value for value in raw_tags if isinstance(value, str)),
+                    *_tag_phrases(extra),
+                ),
+                prompt_model=prompt_model,
+            )
+            negative_tags = _model_tags(
+                tuple(value for value in raw_negative if isinstance(value, str)),
+                prompt_model=prompt_model,
+                negative=True,
             )
             if not tags:
                 raise PromptEnhancementError("tag response contained no valid tags")
             return GeneratedPrompt(
                 style=style,
-                prompt=", ".join(tags),
-                negative=", ".join(negative_tags),
+                prompt=_render_tags(tags, prompt_model),
+                negative=_render_tags(negative_tags, prompt_model),
                 tags=tags,
                 enhancer=self.name,
                 grounding_fact_ids=grounding,
@@ -696,9 +818,10 @@ class LLMMediaPromptEnhancer:
             raise PromptEnhancementError("natural response negative must be text")
         if len(prompt) > MAX_PROMPT_CHARS:
             raise PromptEnhancementError("natural response exceeds the prompt limit")
+        prompt = _append_direction(prompt.strip(), extra)
         return GeneratedPrompt(
             style=style,
-            prompt=prompt.strip(),
+            prompt=prompt,
             negative=negative.strip(),
             enhancer=self.name,
             grounding_fact_ids=grounding,
@@ -709,10 +832,12 @@ class LLMMediaPromptEnhancer:
 LLMPromptEnhancer = LLMMediaPromptEnhancer
 
 
-def load_catalog_from(directory: Traversable) -> ExamplePromptCatalog:
-    """Load image and video format examples from package JSON files."""
-
-    catalog: ExamplePromptCatalog = {}
+def _load_catalog_directory(
+    directory: Traversable,
+    *,
+    prompt_model: str,
+    catalog: ExamplePromptCatalog,
+) -> None:
     for entry in sorted(directory.iterdir(), key=lambda item: item.name):
         if not entry.name.endswith(".json"):
             continue
@@ -730,11 +855,21 @@ def load_catalog_from(directory: Traversable) -> ExamplePromptCatalog:
         raw = _JSON_OBJECT.validate_python({"items": json.loads(entry.read_text())})["items"]
         if not isinstance(raw, list):
             raise ValueError(f"prompt examples in {entry.name!r} must be a list")
-        catalog[(media, style, purpose)] = [
+        catalog[(prompt_model, media, style, purpose)] = [
             GeneratedPrompt.model_validate({"style": style.value, **item})
             for item in raw
             if isinstance(item, dict)
         ]
+
+
+def load_catalog_from(directory: Traversable) -> ExamplePromptCatalog:
+    """Load generic examples plus one model-specific level of subdirectories."""
+
+    catalog: ExamplePromptCatalog = {}
+    _load_catalog_directory(directory, prompt_model="", catalog=catalog)
+    for entry in sorted(directory.iterdir(), key=lambda item: item.name):
+        if entry.is_dir():
+            _load_catalog_directory(entry, prompt_model=entry.name, catalog=catalog)
     return catalog
 
 
@@ -754,11 +889,12 @@ class CatalogExampleSource:
         else:
             self._catalog: ExamplePromptCatalog = {}
             for key, values in catalog.items():
-                normalized_key = (
-                    (MediaKind.IMAGE, key[0], key[1])
-                    if len(key) == 2
-                    else (key[0], key[1], key[2])
-                )
+                if len(key) == 2:
+                    normalized_key = ("", MediaKind.IMAGE, key[0], key[1])
+                elif len(key) == 3:
+                    normalized_key = ("", key[0], key[1], key[2])
+                else:
+                    normalized_key = (key[0], key[1], key[2], key[3])
                 self._catalog[normalized_key] = list(values)
         self._limit = limit
 
@@ -769,25 +905,41 @@ class CatalogExampleSource:
         subject: str,
         *,
         media: MediaKind = MediaKind.IMAGE,
+        prompt_model: str = "",
     ) -> list[GeneratedPrompt]:
         del subject
-        exact = self._catalog.get((media, style, purpose))
-        if exact:
-            return list(exact[: self._limit])
-        image_fallback = self._catalog.get((MediaKind.IMAGE, style, purpose), ())
-        if image_fallback:
-            return list(image_fallback[: self._limit])
-        style_fallback = next(
-            (
-                values
-                for (candidate_media, candidate_style, _candidate_purpose), values in sorted(
-                    self._catalog.items(), key=lambda item: tuple(str(part) for part in item[0])
-                )
-                if candidate_media is media and candidate_style is style and values
-            ),
-            (),
-        )
-        return list(style_fallback[: self._limit])
+        prompt_models = (prompt_model, "") if prompt_model else ("",)
+        for candidate_model in prompt_models:
+            exact = self._catalog.get((candidate_model, media, style, purpose))
+            if exact:
+                return list(exact[: self._limit])
+            image_fallback = self._catalog.get(
+                (candidate_model, MediaKind.IMAGE, style, purpose), ()
+            )
+            if image_fallback:
+                return list(image_fallback[: self._limit])
+            style_fallback = next(
+                (
+                    values
+                    for (
+                        catalog_model,
+                        candidate_media,
+                        candidate_style,
+                        _candidate_purpose,
+                    ), values in sorted(
+                        self._catalog.items(),
+                        key=lambda item: tuple(str(part) for part in item[0]),
+                    )
+                    if catalog_model == candidate_model
+                    and candidate_media is media
+                    and candidate_style is style
+                    and values
+                ),
+                (),
+            )
+            if style_fallback:
+                return list(style_fallback[: self._limit])
+        return []
 
 
 class VectorCollection(Protocol):
@@ -819,16 +971,20 @@ class VectorExampleSource:
         subject: str,
         *,
         media: MediaKind = MediaKind.IMAGE,
+        prompt_model: str = "",
     ) -> list[GeneratedPrompt]:
+        where = {
+            "media": media.value,
+            "style": style.value,
+            "purpose": purpose.value,
+        }
+        if prompt_model:
+            where["prompt_model"] = prompt_model
         result = _JSON_OBJECT.validate_python(
             self._collection.query(
                 query_texts=[subject],
                 n_results=self._limit,
-                where={
-                    "media": media.value,
-                    "style": style.value,
-                    "purpose": purpose.value,
-                },
+                where=where,
             )
         )
         raw_documents = result.get("documents", [[]])
@@ -857,7 +1013,11 @@ class VectorExampleSource:
                 )
         if not examples and self._fallback is not None:
             return self._fallback.examples_for(
-                style, purpose, subject, media=media
+                style,
+                purpose,
+                subject,
+                media=media,
+                prompt_model=prompt_model,
             )
         return examples
 

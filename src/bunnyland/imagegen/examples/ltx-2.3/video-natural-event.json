@@ -1,0 +1,10 @@
+[
+  {
+    "prompt": "Style: hand-painted cinematic fantasy. Inside a timber tavern at night, two rabbit travelers are lifting their clay mugs while a fox musician is drawing a paw across the strings of a lute. As the travelers are leaning together, candle flames and firelight are flickering across the table; then the camera is gliding slowly from the hearth into a steady medium view of the toast. Low tavern conversation and the fireplace are murmuring underneath the clear clink of pottery, followed by the first warm lute chord as the mugs meet.",
+    "negative": "static subjects, abrupt cuts, inconsistent characters, warped motion, subtitles, watermark"
+  },
+  {
+    "prompt": "Style: hand-painted cinematic fantasy. In a moonlit castle courtyard, three armored rabbit guards are closing around a cloaked fox beside a stone well. The fox is stepping backward while the guards are tightening their formation and wind is moving their cloaks and the hanging banners; then the camera is pushing slowly toward the fox without cutting. Boots are scraping across stone as armor is softly clinking, banners are snapping in the wind, and a distant bell is sounding behind the confrontation.",
+    "negative": "static subjects, modern objects, character changes, jitter, cuts, text, watermark"
+  }
+]

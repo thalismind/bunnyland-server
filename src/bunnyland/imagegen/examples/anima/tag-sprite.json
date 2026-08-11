@@ -1,0 +1,12 @@
+[
+  {
+    "prompt": "masterpiece, best quality, score_7, safe, 1girl, rabbit girl, grey fur, rabbit ears, weathered red scarf, full body, standing, facing viewer, game sprite, cel shading, flat colors, simple white background",
+    "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, chromatic aberration, cropped, bad anatomy, text, watermark, busy background",
+    "tags": ["masterpiece", "best quality", "score_7", "safe", "1girl", "rabbit girl", "grey fur", "rabbit ears", "weathered red scarf", "full body", "standing", "facing viewer", "game sprite", "cel shading", "flat colors", "simple white background"]
+  },
+  {
+    "prompt": "masterpiece, best quality, score_7, safe, 1boy, fox boy, orange fur, fox ears, leather armor, full body, walking, side view, game sprite, cel shading, flat colors, simple white background",
+    "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, chromatic aberration, cropped, bad anatomy, text, watermark, busy background",
+    "tags": ["masterpiece", "best quality", "score_7", "safe", "1boy", "fox boy", "orange fur", "fox ears", "leather armor", "full body", "walking", "side view", "game sprite", "cel shading", "flat colors", "simple white background"]
+  }
+]

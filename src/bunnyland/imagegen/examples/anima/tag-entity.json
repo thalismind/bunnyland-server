@@ -1,0 +1,12 @@
+[
+  {
+    "prompt": "masterpiece, best quality, score_7, safe, no humans, treasure chest, oak wood, iron bands, centered, simple background, still life, studio lighting, sharp focus",
+    "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, chromatic aberration, person, text, watermark, busy background",
+    "tags": ["masterpiece", "best quality", "score_7", "safe", "no humans", "treasure chest", "oak wood", "iron bands", "centered", "simple background", "still life", "studio lighting", "sharp focus"]
+  },
+  {
+    "prompt": "masterpiece, best quality, score_7, safe, no humans, brass lantern, glowing, centered, plain background, still life, warm light, sharp focus",
+    "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, chromatic aberration, person, text, watermark, busy background",
+    "tags": ["masterpiece", "best quality", "score_7", "safe", "no humans", "brass lantern", "glowing", "centered", "plain background", "still life", "warm light", "sharp focus"]
+  }
+]

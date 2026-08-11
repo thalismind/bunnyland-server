@@ -63,7 +63,7 @@ BUNNYLAND_VIDEO_PROFILE=event-video          # built-in ComfyUI LTX 2.3 T2V prof
 BUNNYLAND_MEDIA_ENHANCER=structured          # "structured" (offline) or "llm" (uses OLLAMA_*)
 BUNNYLAND_IMAGE_PROMPT_ENHANCER=             # optional image-only enhancer override
 BUNNYLAND_VIDEO_PROMPT_ENHANCER=             # optional video-only enhancer override
-BUNNYLAND_MEDIA_MODEL=kimi-k2.7-code:cloud    # prompt-enhancement model
+BUNNYLAND_MEDIA_MODEL=deepseek-v4-flash       # prompt-enhancement model
 BUNNYLAND_IMAGE_BACKFILL_SECONDS=5         # cadence of the portrait/sprite backfill
 ```
 
@@ -223,6 +223,37 @@ the suffix is just a label for templates you override (below).
 
 The enhancer formats prompts to the family's style (tag vs natural) automatically. To force
 a style regardless of family, set `BUNNYLAND_MEDIA_PROMPT_STYLE=tag` or `natural`.
+
+### Model-specific prompt examples
+
+Built-in workflows also declare `prompt_model`, which selects model-specific enhancer
+instructions and few-shot examples after the workflow is resolved. The `anima` image
+workflows select `prompt_model: "anima"`; `event-video` selects
+`prompt_model: "ltx-2.3"`. A custom workflow can use either value, leave it blank for the
+generic style examples, or provide a plugin enhancer for another model contract.
+
+Anima's official model card recommends lowercase Danbooru/Gelbooru-style tags, spaces rather
+than underscores except in score tags, quality/meta/safety tags first, and these positive and
+negative prefixes. A model-ready event prompt therefore looks like:
+
+```text
+masterpiece, best quality, score_7, safe, 2girls, 1boy, rabbit girl, rabbit ears, fox boy, tavern interior, raising mug, playing lute, wooden table, fireplace, candlelight, night, wide shot, detailed background
+```
+
+```text
+worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, chromatic aberration, bad anatomy, text, watermark
+```
+
+LTX 2.3 expects one continuous, chronological natural-language paragraph. It should preserve
+every requested visual and motion detail, use active present-progressive verbs, and integrate
+specific sounds alongside the corresponding action. For example:
+
+```text
+Style: hand-painted cinematic fantasy. Inside a timber tavern at night, two rabbit travelers are lifting their clay mugs while a fox musician is drawing a paw across the strings of a lute. As the travelers are leaning together, candle flames and firelight are flickering across the table; then the camera is gliding slowly from the hearth into a steady medium view of the toast. Low tavern conversation and the fireplace are murmuring underneath the clear clink of pottery, followed by the first warm lute chord as the mugs meet.
+```
+
+These formats follow the [Anima model card](https://huggingface.co/circlestone-labs/Anima#prompting)
+and Lightricks' [LTX-2 text-to-video system prompt](https://github.com/Lightricks/LTX-2/blob/main/packages/ltx-core/src/ltx_core/text_encoders/gemma/encoders/prompts/gemma_t2v_system_prompt.txt).
 
 ## Changing the model
 

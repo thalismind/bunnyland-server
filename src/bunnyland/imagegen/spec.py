@@ -33,7 +33,7 @@ class MediaKind(StrEnum):
 class PromptStyle(StrEnum):
     """The prompt format a template expects from the enhancer."""
 
-    #: Comma-separated WD14-style danbooru tags, for SDXL-era models.
+    #: Comma-separated model tags, such as Anima or SDXL Danbooru-style prompts.
     TAG = "tag"
     #: Free-form natural-language description, for Flux/Qwen-era models.
     NATURAL = "natural"
@@ -67,6 +67,8 @@ class WorkflowTemplate(BaseModel):
     name: str
     purpose: ImagePurpose
     prompt_style: PromptStyle = PromptStyle.NATURAL
+    #: Optional model-specific prompt/example contract selected before enhancement.
+    prompt_model: str = ""
     media: MediaKind = MediaKind.IMAGE
     description: str = ""
     default_negative: str = ""
