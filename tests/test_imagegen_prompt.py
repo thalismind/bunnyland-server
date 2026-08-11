@@ -349,7 +349,7 @@ async def test_llm_enhancer_uses_host_and_api_key(monkeypatch):
     }
 
 
-async def test_llm_enhancer_receives_full_scene_and_requires_grounding(monkeypatch):
+async def test_llm_enhancer_receives_full_scene_and_records_grounding(monkeypatch):
     class GroundedClient(_FakeOllamaClient):
         async def chat(self, *, model, format, messages):
             type(self).last_messages = messages
@@ -377,18 +377,18 @@ async def test_llm_enhancer_receives_full_scene_and_requires_grounding(monkeypat
     assert "grey fur and a weathered red scarf" in user_content
     assert result.enhancer == "llm"
     assert result.fallback is False
+    assert result.grounding_fact_ids == ("room:castle", "event:lever")
 
 
-async def test_llm_enhancer_falls_back_in_same_style_when_grounding_is_missing(monkeypatch):
+async def test_llm_enhancer_accepts_prompt_when_grounding_metadata_is_missing(monkeypatch):
     _install_fake_ollama(monkeypatch)
     result = await LLMPromptEnhancer().enhance_image(
-        _request(PromptStyle.TAG, ImagePurpose.EVENT, scene=_scene())
+        _request(PromptStyle.NATURAL, ImagePurpose.EVENT, scene=_scene())
     )
-    assert result.style is PromptStyle.TAG
-    assert result.fallback is True
-    assert result.enhancer == "structured"
-    assert "lower_gaol" in result.tags
-    assert "juniper_pulls_the_rusted_gate_lever" in result.tags
+    assert result.prompt == "enhanced rabbit"
+    assert result.fallback is False
+    assert result.enhancer == "llm"
+    assert result.grounding_fact_ids == ()
 
 
 async def test_structured_scene_renderers_cover_prose_context_tags_and_adapters():

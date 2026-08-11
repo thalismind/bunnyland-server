@@ -663,15 +663,12 @@ class LLMMediaPromptEnhancer:
             purpose=purpose,
             example_count=len(examples),
         )
-        required = set(_grounding_ids(scene))
         raw_grounding = data.get("grounding_fact_ids", [])
         grounding = (
             tuple(value for value in raw_grounding if isinstance(value, str))
             if isinstance(raw_grounding, list)
             else ()
         )
-        if required and not required.issubset(grounding):
-            raise PromptEnhancementError("enhanced prompt omitted required grounding IDs")
         if style is PromptStyle.TAG:
             raw_tags = data.get("tags", [])
             raw_negative = data.get("negative_tags", [])
