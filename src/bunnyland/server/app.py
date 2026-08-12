@@ -77,7 +77,8 @@ from ..imagegen.media import (
     MediaStore,
 )
 from ..imagegen.scene import request_scene_image, request_scene_video
-from ..imagegen.spec import ImagePurpose
+from ..imagegen.spec import ImagePurpose, WorkflowTemplate
+from ..imagegen.store import WorkflowTemplateStore
 from ..llm_agents import (
     ControllerDefinitionStore,
     action_library_names,
@@ -559,6 +560,7 @@ def create_app(
     imagegen: ImageGenService | None = None,
     videogen: VideoGenService | None = None,
     image_backfill: ImageBackfillScheduler | None = None,
+    workflow_templates: WorkflowTemplateStore | None = None,
     character_chat: CharacterChatService | None = None,
     open_character_chat: bool = True,
     character_chat_media_tools: bool = False,
@@ -857,6 +859,11 @@ def create_app(
         if videogen is None:
             raise HTTPException(status_code=409, detail="video generation is not configured")
         return videogen
+
+    def _require_workflow_templates() -> WorkflowTemplateStore:
+        if workflow_templates is None:
+            raise HTTPException(status_code=409, detail="ComfyUI workflows are not configured")
+        return workflow_templates
 
     def _require_memory_store():
         if memory_store is None:
@@ -3629,6 +3636,36 @@ def create_app(
     async def v1_generators() -> GeneratorCollection:
         result = _list_world_generators_response()
         return GeneratorCollection(**_world_fields(), generators=result.generators)
+
+    @admin_v1.get("/media/workflows", response_model=list[WorkflowTemplate])
+    async def v1_media_workflows() -> list[WorkflowTemplate]:
+        return _require_workflow_templates().templates()
+
+    @admin_v1.get("/media/workflows/{name}", response_model=WorkflowTemplate)
+    async def v1_media_workflow(name: str) -> WorkflowTemplate:
+        template = _require_workflow_templates().get(name)
+        if template is None:
+            raise HTTPException(status_code=404, detail="media workflow does not exist")
+        return template
+
+    @admin_v1.put("/media/workflows/{name}", response_model=WorkflowTemplate)
+    async def v1_put_media_workflow(
+        name: str, body: WorkflowTemplate
+    ) -> WorkflowTemplate:
+        if body.name != name:
+            raise HTTPException(
+                status_code=400,
+                detail="media workflow name must match the request path",
+            )
+        return _require_workflow_templates().add_template(body)
+
+    @admin_v1.delete("/media/workflows/{name}", status_code=204)
+    async def v1_delete_media_workflow(name: str) -> Response:
+        templates = _require_workflow_templates()
+        if templates.get(name) is None:
+            raise HTTPException(status_code=404, detail="media workflow does not exist")
+        templates.remove_template(name)
+        return Response(status_code=204)
 
     @admin_v1.post("/world/generation-jobs", response_model=JobResource, status_code=202)
     async def v1_submit_generation_job(

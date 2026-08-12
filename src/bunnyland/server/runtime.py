@@ -18,6 +18,7 @@ from .auth import TokenStore, UserCredentialStore
 if TYPE_CHECKING:
     from ..imagegen.backfill import ImageBackfillScheduler
     from ..imagegen.service import ImageGenService
+    from ..imagegen.store import WorkflowTemplateStore
     from ..imagegen.video_service import VideoGenService
     from ..plugins.model import Plugin
     from ..worldgen import GenOptions
@@ -44,6 +45,7 @@ async def run_loop_with_api(
     imagegen: ImageGenService | None = None,
     videogen: VideoGenService | None = None,
     image_backfill: ImageBackfillScheduler | None = None,
+    workflow_templates: WorkflowTemplateStore | None = None,
     character_chat: CharacterChatService | None = None,
     open_character_chat: bool = True,
     character_chat_media_tools: bool = False,
@@ -89,6 +91,7 @@ async def run_loop_with_api(
         imagegen=imagegen,
         videogen=videogen,
         image_backfill=image_backfill,
+        workflow_templates=workflow_templates,
         character_chat=character_chat,
         open_character_chat=open_character_chat,
         character_chat_media_tools=character_chat_media_tools,

@@ -42,13 +42,12 @@ def test_sdxl_family_substitutes_prompt_and_seed():
 def test_anima_family_routes_every_purpose_through_bunnyland_lora():
     for template in default_templates("anima"):
         graph = substitute(template, prompt="a brave rabbit", seed=7)
-        expected_strength = 0.7 if template.purpose is ImagePurpose.PORTRAIT else 0.9
         assert template.prompt_model == "anima"
         assert graph["67"]["inputs"]["text"] == "a brave rabbit"
         assert graph["69"] == {
             "inputs": {
                 "lora_name": "testing/anima/bunnyland_vector_anima_v1_e20.safetensors",
-                "strength_model": expected_strength,
+                "strength_model": 0.9,
                 "model": ["68", 0],
             },
             "class_type": "LoraLoaderModelOnly",
@@ -138,6 +137,21 @@ def test_store_get_and_for_purpose_prefer_user():
     assert store.for_purpose(ImagePurpose.EVENT) is None
 
 
+def test_store_lists_effective_templates_and_removes_override():
+    default = _template("portrait")
+    override = default.model_copy(update={"description": "custom"})
+    store = WorkflowTemplateStore(defaults=[default, _template("entity", ImagePurpose.ENTITY)])
+    store.add_template(override)
+
+    assert [(item.name, item.description) for item in store.templates()] == [
+        ("entity", ""),
+        ("portrait", "custom"),
+    ]
+    assert store.remove_template("portrait") is True
+    assert store.get("portrait") is default
+    assert store.remove_template("portrait") is False
+
+
 def test_store_for_purpose_falls_back_to_default():
     default = _template("portrait")
     store = WorkflowTemplateStore(defaults=[default])
@@ -158,6 +172,9 @@ def test_store_persists_and_reloads(tmp_path):
     assert reloaded.get("custom").purpose is ImagePurpose.ENTITY
     # Defaults are not written back to the user file.
     assert reloaded.get("portrait") is not None
+
+    assert reloaded.remove_template("custom") is True
+    assert json.loads(path.read_text()) == {"templates": []}
 
 
 def test_store_load_skips_invalid_entry(tmp_path, caplog):

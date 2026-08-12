@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import types
 
@@ -116,6 +117,68 @@ async def test_generate_image_requires_admin(tmp_path):
             json={"kind": "image", "entity_id": str(scenario.character)},
         )
     assert response.status_code == 403
+
+
+async def test_admin_media_workflows_are_live_persistent_overrides(tmp_path):
+    scenario = build_scenario()
+    path = tmp_path / "workflows.json"
+    templates = WorkflowTemplateStore(path, defaults=default_templates())
+    app = create_app(
+        scenario.actor,
+        meta=WorldMeta(seed="moss"),
+        workflow_templates=templates,
+        allow_unauthenticated_embedding=True,
+    )
+
+    async with _client(app) as client:
+        listing = await client.get("/v1/admin/media/workflows", headers=ADMIN)
+        assert listing.status_code == 200
+        assert [item["name"] for item in listing.json()] == [
+            "entity",
+            "event",
+            "portrait",
+            "sprite",
+        ]
+
+        original = (
+            await client.get("/v1/admin/media/workflows/portrait", headers=ADMIN)
+        ).json()
+        override = {**original, "description": "live portrait override"}
+        mismatch = await client.put(
+            "/v1/admin/media/workflows/other",
+            headers=ADMIN,
+            json=override,
+        )
+        assert mismatch.status_code == 400
+
+        updated = await client.put(
+            "/v1/admin/media/workflows/portrait",
+            headers=ADMIN,
+            json=override,
+        )
+        assert updated.status_code == 200
+        assert templates.get("portrait").description == "live portrait override"
+        assert json.loads(path.read_text())["templates"][0]["name"] == "portrait"
+
+        reset = await client.delete("/v1/admin/media/workflows/portrait", headers=ADMIN)
+        assert reset.status_code == 204
+        assert templates.get("portrait").description == original["description"]
+        assert json.loads(path.read_text()) == {"templates": []}
+
+        missing = await client.get("/v1/admin/media/workflows/missing", headers=ADMIN)
+        assert missing.status_code == 404
+        missing_reset = await client.delete(
+            "/v1/admin/media/workflows/missing", headers=ADMIN
+        )
+        assert missing_reset.status_code == 404
+
+
+async def test_admin_media_workflows_require_comfy_configuration(tmp_path):
+    scenario = build_scenario()
+    app = _app(scenario.actor, _service(scenario.actor, tmp_path))
+    async with _client(app) as client:
+        response = await client.get("/v1/admin/media/workflows", headers=ADMIN)
+    assert response.status_code == 409
 
 
 async def test_event_image_requires_admin_scope(tmp_path):

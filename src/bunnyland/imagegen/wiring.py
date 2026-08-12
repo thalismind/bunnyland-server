@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from pydantic import JsonValue
 
@@ -54,6 +55,7 @@ class MediaGenerationServices:
     image: ImageGenService | None = None
     video: VideoGenService | None = None
     backfill: ImageBackfillScheduler | None = None
+    templates: WorkflowTemplateStore | None = None
 
 
 def select_enhancer(config: MediaGenConfig, plugins: Sequence[Plugin] = ()) -> PromptEnhancer:
@@ -142,11 +144,15 @@ def build_media_services(
     if "comfyui" in video_registry:
         raise ValueError("duplicate video generator 'comfyui'")
 
+    templates = None
     if "comfyui" in image_names or video_name == "comfyui":
         if not config.comfyui.server_url:
             raise ValueError("comfyui generation requires COMFYUI_SERVER_URL")
+        templates_path = config.comfyui.templates_path or str(
+            Path(config.media_root) / "workflows.json"
+        )
         templates = WorkflowTemplateStore(
-            config.comfyui.templates_path or None,
+            templates_path,
             defaults=default_comfy_templates(config.comfyui.workflows),
         )
         templates.load()
@@ -223,7 +229,13 @@ def build_media_services(
             media=media,
             scene_projection=scenes,
         )
-    return MediaGenerationServices(media=media, image=image, video=video, backfill=backfill)
+    return MediaGenerationServices(
+        media=media,
+        image=image,
+        video=video,
+        backfill=backfill,
+        templates=templates,
+    )
 
 
 __all__ = ["MediaGenerationServices", "build_media_services", "select_enhancer"]

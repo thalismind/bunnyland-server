@@ -163,9 +163,10 @@ BUNNYLAND_VIDEO_PROFILE=event-video
 The LTX graph is provider-specific: Bunnyland only resolves it through the ComfyUI generator.
 Selecting another provider for images does not send this graph to that provider.
 
-To override it or add another ComfyUI video graph, set `BUNNYLAND_MEDIA_TEMPLATES` to a JSON
-file. Template metadata must use `purpose: "event"` and `media: "video"`; the configured name
-must match exactly:
+To override it or add another ComfyUI video graph, use the admin workflow API or set
+`BUNNYLAND_MEDIA_TEMPLATES` to a JSON file. Without that variable, Bunnyland persists runtime
+overrides beside the media store at `<BUNNYLAND_MEDIA_DIR>/workflows.json`. Template metadata
+must use `purpose: "event"` and `media: "video"`; the configured name must match exactly:
 
 ```json
 {
@@ -199,6 +200,20 @@ BUNNYLAND_MEDIA_TEMPLATES=/data/media-workflows.json
 BUNNYLAND_VIDEO_GENERATOR=comfyui
 BUNNYLAND_VIDEO_PROFILE=event-video
 ```
+
+An operator can update a running server without restarting it. Fetch the effective template,
+edit any graph data (for example, a LoRA `strength_model`), and put the complete template back:
+
+```text
+GET    /v1/admin/media/workflows
+GET    /v1/admin/media/workflows/{name}
+PUT    /v1/admin/media/workflows/{name}
+DELETE /v1/admin/media/workflows/{name}
+```
+
+`PUT` validates the same typed workflow contract used at startup, changes the live in-memory
+template immediately, and saves the override atomically. `DELETE` removes only the override
+and reveals the shipped default again. These routes require world-admin authorization.
 
 `GET /v1/public/features` reports `image_generation` and `video_generation` independently.
 Browser clients hide each corresponding control when its flag is false. Discord only accepts
@@ -259,9 +274,10 @@ and Lightricks' [LTX-2 text-to-video system prompt](https://github.com/Lightrick
 
 Each family is a directory of JSON files shipped inside the package at
 `bunnyland/imagegen/workflows/<family>/{portrait,entity,sprite,event}.json`. The simplest
-customization is to keep a family but point it at a different checkpoint — copy the template
-you want to change, edit the model field, and load it through `BUNNYLAND_MEDIA_TEMPLATES`
-(a `{"templates": [...]}` file whose entries **shadow** the shipped defaults by `name`):
+customization is to keep a family but point it at a different checkpoint — fetch or copy the
+template you want to change, edit the model field, and `PUT` it through the admin workflow API.
+File-managed installations can instead load a `{"templates": [...]}` document through
+`BUNNYLAND_MEDIA_TEMPLATES`; entries **shadow** the shipped defaults by `name`:
 
 - **SDXL/Illustrious/Pony**: change `ckpt_name` in the `CheckpointLoaderSimple` node (`10`).
   Any SDXL-architecture checkpoint works with the same graph.

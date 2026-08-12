@@ -65,6 +65,8 @@
         "/v1/admin/memory/collections",
         "/v1/admin/memory/collections/{collection}/documents",
         "/v1/admin/memory/collections/{collection}/documents/{document_id}",
+        "/v1/admin/media/workflows",
+        "/v1/admin/media/workflows/{name}",
         "/v1/admin/world",
         "/v1/admin/world/events",
         "/v1/admin/world/generation-jobs/{job_id}",
@@ -82,6 +84,7 @@
         "/v1/admin/characters/{character_id}/controller",
         "/v1/admin/controller-definitions/{kind}/{name}",
         "/v1/admin/media/{target_kind}/{target_id}/{purpose}",
+        "/v1/admin/media/workflows/{name}",
         "/v1/admin/memory/collections/{collection}/documents/{document_id}"
       ],
       "PATCH": [
@@ -90,6 +93,7 @@
         "/v1/admin/world/runtime"
       ],
       "DELETE": [
+        "/v1/admin/media/workflows/{name}",
         "/v1/admin/memory/collections/{collection}/documents/{document_id}"
       ],
       "WEBSOCKET": ["/v1/admin/world/stream"]

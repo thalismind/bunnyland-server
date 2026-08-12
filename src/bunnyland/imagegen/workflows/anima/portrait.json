@@ -139,7 +139,7 @@
     "69": {
       "inputs": {
         "lora_name": "testing/anima/bunnyland_vector_anima_v1_e20.safetensors",
-        "strength_model": 0.7,
+        "strength_model": 0.9,
         "model": [
           "68",
           0

@@ -19,6 +19,7 @@ import sys
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from bunnyland.simpacks.lifesim.mechanics import configure_lifesim_aging
 
@@ -78,6 +79,9 @@ from .worldgen import (
     collect_generators,
     traced_generate,
 )
+
+if TYPE_CHECKING:
+    from .imagegen.store import WorkflowTemplateStore
 
 #: Ollama Cloud endpoint; the API key authenticates against it.
 OLLAMA_CLOUD_HOST = "https://ollama.com"
@@ -743,6 +747,7 @@ async def _run_serve_runtime(
     imagegen=None,
     videogen=None,
     image_backfill=None,
+    workflow_templates: WorkflowTemplateStore | None = None,
     character_chat=None,
     claim_secrets: ClaimSecretRegistry | None = None,
 ) -> int:
@@ -770,6 +775,7 @@ async def _run_serve_runtime(
         imagegen=imagegen,
         videogen=videogen,
         image_backfill=image_backfill,
+        workflow_templates=workflow_templates,
         character_chat=character_chat,
         claim_secrets=claim_secrets,
     )
@@ -799,6 +805,7 @@ async def _run_api_runtime(
     imagegen=None,
     videogen=None,
     image_backfill=None,
+    workflow_templates: WorkflowTemplateStore | None = None,
     character_chat=None,
     claim_secrets: ClaimSecretRegistry | None = None,
 ) -> int:
@@ -830,6 +837,7 @@ async def _run_api_runtime(
                 imagegen=imagegen,
                 videogen=videogen,
                 image_backfill=image_backfill,
+                workflow_templates=workflow_templates,
                 character_chat=character_chat,
                 open_character_chat=getattr(args, "open_character_chat", True),
                 character_chat_media_tools=getattr(
@@ -1009,6 +1017,7 @@ async def _serve(args) -> None:
     imagegen = media_services.image if media_services is not None else None
     videogen = media_services.video if media_services is not None else None
     image_backfill = media_services.backfill if media_services is not None else None
+    workflow_templates = media_services.templates if media_services is not None else None
     agent = _build_serve_agent(args, credentials, models)
     autosave = _make_autosave(actor, args, meta)
     builder = PromptBuilder(
@@ -1054,6 +1063,7 @@ async def _serve(args) -> None:
         imagegen=imagegen,
         videogen=videogen,
         image_backfill=image_backfill,
+        workflow_templates=workflow_templates,
         character_chat=character_chat,
         claim_secrets=claim_secrets,
     )

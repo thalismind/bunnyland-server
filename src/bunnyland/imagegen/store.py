@@ -115,6 +115,13 @@ class WorkflowTemplateStore:
         self.save()
         return template
 
+    def remove_template(self, name: str) -> bool:
+        """Remove a user override and reveal the shipped default, if one exists."""
+        removed = self._user.pop(name, None) is not None
+        if removed:
+            self.save()
+        return removed
+
     def save(self) -> None:
         """Write the user templates to disk atomically (no-op when no path is configured)."""
         if self.path is None:
@@ -142,6 +149,11 @@ class WorkflowTemplateStore:
     def snapshot(self) -> dict[str, list[str]]:
         """Names of all templates (defaults plus user) this store can resolve."""
         return {"templates": sorted({**self._defaults, **self._user})}
+
+    def templates(self) -> list[WorkflowTemplate]:
+        """Return every effective template in stable name order."""
+        effective = {**self._defaults, **self._user}
+        return [effective[name] for name in sorted(effective)]
 
 
 __all__ = [

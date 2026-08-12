@@ -597,6 +597,15 @@ def test_build_service_requires_a_named_event_video_workflow(tmp_path):
 
     assert services.image is not None
     assert services.video is not None
+    assert services.templates is not None
+    assert services.templates.path == path
+
+
+def test_build_service_defaults_workflow_data_beside_media(tmp_path):
+    services = build_media_services(build_scenario().actor, _config(tmp_path))
+
+    assert services.templates is not None
+    assert services.templates.path == tmp_path / "workflows.json"
 
 
 @pytest.mark.parametrize(
