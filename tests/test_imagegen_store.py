@@ -42,12 +42,13 @@ def test_sdxl_family_substitutes_prompt_and_seed():
 def test_anima_family_routes_every_purpose_through_bunnyland_lora():
     for template in default_templates("anima"):
         graph = substitute(template, prompt="a brave rabbit", seed=7)
+        expected_strength = 0.7 if template.purpose is ImagePurpose.PORTRAIT else 0.9
         assert template.prompt_model == "anima"
         assert graph["67"]["inputs"]["text"] == "a brave rabbit"
         assert graph["69"] == {
             "inputs": {
                 "lora_name": "testing/anima/bunnyland_vector_anima_v1_e20.safetensors",
-                "strength_model": 0.9,
+                "strength_model": expected_strength,
                 "model": ["68", 0],
             },
             "class_type": "LoraLoaderModelOnly",
