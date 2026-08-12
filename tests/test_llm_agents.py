@@ -1583,6 +1583,20 @@ async def test_ollama_agent_sends_system_prompt_and_tool_schemas(monkeypatch):
     assert "Example: wait." in by_name["wait"]["description"]
 
 
+async def test_ollama_agent_uses_configured_system_prompt(monkeypatch):
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = _FakeOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(model="llama3", system_prompt="You are player one.")
+    await agent.decide("turn one", None, character_id="hazel")
+
+    assert agent._client.calls[0][0] == {
+        "role": "system",
+        "content": "You are player one.",
+    }
+
+
 async def test_ollama_agent_sends_configured_thinking_and_temperature(monkeypatch):
     class ConfiguredOllamaClient(_FakeOllamaClient):
         def __init__(self, *args, **kwargs):
@@ -2457,6 +2471,24 @@ async def test_openrouter_agent_parses_tool_arguments_json(monkeypatch):
     assert call == ToolCall("wait", {"reason": "rest"})
     assert agent._client.kwargs == {"api_key": "key"}
     assert agent._client.chat.calls[0]["model"] == "openai/gpt-4.1-mini"
+
+
+async def test_openrouter_agent_uses_configured_system_prompt(monkeypatch):
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = _FakeOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(
+        model="openai/gpt-4.1-mini",
+        api_key="key",
+        system_prompt="You are player two.",
+    )
+    await agent.decide("turn one", None, character_id="hazel")
+
+    assert agent._client.chat.calls[0]["messages"][0] == {
+        "role": "system",
+        "content": "You are player two.",
+    }
 
 
 async def test_openrouter_agent_passes_reasoning_options_and_observes_response(

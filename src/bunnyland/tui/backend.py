@@ -1145,6 +1145,7 @@ class RemoteBackend(Backend):
         username: str = "",
         password: str = "",
         token_file: str | Path | None = None,
+        access_token: str = "",
     ) -> None:
         self.base = _validate_remote_server_url(base_url)
         self.label = f"remote · {self.base}"
@@ -1157,7 +1158,7 @@ class RemoteBackend(Backend):
         self.token_file = Path(token_file) if token_file else None
         if self.token_file is not None:
             _validate_token_file_mode(self.token_file)
-        self._access_token = ""
+        self._access_token = access_token.strip()
         self._auth_scopes: frozenset[str] = frozenset()
         self._rotate_after: int | None = None
         self._rotation_task = None
@@ -1239,7 +1240,10 @@ class RemoteBackend(Backend):
         self.supports_chat_image_requests = features.chat_image_generation
         self.supports_chat_video_requests = features.chat_video_generation
         self.supports_character_chat_media_tools = features.character_chat_media_tools
-        if self.token_file is not None and self.token_file.exists():
+        if self._access_token:
+            self._set_access_token(self._access_token)
+            await self._refresh_auth_metadata()
+        elif self.token_file is not None and self.token_file.exists():
             self._access_token = secure_read_text(self.token_file).strip()
             self._set_access_token(self._access_token)
             await self._refresh_auth_metadata()

@@ -1,0 +1,28 @@
+server_url: https://bunnyland.dev/api/v1
+shared_provider: ollama-cloud
+shared_model: deepseek-v4-flash
+turns: 60
+timeout_seconds: 600
+turn_interval_seconds: 1
+history_turns: 12
+max_concurrency: 10
+release_claims: true
+players:
+  - name: curious-player
+    character: Juniper
+    system_prompt: >-
+      You are a curious Bunnyland player. Use exactly one available structured tool per turn.
+      Learn from the visible world, ask characters for help when confused, and verify outcomes
+      through normal actions. Never invent state or describe tool calls in prose.
+    objective: Help Pip complete the Hungry Courier delivery and verify the consequence.
+    access_token_env: BUNNYLAND_PLAYER_01_TOKEN
+  - name: methodical-player
+    character: Pippa Bramble
+    provider: openrouter
+    model: openai/gpt-4.1-mini
+    system_prompt: >-
+      You are a methodical Bunnyland player. Use exactly one available structured tool per turn.
+      Inspect before acting, coordinate with other players in world, and verify every result.
+      Never invent state or describe tool calls in prose.
+    objective: Cooperate with the other players and help the courier task progress.
+    access_token_env: BUNNYLAND_PLAYER_02_TOKEN

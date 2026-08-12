@@ -918,6 +918,7 @@ class OllamaAgent:
         log_thinking: bool = False,
         reject_text_tool_calls: bool = True,
         response_filters: tuple[AssistantResponseFilter, ...] = DEFAULT_RESPONSE_FILTERS,
+        system_prompt: str = CHARACTER_SYSTEM_PROMPT,
     ) -> None:
         try:
             import ollama
@@ -950,6 +951,7 @@ class OllamaAgent:
         self._log_thinking = log_thinking
         self._reject_text_tool_calls = reject_text_tool_calls
         self._response_filters = tuple(response_filters)
+        self._system_prompt = system_prompt
         # character_id -> running provider-native user/assistant/tool message history.
         self._history: dict[str, list[dict]] = {}
         # The authoritative visible result is available in PromptContext on the next turn.
@@ -971,7 +973,7 @@ class OllamaAgent:
         if pending_tool is not None:
             history.append(_ollama_tool_result_history(pending_tool, context))
         user_message = {"role": "user", "content": prompt}
-        messages = [_character_system_message(), *history, user_message]
+        messages = [_character_system_message(self._system_prompt), *history, user_message]
         resolved_model = normalize_model(model or self._model)
         resolved_tools = tools or tool_schemas()
         request_attrs = _llm_request_attrs(
@@ -979,7 +981,7 @@ class OllamaAgent:
             resolved_model,
             messages,
             resolved_tools,
-            system_prompt=CHARACTER_SYSTEM_PROMPT,
+            system_prompt=self._system_prompt,
         )
         last_rejection: ResponseFilterRejection | None = None
         filter_context = ResponseFilterContext(
@@ -1180,6 +1182,7 @@ class OpenRouterAgent:
         log_thinking: bool = False,
         reject_text_tool_calls: bool = True,
         response_filters: tuple[AssistantResponseFilter, ...] = DEFAULT_RESPONSE_FILTERS,
+        system_prompt: str = CHARACTER_SYSTEM_PROMPT,
     ) -> None:
         try:
             from openrouter import OpenRouter
@@ -1202,6 +1205,7 @@ class OpenRouterAgent:
         self._log_thinking = log_thinking
         self._reject_text_tool_calls = reject_text_tool_calls
         self._response_filters = tuple(response_filters)
+        self._system_prompt = system_prompt
         self._history: dict[str, list[dict]] = {}
         self._pending_tool_results: dict[str, str] = {}
 
@@ -1221,7 +1225,7 @@ class OpenRouterAgent:
         if pending_tool_call_id is not None:
             history.append(_openrouter_tool_result_history(pending_tool_call_id, context))
         user_message = {"role": "user", "content": prompt}
-        messages = [_character_system_message(), *history, user_message]
+        messages = [_character_system_message(self._system_prompt), *history, user_message]
         resolved_model = normalize_model(model or self._model)
         resolved_tools = tools or tool_schemas()
         request_attrs = _llm_request_attrs(
@@ -1229,7 +1233,7 @@ class OpenRouterAgent:
             resolved_model,
             messages,
             resolved_tools,
-            system_prompt=CHARACTER_SYSTEM_PROMPT,
+            system_prompt=self._system_prompt,
         )
         last_rejection: ResponseFilterRejection | None = None
         filter_context = ResponseFilterContext(
@@ -1706,8 +1710,8 @@ def _trim_history(history: list[dict], history_turns: int) -> None:
     del history[: user_indexes[-history_turns]]
 
 
-def _character_system_message() -> dict:
-    return {"role": "system", "content": CHARACTER_SYSTEM_PROMPT}
+def _character_system_message(system_prompt: str = CHARACTER_SYSTEM_PROMPT) -> dict:
+    return {"role": "system", "content": system_prompt}
 
 
 def _llm_request_attrs(

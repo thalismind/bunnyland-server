@@ -242,3 +242,34 @@ orientation, non-admin claim/play, feature-flag disclosure, and known-issues cla
 The controlled preview additionally requires three reproducible systemic-story runs and a
 passing 40-client stream rehearsal; neither a focused green check nor later green legs can
 override a failed aggregate runner.
+
+## Concurrent LLM players
+
+Use the multiplayer harness when the players themselves should be LLM agents sharing one
+live world. Each roster entry has its own player identity, character claim, system prompt,
+provider client, bounded conversation history, and harness memory. `provider` and `model`
+may be set per player; omitted values inherit `shared_provider` and `shared_model`.
+
+Copy `examples/playtests/multiplayer-llm.yml`, expand `players` to any roster size, and keep
+credentials in environment variables named by `access_token_env` or `password_env`. The
+configuration file and result artifact must not contain bearer tokens, passwords, provider
+keys, or claim secrets. Ollama Local, Ollama Cloud, and OpenRouter are supported. Provider
+keys use the normal `OLLAMA_CLOUD_API_KEY` and `OPENROUTER_API_KEY` environment variables;
+`ollama_host` and `openrouter_server_url` optionally override their endpoints.
+
+Run an opt-in live test against Ollama Cloud first, then run the roster:
+
+```bash
+BUNNYLAND_LIVE_LLM=1 uv run --extra llm -m pytest \
+  tests/test_live_multiplayer.py -m live_llm
+scripts/run-multiplayer-llm examples/playtests/multiplayer-llm.yml \
+  --output artifacts/playtests/multiplayer-llm.json
+```
+
+For the ten-player release exercise, configure ten distinct player credentials and ten
+distinct claimable characters, set `max_concurrency: 10`, retain the 600-second per-player
+timeout, and attach the JSON artifact to the canonical release checklist. The generic
+harness reports `completed` only when supplied a scenario completion probe; its default
+run is exploratory and ends at the turn limit. Release acceptance still requires the
+Apple Crossing-specific aggregate: at least eight of ten fresh sessions complete within
+ten minutes.

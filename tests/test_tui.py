@@ -2043,6 +2043,47 @@ async def test_remote_backend_login_persistence_refresh_rotation_and_close(tmp_p
     await existing.close()
 
 
+async def test_remote_backend_starts_with_in_memory_access_token(monkeypatch):
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self): ...
+
+        def json(self):
+            return {
+                "subject": "player",
+                "scopes": ["world:play"],
+                "expires_at": 999,
+                "rotate_after": 321,
+                "rotation_eligible": True,
+            }
+
+    class Client:
+        def __init__(self):
+            self.headers = {}
+
+        async def get(self, url):
+            if url.endswith("/public/features"):
+                return SimpleNamespace(
+                    raise_for_status=lambda: None,
+                    json=lambda: {},
+                )
+            assert url.endswith("/auth/session")
+            return Response()
+
+        async def aclose(self): ...
+
+    client = Client()
+    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(AsyncClient=lambda **_kw: client))
+    backend = RemoteBackend("https://server/api", access_token="memory-token")
+
+    await backend.start()
+
+    assert backend._access_token == "memory-token"
+    assert client.headers["Authorization"] == "Bearer memory-token"
+    await backend.close()
+
+
 async def test_remote_backend_runtime_sign_in_and_auth_required_detection(monkeypatch):
     class Response:
         status_code = 200
