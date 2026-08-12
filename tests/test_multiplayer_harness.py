@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import stat
 
 import pytest
 from pydantic import JsonValue, ValidationError
 
 from bunnyland.llm_agents import InvalidAgentResponse, ToolCall
 from bunnyland.playtest.multiplayer import (
+    AdminTraceRecord,
     MultiplayerHarness,
     MultiplayerHarnessConfig,
     MultiplayerHarnessError,
+    NdjsonAdminTraceWriter,
     PlayerSpec,
     _command_payload,
     _json_arguments,
@@ -37,8 +40,15 @@ SYSTEM_PROMPT = "Use one structured tool and stay grounded in visible world stat
 
 
 class _RecordingAgent:
-    def __init__(self, decisions: tuple[ToolCall | InvalidAgentResponse | None, ...]) -> None:
+    def __init__(
+        self,
+        decisions: tuple[ToolCall | InvalidAgentResponse | None, ...],
+        request_observer=None,
+        response_observer=None,
+    ) -> None:
         self.decisions = decisions
+        self.request_observer = request_observer
+        self.response_observer = response_observer
         self.calls: list[dict[str, object]] = []
         self.closed = False
 
@@ -52,6 +62,17 @@ class _RecordingAgent:
         provider=None,
         tools=None,
     ):
+        if self.request_observer is not None:
+            self.request_observer(
+                {
+                    "provider": str(provider),
+                    "model": str(model),
+                    "messages": [{"role": "user", "content": prompt}],
+                    "tools": tools or [],
+                }
+            )
+        if self.response_observer is not None:
+            self.response_observer({"message": {"role": "assistant", "content": ""}})
         self.calls.append(
             {
                 "prompt": prompt,
@@ -283,9 +304,15 @@ async def test_harness_runs_arbitrary_players_concurrently_with_isolated_state()
         backends[player.name] = backend
         return backend
 
-    def agent_factory(player, provider, model, config):
+    def agent_factory(
+        player, provider, model, config, request_observer, response_observer
+    ):
         del provider, model, config
-        agent = _RecordingAgent((ToolCall("move", {"exit_id": "room-2"}),))
+        agent = _RecordingAgent(
+            (ToolCall("move", {"exit_id": "room-2"}),),
+            request_observer,
+            response_observer,
+        )
         agents[player.name] = agent
         return agent
 
@@ -334,9 +361,61 @@ async def test_harness_records_invalid_responses_refusals_and_turn_limit(tmp_pat
     assert result.players[0].turns[1].reason == "blocked"
     output = result.write_json(tmp_path / "result.json")
     payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["run_id"] == result.run_id
     assert payload["players"][0]["status"] == "turn_limit"
+    assert payload["players"][0]["turns"][0]["system_prompt"] == SYSTEM_PROMPT
+    assert "controlling Juniper" in payload["players"][0]["turns"][0]["prompt"]
     assert result.completed_players == 0
     assert "secret" not in output.read_text(encoding="utf-8")
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+
+
+async def test_admin_trace_attributes_exact_provider_exchange_and_flushes_ndjson(tmp_path):
+    spec = PlayerSpec(name="operator-visible", character="Juniper", system_prompt=SYSTEM_PROMPT)
+    records: list[AdminTraceRecord] = []
+    writer = NdjsonAdminTraceWriter(tmp_path / "admin.trace.ndjson")
+
+    def trace_sink(record):
+        records.append(record)
+        writer(record)
+
+    def agent_factory(
+        player, provider, model, config, request_observer, response_observer
+    ):
+        del player, provider, model, config
+        return _RecordingAgent(
+            (ToolCall("move", {"direction": "north"}),),
+            request_observer,
+            response_observer,
+        )
+
+    result = await MultiplayerHarness(
+        _config((spec,), turns=1),
+        agent_factory=agent_factory,
+        backend_factory=lambda *_args: _Backend("Juniper"),
+        admin_trace_sink=trace_sink,
+    ).run()
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.sensitive is True
+    assert record.run_id == result.run_id
+    assert record.player_name == "operator-visible"
+    assert record.character_id == "id-Juniper"
+    assert record.character_name == "Juniper"
+    assert record.turn.system_prompt == SYSTEM_PROMPT
+    assert record.turn.provider_requests[0]["messages"][0]["content"].startswith(
+        "You are player operator-visible"
+    )
+    assert record.turn.provider_responses == (
+        {"message": {"role": "assistant", "content": ""}},
+    )
+    lines = (tmp_path / "admin.trace.ndjson").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert stat.S_IMODE((tmp_path / "admin.trace.ndjson").stat().st_mode) == 0o600
+    persisted = json.loads(lines[0])
+    assert persisted["character_name"] == "Juniper"
+    assert persisted["turn"]["tool"] == "move"
 
 
 async def test_harness_records_hold_unknown_tool_and_final_completion():

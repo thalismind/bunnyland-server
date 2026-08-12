@@ -66,6 +66,23 @@ For LLM diagnosis, traces can show prompt size, recall-filter application, retri
 count, provider attempt, tool call, and validated result. Keep full prompt content capture off
 unless a controlled privacy review requires it.
 
+The concurrent LLM player harness is such a controlled admin surface. Its
+`--trace-output` NDJSON file flushes after each turn and attributes the configured system
+prompt, exact provider request/history, all response attempts, decoded tool call, and command
+result to a player and character. Monitor it while the run is active with `tail -f`:
+
+```bash
+scripts/run-multiplayer-llm examples/playtests/multiplayer-llm.yml \
+  --output artifacts/playtests/multiplayer-llm.json \
+  --trace-output artifacts/playtests/multiplayer-llm.trace.ndjson
+tail -f artifacts/playtests/multiplayer-llm.trace.ndjson
+```
+
+The result JSON and NDJSON are operator-only evidence. They contain full prompts, responses,
+and—unless `log_thinking: false` is configured—provider thinking. Keep both outside public
+logs and tickets and apply the playtest evidence retention policy. Authentication credentials
+and claim secrets are deliberately excluded.
+
 Server logs and telemetry are for internal errors. Character prompts should contain only
 conditions they can address in the world.
 

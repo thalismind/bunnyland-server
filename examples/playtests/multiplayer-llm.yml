@@ -5,6 +5,7 @@ turns: 60
 timeout_seconds: 600
 turn_interval_seconds: 1
 history_turns: 12
+log_thinking: true
 max_concurrency: 10
 release_claims: true
 players:

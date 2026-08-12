@@ -288,8 +288,27 @@ def _openrouter_response_view(response: object, message: object) -> AssistantRes
 AgentDecision = ToolCall | InvalidAgentResponse | None
 
 
+ProviderRequestObserver = Callable[[dict[str, JsonValue]], None]
 ProviderResponseObserver = Callable[[dict[str, JsonValue]], None]
 OllamaResponseObserver = ProviderResponseObserver
+
+
+def _provider_request_json(
+    provider: str,
+    model: str,
+    messages: list[dict],
+    tools: list[dict],
+    options: dict[str, object],
+) -> dict[str, JsonValue]:
+    return _JSON_OBJECT.validate_python(
+        {
+            "provider": provider,
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "options": options,
+        }
+    )
 
 
 def _ollama_response_json(
@@ -914,6 +933,7 @@ class OllamaAgent:
         max_retries: int = DEFAULT_PROVIDER_RETRIES,
         retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
         request_timeout_seconds: float | None = None,
+        request_observer: ProviderRequestObserver | None = None,
         response_observer: OllamaResponseObserver | None = None,
         log_thinking: bool = False,
         reject_text_tool_calls: bool = True,
@@ -947,6 +967,7 @@ class OllamaAgent:
         self._history_turns = history_turns
         self._max_retries = max(0, max_retries)
         self._retry_delay_seconds = max(0.0, retry_delay_seconds)
+        self._request_observer = request_observer
         self._response_observer = response_observer
         self._log_thinking = log_thinking
         self._reject_text_tool_calls = reject_text_tool_calls
@@ -992,11 +1013,13 @@ class OllamaAgent:
 
         async def request():
             nonlocal last_rejection, messages
+            options = self._request_options()
+            self._observe_request(resolved_model, messages, resolved_tools, options)
             response = await self._client.chat(
                 model=resolved_model,
                 messages=messages,
                 tools=resolved_tools,
-                **self._request_options(),
+                **options,
             )
             message = response["message"]
             self._observe_response(response)
@@ -1089,11 +1112,15 @@ class OllamaAgent:
 
         async def request():
             nonlocal request_messages
+            options = self._request_options()
+            self._observe_request(
+                resolved_model, request_messages, resolved_tools, options
+            )
             response = await self._client.chat(
                 model=resolved_model,
                 messages=request_messages,
                 tools=resolved_tools,
-                **self._request_options(),
+                **options,
             )
             self._observe_response(response)
             _record_llm_usage("ollama", resolved_model, _ollama_usage(response))
@@ -1153,6 +1180,18 @@ class OllamaAgent:
 
         await self._client.close()
 
+    def _observe_request(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[dict],
+        options: dict[str, object],
+    ) -> None:
+        if self._request_observer is not None:
+            self._request_observer(
+                _provider_request_json("ollama", model, messages, tools, options)
+            )
+
     def _observe_response(self, response: object) -> None:
         if self._response_observer is not None:
             self._response_observer(
@@ -1178,6 +1217,7 @@ class OpenRouterAgent:
         history_turns: int = 12,
         max_retries: int = DEFAULT_PROVIDER_RETRIES,
         retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
+        request_observer: ProviderRequestObserver | None = None,
         response_observer: ProviderResponseObserver | None = None,
         log_thinking: bool = False,
         reject_text_tool_calls: bool = True,
@@ -1201,6 +1241,7 @@ class OpenRouterAgent:
         self._history_turns = history_turns
         self._max_retries = max(0, max_retries)
         self._retry_delay_seconds = max(0.0, retry_delay_seconds)
+        self._request_observer = request_observer
         self._response_observer = response_observer
         self._log_thinking = log_thinking
         self._reject_text_tool_calls = reject_text_tool_calls
@@ -1244,11 +1285,13 @@ class OpenRouterAgent:
 
         async def request():
             nonlocal last_rejection, messages
+            options = self._request_options()
+            self._observe_request(resolved_model, messages, resolved_tools, options)
             response = await self._client.chat.send_async(
                 model=resolved_model,
                 messages=messages,
                 tools=resolved_tools,
-                **self._request_options(),
+                **options,
             )
             message = response.choices[0].message
             self._observe_response(response)
@@ -1356,11 +1399,15 @@ class OpenRouterAgent:
 
         async def request():
             nonlocal request_messages
+            options = self._request_options()
+            self._observe_request(
+                resolved_model, request_messages, resolved_tools, options
+            )
             response = await self._client.chat.send_async(
                 model=resolved_model,
                 messages=request_messages,
                 tools=resolved_tools,
-                **self._request_options(),
+                **options,
             )
             self._observe_response(response)
             _record_llm_usage(
@@ -1423,6 +1470,18 @@ class OpenRouterAgent:
 
         self._client.sdk_configuration.client.close()
         await self._client.sdk_configuration.async_client.aclose()
+
+    def _observe_request(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[dict],
+        options: dict[str, object],
+    ) -> None:
+        if self._request_observer is not None:
+            self._request_observer(
+                _provider_request_json("openrouter", model, messages, tools, options)
+            )
 
     def _observe_response(self, response: object) -> None:
         if self._response_observer is not None:

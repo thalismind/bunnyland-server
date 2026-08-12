@@ -1588,13 +1588,27 @@ async def test_ollama_agent_uses_configured_system_prompt(monkeypatch):
     fake_module.AsyncClient = _FakeOllamaClient
     monkeypatch.setitem(sys.modules, "ollama", fake_module)
 
-    agent = OllamaAgent(model="llama3", system_prompt="You are player one.")
+    requests: list[dict[str, JsonValue]] = []
+    agent = OllamaAgent(
+        model="llama3",
+        system_prompt="You are player one.",
+        request_observer=requests.append,
+    )
     await agent.decide("turn one", None, character_id="hazel")
 
     assert agent._client.calls[0][0] == {
         "role": "system",
         "content": "You are player one.",
     }
+    assert requests == [
+        {
+            "provider": "ollama",
+            "model": "deepseek-v4-flash",
+            "messages": agent._client.calls[0],
+            "tools": agent._client.tools[0],
+            "options": {},
+        }
+    ]
 
 
 async def test_ollama_agent_sends_configured_thinking_and_temperature(monkeypatch):
@@ -2478,16 +2492,25 @@ async def test_openrouter_agent_uses_configured_system_prompt(monkeypatch):
     fake_module.OpenRouter = _FakeOpenRouterClient
     monkeypatch.setitem(sys.modules, "openrouter", fake_module)
 
+    requests: list[dict[str, JsonValue]] = []
     agent = OpenRouterAgent(
         model="openai/gpt-4.1-mini",
         api_key="key",
         system_prompt="You are player two.",
+        request_observer=requests.append,
     )
     await agent.decide("turn one", None, character_id="hazel")
 
     assert agent._client.chat.calls[0]["messages"][0] == {
         "role": "system",
         "content": "You are player two.",
+    }
+    assert requests[0] == {
+        "provider": "openrouter",
+        "model": "openai/gpt-4.1-mini",
+        "messages": agent._client.chat.calls[0]["messages"],
+        "tools": agent._client.chat.calls[0]["tools"],
+        "options": {},
     }
 
 

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 import pytest
+from pydantic import JsonValue
 
 from bunnyland.llm_agents import OllamaAgent, ToolCall
 from bunnyland.playtest import DEFAULT_PLAYER_SYSTEM_PROMPT
@@ -64,6 +65,8 @@ async def test_live_ollama_cloud_player_agents_keep_independent_histories():
             },
         }
     ]
+    requests: list[list[dict[str, JsonValue]]] = [[], []]
+    responses: list[list[dict[str, JsonValue]]] = [[], []]
     agents = [
         OllamaAgent(
             model=model,
@@ -71,6 +74,9 @@ async def test_live_ollama_cloud_player_agents_keep_independent_histories():
             api_key=api_key,
             system_prompt=f"{DEFAULT_PLAYER_SYSTEM_PROMPT} Your test identity is player {index}.",
             max_output_tokens=256,
+            request_observer=requests[index].append,
+            response_observer=responses[index].append,
+            log_thinking=True,
         )
         for index in range(2)
     ]
@@ -89,9 +95,21 @@ async def test_live_ollama_cloud_player_agents_keep_independent_histories():
         assert all(
             isinstance(decision, ToolCall) and decision.name == "wait"
             for decision in decisions
-        )
+        ), [
+            decision.reason if not isinstance(decision, ToolCall) else decision.name
+            for decision in decisions
+        ]
         assert set(agents[0]._history) == {"player-0"}
         assert set(agents[1]._history) == {"player-1"}
+        for index in range(2):
+            assert requests[index][0]["provider"] == "ollama"
+            messages = requests[index][0]["messages"]
+            assert messages[-1]["content"].startswith(
+                f"Live multiplayer smoke for player {index}"
+            )
+            assert responses[index][0]["message"]["tool_calls"][0]["function"][
+                "name"
+            ] == "wait"
     finally:
         for agent in agents:
             await agent.close()

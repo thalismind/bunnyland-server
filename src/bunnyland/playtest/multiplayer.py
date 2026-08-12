@@ -32,6 +32,7 @@ from ..llm_agents import (
     ToolCall,
 )
 from ..prompts.builder import PromptContext
+from ..secure_files import secure_write_text
 from ..server.models import (
     CharacterProjectionResponse,
     CharacterSummaryView,
@@ -92,6 +93,7 @@ class MultiplayerHarnessConfig(BaseModel):
     timeout_seconds: float = Field(default=600.0, gt=0)
     turn_interval_seconds: float = Field(default=1.0, ge=0)
     history_turns: int = Field(default=12, ge=1)
+    log_thinking: bool = True
     max_concurrency: int | None = Field(default=None, ge=1)
     release_claims: bool = True
     ollama_host: str = ""
@@ -114,6 +116,26 @@ class PlayerTurn:
     accepted: bool
     reason: str
     latency_seconds: float
+    system_prompt: str
+    prompt: str
+    provider_requests: tuple[dict[str, JsonValue], ...]
+    provider_responses: tuple[dict[str, JsonValue], ...]
+
+
+@dataclass(frozen=True)
+class AdminTraceRecord:
+    """Sensitive, operator-only evidence for one simulated player turn."""
+
+    schema_version: int
+    sensitive: bool
+    run_id: str
+    recorded_at: str
+    player_name: str
+    character_id: str
+    character_name: str
+    provider: PlayerProvider
+    model: str
+    turn: PlayerTurn
 
 
 @dataclass(frozen=True)
@@ -131,6 +153,7 @@ class PlayerResult:
 
 @dataclass(frozen=True)
 class MultiplayerRunResult:
+    run_id: str
     started_at: str
     server_url: str
     players: tuple[PlayerResult, ...]
@@ -142,8 +165,7 @@ class MultiplayerRunResult:
 
     def write_json(self, path: str | Path) -> Path:
         output = Path(path)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+        secure_write_text(output, json.dumps(asdict(self), indent=2))
         return output
 
 
@@ -154,6 +176,8 @@ class PlayerAgentFactory(Protocol):
         provider: PlayerProvider,
         model: str,
         config: MultiplayerHarnessConfig,
+        request_observer: Callable[[dict[str, JsonValue]], None],
+        response_observer: Callable[[dict[str, JsonValue]], None],
     ) -> CharacterAgent: ...
 
 
@@ -180,6 +204,20 @@ class PlayerBackend(Protocol):
 
 
 CompletionProbe = Callable[[CharacterProjectionResponse], bool]
+AdminTraceSink = Callable[[AdminTraceRecord], None]
+
+
+class NdjsonAdminTraceWriter:
+    """Write each sensitive admin trace immediately for live ``tail -f`` monitoring."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        secure_write_text(self.path, "")
+
+    def __call__(self, record: AdminTraceRecord) -> None:
+        with self.path.open("a", encoding="utf-8") as output:
+            output.write(json.dumps(asdict(record), separators=(",", ":")))
+            output.write("\n")
 
 
 @dataclass
@@ -193,6 +231,8 @@ class _PlayerRuntime:
     character_name: str = ""
     claim: ControlClaim | None = None
     memory: dict[str, JsonValue] = field(default_factory=dict)
+    provider_requests: list[dict[str, JsonValue]] = field(default_factory=list)
+    provider_responses: list[dict[str, JsonValue]] = field(default_factory=list)
 
 
 def load_multiplayer_config(path: str | Path) -> MultiplayerHarnessConfig:
@@ -219,11 +259,14 @@ class MultiplayerHarness:
         agent_factory: PlayerAgentFactory | None = None,
         backend_factory: PlayerBackendFactory | None = None,
         completion_probe: CompletionProbe | None = None,
+        admin_trace_sink: AdminTraceSink | None = None,
     ) -> None:
         self.config = config
         self._agent_factory = agent_factory or self._build_agent
         self._backend_factory = backend_factory or self._build_backend
         self._completion_probe = completion_probe or (lambda _projection: False)
+        self._admin_trace_sink = admin_trace_sink
+        self._run_id = uuid4().hex
 
     async def run(self) -> MultiplayerRunResult:
         started_at = datetime.now(UTC).isoformat()
@@ -238,6 +281,7 @@ class MultiplayerHarness:
 
         players = await asyncio.gather(*(run_limited(runtime) for runtime in runtimes))
         return MultiplayerRunResult(
+            run_id=self._run_id,
             started_at=started_at,
             server_url=self.config.server_url,
             players=tuple(players),
@@ -248,12 +292,23 @@ class MultiplayerHarness:
         provider = player.provider or self.config.shared_provider
         model = player.model or self.config.shared_model
         client_id = f"llm-playtest-{uuid4()}"
+        requests: list[dict[str, JsonValue]] = []
+        responses: list[dict[str, JsonValue]] = []
         return _PlayerRuntime(
             spec=player,
             provider=provider,
             model=model,
             backend=self._backend_factory(player, client_id),
-            agent=self._agent_factory(player, provider, model, self.config),
+            agent=self._agent_factory(
+                player,
+                provider,
+                model,
+                self.config,
+                requests.append,
+                responses.append,
+            ),
+            provider_requests=requests,
+            provider_responses=responses,
         )
 
     def _build_backend(self, player: PlayerSpec, client_id: str) -> RemoteBackend:
@@ -276,6 +331,8 @@ class MultiplayerHarness:
         provider: PlayerProvider,
         model: str,
         config: MultiplayerHarnessConfig,
+        request_observer: Callable[[dict[str, JsonValue]], None] | None = None,
+        response_observer: Callable[[dict[str, JsonValue]], None] | None = None,
     ) -> CharacterAgent:
         if provider in {"ollama-local", "ollama-cloud"}:
             api_key = (
@@ -298,6 +355,9 @@ class MultiplayerHarness:
                 api_key=api_key,
                 history_turns=config.history_turns,
                 system_prompt=player.system_prompt,
+                request_observer=request_observer,
+                response_observer=response_observer,
+                log_thinking=config.log_thinking,
             )
         api_key = os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
@@ -310,6 +370,9 @@ class MultiplayerHarness:
             server_url=config.openrouter_server_url or None,
             history_turns=config.history_turns,
             system_prompt=player.system_prompt,
+            request_observer=request_observer,
+            response_observer=response_observer,
+            log_thinking=config.log_thinking,
         )
 
     async def _run_player(self, runtime: _PlayerRuntime) -> PlayerResult:
@@ -333,7 +396,9 @@ class MultiplayerHarness:
                     if self._completion_probe(projection):
                         status = "completed"
                         break
-                    turns.append(await self._take_turn(runtime, projection, turn))
+                    player_turn = await self._take_turn(runtime, projection, turn)
+                    turns.append(player_turn)
+                    self._emit_admin_trace(runtime, player_turn)
                     if self.config.turn_interval_seconds:
                         await asyncio.sleep(self.config.turn_interval_seconds)
                 else:
@@ -374,6 +439,26 @@ class MultiplayerHarness:
             error=error,
         )
 
+    def _emit_admin_trace(
+        self, runtime: _PlayerRuntime, player_turn: PlayerTurn
+    ) -> None:
+        if self._admin_trace_sink is None:
+            return
+        self._admin_trace_sink(
+            AdminTraceRecord(
+                schema_version=1,
+                sensitive=True,
+                run_id=self._run_id,
+                recorded_at=datetime.now(UTC).isoformat(),
+                player_name=runtime.spec.name,
+                character_id=runtime.character_id,
+                character_name=runtime.character_name,
+                provider=runtime.provider,
+                model=runtime.model,
+                turn=player_turn,
+            )
+        )
+
     async def _resolve_character(self, runtime: _PlayerRuntime) -> tuple[str, str]:
         characters = await runtime.backend.fetch_character_list()
         exact_id = next(
@@ -412,6 +497,8 @@ class MultiplayerHarness:
         prompt, context = _player_prompt(runtime, projection)
         actions = tuple(action for action in projection.actions if action.available)
         schemas = [_tool_schema(action, projection.target_groups) for action in actions]
+        runtime.provider_requests.clear()
+        runtime.provider_responses.clear()
         started = time.perf_counter()
         decision = await runtime.agent.decide(
             prompt,
@@ -422,12 +509,34 @@ class MultiplayerHarness:
             tools=schemas,
         )
         latency = time.perf_counter() - started
+        trace_fields = {
+            "system_prompt": runtime.spec.system_prompt,
+            "prompt": prompt,
+            "provider_requests": tuple(runtime.provider_requests),
+            "provider_responses": tuple(runtime.provider_responses),
+        }
         if isinstance(decision, InvalidAgentResponse):
             return PlayerTurn(
-                turn, projection.world_epoch, None, {}, False, decision.reason, latency
+                turn,
+                projection.world_epoch,
+                None,
+                {},
+                False,
+                decision.reason,
+                latency,
+                **trace_fields,
             )
         if decision is None:
-            return PlayerTurn(turn, projection.world_epoch, None, {}, False, "agent held", latency)
+            return PlayerTurn(
+                turn,
+                projection.world_epoch,
+                None,
+                {},
+                False,
+                "agent held",
+                latency,
+                **trace_fields,
+            )
         action = next((item for item in actions if item.tool_name == decision.name), None)
         if action is None:
             return PlayerTurn(
@@ -438,6 +547,7 @@ class MultiplayerHarness:
                 False,
                 "tool is not currently available",
                 latency,
+                **trace_fields,
             )
         payload = _command_payload(decision, action, projection.target_groups)
         result = await runtime.backend.submit(
@@ -465,6 +575,7 @@ class MultiplayerHarness:
             result.accepted,
             result.reason,
             latency,
+            **trace_fields,
         )
 
 

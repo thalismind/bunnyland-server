@@ -263,8 +263,30 @@ Run an opt-in live test against Ollama Cloud first, then run the roster:
 BUNNYLAND_LIVE_LLM=1 uv run --extra llm -m pytest \
   tests/test_live_multiplayer.py -m live_llm
 scripts/run-multiplayer-llm examples/playtests/multiplayer-llm.yml \
-  --output artifacts/playtests/multiplayer-llm.json
+  --output artifacts/playtests/multiplayer-llm.json \
+  --trace-output artifacts/playtests/multiplayer-llm.trace.ndjson
 ```
+
+The trace is written and flushed after every turn, so an administrator can monitor all
+players during the run with:
+
+```bash
+tail -f artifacts/playtests/multiplayer-llm.trace.ndjson
+```
+
+Each record is attributed by run, player, character id/name, provider, model, and turn. It
+contains the configured system prompt, rendered world prompt, exact provider requests
+(including retained per-character history and retry corrections), every raw provider
+response, decoded tool choice, submission result, world epoch, and decision latency. The
+final JSON also retains those prompt/response pairs under each player's turns. Thinking is
+captured by default; set `log_thinking: false` if it should be removed from provider response
+records.
+
+Both artifacts are sensitive admin evidence: prompts can contain private character context
+and raw responses can contain model reasoning. Store them with release evidence under
+operator-only access, do not publish them in tickets or player-visible logs, and delete them
+according to the playtest evidence retention policy. Credentials, access tokens, passwords,
+provider keys, and claim secrets are never added to either artifact.
 
 For the ten-player release exercise, configure ten distinct player credentials and ten
 distinct claimable characters, set `max_concurrency: 10`, retain the 600-second per-player

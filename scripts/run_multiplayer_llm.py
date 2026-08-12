@@ -8,7 +8,11 @@ import asyncio
 from collections.abc import Sequence
 from pathlib import Path
 
-from bunnyland.playtest import MultiplayerHarness, load_multiplayer_config
+from bunnyland.playtest import (
+    MultiplayerHarness,
+    NdjsonAdminTraceWriter,
+    load_multiplayer_config,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -17,12 +21,20 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("config", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--trace-output",
+        type=Path,
+        help="Sensitive live admin NDJSON (default: OUTPUT with .trace.ndjson suffix)",
+    )
     return parser
 
 
-async def _run(config_path: Path, output: Path) -> int:
+async def _run(config_path: Path, output: Path, trace_output: Path | None = None) -> int:
     config = load_multiplayer_config(config_path)
-    result = await MultiplayerHarness(config).run()
+    trace_path = trace_output or output.with_suffix(".trace.ndjson")
+    trace_writer = NdjsonAdminTraceWriter(trace_path)
+    print(f"Sensitive admin trace: {trace_path} (monitor with: tail -f {trace_path})")
+    result = await MultiplayerHarness(config, admin_trace_sink=trace_writer).run()
     result.write_json(output)
     completed = result.completed_players
     total = len(result.players)
@@ -38,7 +50,7 @@ async def _run(config_path: Path, output: Path) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    return asyncio.run(_run(args.config, args.output))
+    return asyncio.run(_run(args.config, args.output, args.trace_output))
 
 
 if __name__ == "__main__":
