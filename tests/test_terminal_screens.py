@@ -14,7 +14,6 @@ from bunnyland.server.models import (
 )
 from bunnyland.server.v1_models import CharacterProfileResource
 from bunnyland.terminal_chat import (
-    PARAGRAPH_REVEAL_DELAY_SECONDS,
     history_path,
     load_chat_preferences,
     load_history,
@@ -572,6 +571,14 @@ async def test_conversation_screen_separates_reply_paragraphs_with_visual_delay(
     screen = ConversationScreen(backend, "character:1", "Juniper")
     host = ScreenHost(screen)
     async with host.run_test() as pilot:
+        reveals: asyncio.Queue[int] = asyncio.Queue()
+        reveal_paragraph = screen._reveal_paragraph
+
+        def record_reveal(key: int, visible: int, total: int) -> None:
+            reveal_paragraph(key, visible, total)
+            reveals.put_nowait(visible)
+
+        monkeypatch.setattr(screen, "_reveal_paragraph", record_reveal)
         screen.query_one("#conversation-separate-paragraphs", Checkbox).value = True
         await screen._send("hello")
 
@@ -582,11 +589,13 @@ async def test_conversation_screen_separates_reply_paragraphs_with_visual_delay(
         saved = load_history(backend.client_id, "character:1")
         assert saved["messages"][-1] == {"role": "character", "text": reply}
 
-        await pilot.pause(PARAGRAPH_REVEAL_DELAY_SECONDS + 0.05)
+        assert await asyncio.wait_for(reveals.get(), timeout=2) == 2
+        await pilot.pause()
         assert transcript.render().plain.count("Juniper:") == 2
         assert "Second thought." in transcript.render().plain
 
-        await pilot.pause(PARAGRAPH_REVEAL_DELAY_SECONDS + 0.05)
+        assert await asyncio.wait_for(reveals.get(), timeout=2) == 3
+        await pilot.pause()
         assert transcript.render().plain.count("Juniper:") == 3
         assert "Third thought." in transcript.render().plain
 
