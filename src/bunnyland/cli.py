@@ -1050,28 +1050,32 @@ async def _serve(args) -> None:
         imagegen,
         videogen,
     )
-    ticks = await _run_serve_runtime(
-        loop,
-        actor,
-        meta,
-        args,
-        plugins,
-        discord_playtest,
-        discord_bot,
-        credentials,
-        models,
-        imagegen=imagegen,
-        videogen=videogen,
-        image_backfill=image_backfill,
-        workflow_templates=workflow_templates,
-        character_chat=character_chat,
-        claim_secrets=claim_secrets,
-    )
-    print(f"Stopped after {ticks} ticks at game epoch {actor.epoch}s.")
-
-    if args.save:
-        saved = save_world(actor, args.save, meta=meta)
-        print(f"Saved world to {args.save!r} (seed {saved.seed!r}, epoch {saved.saved_at_epoch}s).")
+    try:
+        ticks = await _run_serve_runtime(
+            loop,
+            actor,
+            meta,
+            args,
+            plugins,
+            discord_playtest,
+            discord_bot,
+            credentials,
+            models,
+            imagegen=imagegen,
+            videogen=videogen,
+            image_backfill=image_backfill,
+            workflow_templates=workflow_templates,
+            character_chat=character_chat,
+            claim_secrets=claim_secrets,
+        )
+        print(f"Stopped after {ticks} ticks at game epoch {actor.epoch}s.")
+    finally:
+        if args.save:
+            saved = save_world(actor, args.save, meta=meta)
+            print(
+                f"Saved world to {args.save!r} "
+                f"(seed {saved.seed!r}, epoch {saved.saved_at_epoch}s)."
+            )
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -46,6 +46,7 @@ class GameLoop:
         self._running = False
         self._paused = paused
         self._next_tick_at_unix: float | None = None
+        self._stop_requested = asyncio.Event()
 
     @property
     def running(self) -> bool:
@@ -99,10 +100,14 @@ class GameLoop:
         self._running = True
         ticks = 0
         try:
-            while self._running and (max_ticks is None or ticks < max_ticks):
+            while (
+                self._running
+                and not self._stop_requested.is_set()
+                and (max_ticks is None or ticks < max_ticks)
+            ):
                 if self._paused:
                     self._next_tick_at_unix = None
-                    await asyncio.sleep(self.tick_seconds)
+                    await self._wait_for_next_tick()
                     continue
                 game_delta_seconds = self.tick_seconds * self.time_scale
                 # One iteration root span ties the world tick and the dispatch turn together
@@ -127,16 +132,24 @@ class GameLoop:
                     self.autosave(ticks)
                 if max_ticks is None and self._running:
                     self._next_tick_at_unix = time.time() + self.tick_seconds
-                    await asyncio.sleep(self.tick_seconds)
+                    await self._wait_for_next_tick()
         finally:
             self._running = False
             self._next_tick_at_unix = None
+            self._stop_requested.clear()
             # Drop any in-flight agent decisions rather than leaking their tasks past the loop.
             self.dispatch.cancel_pending()
         return ticks
 
+    async def _wait_for_next_tick(self) -> None:
+        try:
+            await asyncio.wait_for(self._stop_requested.wait(), timeout=self.tick_seconds)
+        except TimeoutError:
+            pass
+
     def stop(self) -> None:
         self._running = False
+        self._stop_requested.set()
 
 
 __all__ = ["GameLoop"]

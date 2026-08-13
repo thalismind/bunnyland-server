@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import signal
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from types import FrameType
 from typing import TYPE_CHECKING
 
 from .. import telemetry
@@ -99,7 +104,14 @@ async def run_loop_with_api(
         claim_secrets=claim_secrets,
     )
     telemetry.instrument_fastapi(app)
-    server = uvicorn.Server(
+    class BunnylandServer(uvicorn.Server):
+        @contextmanager
+        def capture_signals(self) -> Iterator[None]:
+            """Leave process signals to the enclosing Bunnyland runtime."""
+
+            yield
+
+    server = BunnylandServer(
         uvicorn.Config(
             app,
             host=host,
@@ -110,28 +122,46 @@ async def run_loop_with_api(
             ws="websockets-sansio",
         )
     )
+    captures_process_signals = threading.current_thread() is threading.main_thread()
+    original_sigint_handler = signal.getsignal(signal.SIGINT) if captures_process_signals else None
+    original_sigterm_handler = (
+        signal.getsignal(signal.SIGTERM) if captures_process_signals else None
+    )
+
+    def request_shutdown(_signal: int, _frame: FrameType | None) -> None:
+        server.should_exit = True
+        loop.stop()
+
+    if captures_process_signals:
+        signal.signal(signal.SIGINT, request_shutdown)
+        signal.signal(signal.SIGTERM, request_shutdown)
     game_task = asyncio.create_task(loop.run(max_ticks=max_ticks))
     server_task = asyncio.create_task(server.serve())
+    try:
+        done, _pending = await asyncio.wait(
+            {game_task, server_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if server_task in done:
+            server_task.result()
+            loop.stop()
+            return await game_task
 
-    done, _pending = await asyncio.wait(
-        {game_task, server_task}, return_when=asyncio.FIRST_COMPLETED
-    )
-    if server_task in done:
-        server_task.result()
-        loop.stop()
-        ticks = await game_task
+        ticks = game_task.result()
+        server.should_exit = True
+        await server_task
+        return ticks
+    finally:
+        if not game_task.done():
+            loop.stop()
+        if not server_task.done():
+            server.should_exit = True
+        await asyncio.gather(game_task, server_task, return_exceptions=True)
+        if captures_process_signals:
+            signal.signal(signal.SIGINT, original_sigint_handler)
+            signal.signal(signal.SIGTERM, original_sigterm_handler)
         token_store.close()
         if owns_moderation_store:
             moderation_store.close()
-        return ticks
-
-    ticks = game_task.result()
-    server.should_exit = True
-    await server_task
-    token_store.close()
-    if owns_moderation_store:
-        moderation_store.close()
-    return ticks
 
 
 __all__ = ["run_loop_with_api"]

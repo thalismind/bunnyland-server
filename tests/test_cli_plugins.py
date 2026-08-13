@@ -929,6 +929,7 @@ def test_cli_api_runtime_error_exits(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(runtime, "run_loop_with_api", fake_run_loop_with_api)
 
+    save_path = tmp_path / "shutdown-save.json"
     with pytest.raises(SystemExit, match="server unavailable"):
         main(
             [
@@ -940,10 +941,14 @@ def test_cli_api_runtime_error_exits(monkeypatch, tmp_path):
                 "empty",
                 "--ticks",
                 "1",
+                "--save",
+                str(save_path),
                 "--claim-timeout-seconds",
                 "0",
             ]
         )
+    _actor, meta = load_world(save_path, registry=PluginRegistry(bunnyland_plugins()))
+    assert meta.generator == "empty"
 
 
 def test_cli_discord_playtest_loads_runs_and_reports(monkeypatch, tmp_path, capsys):

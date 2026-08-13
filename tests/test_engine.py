@@ -189,6 +189,23 @@ async def test_game_loop_stops_when_asked():
     assert await loop.run() == 1
 
 
+async def test_game_loop_stop_interrupts_tick_sleep():
+    actor = WorldActor()
+    builder = PromptBuilder(actor.world)
+    loop = GameLoop(
+        actor,
+        ControllerDispatch(actor, builder, ScriptedAgent([])),
+        tick_seconds=60.0,
+    )
+
+    task = asyncio.create_task(loop.run())
+    while loop.next_tick_at_unix is None:
+        await asyncio.sleep(0)
+    loop.stop()
+
+    assert await asyncio.wait_for(task, timeout=0.1) == 1
+
+
 async def test_game_loop_pause_blocks_ticks_until_resumed():
     actor = WorldActor()
     builder = PromptBuilder(actor.world)

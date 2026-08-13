@@ -14,6 +14,7 @@ import pytest
 from pydantic import BaseModel
 from relics import EntityId, World
 
+from bunnyland import persistence
 from bunnyland.core import (
     CommandCost,
     ContainmentMode,
@@ -31,8 +32,10 @@ from bunnyland.core import (
     replace_component,
     spawn_entity,
 )
-from bunnyland.core.components import IdentityComponent, MemoryProfileComponent
+from bunnyland.core.components import CharacterComponent, IdentityComponent, MemoryProfileComponent
+from bunnyland.core.controllers import LLMControllerComponent
 from bunnyland.core.ecs import contents
+from bunnyland.core.edges import ControlledBy
 from bunnyland.discord.components import DiscordRoomFeedComponent
 from bunnyland.engine import GameLoop
 from bunnyland.foundation.environment.mechanics import MoistureComponent, ShelterComponent
@@ -2428,6 +2431,35 @@ async def test_reloaded_world_keeps_playing(tmp_path):
     assert container_of(actor2.world.get_entity(hazel)) == result.rooms["tunnel"]
 
 
+def test_llm_controller_assignment_survives_save_load(tmp_path):
+    actor = WorldActor()
+    apply_plugins(bunnyland_plugins(), actor)
+    character = spawn_entity(actor.world, [CharacterComponent()])
+    controller = spawn_entity(
+        actor.world,
+        [
+            LLMControllerComponent(
+                profile_name="default",
+                model="deepseek-v4-flash",
+                provider="ollama",
+            )
+        ],
+    )
+    generation = actor.assign_controller(character.id, controller.id)
+    path = tmp_path / "llm-assignment.json"
+
+    save_world(actor, path, meta=WorldMeta(seed="llm-assignment"))
+    loaded, _meta = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+
+    loaded_controller = loaded.world.get_entity(controller.id)
+    assert loaded_controller.get_component(LLMControllerComponent) == (
+        controller.get_component(LLMControllerComponent)
+    )
+    assert loaded.world.get_entity(character.id).get_relationships(ControlledBy) == [
+        (ControlledBy(generation=generation, since_epoch=actor.epoch), controller.id)
+    ]
+
+
 async def test_offline_life_advances_reloaded_world_and_persists_changes(tmp_path):
     actor = WorldActor()
     apply_plugins(bunnyland_plugins(), actor)
@@ -3004,6 +3036,115 @@ def test_save_is_checksummed_rotated_and_restorable(tmp_path, suffix):
     path.write_text(path.read_text() + "\ncorrupt")
     with pytest.raises(ValueError, match="checksum mismatch"):
         load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+
+
+@pytest.mark.parametrize("interrupted_replace", [1, 2, 3])
+def test_interrupted_checkpoint_publication_recovers_complete_snapshot(
+    tmp_path, monkeypatch, interrupted_replace
+):
+    actor = WorldActor()
+    path = tmp_path / "world.json"
+    original = save_world(actor, path, meta=WorldMeta(seed="old"), backup_count=0)
+    real_replace = persistence.os.replace
+    replacements = 0
+
+    def interrupt_after_replace(source, destination):
+        nonlocal replacements
+        real_replace(source, destination)
+        replacements += 1
+        if replacements == interrupted_replace:
+            raise OSError("simulated power loss")
+
+    monkeypatch.setattr(persistence.os, "replace", interrupt_after_replace)
+    with pytest.raises(OSError, match="simulated power loss"):
+        save_world(
+            actor,
+            path,
+            meta=original.model_copy(update={"seed": "new"}),
+            backup_count=0,
+        )
+
+    monkeypatch.setattr(persistence.os, "replace", real_replace)
+    _loaded, recovered = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+    assert recovered.seed in {"old", "new"}
+    assert persistence._checksum(path) == (
+        persistence._checksum_path(path).read_text().split(maxsplit=1)[0]
+    )
+    assert not persistence._checkpoint_transaction_path(path).exists()
+
+
+def test_checkpoint_recovery_rejects_unverifiable_transaction(tmp_path):
+    path = tmp_path / "world.json"
+    path.write_text("partial")
+    persistence._checkpoint_transaction_path(path).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "snapshot": path.name,
+                "new_checksum": "new",
+                "old_checksum": "old",
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="checkpoint transaction cannot recover"):
+        load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+
+
+@pytest.mark.parametrize(
+    "transaction",
+    [
+        [],
+        {"version": 2},
+        {
+            "version": 1,
+            "snapshot": "wrong.json",
+            "new_checksum": "new",
+            "old_checksum": "old",
+        },
+        {
+            "version": 1,
+            "snapshot": "world.json",
+            "new_checksum": None,
+            "old_checksum": "old",
+        },
+        {
+            "version": 1,
+            "snapshot": "world.json",
+            "new_checksum": "new",
+            "old_checksum": 1,
+        },
+    ],
+)
+def test_checkpoint_recovery_rejects_invalid_transaction_shape(tmp_path, transaction):
+    path = tmp_path / "world.json"
+    persistence._checkpoint_transaction_path(path).write_text(json.dumps(transaction))
+
+    with pytest.raises(ValueError, match="invalid checkpoint transaction"):
+        load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+
+
+def test_checkpoint_recovery_can_retain_verified_old_snapshot(tmp_path):
+    actor = WorldActor()
+    path = tmp_path / "world.json"
+    save_world(actor, path, meta=WorldMeta(seed="old"), backup_count=0)
+    old_checksum = persistence._checksum(path)
+    persistence._checkpoint_temporary_path(path).write_text("incomplete new snapshot")
+    persistence._checkpoint_transaction_path(path).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "snapshot": path.name,
+                "new_checksum": "unavailable",
+                "old_checksum": old_checksum,
+            }
+        )
+    )
+
+    _loaded, recovered = load_world(path, registry=PluginRegistry(bunnyland_plugins()))
+
+    assert recovered.seed == "old"
+    assert persistence._checksum_path(path).read_text().startswith(old_checksum)
 
 
 def test_pre_checksum_schema_v2_save_remains_loadable(tmp_path):

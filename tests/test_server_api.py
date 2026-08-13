@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import signal
 import sys
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -13,6 +14,7 @@ import httpx
 import pytest
 from conftest import build_scenario
 
+import bunnyland.server.runtime as server_runtime
 import bunnyland.server.worldgen as server_worldgen
 from bunnyland.claims import (
     ClaimOwner,
@@ -3496,7 +3498,8 @@ async def test_run_loop_with_api_stops_game_when_server_finishes(
             pass
 
         async def serve(self):
-            return None
+            with self.capture_signals():
+                return None
 
     monkeypatch.setitem(
         sys.modules,
@@ -3530,6 +3533,124 @@ async def test_run_loop_with_api_stops_game_when_server_finishes(
     if moderation_store is not None:
         assert moderation_store.history() == []
         moderation_store.close()
+
+
+async def test_run_loop_with_api_owns_sigterm_and_stops_cleanly(
+    monkeypatch, scenario, tmp_path
+):
+    monkeypatch.setattr("bunnyland.server.runtime.UserCredentialStore.validate", lambda _self: None)
+    server_started = asyncio.Event()
+
+    class FakeLoop:
+        paused = False
+        running = True
+
+        def __init__(self) -> None:
+            self.stopped = False
+
+        async def run(self, *, max_ticks=None):
+            while not self.stopped:
+                await asyncio.sleep(0)
+            return 4
+
+        def stop(self):
+            self.stopped = True
+
+    class FakeServer:
+        should_exit = False
+
+        def __init__(self, _config):
+            pass
+
+        async def serve(self):
+            server_started.set()
+            while not self.should_exit:
+                await asyncio.sleep(0)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "uvicorn",
+        SimpleNamespace(Config=lambda app, **kwargs: {"app": app, **kwargs}, Server=FakeServer),
+    )
+    loop = FakeLoop()
+    original_handler = signal.getsignal(signal.SIGTERM)
+    runtime_task = asyncio.create_task(
+        run_loop_with_api(
+            loop,
+            scenario.actor,
+            WorldMeta(seed="runtime"),
+            host="127.0.0.1",
+            port=8765,
+            token_db_path=tmp_path / "tokens.sqlite3",
+        )
+    )
+    await server_started.wait()
+
+    installed_handler = signal.getsignal(signal.SIGTERM)
+    assert callable(installed_handler)
+    installed_handler(signal.SIGTERM, None)
+
+    assert await runtime_task == 4
+    assert loop.stopped is True
+    assert signal.getsignal(signal.SIGTERM) == original_handler
+
+
+async def test_run_loop_with_api_cleans_up_when_runtime_is_cancelled(
+    monkeypatch, scenario, tmp_path
+):
+    monkeypatch.setattr("bunnyland.server.runtime.UserCredentialStore.validate", lambda _self: None)
+    monkeypatch.setattr(server_runtime.threading, "current_thread", lambda: object())
+    server_started = asyncio.Event()
+
+    class FakeLoop:
+        paused = False
+        running = True
+
+        def __init__(self) -> None:
+            self.stopped = False
+
+        async def run(self, *, max_ticks=None):
+            while not self.stopped:
+                await asyncio.sleep(0)
+            return 5
+
+        def stop(self):
+            self.stopped = True
+
+    class FakeServer:
+        should_exit = False
+
+        def __init__(self, _config):
+            pass
+
+        async def serve(self):
+            server_started.set()
+            while not self.should_exit:
+                await asyncio.sleep(0)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "uvicorn",
+        SimpleNamespace(Config=lambda app, **kwargs: {"app": app, **kwargs}, Server=FakeServer),
+    )
+    loop = FakeLoop()
+    runtime_task = asyncio.create_task(
+        run_loop_with_api(
+            loop,
+            scenario.actor,
+            WorldMeta(seed="runtime"),
+            host="127.0.0.1",
+            port=8765,
+            token_db_path=tmp_path / "tokens.sqlite3",
+        )
+    )
+    await server_started.wait()
+
+    runtime_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime_task
+    assert loop.stopped is True
 
 
 def test_web_controller_claim_replaces_llm_controller_and_reuses_client(

@@ -46,6 +46,7 @@ type TupleTree = (
     None | bool | int | float | str | dict[str, JsonValue] | tuple["TupleTree", ...]
 )
 CHECKSUM_SUFFIX = ".sha256"
+CHECKPOINT_TRANSACTION_SUFFIX = ".checkpoint-transaction.json"
 DEFAULT_BACKUP_COUNT = 3
 DEFAULT_JOURNAL_RECORDS = 5000
 DEFAULT_JOURNAL_SEGMENT_RECORDS = 100
@@ -364,6 +365,7 @@ def save_world(
         telemetry.span("world.save", {**attrs, "path": str(path)}) as save_span,
     ):
         try:
+            _recover_checkpoint_transaction(path)
             memory = meta.memory.model_copy(
                 update={
                     "checkpoint_epoch": actor.epoch,
@@ -380,7 +382,7 @@ def save_world(
             )
             path.parent.mkdir(parents=True, exist_ok=True)
             snapshot = _snapshot(actor, stamped)
-            temporary = path.with_name(f".{path.name}.tmp")
+            temporary = _checkpoint_temporary_path(path)
             if resolved_format == "yaml":
                 YAMLPersistenceDriver().save_snapshot(snapshot, temporary)
             else:
@@ -388,14 +390,17 @@ def save_world(
             _fsync_file(temporary)
             checksum = _checksum(temporary)
             checksum_path = _checksum_path(path)
-            checksum_temporary = checksum_path.with_name(f".{checksum_path.name}.tmp")
+            checksum_temporary = _checkpoint_temporary_path(checksum_path)
             checksum_temporary.write_text(f"{checksum}  {path.name}\n")
             _fsync_file(checksum_temporary)
             _rotate_backups(path, backup_count)
             _rotate_backups(checksum_path, backup_count)
-            os.replace(temporary, path)
-            os.replace(checksum_temporary, checksum_path)
-            _fsync_directory(path.parent)
+            _publish_checkpoint(
+                path,
+                temporary=temporary,
+                checksum_temporary=checksum_temporary,
+                checksum=checksum,
+            )
             _actor_journal(actor, path).append(
                 "checkpoint",
                 world_epoch=actor.epoch,
@@ -678,6 +683,14 @@ def _checksum_path(path: Path) -> Path:
     return path.with_name(f"{path.name}{CHECKSUM_SUFFIX}")
 
 
+def _checkpoint_transaction_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}{CHECKPOINT_TRANSACTION_SUFFIX}")
+
+
+def _checkpoint_temporary_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}.checkpoint-new")
+
+
 def _checksum(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -711,7 +724,84 @@ def _rotate_backups(path: Path, count: int) -> None:
     shutil.copy2(path, path.with_name(f"{path.name}.bak.1"))
 
 
+def _write_checksum(path: Path, checksum: str, snapshot_name: str) -> None:
+    temporary = path.with_name(f".{path.name}.recovery-tmp")
+    temporary.write_text(f"{checksum}  {snapshot_name}\n", encoding="utf-8")
+    _fsync_file(temporary)
+    os.replace(temporary, path)
+    _fsync_directory(path.parent)
+
+
+def _publish_checkpoint(
+    path: Path,
+    *,
+    temporary: Path,
+    checksum_temporary: Path,
+    checksum: str,
+) -> None:
+    transaction_path = _checkpoint_transaction_path(path)
+    transaction_temporary = transaction_path.with_name(f".{transaction_path.name}.tmp")
+    old_checksum = _checksum(path) if path.exists() else None
+    transaction = {
+        "version": 1,
+        "snapshot": path.name,
+        "new_checksum": checksum,
+        "old_checksum": old_checksum,
+    }
+    transaction_temporary.write_text(
+        json.dumps(transaction, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    _fsync_file(transaction_temporary)
+    os.replace(transaction_temporary, transaction_path)
+    _fsync_directory(path.parent)
+
+    os.replace(temporary, path)
+    _fsync_directory(path.parent)
+    os.replace(checksum_temporary, _checksum_path(path))
+    _fsync_directory(path.parent)
+    transaction_path.unlink()
+    _fsync_directory(path.parent)
+
+
+def _recover_checkpoint_transaction(path: Path) -> None:
+    transaction_path = _checkpoint_transaction_path(path)
+    if not transaction_path.exists():
+        return
+    transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(transaction, dict)
+        or transaction.get("version") != 1
+        or transaction.get("snapshot") != path.name
+    ):
+        raise ValueError(f"invalid checkpoint transaction for {path}")
+    new_checksum = transaction.get("new_checksum")
+    old_checksum = transaction.get("old_checksum")
+    if not isinstance(new_checksum, str) or (
+        old_checksum is not None and not isinstance(old_checksum, str)
+    ):
+        raise ValueError(f"invalid checkpoint transaction for {path}")
+
+    temporary = _checkpoint_temporary_path(path)
+    if path.exists() and _checksum(path) == new_checksum:
+        _write_checksum(_checksum_path(path), new_checksum, path.name)
+    elif temporary.exists() and _checksum(temporary) == new_checksum:
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+        _write_checksum(_checksum_path(path), new_checksum, path.name)
+    elif path.exists() and old_checksum is not None and _checksum(path) == old_checksum:
+        _write_checksum(_checksum_path(path), old_checksum, path.name)
+    else:
+        raise ValueError(f"checkpoint transaction cannot recover {path}")
+
+    temporary.unlink(missing_ok=True)
+    _checkpoint_temporary_path(_checksum_path(path)).unlink(missing_ok=True)
+    transaction_path.unlink()
+    _fsync_directory(path.parent)
+
+
 def _verify_checksum(path: Path) -> None:
+    _recover_checkpoint_transaction(path)
     checksum_path = _checksum_path(path)
     if not checksum_path.exists():
         return  # Backward compatibility for schema-v2 saves made before checksums.

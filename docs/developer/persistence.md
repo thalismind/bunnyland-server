@@ -16,6 +16,11 @@ with cheap background controllers. The helper uses the normal actor tick, contro
 dispatch, command validation, and handlers; any resulting changes are persisted by the next
 `save_world(...)`.
 
+Checkpoint publication is crash-recoverable. The server fsyncs the new snapshot and checksum
+before publishing a durable transaction marker. If the process or host stops during
+publication, the next load either completes that verified new checkpoint or retains the last
+verified old checkpoint; it never accepts a mismatched or partial snapshot/checksum pair.
+
 ## Saving from the server
 
 ```bash
