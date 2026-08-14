@@ -35,7 +35,7 @@ def test_container_bases_are_immutable_debian_images() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     container_smoke = (ROOT / "scripts/container-auth-smoke").read_text()
 
-    assert "0.12.0-python3.14-trixie-slim@sha256:" in dockerfile
+    assert "0.12.4-python3.14-trixie-slim@sha256:" in dockerfile
     assert "apt-get upgrade -y" in dockerfile
     assert "alpine" not in dockerfile
     assert "musl" not in dockerfile

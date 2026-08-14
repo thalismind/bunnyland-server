@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM ghcr.io/astral-sh/uv:0.12.0-python3.14-trixie-slim@sha256:5d7d18f8d3d16b4a3e55a8a865c150dbefb8d444c5355f7071a5457fc62352e1 AS runtime
+FROM ghcr.io/astral-sh/uv:0.12.4-python3.14-trixie-slim@sha256:731ebbfbba27d676b6eff0e5f170a88aaa9e25c5d352eea370e77330bd8edbc4 AS runtime
 
 WORKDIR /app
 
