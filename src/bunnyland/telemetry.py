@@ -116,6 +116,7 @@ class _Meter(Protocol):
         name: str,
         *,
         callbacks: Sequence[Callable[[object], Iterator[object]]],
+        unit: str = "",
         description: str = "",
     ) -> object: ...
 
@@ -134,6 +135,13 @@ class WorldHealthCollector(Protocol):
     def __call__(self, actor: WorldActor) -> Mapping[tuple[str, str], int]: ...
 
 
+class DiscordGatewayClient(Protocol):
+    """The bounded Discord client surface needed by the gateway-latency gauge."""
+
+    @property
+    def latency(self) -> float: ...
+
+
 # Module-level state. ``_ENABLED`` is the single hot-path gate.
 _ENABLED = False
 _initialized = False
@@ -144,9 +152,11 @@ _gauges_actor: WorldActor | None = None
 _gauges_dispatch: ControllerDispatch | None = None
 _gauges_loop: GameLoop | None = None
 _gauges_stream: EventStream | None = None
+_gauges_discord: DiscordGatewayClient | None = None
 _world_gauges_registered = False
 _runtime_gauges_registered = False
 _stream_gauges_registered = False
+_discord_gauge_registered = False
 _world_health_actor: WorldActor | None = None
 _world_health_collector: WorldHealthCollector | None = None
 _world_health_gauge_registered = False
@@ -684,6 +694,31 @@ def register_event_stream(stream: EventStream) -> None:
     )
 
 
+def register_discord_gateway(client: DiscordGatewayClient) -> None:
+    """Expose the current Discord heartbeat acknowledgement latency."""
+    global _gauges_discord, _discord_gauge_registered
+    if not _ENABLED:
+        return
+    _gauges_discord = client
+    if _discord_gauge_registered:
+        return
+    _discord_gauge_registered = True
+    assert _meter is not None
+    _meter.create_observable_gauge(
+        "bunnyland.discord.gateway.latency",
+        callbacks=[_observe_discord_gateway_latency],
+        unit="s",
+        description="Discord gateway heartbeat-to-acknowledgement latency.",
+    )
+
+
+def unregister_discord_gateway(client: DiscordGatewayClient) -> None:
+    """Stop observing a Discord client after its gateway is closed."""
+    global _gauges_discord
+    if _gauges_discord is client:
+        _gauges_discord = None
+
+
 def _observation(value: int | float, attributes: Mapping[str, object] | None = None) -> object:
     assert _otel_metrics is not None
     return _otel_metrics.Observation(value, attributes=attributes or {})
@@ -852,6 +887,14 @@ def _observe_loop_paused(_options: object) -> Iterator[object]:
 def _observe_websocket_connections(_options: object) -> Iterator[object]:
     if _gauges_stream is not None:
         yield _observation(_gauges_stream.active_connections)
+
+
+def _observe_discord_gateway_latency(_options: object) -> Iterator[object]:
+    if _gauges_discord is None:
+        return
+    latency = _gauges_discord.latency
+    if math.isfinite(latency) and latency >= 0:
+        yield _observation(latency)
 
 
 def _observe_websocket_queue_depth(_options: object) -> Iterator[object]:
@@ -1230,8 +1273,9 @@ def instrument_fastapi(app: object) -> None:
 def reset_for_tests() -> None:
     """Reset module state so tests can re-init with injected providers."""
     global _ENABLED, _initialized, _tracer, _meter, _instruments
-    global _gauges_actor, _gauges_dispatch, _gauges_loop, _gauges_stream
+    global _gauges_actor, _gauges_dispatch, _gauges_loop, _gauges_stream, _gauges_discord
     global _world_gauges_registered, _runtime_gauges_registered, _stream_gauges_registered
+    global _discord_gauge_registered
     global _world_health_actor, _world_health_collector, _world_health_gauge_registered
     global _world_audit_enabled, _orphan_grace_seconds
     global _prometheus_server, _prometheus_thread
@@ -1247,9 +1291,11 @@ def reset_for_tests() -> None:
     _gauges_dispatch = None
     _gauges_loop = None
     _gauges_stream = None
+    _gauges_discord = None
     _world_gauges_registered = False
     _runtime_gauges_registered = False
     _stream_gauges_registered = False
+    _discord_gauge_registered = False
     _world_health_actor = None
     _world_health_collector = None
     _world_health_gauge_registered = False
@@ -1290,6 +1336,7 @@ __all__ = [
     "record_websocket_resync",
     "record_worldgen",
     "record_worldgen_request",
+    "register_discord_gateway",
     "register_event_stream",
     "register_runtime_gauges",
     "register_world_health_gauge",
@@ -1297,4 +1344,5 @@ __all__ = [
     "reset_for_tests",
     "set_span_attributes",
     "span",
+    "unregister_discord_gateway",
 ]

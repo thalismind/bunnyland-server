@@ -3344,6 +3344,14 @@ async def test_discord_bot_init_registers_commands_and_lifecycle_delegates(
     scenario,
 ):
     _discord_module, _commands_module, clients = _install_fake_discord(monkeypatch)
+    registered_gateways = []
+    unregistered_gateways = []
+    monkeypatch.setattr(
+        discord_bot.telemetry, "register_discord_gateway", registered_gateways.append
+    )
+    monkeypatch.setattr(
+        discord_bot.telemetry, "unregister_discord_gateway", unregistered_gateways.append
+    )
     pause_status = False
 
     bot = DiscordBot(
@@ -3357,6 +3365,7 @@ async def test_discord_bot_init_registers_commands_and_lifecycle_delegates(
 
     client = clients[0]
     assert bot.client is client
+    assert registered_gateways == [client]
     assert client.command_prefix == "!"
     assert client.intents.message_content is True
     assert set(client.commands) == {
@@ -3377,6 +3386,7 @@ async def test_discord_bot_init_registers_commands_and_lifecycle_delegates(
     assert client.run_tokens == ["discord-token"]
     assert client.start_tokens == ["discord-token"]
     assert client.closed is True
+    assert unregistered_gateways == [client]
 
 
 async def test_discord_registered_command_callbacks_cover_success_and_error_paths(

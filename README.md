@@ -183,7 +183,8 @@ Grafana/Tempo, Jaeger, or any OTLP backend. Distributed traces span the game tic
 dispatch → handler → LLM decision (plus auto-instrumented HTTP requests), alongside world
 metrics: entity/character/room and active-controller counts, tick cadence, command queues
 and outcomes, prompt/turn/provider latency, WebSocket health, LLM input/output token usage,
-and provider-reported LLM cost when the SDK/API exposes it. It is **off by default** —
+Discord gateway latency, and provider-reported LLM cost when the SDK/API exposes it. It is
+**off by default** —
 install the `otel` extra and set
 `BUNNYLAND_OTEL_ENABLED`:
 

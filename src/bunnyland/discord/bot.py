@@ -548,6 +548,7 @@ class DiscordBot:
         intents.message_content = True  # required to read "!" command text
         intents.reactions = True  # required to receive the 📷 image-request reaction
         self.client = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+        telemetry.register_discord_gateway(self.client)
         self._pending: dict[str, asyncio.Future[CommandExecutedEvent | CommandRejectedEvent]] = {}
         self._paused_reactions: dict[str, object] = {}
         # record entity id -> the Discord message that requested an image for it.
@@ -1602,6 +1603,7 @@ class DiscordBot:
     async def close(self) -> None:
         """Stop the Discord client when the host game loop is shutting down."""
 
+        telemetry.unregister_discord_gateway(self.client)
         self.actor.bus.unsubscribe(WorldPauseStatusChangedEvent, self._post_pause_status)
         self.actor.bus.unsubscribe(DomainEvent, self._post_room_feed_event)
         if self.imagegen is not None:

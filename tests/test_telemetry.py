@@ -1150,6 +1150,39 @@ def test_runtime_gauges_report_queue_and_loop_state(otel_capture):
     assert points["bunnyland.loop.paused"][0].value == 0
 
 
+@pytestmark_otel
+def test_discord_gateway_gauge_reports_finite_latency_and_unregisters(otel_capture):
+    _span_exporter, reader = otel_capture
+
+    class Gateway:
+        def __init__(self, latency: float) -> None:
+            self.latency = latency
+
+    first = Gateway(0.125)
+    second = Gateway(0.25)
+    telemetry.register_discord_gateway(first)
+    telemetry.register_discord_gateway(second)
+
+    points = _metric_points(reader)
+    assert points["bunnyland.discord.gateway.latency"][0].value == 0.25
+
+    telemetry.unregister_discord_gateway(first)
+    assert telemetry._gauges_discord is second
+    telemetry.unregister_discord_gateway(second)
+    assert list(telemetry._observe_discord_gateway_latency(None)) == []
+
+
+@pytest.mark.parametrize("latency", [float("nan"), float("inf"), -1.0])
+def test_discord_gateway_gauge_omits_invalid_latency(latency):
+    class Gateway:
+        def __init__(self, value: float) -> None:
+            self.latency = value
+
+    telemetry._gauges_discord = Gateway(latency)
+
+    assert list(telemetry._observe_discord_gateway_latency(None)) == []
+
+
 def test_inflight_decision_counts_bucket_unregistered_controller_kind():
     scenario = build_scenario()
     dispatch = ControllerDispatch(
@@ -1219,6 +1252,11 @@ def test_prometheus_exporter_serves_private_metrics(monkeypatch, tmp_path):
     scenario = build_scenario()
     spawn_entity(scenario.actor.world)
     telemetry.register_world_gauges(scenario.actor)
+
+    class Gateway:
+        latency = 0.25
+
+    telemetry.register_discord_gateway(Gateway())
     apply_plugin(world_health_plugin(), scenario.actor)
 
     response = httpx.get(f"http://127.0.0.1:{port}/metrics")
@@ -1226,6 +1264,13 @@ def test_prometheus_exporter_serves_private_metrics(monkeypatch, tmp_path):
     assert "bunnyland_prompt_characters" in response.text
     assert "bunnyland_world_entities_orphaned" in response.text
     assert "bunnyland_world_health_issues" in response.text
+    gateway_lines = [
+        line
+        for line in response.text.splitlines()
+        if line.startswith("bunnyland_discord_gateway_latency_seconds{")
+    ]
+    assert len(gateway_lines) == 1
+    assert gateway_lines[0].endswith("} 0.25")
     assert 'check="detached_controller"' in response.text
     assert 'controller_kind="llm"' in response.text
     assert "character.id" not in response.text

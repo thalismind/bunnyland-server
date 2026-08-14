@@ -140,6 +140,11 @@ OTEL_EXPORTER_PROMETHEUS_PORT=9464
 
 Do not add this listener to nginx or the public firewall.
 
+When Discord is enabled, `bunnyland.discord.gateway.latency` reports the current gateway
+heartbeat acknowledgement latency in seconds. The Prometheus exporter exposes it as
+`bunnyland_discord_gateway_latency_seconds`; alert on sustained latency rather than a single
+external-service spike.
+
 ## Expensive world-health metrics
 
 The optional world-health plugin walks entities, relationships, controllers, claims, and
