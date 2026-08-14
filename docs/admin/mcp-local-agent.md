@@ -58,7 +58,12 @@ credential facility:
 
 ```text
 Authorization: Bearer blt_<public-id>_<random-secret>
+X-Bunnyland-Client-Id: my-stable-mcp-client
 ```
+
+The client-ID header is required on authenticated restricted routes even when no allowlist
+is configured. Keep one stable non-empty value for the session. It is not a credential;
+only the bearer token belongs in protected secret storage.
 
 The bearer token never belongs in an MCP tool schema, prompt, argument, URL, repository
 configuration, screenshot, or log. If a client cannot protect and send an HTTP header, do not
@@ -86,8 +91,8 @@ authentication failure. A valid token whose client ID is excluded by an optional
 must also be rejected.
 
 For client-specific configuration syntax, use that client's documentation. The essential
-values are transport `streamable-http`, one of the endpoint URLs above, and the protected
-`Authorization` header.
+values are transport `streamable-http`, one of the endpoint URLs above, the protected
+`Authorization` header, and a stable `X-Bunnyland-Client-Id` header.
 
 ## Rotate and revoke
 
@@ -122,9 +127,9 @@ expiry/revocation metadata. Never move the token into tool arguments as a workar
 
 ### The client receives 403
 
-The principal is authenticated but lacks a required scope or fails a configured client-ID
-allowlist. Use `world:play` for character operation and reserve `world:admin` for privileged
-tools.
+The principal is authenticated but lacks a required scope, omitted the required stable
+`X-Bunnyland-Client-Id`, or fails a configured client-ID allowlist. Use `world:play` for
+character operation and reserve `world:admin` for privileged tools.
 
 ### Local MCP works but hosted MCP fails
 

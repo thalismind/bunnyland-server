@@ -21,8 +21,10 @@ protected header or credential configuration as `Authorization: Bearer ...`; nev
 a tool argument. Server operators can follow [Connect a local agent to Bunnyland
 MCP](../../admin/mcp-local-agent.md) to start MCP and provision the token.
 
-Use one stable `client_id` for the session. If the server enforces a client-ID allowlist, the
-same value must be configured as the `X-Bunnyland-Client-Id` request header.
+Use one stable `client_id` for the session and always configure the same non-empty value as
+the `X-Bunnyland-Client-Id` request header. The header is required even without an allowlist,
+but it is not a secret or a substitute for the bearer token. A server-side allowlist may
+additionally restrict which client IDs are accepted.
 
 ## Choose and claim a character
 

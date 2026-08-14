@@ -22,15 +22,17 @@ Configure the MCP client's HTTP transport with:
 
 ```text
 Authorization: Bearer blt_<public-id>_<random-secret>
+X-Bunnyland-Client-Id: my-stable-mcp-client
 ```
 
 `world:play` permits character claims, perceived views, normal commands, and client event
 resources. `world:admin` also permits global projections, world generation/editing, runtime
 administration, and the corresponding admin MCP tools. Admin scope implies play scope.
 
-Client-ID allowlists remain an additional policy check. Send `X-Bunnyland-Client-Id` when
-the deployment configures `BUNNYLAND_PLAYER_CLIENT_IDS` or `BUNNYLAND_ADMIN_CLIENT_IDS`, but
-do not treat that caller-supplied value as identity; the bearer token subject is identity.
+Every authenticated restricted route requires a stable, non-empty
+`X-Bunnyland-Client-Id`. It is routing/session context, not a secret or authenticated
+identity; the bearer token subject remains identity. Client-ID allowlists configured with
+`BUNNYLAND_PLAYER_CLIENT_IDS` or `BUNNYLAND_ADMIN_CLIENT_IDS` are an additional policy check.
 
 Rotate automation credentials explicitly:
 
