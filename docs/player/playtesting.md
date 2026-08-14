@@ -295,3 +295,27 @@ harness reports `completed` only when supplied a scenario completion probe; its 
 run is exploratory and ends at the turn limit. Release acceptance still requires the
 Apple Crossing-specific aggregate: at least eight of ten fresh sessions complete within
 ten minutes.
+
+To keep that exercise isolated from a soak or hosted world, prepare the checked-in local
+fixture in a fresh private directory and run a loopback server:
+
+```bash
+scripts/prepare-multiplayer-fixture --output artifacts/playtests/shared-10-fixture
+source artifacts/playtests/shared-10-fixture/players.env
+uv run --extra server --extra llm bunnyland serve \
+  --load artifacts/playtests/shared-10-fixture/world.json \
+  --save artifacts/playtests/shared-10-fixture/world.json \
+  --auth-users-file artifacts/playtests/shared-10-fixture/auth-users.yml \
+  --token-db artifacts/playtests/shared-10-fixture/auth-tokens.sqlite3 \
+  --api-host 127.0.0.1 --api-port 18769 --ticks 0 --tick-seconds 1 --time-scale 1
+scripts/run-multiplayer-llm examples/playtests/multiplayer-llm-10.yml \
+  --output artifacts/playtests/shared-10.json \
+  --trace-output artifacts/playtests/shared-10.trace.ndjson
+```
+
+The fixture refuses to overwrite an existing world or token database. Its bearer tokens
+expire after two hours by default, and its directory, token database, sourceable environment,
+manifest, result, and trace are local operator artifacts rather than files to commit.
+The checked-in ten-player scenario runs twelve turns per player (120 decisions total), which
+keeps the release exercise focused on concurrent authentication, isolation, and action handling
+rather than treating an external model provider's sustained throughput as a server gate.

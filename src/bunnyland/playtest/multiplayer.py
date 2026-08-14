@@ -264,7 +264,7 @@ class MultiplayerHarness:
         self.config = config
         self._agent_factory = agent_factory or self._build_agent
         self._backend_factory = backend_factory or self._build_backend
-        self._completion_probe = completion_probe or (lambda _projection: False)
+        self._completion_probe = completion_probe
         self._admin_trace_sink = admin_trace_sink
         self._run_id = uuid4().hex
 
@@ -393,18 +393,19 @@ class MultiplayerHarness:
                     )
                 for turn in range(1, self.config.turns + 1):
                     projection = await self._projection(runtime)
-                    if self._completion_probe(projection):
+                    if self._completion_probe is not None and self._completion_probe(projection):
                         status = "completed"
                         break
                     player_turn = await self._take_turn(runtime, projection, turn)
                     turns.append(player_turn)
                     self._emit_admin_trace(runtime, player_turn)
-                    if self.config.turn_interval_seconds:
+                    if turn < self.config.turns and self.config.turn_interval_seconds:
                         await asyncio.sleep(self.config.turn_interval_seconds)
                 else:
-                    projection = await self._projection(runtime)
-                    if self._completion_probe(projection):
-                        status = "completed"
+                    if self._completion_probe is not None:
+                        projection = await self._projection(runtime)
+                        if self._completion_probe(projection):
+                            status = "completed"
         except TimeoutError:
             status = "timeout"
             error = f"player exceeded {self.config.timeout_seconds:g}s timeout"

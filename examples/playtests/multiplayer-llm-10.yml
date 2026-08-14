@@ -1,0 +1,65 @@
+server_url: http://127.0.0.1:18769/v1
+shared_provider: ollama-cloud
+shared_model: deepseek-v4-flash
+turns: 12
+timeout_seconds: 600
+turn_interval_seconds: 1
+history_turns: 12
+log_thinking: true
+max_concurrency: 10
+release_claims: true
+players:
+  - &player
+    name: player-01
+    character: Playtester 01
+    system_prompt: &prompt >-
+      You are one independent Bunnyland player in a shared ten-player exercise. Use exactly
+      one available structured tool per turn. Coordinate through visible in-world actions,
+      verify outcomes, and never invent state or describe a tool call only in prose.
+    objective: Introduce yourself and coordinate a visible action with another player.
+    access_token_env: BUNNYLAND_PLAYER_01_TOKEN
+  - <<: *player
+    name: player-02
+    character: Playtester 02
+    system_prompt: *prompt
+    access_token_env: BUNNYLAND_PLAYER_02_TOKEN
+  - <<: *player
+    name: player-03
+    character: Playtester 03
+    system_prompt: *prompt
+    access_token_env: BUNNYLAND_PLAYER_03_TOKEN
+  - <<: *player
+    name: player-04
+    character: Playtester 04
+    system_prompt: *prompt
+    access_token_env: BUNNYLAND_PLAYER_04_TOKEN
+  - <<: *player
+    name: player-05
+    character: Playtester 05
+    system_prompt: *prompt
+    access_token_env: BUNNYLAND_PLAYER_05_TOKEN
+  - <<: *player
+    name: player-06
+    character: Playtester 06
+    system_prompt: *prompt
+    access_token_env: BUNNYLAND_PLAYER_06_TOKEN
+  - <<: *player
+    name: player-07
+    character: Playtester 07
+    system_prompt: *prompt
+    access_token_env: BUNNYLAND_PLAYER_07_TOKEN
+  - <<: *player
+    name: player-08
+    character: Playtester 08
+    system_prompt: *prompt
+    access_token_env: BUNNYLAND_PLAYER_08_TOKEN
+  - <<: *player
+    name: player-09
+    character: Playtester 09
+    system_prompt: *prompt
+    access_token_env: BUNNYLAND_PLAYER_09_TOKEN
+  - <<: *player
+    name: player-10
+    character: Playtester 10
+    system_prompt: *prompt
+    access_token_env: BUNNYLAND_PLAYER_10_TOKEN

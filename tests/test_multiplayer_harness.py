@@ -366,6 +366,7 @@ async def test_harness_records_invalid_responses_refusals_and_turn_limit(tmp_pat
     assert payload["players"][0]["turns"][0]["system_prompt"] == SYSTEM_PROMPT
     assert "controlling Juniper" in payload["players"][0]["turns"][0]["prompt"]
     assert result.completed_players == 0
+    assert backend.projection_calls == 2
     assert "secret" not in output.read_text(encoding="utf-8")
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
 
@@ -438,6 +439,20 @@ async def test_harness_records_hold_unknown_tool_and_final_completion():
     assert backend.submissions == []
 
 
+async def test_harness_keeps_turn_limit_when_final_completion_probe_is_false():
+    spec = PlayerSpec(name="one", character="Juniper", system_prompt=SYSTEM_PROMPT)
+    backend = _Backend("Juniper")
+    result = await MultiplayerHarness(
+        _config((spec,)),
+        agent_factory=lambda *_args: _RecordingAgent((None,)),
+        backend_factory=lambda *_args: backend,
+        completion_probe=lambda _projection: False,
+    ).run()
+
+    assert result.players[0].status == "turn_limit"
+    assert backend.projection_calls == 3
+
+
 async def test_harness_reports_timeout_missing_character_and_projection():
     spec = PlayerSpec(name="one", character="Juniper", system_prompt=SYSTEM_PROMPT)
 
@@ -499,7 +514,7 @@ async def test_harness_ignores_cleanup_errors():
     assert result.players[0].status == "turn_limit"
 
 
-async def test_harness_honors_turn_interval_and_agent_without_close(monkeypatch):
+async def test_harness_sleeps_only_between_turns_and_allows_agent_without_close(monkeypatch):
     class _HoldAgent:
         async def decide(self, *_args, **_kwargs):
             return None
@@ -512,7 +527,7 @@ async def test_harness_honors_turn_interval_and_agent_without_close(monkeypatch)
     monkeypatch.setattr(asyncio, "sleep", record_sleep)
     spec = PlayerSpec(name="one", character="Juniper", system_prompt=SYSTEM_PROMPT)
     result = await MultiplayerHarness(
-        _config((spec,), turns=1, turn_interval_seconds=0.25),
+        _config((spec,), turns=2, turn_interval_seconds=0.25),
         agent_factory=lambda *_args: _HoldAgent(),
         backend_factory=lambda *_args: _Backend("Juniper"),
     ).run()

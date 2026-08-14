@@ -78,6 +78,12 @@ scripts/run-multiplayer-llm examples/playtests/multiplayer-llm.yml \
 tail -f artifacts/playtests/multiplayer-llm.trace.ndjson
 ```
 
+For the release-scale ten-player exercise, use
+`scripts/prepare-multiplayer-fixture --output artifacts/playtests/shared-10-fixture` and
+`examples/playtests/multiplayer-llm-10.yml`. The generated world and short-lived player
+tokens are intended for a loopback server only; do not target the hosted soak or commit the
+fixture directory and sensitive trace.
+
 The result JSON and NDJSON are operator-only evidence. They contain full prompts, responses,
 and—unless `log_thinking: false` is configured—provider thinking. Keep both outside public
 logs and tickets and apply the playtest evidence retention policy. Authentication credentials
