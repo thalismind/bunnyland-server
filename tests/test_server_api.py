@@ -1620,8 +1620,9 @@ def test_target_groups_separate_perceived_characters_from_room_items(scenario):
     assert "rock" in [target["label"] for target in groups["roomItems"]]
 
 
-def test_target_groups_scope_conversations_to_participants_and_current_turn(scenario):
+async def test_target_groups_scope_conversations_to_participants_and_current_turn(scenario):
     world = scenario.actor.world
+    await scenario.actor.tick(2)
     participant = spawn_entity(
         world, [CharacterComponent(), IdentityComponent(name="Hazel", kind="character")]
     )
@@ -1640,6 +1641,10 @@ def test_target_groups_scope_conversations_to_participants_and_current_turn(scen
     )
     conversation.add_relationship(ConversationParticipant(order=0), scenario.character)
     conversation.add_relationship(ConversationParticipant(order=1), participant.id)
+    ended = spawn_entity(world, [ConversationComponent(ended=True, ended_reason="resolved")])
+    ended.add_relationship(ConversationParticipant(order=0), scenario.character)
+    expired = spawn_entity(world, [ConversationComponent(expires_at_epoch=1)])
+    expired.add_relationship(ConversationParticipant(order=0), scenario.character)
 
     player_groups = serialize_character_projection(
         scenario.actor, str(scenario.character)

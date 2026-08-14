@@ -771,6 +771,21 @@ def test_start_conversation_allows_replacement_after_explicit_timeout():
     assert replacement.ok is True
 
 
+def test_start_conversation_ignores_ended_and_unrelated_conversations():
+    scenario = speech_scenario()
+    listener = add_listener(scenario, scenario.room_a)
+    ended = spawn_entity(
+        scenario.actor.world,
+        [ConversationComponent(ended=True, ended_reason="resolved")],
+    )
+    ended.add_relationship(ConversationParticipant(order=0), scenario.character)
+    spawn_entity(scenario.actor.world, [ConversationComponent()])
+
+    replacement = execute_start_conversation(scenario, [listener])
+
+    assert replacement.ok is True
+
+
 def test_conversation_line_rejects_bad_speaker_wrong_kind_empty_and_detached():
     scenario = speech_scenario()
     listener = add_listener(scenario, scenario.room_a)

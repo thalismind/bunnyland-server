@@ -174,10 +174,15 @@ def test_conversation_arguments_use_participant_scoped_target_groups():
         command_type="end-conversation",
         arguments={"conversation_id": ActionArgument(kind="entity", required=True)},
     )
+    unrelated = _definition(
+        command_type="inspect",
+        arguments={"conversation_id": ActionArgument(kind="entity", required=True)},
+    )
 
     assert target_group_for_argument(start, "target_ids") == "characters"
     assert target_group_for_argument(line, "conversation_id") == "conversationTurns"
     assert target_group_for_argument(end, "conversation_id") == "activeConversations"
+    assert target_group_for_argument(unrelated, "conversation_id") == "reachable"
 
 
 def test_requirement_met_via_character_component():
