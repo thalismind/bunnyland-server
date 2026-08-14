@@ -6,13 +6,15 @@ cd "$repo_dir"
 
 coverage_artifact_dir="${BUNNYLAND_COVERAGE_ARTIFACT_DIR:-artifacts/coverage}"
 coverage_junit="$coverage_artifact_dir/pytest.xml"
+coverage_reports=(
+  --cov-report=term-missing:skip-covered
+  --cov-report=xml
+)
 mkdir -p "$coverage_artifact_dir"
 
 uv run --all-extras -m pytest \
   --cov=bunnyland \
-  --cov-report=term-missing \
-  --cov-report=html \
-  --cov-report=xml \
+  "${coverage_reports[@]}" \
   --junit-xml="$coverage_junit" \
   "$@"
 

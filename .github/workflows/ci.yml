@@ -110,7 +110,7 @@ jobs:
       - name: Test with coverage
         env:
           BUNNYLAND_PLAYTEST_TRACE_DIR: artifacts/playtests
-        run: scripts/test-coverage
+        run: scripts/test-all
 
       - name: Check bounded world operations across CI-sized worlds
         if: matrix.python-version == '3.12'
@@ -136,7 +136,6 @@ jobs:
           path: |
             artifacts/coverage/pytest.xml
             coverage.xml
-            htmlcov
           if-no-files-found: error
 
       - name: Upload performance smoke report

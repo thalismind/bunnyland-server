@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ordering_args=(
+  --random-order
+  --random-order-bucket=global
+)
+if [[ -n "${BUNNYLAND_TEST_SEED:-}" ]]; then
+  ordering_args+=(--random-order-seed="$BUNNYLAND_TEST_SEED")
+fi
+
+exec "$repo_dir/scripts/test-coverage" \
+  "${ordering_args[@]}" \
+  "$@"

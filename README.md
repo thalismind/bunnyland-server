@@ -403,8 +403,10 @@ scripts/test-all
 uv run ruff check src tests
 ```
 
-Use `scripts/test-all` for the default test run. It delegates to `scripts/test-coverage`,
-which runs `uv run -m pytest` with coverage. Use module-form pytest instead of
+Use `scripts/test-all` for the default test run. It runs the complete required suite in
+parallel with branch coverage. Slower `scripts/test-ordering` and
+`scripts/test-isolation` modes diagnose order dependencies and process-state leakage; see
+`docs/developer/testing.md` for options and reproducible seeds. Use module-form pytest instead of
 `uv run pytest`; with some `uv` environments the console entrypoint can run without the
 same import path as the module form, which shows up as missing installed dependencies such
 as `relics`.

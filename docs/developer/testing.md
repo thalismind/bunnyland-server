@@ -26,10 +26,34 @@ Direct handler calls only validate and return a `MutationPlan`. Tests must execu
 plan explicitly and realize its event factories before asserting committed ECS state or
 post-commit events; `HandlerContext` never applies a plan as a side effect.
 
-Run focused tests with module-form pytest:
+## Development commands
+
+Always invoke pytest through Python's module form. `uv run pytest` can resolve the pytest
+console entry point outside the project environment and then fail to import installed
+dependencies such as `relics`.
+
+Run a focused file, test, or expression without the full-suite coverage threshold:
 
 ```bash
 uv run -m pytest tests/test_barbariansim.py
+uv run -m pytest tests/test_barbariansim.py::test_specific_behavior
+uv run -m pytest tests/test_barbariansim.py -k rejection
+```
+
+Add `--all-extras` when the selected tests exercise optional server integrations:
+
+```bash
+uv run --all-extras -m pytest tests/test_mcp.py
+uv run --all-extras -m pytest tests/test_discord.py
+uv run --all-extras -m pytest tests/test_telemetry.py -m otel
+```
+
+Do not use `scripts/test-coverage` for an ordinary focused run: the project-wide 100%
+threshold correctly fails when only part of the source is exercised. Use it for a complete
+serial coverage run when comparing parallel behavior:
+
+```bash
+scripts/test-coverage
 ```
 
 Run the default verification gate before handing off a change:
@@ -39,6 +63,75 @@ scripts/test-all
 uv run ruff check src tests
 git diff --check
 ```
+
+`scripts/test-all` is the fast commit and CI gate. It runs the complete required suite
+with 100% branch coverage across four worker processes, distributing whole test files so
+tests in one module stay together. Set `BUNNYLAND_TEST_WORKERS` to tune the worker count.
+The gate writes terminal and XML coverage plus a JUnit report. CI summarizes the XML and
+JUnit data directly rather than generating a redundant HTML coverage tree.
+
+Equivalent direct pytest commands are useful when debugging the runners themselves:
+
+```bash
+# What scripts/test-all runs, before coverage/report and required-suite checks.
+uv run --all-extras -m pytest -n 4 --dist=loadfile
+
+# Tune parallelism without changing the committed default.
+BUNNYLAND_TEST_WORKERS=2 scripts/test-all
+BUNNYLAND_TEST_WORKERS=8 scripts/test-all
+```
+
+For small focused selections, use direct module-form pytest without `-n`: importing the
+suite in four workers costs more than it saves. Parallelism is intended for the complete
+gate and large test selections.
+
+Use the slower diagnostic modes periodically and when investigating state leakage:
+
+```bash
+# Randomized, sequential order; copy the reported seed to reproduce a failure.
+scripts/test-ordering
+BUNNYLAND_TEST_SEED=123456 scripts/test-ordering
+
+# Run every test in its own forked subprocess.
+scripts/test-isolation
+```
+
+The ordering mode exposes accidental dependencies on prior tests. The isolation mode
+distinguishes those dependencies from failures intrinsic to a test, at the cost of a new
+process per test. Ordering retains the same coverage threshold and required E2E/playtest
+skip checks as the fast gate. Isolation is deliberately a no-coverage diagnostic because
+`pytest-cov` cannot merge execution data from `pytest-forked` children; use the fast gate
+for the authoritative coverage result.
+
+Their direct pytest equivalents, without the coverage/report wrapper, are:
+
+```bash
+uv run --all-extras -m pytest --random-order --random-order-bucket=global
+uv run --all-extras -m pytest --random-order --random-order-seed=123456
+uv run --all-extras -m pytest --forked --capture=no
+```
+
+The random-order plugin prints the chosen seed at session start. Preserve that seed in a
+failure report and reproduce it with `BUNNYLAND_TEST_SEED` or
+`--random-order-seed`. Run ordering sequentially: combining global randomization with
+xdist makes the execution order scheduler-dependent and therefore harder to reproduce.
+The isolation mode disables pytest capture because `pytest-forked` otherwise leaves its
+capture handles to finalization in each child, producing plugin-owned `ResourceWarning`s;
+test failures still stream directly to the terminal.
+
+## What each gate proves
+
+| Command | Distribution | Coverage | Primary purpose |
+| --- | --- | --- | --- |
+| `uv run -m pytest PATH` | sequential | no | Fast focused development feedback |
+| `scripts/test-all` | four workers, whole files | 100% branch | Commit and CI gate |
+| `scripts/test-coverage` | sequential | 100% branch | Compare with parallel failures |
+| `scripts/test-ordering` | sequential, globally randomized | 100% branch | Find order-dependent state leakage |
+| `scripts/test-isolation` | one subprocess per test | no | Confirm process-state isolation |
+
+The fast and ordering coverage gates reject skipped E2E or Discord playtest cases. Optional
+live-service tests remain skipped unless explicitly enabled; those skips do not weaken the
+local deterministic gate.
 
 Unexpected warnings fail the test suite. The narrow third-party allowlist covers:
 

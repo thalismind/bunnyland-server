@@ -1604,10 +1604,20 @@ async def test_mcp_save_world_admin_traces_status(otel_capture, monkeypatch, tmp
 
     fastmcp_module = types.ModuleType("mcp.server.fastmcp")
     exceptions_module = types.ModuleType("mcp.server.fastmcp.exceptions")
+    transport_security_module = types.ModuleType("mcp.server.transport_security")
+
+    class FakeTransportSecuritySettings:
+        def __init__(self, **settings: object) -> None:
+            self.__dict__.update(settings)
+
     fastmcp_module.FastMCP = FakeFastMCP
     exceptions_module.ToolError = RuntimeError
+    transport_security_module.TransportSecuritySettings = FakeTransportSecuritySettings
     monkeypatch.setitem(sys.modules, "mcp", types.ModuleType("mcp"))
     monkeypatch.setitem(sys.modules, "mcp.server", types.ModuleType("mcp.server"))
+    monkeypatch.setitem(
+        sys.modules, "mcp.server.transport_security", transport_security_module
+    )
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
     monkeypatch.setitem(sys.modules, "mcp.server.fastmcp.exceptions", exceptions_module)
 

@@ -208,10 +208,14 @@ uv run ruff check src tests
 git diff --check
 ```
 
-`scripts/test-all` delegates to `scripts/test-coverage`, runs `uv run -m pytest` with
-branch coverage, writes coverage artifacts, and enforces the project coverage threshold
-from `pyproject.toml` (`fail_under = 100`). It also fails if e2e or Discord playtest tests
-are skipped.
+`scripts/test-all` delegates to `scripts/test-fast`, which runs the complete suite through
+`scripts/test-coverage` with four xdist workers, whole-file distribution, branch coverage,
+and the project threshold from `pyproject.toml` (`fail_under = 100`). It writes XML
+coverage and JUnit artifacts and fails if e2e or Discord playtest tests are skipped. Use
+`scripts/test-coverage` for the slower sequential comparison,
+`scripts/test-ordering` for reproducible randomized ordering, and
+`scripts/test-isolation` for a no-coverage run with one forked subprocess per test. The
+exact development calls and tradeoffs are documented in `docs/developer/testing.md`.
 
 Do not run `uv sync` unless the user explicitly asks for dependency syncing.
 
