@@ -1092,6 +1092,10 @@ conversation-line
 end-conversation
 ```
 
+Focused conversations allow one active thread per participant. They end explicitly by
+default; callers may request a positive world-time timeout, and terminal conversation
+entities are removed by the indexed core-verbs lifecycle consequence.
+
 Speech intent can be:
 
 ```text

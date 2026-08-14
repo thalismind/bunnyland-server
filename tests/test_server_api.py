@@ -36,6 +36,8 @@ from bunnyland.core import (
     ContainmentMode,
     Contains,
     ControlledBy,
+    ConversationComponent,
+    ConversationParticipant,
     DescriptionComponent,
     DiscordControllerComponent,
     DoorComponent,
@@ -1616,6 +1618,51 @@ def test_target_groups_separate_perceived_characters_from_room_items(scenario):
     assert "Bramble" in [target["label"] for target in groups["characters"]]
     assert "Bramble" not in [target["label"] for target in groups["roomItems"]]
     assert "rock" in [target["label"] for target in groups["roomItems"]]
+
+
+def test_target_groups_scope_conversations_to_participants_and_current_turn(scenario):
+    world = scenario.actor.world
+    participant = spawn_entity(
+        world, [CharacterComponent(), IdentityComponent(name="Hazel", kind="character")]
+    )
+    outsider = spawn_entity(
+        world, [CharacterComponent(), IdentityComponent(name="Clover", kind="character")]
+    )
+    room = world.get_entity(scenario.room_a)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), participant.id)
+    room.add_relationship(Contains(mode=ContainmentMode.ROOM_CONTENT), outsider.id)
+    conversation = spawn_entity(
+        world,
+        [
+            IdentityComponent(name="watch plans", kind="conversation"),
+            ConversationComponent(topic="watch plans"),
+        ],
+    )
+    conversation.add_relationship(ConversationParticipant(order=0), scenario.character)
+    conversation.add_relationship(ConversationParticipant(order=1), participant.id)
+
+    player_groups = serialize_character_projection(
+        scenario.actor, str(scenario.character)
+    ).model_dump(mode="json")["target_groups"]
+    participant_groups = serialize_character_projection(
+        scenario.actor, str(participant.id)
+    ).model_dump(mode="json")["target_groups"]
+    outsider_groups = serialize_character_projection(
+        scenario.actor, str(outsider.id)
+    ).model_dump(mode="json")["target_groups"]
+
+    assert [target["id"] for target in player_groups["activeConversations"]] == [
+        str(conversation.id)
+    ]
+    assert [target["id"] for target in player_groups["conversationTurns"]] == [
+        str(conversation.id)
+    ]
+    assert [target["id"] for target in participant_groups["activeConversations"]] == [
+        str(conversation.id)
+    ]
+    assert participant_groups["conversationTurns"] == []
+    assert outsider_groups["activeConversations"] == []
+    assert outsider_groups["conversationTurns"] == []
 
 
 def test_target_groups_separate_living_held_items_from_takeable_body_contents(scenario):

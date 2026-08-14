@@ -373,6 +373,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ),
         lane=Lane.FOCUS,
         cost=FOCUS_COST,
+        required=("target_ids",),
         patterns=("start conversation with {target_ids}",),
     ),
     define_action(
@@ -385,6 +386,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ),
         lane=Lane.FOCUS,
         cost=FOCUS_COST,
+        required=("conversation_id", "text"),
     ),
     define_action(
         "end-conversation",
@@ -396,6 +398,7 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ),
         lane=Lane.FOCUS,
         cost=FOCUS_COST,
+        required=("conversation_id",),
     ),
 )
 

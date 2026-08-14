@@ -44,7 +44,7 @@ listener may be pointedly silent after your last remark. These cues are projecti
 world state and recent events, not new state invented by narration.
 
 For immediate turn-taking, use a conversation thread. The first command creates a
-conversation entity with participants, timeout, and whose turn it is; each
+conversation entity with participants and whose turn it is; each
 `conversation-line` advances the turn and also emits ordinary speech for social systems:
 
 ```text
@@ -52,6 +52,11 @@ conversation entity with participants, timeout, and whose turn it is; each
 !conversation-line conversation_id=entity_12 text="Please check the east tunnel."
 !end-conversation conversation_id=entity_12 reason=resolved
 ```
+
+Each character can participate in one active thread. Threads normally remain active until
+a participant ends them; an optional positive `timeout_seconds` ends one in world time.
+The character view supplies active conversation ids and restricts line-taking to the
+participant whose turn it is.
 
 When memory is enabled, conversation lines are also stored as private memories for
 profiled participants. Later `remember` searches and prompt recall can surface who spoke,

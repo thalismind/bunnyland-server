@@ -8,6 +8,7 @@ from ...core.components import (
     RoomGateComponent,
     WearableComponent,
 )
+from ...core.consequences import ConversationConsequence
 from ...core.edges import AllowsMembersOf, ConversationParticipant, KnowsRoom, StudiedBy
 from ...core.events import (
     CharacterWokeEvent,
@@ -69,6 +70,10 @@ from ...plugins.model import (
     RuntimeContribution,
 )
 from .actions import ACTION_DEFINITIONS
+
+
+def _install_conversation_lifecycle(actor, _context=None) -> None:
+    actor.register_consequence(ConversationConsequence())
 
 
 def _definition() -> Plugin:
@@ -138,7 +143,7 @@ def _definition() -> Plugin:
             ),
         ),
         runtime=RuntimeContribution(
-            integration_factories=(install_recovery,),
+            integration_factories=(_install_conversation_lifecycle, install_recovery),
             perspective_queries=V1_PERSPECTIVE_QUERIES,
         ),
         content=ContentContribution(prompt_fragments=(recovery_fragments,)),

@@ -136,4 +136,7 @@ characters, add lines in turn, then end it:
 ```
 
 Conversation lines are structured speech events with explicit participants, turn order,
-intent, approach, and timeout state.
+intent, and approach. A character can join only one active conversation at a time. By
+default the participants end it explicitly; `timeout_seconds` may be supplied when a
+world-time timeout is useful. Character views list the active conversation ids and expose
+only the conversation whose turn the character can currently take.

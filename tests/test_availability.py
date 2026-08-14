@@ -161,6 +161,25 @@ def test_pickpocket_uses_visible_held_items_instead_of_take_targets():
     assert target_group_for_argument(definition, "item_id") == "heldItems"
 
 
+def test_conversation_arguments_use_participant_scoped_target_groups():
+    start = _definition(
+        command_type="start-conversation",
+        arguments={"target_ids": ActionArgument(kind="entity", required=True)},
+    )
+    line = _definition(
+        command_type="conversation-line",
+        arguments={"conversation_id": ActionArgument(kind="entity", required=True)},
+    )
+    end = _definition(
+        command_type="end-conversation",
+        arguments={"conversation_id": ActionArgument(kind="entity", required=True)},
+    )
+
+    assert target_group_for_argument(start, "target_ids") == "characters"
+    assert target_group_for_argument(line, "conversation_id") == "conversationTurns"
+    assert target_group_for_argument(end, "conversation_id") == "activeConversations"
+
+
 def test_requirement_met_via_character_component():
     scenario = build_scenario()
     character = _character(scenario)

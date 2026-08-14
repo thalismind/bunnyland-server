@@ -6,9 +6,9 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import is_dataclass
 from enum import Enum
-from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue, TypeAdapter
+from relics import Entity
 
 from bunnyland.foundation.consumables.components import DrinkableComponent, FoodComponent
 from bunnyland.foundation.meters.mechanics import band as meter_band
@@ -69,6 +69,7 @@ from ..core.components import (
     BodyPlanComponent,
     CharacterComponent,
     ContainerComponent,
+    ConversationComponent,
     DeadComponent,
     DescriptionComponent,
     DoorComponent,
@@ -104,6 +105,7 @@ from ..core.ecs import container_of, contents, entity_name, parse_entity_id
 from ..core.edges import (
     Contains,
     ControlledBy,
+    ConversationParticipant,
     ExitTo,
     HasInjury,
     HasThought,
@@ -112,9 +114,10 @@ from ..core.edges import (
     Wearing,
 )
 from ..core.events import DomainEvent
-from ..core.world_actor import WorldActor
+from ..core.world_actor import PromptFragmentProvider, WorldActor
 from ..imagegen.components import PortraitImageComponent
 from ..persistence import WorldMeta
+from ..plugins.registry import PluginRegistry
 from ..projections import PerceivedEntity, build_room_facts, perceive
 from ..prompts.facts import DETAILED_DETAIL_CUTOFF, collect_prompt_facts
 from .action_search import smart_action_search
@@ -153,14 +156,16 @@ from .models import (
     WorldOverviewRoomView,
 )
 
+_JSON_VALUE = TypeAdapter(JsonValue)
 
-def jsonable(value: Any) -> Any:
+
+def jsonable(value: object) -> JsonValue:
     """Recursively convert known value objects into JSON-native structures."""
 
     if isinstance(value, Enum):
-        return value.value
+        return _JSON_VALUE.validate_python(value.value)
     if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
+        return _JSON_VALUE.validate_python(value.model_dump(mode="json"))
     if is_dataclass(value) and not isinstance(value, type):
         fields = getattr(value, "__pydantic_fields__", None) or getattr(
             value, "__dataclass_fields__", {}
@@ -170,21 +175,21 @@ def jsonable(value: Any) -> Any:
         return {str(key): jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
         return [jsonable(item) for item in value]
-    return value
+    return _JSON_VALUE.validate_python(value)
 
 
-def _sorted_entities(actor: WorldActor) -> Iterable:
+def _sorted_entities(actor: WorldActor) -> Iterable[Entity]:
     return sorted(actor.world.query().execute_entities(), key=lambda entity: str(entity.id))
 
 
-def serialize_entity(actor: WorldActor, entity) -> dict[str, Any]:
+def serialize_entity(actor: WorldActor, entity) -> dict[str, JsonValue]:
     """Return a client-facing snapshot of one ECS entity."""
 
     exported = actor.world.export_entity(entity.id)
     identity = (
         entity.get_component(IdentityComponent) if entity.has_component(IdentityComponent) else None
     )
-    relationships: dict[str, list[dict[str, Any]]] = {}
+    relationships: dict[str, list[dict[str, JsonValue]]] = {}
     for edge_name, edges in exported.get("relationships", {}).items():
         relationships[edge_name] = [
             {"target_id": str(edge["target"]), "edge": jsonable(edge["edge"])} for edge in edges
@@ -204,7 +209,7 @@ def serialize_entity(actor: WorldActor, entity) -> dict[str, Any]:
     }
 
 
-def serialize_queued_command(command: SubmittedCommand) -> dict[str, Any]:
+def serialize_queued_command(command: SubmittedCommand) -> dict[str, JsonValue]:
     """Return the client-facing fields for one volatile queued command."""
 
     return {
@@ -229,7 +234,7 @@ def _character_entity(actor: WorldActor, character_id: str):
     return character
 
 
-def serialize_queued_commands(actor: WorldActor) -> list[dict[str, Any]]:
+def serialize_queued_commands(actor: WorldActor) -> list[dict[str, JsonValue]]:
     """Return volatile queued commands grouped by character and lane."""
 
     return [serialize_queued_command(command) for command in actor.pending_submissions()] + [
@@ -297,7 +302,7 @@ def serialize_character_list(actor: WorldActor) -> CharacterListResponse:
     return CharacterListResponse(world_epoch=actor.epoch, characters=summaries)
 
 
-def serialize_world(actor: WorldActor, meta: WorldMeta | None = None) -> dict[str, Any]:
+def serialize_world(actor: WorldActor, meta: WorldMeta | None = None) -> dict[str, JsonValue]:
     """Return the initial snapshot payload expected by web/admin/TUI clients."""
 
     return {
@@ -751,6 +756,29 @@ def _target_groups(
         if target.kind != "character" and entity.has_component(PortableComponent):
             room_items.append(target)
     characters = [target for target in visible if target.kind == "character"]
+    active_conversations: list[ClientTargetView] = []
+    conversation_turns: list[ClientTargetView] = []
+    query = actor.world.query().with_all([ConversationComponent])
+    for conversation in query.execute_entities():
+        component = conversation.get_component(ConversationComponent)
+        if component.ended:
+            continue
+        if component.expires_at_epoch > 0 and actor.epoch >= component.expires_at_epoch:
+            continue
+        participants = tuple(
+            target_id
+            for _edge, target_id in sorted(
+                conversation.get_relationships(ConversationParticipant),
+                key=lambda item: item[0].order,
+            )
+        )
+        if character.id not in participants:
+            continue
+        label = component.topic or "conversation"
+        target = ClientTargetView(id=str(conversation.id), label=label, kind="conversation")
+        active_conversations.append(target)
+        if participants and participants[component.active_turn % len(participants)] == character.id:
+            conversation_turns.append(target)
     reachable = list({**visible_by_id, **carried_by_id}.values())
     return {
         "exits": [ClientTargetView(id=exit.id, label=exit.label, kind="exit") for exit in exits],
@@ -758,6 +786,12 @@ def _target_groups(
         "inventory": inventory,
         "heldItems": sorted(held_items, key=lambda target: target.label.lower()),
         "characters": sorted(characters, key=lambda target: target.label.lower()),
+        "activeConversations": sorted(
+            active_conversations, key=lambda target: target.label.lower()
+        ),
+        "conversationTurns": sorted(
+            conversation_turns, key=lambda target: target.label.lower()
+        ),
         "reachable": sorted(reachable, key=lambda target: target.label.lower()),
         "reachableItems": sorted(
             [target for target in reachable if target.kind != "character"],
@@ -1018,7 +1052,7 @@ _RELATION_SKIP = {
 }
 
 
-def _edge_detail(edge: dict[str, Any]) -> str:
+def _edge_detail(edge: dict[str, JsonValue]) -> str:
     bits = [
         (
             f"{_humanize_token(key)} {value:g}"
@@ -1319,9 +1353,9 @@ _EXAMINE_CONDITIONS: tuple[tuple[type, str], ...] = (
 )
 
 
-def _examine_details(entity, *, is_self: bool) -> dict[str, Any]:
+def _examine_details(entity, *, is_self: bool) -> dict[str, JsonValue]:
     catalogue = _EXAMINE_SELF_COMPONENTS if is_self else _EXAMINE_PUBLIC_COMPONENTS
-    details: dict[str, Any] = {}
+    details: dict[str, JsonValue] = {}
     for component_type, key in catalogue:
         if entity.has_component(component_type):
             details[key] = jsonable(entity.get_component(component_type))
@@ -1346,7 +1380,7 @@ def serialize_examine(
     character_id: str,
     target_id: str | None = None,
     *,
-    fragment_providers: Sequence[Any] = (),
+    fragment_providers: Sequence[PromptFragmentProvider] = (),
 ) -> ExamineResponse:
     """Return a curated, play-facing inspection of one perceivable entity (or self).
 
@@ -1448,7 +1482,9 @@ def serialize_dm_projection(actor: WorldActor, dm_id: str) -> DmProjectionRespon
     )
 
 
-def serialize_event(event: DomainEvent, registry: Any | None = None) -> dict[str, Any]:
+def serialize_event(
+    event: DomainEvent, registry: PluginRegistry | None = None
+) -> dict[str, JsonValue]:
     """Return a typed event payload with class name and JSON-safe fields."""
 
     event_type = event.__class__
@@ -1467,7 +1503,9 @@ def serialize_event(event: DomainEvent, registry: Any | None = None) -> dict[str
     }
 
 
-def event_message(event: DomainEvent, registry: Any | None = None) -> dict[str, Any]:
+def event_message(
+    event: DomainEvent, registry: PluginRegistry | None = None
+) -> dict[str, JsonValue]:
     """Wrap a serialized event as a websocket message."""
 
     return {"type": "event", "data": serialize_event(event, registry)}

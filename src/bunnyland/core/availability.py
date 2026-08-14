@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from relics import Entity, World
 
@@ -138,6 +138,13 @@ def target_group_for_argument(definition: ActionDefinition, key: str) -> str | N
 
     if key == "exit_id":
         return "exits"
+    if key == "target_ids" and definition.command_type == "start-conversation":
+        return "characters"
+    if key == "conversation_id":
+        if definition.command_type == "conversation-line":
+            return "conversationTurns"
+        if definition.command_type == "end-conversation":
+            return "activeConversations"
     if key == "target_id" and definition.command_type == "tell":
         return "characters"
     if key == "item_id":
@@ -155,7 +162,7 @@ def target_group_for_argument(definition: ActionDefinition, key: str) -> str | N
 
 
 def _has_required_target(
-    definition: ActionDefinition, target_groups: Mapping[str, Sequence[Any]]
+    definition: ActionDefinition, target_groups: Mapping[str, Sequence[object]]
 ) -> bool:
     """Whether every required entity argument has at least one candidate in the room."""
 
@@ -174,7 +181,7 @@ def evaluate_availability(
     character: Entity,
     definition: ActionDefinition,
     *,
-    target_groups: Mapping[str, Sequence[Any]] | None = None,
+    target_groups: Mapping[str, Sequence[object]] | None = None,
 ) -> AvailabilityResult:
     """Coarse availability of one action for one character, for the projection.
 

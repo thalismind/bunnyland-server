@@ -12,6 +12,7 @@ from ..core import (
     CharacterComponent,
     ClaimedComponent,
     ControlledBy,
+    ConversationComponent,
     SubmittedCommand,
     TransientControllerComponent,
     WorldActor,
@@ -41,6 +42,7 @@ HEALTH_CHECKS: tuple[IssueKey, ...] = (
     ("queued_command_target_not_character", "error"),
     ("queued_command_from_future", "error"),
     ("expired_queued_command", "warning"),
+    ("expired_conversation", "warning"),
 )
 
 _SEVERITY_BY_CHECK: dict[str, Severity] = dict(HEALTH_CHECKS)
@@ -156,6 +158,14 @@ def _check_queues(actor: WorldActor, counts: Counter[IssueKey]) -> None:
             _increment(counts, "expired_queued_command")
 
 
+def _check_conversations(actor: WorldActor, counts: Counter[IssueKey]) -> None:
+    query = actor.world.query().with_all([ConversationComponent])
+    for conversation in query.execute_entities():
+        component = conversation.get_component(ConversationComponent)
+        if component.expires_at_epoch > 0 and component.expires_at_epoch <= actor.epoch:
+            _increment(counts, "expired_conversation")
+
+
 def collect_world_health_issues(actor: WorldActor) -> Mapping[tuple[str, str], int]:
     """Return every bounded health series, including explicit zero values.
 
@@ -169,6 +179,7 @@ def collect_world_health_issues(actor: WorldActor) -> Mapping[tuple[str, str], i
     _check_relationships(actor.world, counts)
     _check_controllers(actor.world, counts)
     _check_queues(actor, counts)
+    _check_conversations(actor, counts)
     return dict(counts)
 
 

@@ -14,6 +14,7 @@ from bunnyland.core import (
     CommandCost,
     Contains,
     ControlledBy,
+    ConversationComponent,
     LLMControllerComponent,
     OnInsufficientPoints,
     SuspendedControllerComponent,
@@ -270,3 +271,20 @@ def test_claim_matching_one_character_is_valid():
 
     assert counts[("invalid_claim_controller_cardinality", "error")] == 0
     assert counts[("claim_character_mismatch", "error")] == 0
+
+
+def test_conversation_check_reports_only_positive_expired_epochs():
+    scenario = build_scenario()
+    spawn_entity(scenario.actor.world, [ConversationComponent(expires_at_epoch=0)])
+    spawn_entity(scenario.actor.world, [ConversationComponent(expires_at_epoch=9)])
+    clock = next(
+        scenario.actor.world.query().with_all([WorldClockComponent]).execute_entities()
+    )
+    replace_component(
+        clock,
+        replace(clock.get_component(WorldClockComponent), game_time_seconds=10),
+    )
+
+    counts = _counts(scenario.actor)
+
+    assert counts[("expired_conversation", "warning")] == 1

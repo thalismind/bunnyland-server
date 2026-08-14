@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
-from typing import Any
 
 from relics import EntityId
 
@@ -39,7 +38,7 @@ from ..events import (
 from ..mutations import AddEdge, AddEntity, EntityReference, MutationPlan, SetComponent
 from .base import HandlerContext, HandlerResult, planned, rejected
 
-DEFAULT_CONVERSATION_TIMEOUT_SECONDS = 10 * 60
+DEFAULT_CONVERSATION_TIMEOUT_SECONDS = 0
 
 
 def infer_intent(text: str) -> SpeechIntent:
@@ -60,7 +59,7 @@ def infer_intent(text: str) -> SpeechIntent:
     return SpeechIntent.NEUTRAL
 
 
-def _parse_intent(raw: Any) -> SpeechIntent | None:
+def _parse_intent(raw: object) -> SpeechIntent | None:
     if raw is None:
         return None
     if isinstance(raw, SpeechIntent):
@@ -107,7 +106,7 @@ def _current_participant(
     return participants[component.active_turn % len(participants)]
 
 
-def _participant_payload_ids(payload: Mapping[str, Any]) -> list[Any]:
+def _participant_payload_ids(payload: Mapping[str, object]) -> list[object]:
     raw = payload.get("participant_ids", payload.get("target_ids", payload.get("target_id")))
     if raw is None:
         return []
@@ -116,6 +115,22 @@ def _participant_payload_ids(payload: Mapping[str, Any]) -> list[Any]:
     if isinstance(raw, (list, tuple)):
         return list(raw)
     return [raw]
+
+
+def _active_conversation_for_participant(
+    ctx: HandlerContext,
+    participant_id: EntityId,
+) -> EntityId | None:
+    query = ctx.world.query().with_all([ConversationComponent])
+    for conversation in query.execute_entities():
+        component = conversation.get_component(ConversationComponent)
+        if component.ended:
+            continue
+        if component.expires_at_epoch > 0 and ctx.epoch >= component.expires_at_epoch:
+            continue
+        if participant_id in _ordered_participants(conversation):
+            return conversation.id
+    return None
 
 
 def _end_conversation(
@@ -167,7 +182,7 @@ class SayHandler:
     command_type = "say"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        payload: Mapping[str, Any] = command.payload
+        payload: Mapping[str, object] = command.payload
         speaker_id = parse_entity_id(command.character_id)
         text = str(payload.get("text", "")).strip()
         if speaker_id is None:
@@ -209,7 +224,7 @@ class TellHandler:
     command_type = "tell"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        payload: Mapping[str, Any] = command.payload
+        payload: Mapping[str, object] = command.payload
         speaker_id = parse_entity_id(command.character_id)
         target_id = parse_entity_id(payload.get("target_id"))
         text = str(payload.get("text", "")).strip()
@@ -261,7 +276,7 @@ class StartConversationHandler:
     command_type = "start-conversation"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        payload: Mapping[str, Any] = command.payload
+        payload: Mapping[str, object] = command.payload
         speaker_id = parse_entity_id(command.character_id)
         if speaker_id is None:
             return rejected("invalid character id")
@@ -291,13 +306,19 @@ class StartConversationHandler:
             participant_ids.append(target_id)
         if len(participant_ids) < 2:
             return rejected("conversation needs another participant")
+        if any(
+            _active_conversation_for_participant(ctx, participant_id) is not None
+            for participant_id in participant_ids
+        ):
+            return rejected("participant is already in an active conversation")
 
         raw_timeout = payload.get("timeout_seconds", DEFAULT_CONVERSATION_TIMEOUT_SECONDS)
         try:
             timeout_seconds = int(float(raw_timeout))
         except (TypeError, ValueError):
             timeout_seconds = DEFAULT_CONVERSATION_TIMEOUT_SECONDS
-        timeout_seconds = max(1, timeout_seconds)
+        timeout_seconds = max(0, timeout_seconds)
+        expires_at_epoch = ctx.epoch + timeout_seconds if timeout_seconds else 0
         topic = str(payload.get("topic", "")).strip()
         conversation = EntityReference()
         operations = [
@@ -308,7 +329,7 @@ class StartConversationHandler:
                         topic=topic,
                         active_turn=0,
                         started_at_epoch=ctx.epoch,
-                        expires_at_epoch=ctx.epoch + timeout_seconds,
+                        expires_at_epoch=expires_at_epoch,
                     ),
                 ),
                 reference=conversation,
@@ -335,7 +356,7 @@ class StartConversationHandler:
                     participant_ids=tuple(str(participant) for participant in participant_ids),
                     topic=topic,
                     active_participant_id=str(speaker_id),
-                    expires_at_epoch=ctx.epoch + timeout_seconds,
+                    expires_at_epoch=expires_at_epoch,
                 )
             ),
         )
@@ -345,7 +366,7 @@ class ConversationLineHandler:
     command_type = "conversation-line"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        payload: Mapping[str, Any] = command.payload
+        payload: Mapping[str, object] = command.payload
         speaker_id = parse_entity_id(command.character_id)
         conversation_id, conversation, component, error = _conversation_for_command(
             ctx,
@@ -364,7 +385,7 @@ class ConversationLineHandler:
             return rejected("speaker is not a conversation participant")
         if component.ended:
             return rejected("conversation has ended")
-        if ctx.epoch >= component.expires_at_epoch:
+        if component.expires_at_epoch > 0 and ctx.epoch >= component.expires_at_epoch:
             return _end_conversation(ctx, conversation, component, participants, "timeout")
         if _current_participant(participants, component) != speaker_id:
             return rejected("not your conversation turn")
@@ -426,7 +447,7 @@ class EndConversationHandler:
     command_type = "end-conversation"
 
     def execute(self, ctx: HandlerContext, command: SubmittedCommand) -> HandlerResult:
-        payload: Mapping[str, Any] = command.payload
+        payload: Mapping[str, object] = command.payload
         speaker_id = parse_entity_id(command.character_id)
         _conversation_id, conversation, component, error = _conversation_for_command(
             ctx,

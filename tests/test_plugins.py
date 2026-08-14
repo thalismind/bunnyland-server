@@ -28,6 +28,7 @@ from bunnyland.core import (
     build_submitted_command,
     spawn_entity,
 )
+from bunnyland.core.consequences import ConversationConsequence
 from bunnyland.core.events import (
     CharacterWokeEvent,
     NoteTakenEvent,
@@ -704,6 +705,21 @@ def test_speech_action_metadata_exposes_intent_and_approach_arguments():
     assert definitions["tell"].arguments["target_id"].required is True
     assert definitions["tell"].arguments["text"].required is True
     assert definitions["tell"].arguments["audible"].required is False
+    assert definitions["start-conversation"].arguments["target_ids"].required is True
+    assert definitions["conversation-line"].arguments["conversation_id"].required is True
+    assert definitions["conversation-line"].arguments["text"].required is True
+    assert definitions["end-conversation"].arguments["conversation_id"].required is True
+
+
+def test_core_verbs_installs_conversation_lifecycle_consequence():
+    actor = WorldActor()
+
+    apply_plugins([core_verbs_plugin()], actor)
+
+    assert any(
+        isinstance(consequence, ConversationConsequence)
+        for consequence in actor._consequences
+    )
 
 
 async def test_applying_core_verbs_enables_move():

@@ -23,6 +23,7 @@ from .components import (
     AttentionComponent,
     BleedingComponent,
     CharacterComponent,
+    ConversationComponent,
     DeadComponent,
     DownedComponent,
     EncumbranceComponent,
@@ -37,13 +38,14 @@ from .components import (
     WeightComponent,
 )
 from .ecs import container_of, replace_component
-from .edges import ContainmentMode, Contains, HasInjury
+from .edges import ContainmentMode, Contains, ConversationParticipant, HasInjury
 from .events import (
     AttentionShiftedEvent,
     BleedingChangedEvent,
     CharacterDiedEvent,
     CharacterDownedEvent,
     CharacterRevivedEvent,
+    ConversationEndedEvent,
     DomainEvent,
     EncumbranceChangedEvent,
     EntitySeenEvent,
@@ -60,6 +62,55 @@ DEFAULT_RECOVERY_CHECKS = 3
 
 class Consequence(Protocol):
     def process(self, world: World, epoch: int) -> list[DomainEvent]: ...
+
+
+class ConversationConsequence:
+    """Remove terminal conversations and expire explicitly timed conversations."""
+
+    @staticmethod
+    def query(world: World):
+        return world.query().with_all([ConversationComponent])
+
+    def process(self, world: World, epoch: int) -> list[DomainEvent]:
+        events: list[DomainEvent] = []
+        for conversation in tuple(self.query(world).execute_entities()):
+            component = conversation.get_component(ConversationComponent)
+            participants = tuple(
+                target_id
+                for _edge, target_id in sorted(
+                    conversation.get_relationships(ConversationParticipant),
+                    key=lambda item: item[0].order,
+                )
+            )
+            reason = ""
+            if not participants:
+                reason = "participants-missing"
+            elif component.expires_at_epoch > 0 and epoch >= component.expires_at_epoch:
+                reason = "timeout"
+            if not component.ended and reason:
+                lead = participants[0] if participants else None
+                room_id = (
+                    container_of(world.get_entity(lead))
+                    if lead is not None and world.has_entity(lead)
+                    else None
+                )
+                events.append(
+                    ConversationEndedEvent(
+                        **_event_base(
+                            epoch,
+                            visibility=_Vis.ROOM,
+                            actor_id=str(lead) if lead is not None else None,
+                            room_id=str(room_id) if room_id is not None else None,
+                            target_ids=tuple(str(participant) for participant in participants),
+                            conversation_id=str(conversation.id),
+                            participant_ids=tuple(str(participant) for participant in participants),
+                            reason=reason,
+                        )
+                    )
+                )
+            if component.ended or reason:
+                world.remove(conversation.id)
+        return events
 
 
 class HealthConsequence:
@@ -493,6 +544,7 @@ def _entity_id_from_string(world: World, entity_id: str):
 __all__ = [
     "AttentionConsequence",
     "Consequence",
+    "ConversationConsequence",
     "EncumbranceConsequence",
     "HearingConsequence",
     "HealthConsequence",

@@ -27,6 +27,7 @@ from bunnyland.core import (
     parse_entity_id,
     spawn_entity,
 )
+from bunnyland.core.consequences import ConversationConsequence
 from bunnyland.core.events import (
     ConversationEndedEvent,
     ConversationLineEvent,
@@ -105,7 +106,13 @@ def audible_tell(scenario, target_id, text):
     )
 
 
-def start_conversation(scenario, target_ids, *, topic="supplies", timeout_seconds=600):
+def start_conversation(scenario, target_ids, *, topic="supplies", timeout_seconds=None):
+    payload = {
+        "target_ids": tuple(str(target_id) for target_id in target_ids),
+        "topic": topic,
+    }
+    if timeout_seconds is not None:
+        payload["timeout_seconds"] = timeout_seconds
     return build_submitted_command(
         character_id=str(scenario.character),
         controller_id=str(scenario.controller),
@@ -113,11 +120,7 @@ def start_conversation(scenario, target_ids, *, topic="supplies", timeout_second
         command_type="start-conversation",
         cost=CONVERSATION_COST,
         lane=Lane.FOCUS,
-        payload={
-            "target_ids": tuple(str(target_id) for target_id in target_ids),
-            "topic": topic,
-            "timeout_seconds": timeout_seconds,
-        },
+        payload=payload,
     )
 
 
@@ -460,6 +463,7 @@ def test_start_conversation_creates_turn_order_and_event():
     component = conversation.get_component(ConversationComponent)
     assert component.topic == "supplies"
     assert component.active_turn == 0
+    assert component.expires_at_epoch == 0
     relationships = conversation.get_relationships(ConversationParticipant)
     assert [(edge.order, str(target)) for edge, target in relationships] == [
         (0, str(scenario.character)),
@@ -701,8 +705,70 @@ def test_start_conversation_accepts_string_and_scalar_participant_payloads():
         str(hazel),
         str(clover),
     )
-    assert scalar_result.ok is True
-    assert scalar_result.events[0].topic == "single"
+    assert scalar_result.reason == "participant is already in an active conversation"
+
+
+def test_conversation_consequence_removes_terminal_expired_and_malformed_entities():
+    scenario = speech_scenario()
+    listener = add_listener(scenario, scenario.room_a)
+    active = execute_start_conversation(scenario, [listener])
+    active_id = parse_entity_id(active.events[0].conversation_id)
+    assert active_id is not None
+
+    timed = spawn_entity(
+        scenario.actor.world,
+        [
+            IdentityComponent(name="timed", kind="conversation"),
+            ConversationComponent(expires_at_epoch=5),
+        ],
+    )
+    timed.add_relationship(ConversationParticipant(order=0), scenario.character)
+    malformed = spawn_entity(scenario.actor.world, [ConversationComponent()])
+    ended = spawn_entity(
+        scenario.actor.world,
+        [ConversationComponent(ended=True, ended_reason="resolved")],
+    )
+
+    consequence = ConversationConsequence()
+    events = consequence.process(scenario.actor.world, 5)
+
+    assert scenario.actor.world.has_entity(active_id)
+    assert not scenario.actor.world.has_entity(timed.id)
+    assert not scenario.actor.world.has_entity(malformed.id)
+    assert not scenario.actor.world.has_entity(ended.id)
+    assert sorted((event.conversation_id, event.reason) for event in events) == sorted(
+        [
+            (str(timed.id), "timeout"),
+            (str(malformed.id), "participants-missing"),
+        ]
+    )
+
+
+def test_conversation_consequence_query_is_component_indexed():
+    scenario = speech_scenario()
+
+    query = ConversationConsequence.query(scenario.actor.world)
+
+    assert query._with_all == [ConversationComponent]
+
+
+def test_start_conversation_allows_replacement_after_explicit_timeout():
+    scenario = speech_scenario()
+    listener = add_listener(scenario, scenario.room_a)
+    first = execute_start_conversation(
+        scenario,
+        [listener],
+        payload={"target_ids": (str(listener),), "timeout_seconds": 1},
+    )
+
+    replacement = execute_handler(
+        StartConversationHandler(),
+        HandlerContext(scenario.actor.world, 2),
+        start_conversation(scenario, [listener]),
+    )
+
+    assert first.ok is True
+    assert replacement.ok is True
 
 
 def test_conversation_line_rejects_bad_speaker_wrong_kind_empty_and_detached():
