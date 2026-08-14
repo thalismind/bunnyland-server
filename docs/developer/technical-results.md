@@ -1,6 +1,6 @@
 # Technical results
 
-**Evidence date:** July 16, 2026
+**Evidence date:** August 14, 2026
 
 This report separates reproducible controller contracts from live model integration and
 hosted operational tests. A deterministic scenario can prove shared rules and persistent
@@ -74,8 +74,11 @@ Encrypted clean-host restoration and an exact-image rollback rehearsal passed, i
 proof that a previously revoked token remains rejected after restoration. The complete
 post-deployment authorization, REST, WebSocket, streamable-HTTP MCP, browser, provider,
 40-stream, Discord, encrypted-backup, restart, and revocation-persistence gates also passed.
-The retained bearer-release gates have no open blockers; longer-running soak and ongoing
-performance work remain continuous validation rather than claims made by these fixed results.
+The retained bearer-release gates, ten-session fresh-player gate, and current-source server
+CI pass. Public v1 still requires the original 72-hour candidate soak to finish, followed by
+a targeted 24-hour retest of the conversation-lifecycle fix discovered during that soak.
+Ongoing performance and provider monitoring remain continuous validation rather than claims
+made by these fixed results.
 
 The VPS repository's
 [hosted validation record](https://github.com/thalismind/bunnyland-vps/blob/main/releases/bunnyland-early-preview-2026-07-validation.md)

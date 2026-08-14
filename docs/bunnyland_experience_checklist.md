@@ -20,6 +20,11 @@ gates live in the VPS repository's
 Unchecked work here is post-preview backlog unless a release owner explicitly promotes it
 into that checklist.
 
+The remaining roadmap is intentionally narrow: tiered verb reveal, a new-player safe
+window, a typed distributable scenario manifest, the plugin-and-scenario starter/wizard,
+and runtime model budget/latency tiering. The starter kit and wizard are the first planned
+v1.x work after the public-v1 release gates close; they are not retroactive v1 blockers.
+
 ## How to Use This Checklist
 
 - Treat each checklist item as a focused PR or short PR sequence.
@@ -445,23 +450,28 @@ into that checklist.
     opening beat.
   - **Verification:** manifest validation and scenario load tests.
 
-- [ ] **Opening beat via scripts**
+- [x] **Opening beat via scripts**
   - **Goal:** scenarios start with something immediate to react to.
   - **Depends on:** scripting engine, scenario manifest.
   - **Implementation notes:** use `submit_command` and `patch_world` only for scenario
     glue; durable mechanics remain plugin-owned.
   - **Acceptance check:** first few ticks produce a visible inciting event in the loaded
     scenario.
-  - **Verification:** scripting scenario tests.
+  - **Verification:** the Apple Crossing (`hungry-courier-intro`), Bell Green
+    (`bell-green-guide-intro`), and Clover City (`clover-city-guide-intro`) generators
+    install tested scripted opening beats.
 
-- [ ] **Scenario picker**
-  - **Goal:** players/admins can choose a curated scenario, claim a character, and enter
-    the opening beat.
-  - **Depends on:** scenario manifest, claim flow, web/admin UI.
-  - **Implementation notes:** keep sandbox generation available but secondary.
-  - **Acceptance check:** user can select one curated scenario and reach playable state
-    without manual admin patching.
-  - **Verification:** Playwright or server/web smoke tests.
+- [x] **Scenario/world picker**
+  - **Goal:** players and admins can select a built-in world generator and enter a
+    playable world without a manual patch.
+  - **Depends on:** generator registry, claim flow, terminal and web/admin UI.
+  - **Implementation notes:** the shared `WorldGeneratorSelector` serves Textual TUI,
+    REPL, and chat local flows; Web Admin provides the World Generator. A future hosted
+    multi-world catalogue is separate from this completed v1 selection surface.
+  - **Acceptance check:** a user can select a built-in world and seed, generate it, and
+    reach playable state without manual admin patching.
+  - **Verification:** terminal integration/TUI/REPL selector tests and the Web World
+    Generator Playwright regression.
 
 - [ ] **Scenario wizard**
   - **Goal:** admins can scaffold premise, cast, opening beat, arc triggers, and package
@@ -472,12 +482,16 @@ into that checklist.
   - **Acceptance check:** wizard output loads as a playable scenario package.
   - **Verification:** admin API/UI tests.
 
-- [ ] **Scenario authoring guide**
-  - **Goal:** creators know how to build and share scenario packages.
-  - **Depends on:** scenario manifest and at least one curated scenario.
-  - **Implementation notes:** document the validated boundaries for scripts, worldgen,
-    plugin packs, and opening beats.
-  - **Acceptance check:** guide includes a minimal template and one complete example.
+- [x] **Scenario authoring guidance**
+  - **Goal:** creators know how to build, inspect, test, and operate worlds and scripted
+    scenarios within the validated engine boundaries.
+  - **Depends on:** worldgen, scripting, plugin packs, editor, and inspector surfaces.
+  - **Implementation notes:** the 16-part admin world-building series plus the scripting,
+    generator, editor, inspector, LLM-patch, plugin, and persistence guides cover the
+    current authoring surface. The reusable package template belongs to the still-open
+    typed manifest and starter-kit work.
+  - **Acceptance check:** the guide series covers a complete authored world, scripts,
+    testing, validation, and deployment boundaries.
   - **Verification:** doc review and link check.
 
 ---
@@ -503,14 +517,18 @@ into that checklist.
     hidden-state leakage, or incoherent conversation.
   - **Verification:** harness unit/E2E tests.
 
-- [ ] **Story-moment capture**
+- [x] **Grounded story-moment capture**
   - **Goal:** make memorable moments easy to save and share.
   - **Depends on:** narration delivery, event ids, Discord/web clients.
-  - **Implementation notes:** capture should include enough event/source metadata to avoid
-    sharing invented or ungrounded text as fact.
-  - **Acceptance check:** a user can capture a grounded moment with scene text and source
-    context.
-  - **Verification:** client/API tests.
+  - **Implementation notes:** image and video requests resolve a real visible event when
+    supplied, persist its `source_event_id` and a `MediaSceneSnapshotComponent`, and keep
+    location, actors, targets, and enhanced scene text with the generated media. Chat
+    requests use the same media jobs even when no event is selected.
+  - **Acceptance check:** players or opted-in characters can request a scene image/video
+    from Discord, Web/Toon, Textual TUI/REPL, or character chat and receive a stable media
+    URL with grounded scene context where an event was selected.
+  - **Verification:** image/video scene-service, server API, Discord, terminal, character
+    chat, and client regressions.
 
 - [x] **Persistence and restore audit**
   - **Goal:** experience features survive autosave/reload without state drift.

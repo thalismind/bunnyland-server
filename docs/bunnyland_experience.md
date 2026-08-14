@@ -73,8 +73,11 @@ Design invariants to hold throughout:
 
 ## Stage 3 — Depth of storytelling & conversation
 
-### The conversation sub-loop (your open TODO)
-- Implement a **threaded, immediate back-and-forth** conversation loop that doesn't burn a full world tick per line — a Focus-lane micro-loop nested under the existing tick model. Decide turn-taking and exit conditions explicitly. (This is the item with the most open design questions — prototype it early within the stage.)
+### The conversation sub-loop
+- The implemented baseline provides a **threaded, immediate back-and-forth** Focus-lane
+  conversation loop without burning a full world tick per line, with explicit participants,
+  turns, timeouts, endings, and terminal cleanup. Richer interruption and reaction remains
+  presentation work rather than a missing conversation foundation.
 - Support **multi-party scenes**: several characters in a room conversing, with turn-taking, resolving back into one coherent narrated passage.
 - **Interruption / reaction**: characters can interject, gasp, or react mid-scene without consuming a full turn.
 
@@ -143,18 +146,28 @@ Two audiences: the **new player** who must not drown or face an empty room, and 
 - Onboarding telemetry: time-to-first-command, first-failure point, drop-off epoch → feed the harness.
 
 ### Scenario presentation (the default front door)
-- Define a **scenario manifest**: world snapshot + cast + one-line hook + opening beat + arc/goal conditions + recommended pack set + difficulty + suggested player count + tone/genre tags.
-- **Welcome-page scenario picker** for both players and admins: choose scenario → claim a character → drop into the opening beat. Sandbox stays available but secondary.
+- The current Textual TUI, REPL, and chat local flows share a generator/seed selector, and
+  Web Admin exposes the World Generator. The remaining packaging step is a typed,
+  distributable **scenario manifest**: world snapshot + cast + one-line hook + opening beat
+  + arc/goal conditions + recommended pack set + difficulty + suggested player count +
+  tone/genre tags.
+- Evolve those selectors into a hosted scenario catalogue only when multi-world hosting
+  needs it; do not count the existing selector surface as missing.
 - Curate **3–6 headline scenarios** (small casts, clear dramatic pressure) polished to showcase quality: angel/devil debate, the apartment building, a mystery, a cozy one, one genre showpiece.
 - Each scenario: sharp hook; distinct voice + goal + relationship per claimable character; ≥1 **arc condition** via scripting triggers (`epoch_at_least`, `event_type`, `event_fields`).
-- **Opening beat via scripting**: stage an inciting incident in the first few ticks (`submit_command` / `patch_world`) so there's something to react to immediately.
+- **Opening beat via scripting** is established by the ABC tutorials: Apple Crossing,
+  Bell Green, and Clover City each install a tested intro script. Extend that pattern to
+  packaged scenarios rather than rebuilding it.
 - **Resolution / epilogue beat** wired to the Stage 4 legacy system.
 
 ### Admin: a world that's ready to go
-- One-step world stand-up: extend the world-gen wizard into a **scenario wizard** that scaffolds premise → cast → opening beat → arc triggers and emits a valid manifest + scripts.
+- First v1.x work: publish a plugin-and-scenario starter kit, then extend the Web World
+  Generator into a **scenario wizard** that scaffolds premise → cast → opening beat → arc
+  triggers and emits a valid manifest + scripts.
 - Pack-aware setup: surface available plugins/packs and the starter bundles (peaceful / futuristic / fantastic) in the setup flow (worldgen is already plugin-aware).
 - Bundle scenarios as one shareable artifact: world shorthand/snapshot + scripts + manifest, so admins and creators can publish and import them.
-- Scenario-authoring guide + template, parallel to the world-generation guide.
+- Keep the existing world-building, scripting, generator, editor, inspector, and plugin
+  guides as the authoring reference; add the distributable template to the starter kit.
 - **Arc/progress projection** (acts → beats → climax) the DM reads to know where in the story it is (shared with Stage 1).
 
 ---
@@ -163,7 +176,10 @@ Two audiences: the **new player** who must not drown or face an empty room, and 
 
 - **Cost & latency tiering**: narrator + characters + reflection is a lot of inference. Tiered models (premium narrator, cheap background characters), batched reflection, cached personas. OpenRouter is wired; build budgeting on top.
 - **Fun-focused playtest harness**: extend the existing harness (deterministic worlds, mocked at the Discord/MCP adapter) with quality checks — narration coherence, character consistency, conversation quality — not just correctness. The recurring question every session: *"was that a story I'd tell a friend?"*
-- **Story-moment capture**: make great moments easy to capture and share (Discord-native). Word of mouth is how text games win.
+- **Grounded story-moment capture** is implemented through event-linked image/video
+  generation and character chat, with stable media links and persisted scene snapshots.
+  Future work can improve presentation and sharing without treating the grounding pipeline
+  as absent.
 - **Determinism preserved**: narration and character reflection must be reproducible on seeded worlds for testing (respect the scripting engine's determinism contract).
 
 ---

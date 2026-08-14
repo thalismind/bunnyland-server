@@ -55,7 +55,7 @@ governed by the canonical release-readiness checklist rather than this dated ass
 | Controller evaluation benchmark | **Implemented for scripted, behavior-tree, goal-directed, and LLM contracts.** RL remains future work. |
 | Three Clover City systemic outcomes | **Implemented.** Missing parcel, water shortage, and elevator disruption all run through ordinary validated actions with persistent outcome probes and reload evidence. |
 | Real 40-WebSocket validation and soak | **Hosted stream gate passed; soak pending.** The exact deployed image passed 40 distinct authenticated streams, reconnect resynchronization, invalidation, and mid-stream revocation. The 72-hour release-candidate soak remains. |
-| Security/trace hardening and measured release gates | **Automated and operational gates implemented.** Claim/memory isolation, instruction-like memories, provider failures, request/rate limits, revocation, redaction, restore, and rollback have evidence. Ten fresh-player sessions and the 72-hour soak remain manual release gates. |
+| Security/trace hardening and measured release gates | **Automated and operational gates implemented.** Claim/memory isolation, instruction-like memories, provider failures, request/rate limits, revocation, redaction, restore, and rollback have evidence. The ten-session fresh-player gate passed 10/10; the original 72-hour soak and targeted lifecycle retest remain manual release gates. |
 
 ## Reconciled July release TODO
 
@@ -64,8 +64,8 @@ as follows; this table is explanatory and is not a second release checklist.
 
 | Original item | Current classification | Evidence or next action |
 | --- | --- | --- |
-| Ten fresh-player Apple Crossing sessions | **OPEN public-v1 blocker** | Run ten independent sessions, require eight completions under ten minutes, and attach the anonymized aggregate result to the canonical checklist. |
-| Immutable 72-hour candidate soak | **OPEN public-v1 blocker** | Complete the scheduled restart/checkpoint/backup/restore/rollback/revocation drill or record an explicit release-owner waiver. |
+| Ten fresh-player Apple Crossing sessions | **PASS** | Ten independent Ollama Cloud sessions completed 10/10 within the session limit; the anonymized aggregate is attached to the canonical checklist. |
+| Immutable 72-hour candidate soak | **OPEN public-v1 blocker** | Complete the original soak and its final evidence, then promote the indexed conversation-lifecycle fix and run the documented targeted 24-hour retest. |
 | Publish Relics and replace the Git dependency | **PASS** | Server requires published `relics-ecs>=0.1.1,<0.2`; package metadata tests enforce the installed dependency. |
 | Browser-owned Apple Crossing branches | **PASS** | `scripts/playwright-apple-crossing` covers golden path, apple consumed, letter taken, ignored quest, reconnect, and save/reload; the release CI record is linked from the canonical checklist. |
 | Expand experience/controller scorecards from evidence | **BACKLOG/CONTINUOUS** | Governed by the experience implementation checklist and benchmark documentation; not an independent release gate. |
@@ -75,6 +75,8 @@ as follows; this table is explanatory and is not a second release checklist.
 The historical `ec487c0` aggregate reported 3,186 tests and 100% line and branch coverage.
 Every new release candidate must satisfy the repository's warning-as-error aggregate,
 Python 3.12–3.14 CI, package-install, compatibility, migration, security, and performance
-gates before that historical result can be treated as current. Bunnyland now has three
-demonstrated persistent systemic stories. The current source gate and remaining public-v1
+gates before that historical result can be treated as current. Server `main` at
+`23981a7335c1d4763a6c8804896326eabe1a2bf4` passed those exact-source CI gates in
+[run 31828632060](https://github.com/thalismind/bunnyland-server/actions/runs/31828632060).
+Bunnyland now has three demonstrated persistent systemic stories. The remaining public-v1
 manual gates are tracked only in the canonical release-readiness checklist.
