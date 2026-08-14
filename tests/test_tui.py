@@ -2802,28 +2802,21 @@ async def _select_player(app, pilot):
 
 
 async def _wait_for_action_view(app, pilot, command_type: str) -> dict:
-    for _ in range(20):
-        action = next(
-            (item for item in app.action_views if item["command_type"] == command_type),
-            None,
-        )
-        if action is not None:
-            return action
-        await pilot.pause(0.05)
-    raise AssertionError(f"action view did not appear: {command_type}")
+    del pilot
+    await app.refresh_world()
+    action = next(
+        (item for item in app.action_views if item["command_type"] == command_type),
+        None,
+    )
+    if action is None:
+        raise AssertionError(f"action view did not appear: {command_type}")
+    return action
 
 
 async def _wait_for_widget(root, pilot, selector: str, expect_type=None):
-    from textual.css.query import NoMatches
-
-    last_error = None
-    for _ in range(20):
-        try:
-            return root.query_one(selector, expect_type)
-        except NoMatches as exc:
-            last_error = exc
-            await pilot.pause(0.05)
-    raise last_error
+    del pilot
+    await asyncio.wait_for(root._mounted_event.wait(), timeout=2)
+    return root.query_one(selector, expect_type)
 
 
 async def _wait_for_tui_ready(app, pilot) -> None:
@@ -3135,11 +3128,8 @@ async def _open_help_with_key(app, pilot):
     app.query_one("#activity", OptionList).focus()
     await pilot.pause()
     await pilot.press("question_mark")
-    for _ in range(20):
-        if isinstance(app.screen, HelpScreen):
-            return await _wait_for_widget(app.screen, pilot, "#help-close", Button)
-        await pilot.pause(0.05)
-    raise AssertionError("help screen did not open")
+    assert isinstance(app.screen, HelpScreen)
+    return await _wait_for_widget(app.screen, pilot, "#help-close", Button)
 
 
 async def test_help_screen_opens_and_closes():
@@ -3357,8 +3347,8 @@ async def test_intro_splash_dismisses_when_panel_is_missing(monkeypatch):
 
     app = BunnylandTUI(RecordingBackend(_snapshot()), show_intro=True)
     async with app.run_test() as pilot:
-        await pilot.pause(0.1)
         splash = next(s for s in app.screen_stack if isinstance(s, IntroSplash))
+        await asyncio.wait_for(splash._mounted_event.wait(), timeout=2)
 
         # If the panel has vanished by the time the fade starts, the splash dismisses itself
         # rather than animating a missing widget.

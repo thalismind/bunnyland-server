@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -378,7 +379,9 @@ async def test_conversation_screen_sends_pending_chat_and_renders_action(monkeyp
         field = screen.query_one("#conversation-input", Input)
         field.value = "What do you see?"
         await pilot.press("enter")
-        await pilot.pause(0.4)
+        send_task = screen._send_task
+        assert send_task is not None
+        await asyncio.wait_for(send_task, timeout=2)
         transcript = screen.query_one("#conversation-transcript", Static).render().plain
         assert "You: What do you see?" in transcript
         assert "Juniper: There is a lantern here." in transcript
@@ -570,15 +573,13 @@ async def test_conversation_screen_separates_reply_paragraphs_with_visual_delay(
     backend = ConversationBackend([_job("succeeded", reply=reply)])
     screen = ConversationScreen(backend, "character:1", "Juniper")
     host = ScreenHost(screen)
-    async with host.run_test() as pilot:
-        reveals: asyncio.Queue[int] = asyncio.Queue()
-        reveal_paragraph = screen._reveal_paragraph
+    async with host.run_test():
+        timers: list[tuple[float, Callable[[], None]]] = []
 
-        def record_reveal(key: int, visible: int, total: int) -> None:
-            reveal_paragraph(key, visible, total)
-            reveals.put_nowait(visible)
+        def capture_timer(delay: float, callback: Callable[[], None]) -> None:
+            timers.append((delay, callback))
 
-        monkeypatch.setattr(screen, "_reveal_paragraph", record_reveal)
+        monkeypatch.setattr(screen, "set_timer", capture_timer)
         screen.query_one("#conversation-separate-paragraphs", Checkbox).value = True
         await screen._send("hello")
 
@@ -589,19 +590,20 @@ async def test_conversation_screen_separates_reply_paragraphs_with_visual_delay(
         saved = load_history(backend.client_id, "character:1")
         assert saved["messages"][-1] == {"role": "character", "text": reply}
 
-        assert await asyncio.wait_for(reveals.get(), timeout=2) == 2
-        await pilot.pause()
+        assert len(timers) == 2
+        assert 0 < timers[0][0] < timers[1][0]
+        timers[0][1]()
         assert transcript.render().plain.count("Juniper:") == 2
         assert "Second thought." in transcript.render().plain
 
-        assert await asyncio.wait_for(reveals.get(), timeout=2) == 3
-        await pilot.pause()
+        timers[1][1]()
         assert transcript.render().plain.count("Juniper:") == 3
         assert "Third thought." in transcript.render().plain
 
         screen._reveal_paragraph(-1, 2, 3)
-        screen.query_one("#conversation-separate-paragraphs", Checkbox).value = False
-        await pilot.pause()
+        checkbox = screen.query_one("#conversation-separate-paragraphs", Checkbox)
+        checkbox.value = False
+        screen._separate_paragraphs_changed(Checkbox.Changed(checkbox, False))
         assert transcript.render().plain.count("Juniper:") == 1
 
 
@@ -697,8 +699,10 @@ async def test_conversation_cancellation_before_submission_completes(monkeypatch
 async def test_conversation_screen_cancels_pending_send(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     backend = ConversationBackend([_job("running")])
+    poll_started = asyncio.Event()
 
     async def blocked_poll(_job):
+        poll_started.set()
         await asyncio.Event().wait()
 
     backend.poll_character_chat = blocked_poll
@@ -707,7 +711,7 @@ async def test_conversation_screen_cancels_pending_send(monkeypatch, tmp_path):
     async with host.run_test() as pilot:
         screen.query_one("#conversation-input", Input).value = "Hello"
         await pilot.press("enter")
-        await pilot.pause(0.3)
+        await asyncio.wait_for(poll_started.wait(), timeout=2)
         await screen.action_close()
         assert backend.cancelled == ["job-1"]
 

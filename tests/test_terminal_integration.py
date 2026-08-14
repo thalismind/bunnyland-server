@@ -100,6 +100,7 @@ class ChatMediaBackend(EmptyBackend):
     def __init__(self):
         super().__init__()
         self.media_requests: list[tuple[str, str]] = []
+        self.poll_started = asyncio.Event()
         self.release_media = asyncio.Event()
 
     async def request_character_chat_media(
@@ -122,6 +123,7 @@ class ChatMediaBackend(EmptyBackend):
         )
 
     async def poll_character_chat_media(self, job):
+        self.poll_started.set()
         await self.release_media.wait()
         return CharacterChatMediaJob(
             id=job.id,
@@ -497,14 +499,16 @@ async def test_terminal_chat_marks_pending_images_and_videos(monkeypatch, tmp_pa
             focus = conversation.query_one("#conversation-media-focus", Input)
             focus.value = "Juniper dancing beneath lanterns"
             await pilot.click(button_id)
-            await pilot.pause()
+            await asyncio.wait_for(backend.poll_started.wait(), timeout=2)
             marker = conversation.query_one("#conversation-media").render().plain
             assert marker.startswith(f"{icon} pending")
             assert backend.media_requests == [
                 (kind, "Juniper dancing beneath lanterns")
             ]
+            media_task = conversation._media_task
+            assert media_task is not None
             backend.release_media.set()
-            await pilot.pause(0.4)
+            await asyncio.wait_for(media_task, timeout=2)
             marker = conversation.query_one("#conversation-media").render().plain
             assert marker.startswith(f"{icon} ready")
             link = conversation.query_one("#conversation-media-link", Link)

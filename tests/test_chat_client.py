@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import urllib.error
 from unittest.mock import patch
@@ -900,11 +901,7 @@ async def test_textual_chat_is_read_only_until_controller_assignment(tmp_path, m
 
     app = ChatHarness()
     async with app.run_test() as pilot:
-        for _ in range(20):
-            if screen.query("#conversation-input"):
-                await pilot.pause(0.05)
-                break
-            await pilot.pause(0.05)
+        await asyncio.wait_for(screen._mounted_event.wait(), timeout=2)
         input_widget = screen.query_one("#conversation-input", Input)
         assign = screen.query_one("#conversation-controller-assign", Button)
         status = screen.query_one("#conversation-status", Static)
