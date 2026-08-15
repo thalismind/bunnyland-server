@@ -327,6 +327,7 @@ def _serve_args(**overrides):
         "allow_sleeping_character_chat": False,
         "reject_text_tool_calls": True,
         "character_model": None,
+        "character_thinking": None,
         "claim_timeout_controller": None,
         "claim_timeout_seconds": 0,
         "controller_definitions": None,
@@ -1784,6 +1785,7 @@ def test_build_serve_agent_constructs_enabled_providers(monkeypatch):
         "model": "character-model",
         "host": "https://ollama.example",
         "api_key": "ollama-key",
+        "think": None,
         "reject_text_tool_calls": True,
     }
     assert calls["openrouter"] == {
@@ -1814,6 +1816,41 @@ def test_build_serve_agent_constructs_enabled_providers(monkeypatch):
 
     assert calls["ollama"]["reject_text_tool_calls"] is False
     assert calls["openrouter"]["reject_text_tool_calls"] is False
+
+
+def test_build_serve_agent_configures_ollama_character_thinking(monkeypatch):
+    import bunnyland.llm_agents as llm_agents
+
+    calls = {}
+
+    class FakeOllamaAgent:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    class FakeProviderRouterAgent:
+        def __init__(self, providers, *, default_provider):
+            del providers, default_provider
+
+    monkeypatch.setattr(llm_agents, "OllamaAgent", FakeOllamaAgent)
+    monkeypatch.setattr(llm_agents, "ProviderRouterAgent", FakeProviderRouterAgent)
+
+    cli._build_serve_agent(
+        _serve_args(llm=True, character_thinking="medium"),
+        cli.ServeCredentials(
+            worldgen_provider="ollama",
+            host="https://ollama.example",
+            api_key="ollama-key",
+        ),
+        cli.ServeModels(worldgen_model="world-model", character_model="character-model"),
+    )
+
+    assert calls["think"] == "medium"
+
+
+def test_character_thinking_setting_supports_off_and_rejects_invalid_values():
+    assert cli._character_thinking_setting(_serve_args(character_thinking="off")) is False
+    with pytest.raises(ValueError, match="invalid character thinking level"):
+        cli._character_thinking_setting(_serve_args(character_thinking="maximum"))
 
 
 def test_build_serve_agent_rejects_missing_provider():

@@ -43,6 +43,55 @@ def _enabled() -> tuple[str, str]:
 
 
 @pytest.mark.asyncio
+async def test_live_ollama_cloud_accepts_medium_thinking_for_a_tool_call():
+    api_key, model = _enabled()
+    responses: list[dict[str, JsonValue]] = []
+    agent = OllamaAgent(
+        model=model,
+        host="https://ollama.com",
+        api_key=api_key,
+        think="medium",
+        max_retries=0,
+        response_observer=responses.append,
+        log_thinking=True,
+    )
+    context = PromptContext(
+        name="player",
+        kind="player",
+        status="active",
+        action=(5, 5),
+        focus=(3, 3),
+        location_title="Apple Crossing",
+        room_summary="Apple Crossing",
+        commands=("Wait",),
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "wait",
+                "description": "Wait for one turn.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    try:
+        decision = await agent.decide(
+            "Call the wait tool.",
+            context,
+            character_id="medium-thinking-player",
+            tools=tools,
+        )
+    finally:
+        await agent.close()
+
+    assert isinstance(decision, ToolCall)
+    assert decision.name == "wait"
+    assert responses
+    assert responses[0]["eval_count"]
+
+
+@pytest.mark.asyncio
 async def test_live_ollama_cloud_player_agents_keep_independent_histories():
     api_key, model = _enabled()
     context = PromptContext(

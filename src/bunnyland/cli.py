@@ -19,7 +19,7 @@ import sys
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from bunnyland.simpacks.lifesim.mechanics import configure_lifesim_aging
 
@@ -537,6 +537,7 @@ def _build_provider_agent(args, credentials: ServeCredentials, models: ServeMode
             model=models.character_model,
             host=credentials.host,
             api_key=credentials.api_key,
+            think=_character_thinking_setting(args),
             reject_text_tool_calls=reject_text_tool_calls,
         )
     if credentials.openrouter_api_key:
@@ -551,6 +552,19 @@ def _build_provider_agent(args, credentials: ServeCredentials, models: ServeMode
     agent = ProviderRouterAgent(providers, default_provider=args.llm_provider)
     print(f"Driving characters with default {args.llm_provider} model {models.character_model!r}.")
     return agent
+
+
+def _character_thinking_setting(
+    args: argparse.Namespace,
+) -> bool | Literal["low", "medium", "high"] | None:
+    value = getattr(args, "character_thinking", None)
+    if value is None:
+        return None
+    if value == "off":
+        return False
+    if value in ("low", "medium", "high"):
+        return value
+    raise ValueError(f"invalid character thinking level: {value!r}")
 
 
 def _build_serve_agent(args, credentials: ServeCredentials, models: ServeModels):
@@ -918,6 +932,7 @@ _CONFIG_ARG_FLAGS: dict[str, tuple[str, ...]] = {
     "worldgen_provider": ("--worldgen-provider",),
     "worldgen_model": ("--worldgen-model",),
     "character_model": ("--character-model",),
+    "character_thinking": ("--character-thinking",),
     "generator": ("--generator",),
     "max_rooms": ("--max-rooms",),
     "load": ("--load",),
@@ -1228,6 +1243,12 @@ def main(argv: list[str] | None = None) -> int:
         "--character-model",
         default=None,
         help=f"default Ollama model for character controllers (default: {DEFAULT_MODEL})",
+    )
+    serve.add_argument(
+        "--character-thinking",
+        choices=("off", "low", "medium", "high"),
+        default=None,
+        help="Ollama thinking level for character actions and chat (default: model setting)",
     )
     serve.add_argument(
         "--generator", default="recursive", help="world generator to use (e.g. oneshot, recursive)"
