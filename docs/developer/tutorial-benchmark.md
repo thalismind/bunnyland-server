@@ -365,6 +365,35 @@ directory. Only parameter-mismatched attempts belong under an explicitly named
 `quarantine/` directory. Exact-parameter incomplete attempts belong under `incomplete/` or
 `in-progress/`; none of those paths may be supplied to a final `build-tutorial-report` run.
 
+#### August 2026 new-model v1-v5 panel
+
+The prospective panel freezes `kimi-k3:cloud`, `muse-glimmer:30b`,
+`nemotron-3.5-lightning:30b`, and `qwen3.8:27b` across every applicable tutorial cohort
+from v1 through v5. The cloud Kimi route uses Ollama Cloud; the other three use the v4
+loopback Ollama endpoint. Each model runs 45 sessions: all three tutorials in v1 and v2,
+then Bell in v3, v4, and v5. The six run jobs preserve the exact commit and treatment of
+the frozen checkpoint matrix, including v2's separate Apple/Bell and Clover jobs.
+
+Inspect the complete 24-job plan without credentials or provider calls:
+
+```bash
+scripts/benchmark-new-ollama-models plan
+```
+
+Before running, install the three exact local tags on the Ollama instance listening at
+`http://127.0.0.1:11435` and set `OLLAMA_CLOUD_API_KEY` for Kimi K3. Then run and validate:
+
+```bash
+scripts/benchmark-new-ollama-models run \
+  --output artifacts/benchmarks/tutorials/ollama-new-models-v1-v5-2026-08-15
+scripts/benchmark-new-ollama-models validate-output \
+  --output artifacts/benchmarks/tutorials/ollama-new-models-v1-v5-2026-08-15
+```
+
+The runner fail-closes unless every local tag advertises tools and thinking. It checkpoints
+complete cells under `in-progress/`, resumes them after interruption, and promotes the
+requested output only after all 180 sessions and response logs validate.
+
 #### v5 description-rewrite cohort
 
 The v5 cohort compares the retained v1–v4 Ollama Cloud roster on Bell using server and
