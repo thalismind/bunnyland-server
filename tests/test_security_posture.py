@@ -40,8 +40,8 @@ def test_container_bases_are_immutable_debian_images() -> None:
     assert "alpine" not in dockerfile
     assert "musl" not in dockerfile
     assert (
-        "grafana/tempo:3.0.2"
-        "@sha256:cda87c212d8c584dc0b89e337e7ed648a5100feb657e5d528480ee4fa03dbbe3"
+        "grafana/tempo:3.0.3"
+        "@sha256:0296560ac66f8a3600d7fb3014a52c189d4d9c3549ad6ff441bf2409855d68d5"
         in tempo_compose
     )
     assert "alpine" not in tempo_compose
