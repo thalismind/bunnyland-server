@@ -9,6 +9,7 @@ from benchmarks.new_model_checkpoint_matrix import (
     NEW_MODEL_RUNS,
     NEW_MODELS,
     _cell_arguments,
+    _prepare_locked_python,
     matrix_plan,
     matrix_protocol,
 )
@@ -57,3 +58,38 @@ def test_new_model_arguments_select_matching_provider(tmp_path: Path) -> None:
     assert cloud[cloud.index("--host") + 1] == "https://ollama.com"
     assert local[local.index("--provider") + 1] == "ollama-local"
     assert local[local.index("--host") + 1] == "http://127.0.0.1:11435"
+
+
+def test_new_model_runner_prepares_checkout_local_environment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    worktree = tmp_path / "historical-checkout"
+    worktree.mkdir()
+    bootstrap_python = tmp_path / "bootstrap" / "python"
+    locked_python = worktree / ".venv" / "bin" / "python"
+
+    def fake_run(command, *, cwd, check):
+        assert command == (
+            "uv",
+            "run",
+            "--frozen",
+            "--extra",
+            "llm",
+            "--python",
+            str(bootstrap_python),
+            "python",
+            "-c",
+            "import bunnyland",
+        )
+        assert cwd == worktree
+        assert check is True
+        locked_python.parent.mkdir(parents=True)
+        locked_python.touch()
+
+    monkeypatch.setattr(
+        "benchmarks.new_model_checkpoint_matrix.subprocess.run",
+        fake_run,
+    )
+
+    assert _prepare_locked_python(worktree, bootstrap_python) == locked_python

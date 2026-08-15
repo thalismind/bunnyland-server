@@ -205,8 +205,31 @@ def _validate_prerequisites(repo: Path, python: Path) -> None:
         )
 
 
-def run_matrix(repo: Path, output: Path, python: Path) -> None:
-    _validate_prerequisites(repo, python)
+def _prepare_locked_python(worktree: Path, bootstrap_python: Path) -> Path:
+    subprocess.run(
+        (
+            "uv",
+            "run",
+            "--frozen",
+            "--extra",
+            "llm",
+            "--python",
+            str(bootstrap_python),
+            "python",
+            "-c",
+            "import bunnyland",
+        ),
+        cwd=worktree,
+        check=True,
+    )
+    python = worktree / ".venv" / "bin" / "python"
+    if not python.is_file():
+        raise MatrixValidationError(f"locked Python executable is missing: {python}")
+    return python
+
+
+def run_matrix(repo: Path, output: Path, bootstrap_python: Path) -> None:
+    _validate_prerequisites(repo, bootstrap_python)
     if output.exists():
         raise MatrixValidationError(f"output already exists: {output}")
 
@@ -226,6 +249,7 @@ def run_matrix(repo: Path, output: Path, python: Path) -> None:
 
     temporary_root = Path(tempfile.mkdtemp(prefix="bunnyland-new-model-matrix-"))
     worktrees: dict[str, Path] = {}
+    pythons: dict[str, Path] = {}
     try:
         for commit in dict.fromkeys(run.commit for run in NEW_MODEL_RUNS):
             worktree = temporary_root / commit[:8]
@@ -235,6 +259,7 @@ def run_matrix(repo: Path, output: Path, python: Path) -> None:
                 check=True,
             )
             worktrees[commit] = worktree
+            pythons[commit] = _prepare_locked_python(worktree, bootstrap_python)
 
         for candidate in NEW_MODELS:
             for run in NEW_MODEL_RUNS:
@@ -253,7 +278,10 @@ def run_matrix(repo: Path, output: Path, python: Path) -> None:
                 environment = os.environ.copy()
                 environment["PYTHONPATH"] = str(worktree / "src")
                 subprocess.run(
-                    (str(python), *_cell_arguments(candidate, run, destination)),
+                    (
+                        str(pythons[run.commit]),
+                        *_cell_arguments(candidate, run, destination),
+                    ),
                     cwd=worktree,
                     env=environment,
                     check=True,
