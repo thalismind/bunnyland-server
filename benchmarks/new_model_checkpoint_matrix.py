@@ -101,6 +101,12 @@ def matrix_plan() -> list[dict[str, object]]:
     return cells
 
 
+def _execution_models() -> tuple[NewModel, ...]:
+    local = tuple(model for model in NEW_MODELS if model.provider == "ollama-local")
+    cloud = tuple(model for model in NEW_MODELS if model.provider == "ollama-cloud")
+    return local + cloud
+
+
 def _cell_arguments(candidate: NewModel, run: MatrixRun, output: Path) -> tuple[str, ...]:
     if candidate.provider == "ollama-local":
         return local_benchmark_arguments(run, candidate.model, output)
@@ -261,7 +267,7 @@ def run_matrix(repo: Path, output: Path, bootstrap_python: Path) -> None:
             worktrees[commit] = worktree
             pythons[commit] = _prepare_locked_python(worktree, bootstrap_python)
 
-        for candidate in NEW_MODELS:
+        for candidate in _execution_models():
             for run in NEW_MODEL_RUNS:
                 destination = staging / candidate.output_name / run.name
                 if destination.exists():

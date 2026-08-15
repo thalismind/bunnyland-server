@@ -9,6 +9,7 @@ from benchmarks.new_model_checkpoint_matrix import (
     NEW_MODEL_RUNS,
     NEW_MODELS,
     _cell_arguments,
+    _execution_models,
     _prepare_locked_python,
     matrix_plan,
     matrix_protocol,
@@ -39,6 +40,15 @@ def test_new_model_plan_has_45_sessions_per_model() -> None:
     for model in NEW_MODELS:
         cells = [cell for cell in plan if cell["model"] == model.model]
         assert sum(len(cell["tutorials"]) * cell["sessions"] for cell in cells) == 45
+
+
+def test_new_model_execution_runs_available_local_models_before_cloud() -> None:
+    assert tuple(model.model for model in _execution_models()) == (
+        "muse-glimmer:30b",
+        "nemotron-3.5-lightning:30b",
+        "qwen3.8:27b",
+        "kimi-k3:cloud",
+    )
 
 
 def test_new_model_protocol_records_exact_treatment() -> None:
