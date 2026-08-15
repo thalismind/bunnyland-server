@@ -22,3 +22,9 @@ the matching `.grype.yaml` rule and guard test still pass, check for an upstream
 record the result in the release validation log. The exception expires automatically; CI
 rejects an expired or overdue review. It may not be renewed without a new explicit
 acceptance.
+
+Review history:
+
+- 2026-08-15: ChromaDB 1.5.9 remains the latest PyPI release and no upstream fix is
+  available. The embedded-only reachability assessment and immutable scanner guard remain
+  unchanged.
