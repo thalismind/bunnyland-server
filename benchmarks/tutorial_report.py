@@ -614,6 +614,8 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
         14_800_000_000,
     ),
     "gpt-oss:20b-cloud": ModelArchitecture("GPT-OSS 20B", 21_000_000_000),
+    "qwen3.8:27b": ModelArchitecture("Qwen 3.8 27B", 27_300_000_000),
+    "muse-glimmer:30b": ModelArchitecture("Muse Glimmer 30B", 27_900_000_000),
     "gemma4:cloud": ModelArchitecture("Gemma 4 31B", 30_700_000_000),
     "hf.co/HauhauCS/Gemma4-31B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M": (
         ModelArchitecture("Gemma 4 31B HauhauCS Q4", 30_700_000_000)
@@ -621,6 +623,12 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
     "nemotron-3-nano:30b-cloud": ModelArchitecture(
         "Nemotron 3 Nano 30B-A3B",
         31_600_000_000,
+        active_parameters=3_000_000_000,
+        architecture="moe",
+    ),
+    "nemotron-3.5-lightning:30b": ModelArchitecture(
+        "Nemotron 3.5 Lightning 30B-A3B",
+        32_900_000_000,
         active_parameters=3_000_000_000,
         architecture="moe",
     ),
@@ -717,6 +725,7 @@ STUDY_FAMILIES: dict[str, tuple[StudyFamilyModel, ...]] = {
         StudyFamilyModel("qwen3.5:397b-cloud", "Qwen 3.5 397B-A17B", 3),
         StudyFamilyModel("qwen/qwen3.7-flash", "Qwen 3.7 Flash", 4),
         StudyFamilyModel("qwen/qwen3.7-plus", "Qwen 3.7 Plus", 5),
+        StudyFamilyModel("qwen3.8:27b", "Qwen 3.8 27B", 6),
     ),
     "Kimi": (
         StudyFamilyModel("kimi-k2.5", "Kimi K2.5", 0),

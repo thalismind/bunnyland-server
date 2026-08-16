@@ -16,6 +16,7 @@ from benchmarks.tutorial_report import (
     ACTION_DESCRIPTION_V4_COMMIT,
     ACTION_DESCRIPTION_V5_COMMIT,
     MODEL_ARCHITECTURES,
+    STUDY_FAMILIES,
     TUTORIAL_MAPS,
     CohortInput,
     FineTuneComparisonRow,
@@ -899,7 +900,7 @@ def test_parameter_scatter_explains_unpublished_sizes():
 
 
 def test_parameter_scatter_catalogue_covers_full_study_roster():
-    assert len(MODEL_ARCHITECTURES) == 34
+    assert len(MODEL_ARCHITECTURES) == 37
     assert (
         MODEL_ARCHITECTURES[
             "hf.co/bartowski/NousResearch_Hermes-4-14B-GGUF:Q8_0"
@@ -934,6 +935,12 @@ def test_parameter_scatter_catalogue_covers_full_study_roster():
         ].display_name
         == "Qwen 2.5 32B RP-INK Q5"
     )
+    assert MODEL_ARCHITECTURES["muse-glimmer:30b"].display_name == "Muse Glimmer 30B"
+    assert MODEL_ARCHITECTURES["qwen3.8:27b"].total_parameters == 27_300_000_000
+    nemotron = MODEL_ARCHITECTURES["nemotron-3.5-lightning:30b"]
+    assert nemotron.display_name == "Nemotron 3.5 Lightning 30B-A3B"
+    assert nemotron.active_parameters == 3_000_000_000
+    assert STUDY_FAMILIES["Qwen"][-1].model == "qwen3.8:27b"
 
 
 def test_parameter_scatter_key_fits_all_entries_and_truncates_long_names():
