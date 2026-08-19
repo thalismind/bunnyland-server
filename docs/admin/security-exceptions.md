@@ -28,3 +28,8 @@ Review history:
 - 2026-08-15: ChromaDB 1.5.9 remains the latest PyPI release and no upstream fix is
   available. The embedded-only reachability assessment and immutable scanner guard remain
   unchanged.
+- 2026-08-19: ChromaDB 1.5.9 is still the latest PyPI release and no upstream fix is
+  available. The embedded-only reachability assessment, the matching `.grype.yaml` rule,
+  and the guard test are unchanged and passing. This review keeps the weekly cadence
+  current; it does not extend the 2026-08-28 expiry. Renewal past that date requires a new
+  explicit acceptance from the release operator, or removal of the exception.
