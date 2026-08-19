@@ -6,9 +6,10 @@
 - Component: embedded ChromaDB
 - Owner: Bunnyland release operator
 - Approved: 2026-07-29
-- Expires: 2026-08-28
+- Re-accepted: 2026-08-19
+- Expires: 2026-09-18
 - Review cadence: every 7 days
-- Status: temporary launch exception
+- Status: temporary launch exception, re-accepted once
 
 Bunnyland retains ChromaDB because removing it would break the required memory backend. The
 exception applies only to the immutable server image digest recorded in
@@ -30,6 +31,11 @@ Review history:
   unchanged.
 - 2026-08-19: ChromaDB 1.5.9 is still the latest PyPI release and no upstream fix is
   available. The embedded-only reachability assessment, the matching `.grype.yaml` rule,
-  and the guard test are unchanged and passing. This review keeps the weekly cadence
-  current; it does not extend the 2026-08-28 expiry. Renewal past that date requires a new
-  explicit acceptance from the release operator, or removal of the exception.
+  and the guard test are unchanged and passing.
+- 2026-08-19: The release operator re-accepted the exception and extended it to
+  2026-09-18. The rationale is unchanged: no upstream fix exists, and removing ChromaDB
+  would break the required memory backend. This is the single re-acceptance the policy
+  above allows; a further extension needs another explicit acceptance. The `.grype.yaml`
+  rule matches by advisory and package rather than by image digest, so the suppression
+  follows rebuilt images; `image_ref` records the digest the reachability assessment was
+  performed against, not a scan filter.
