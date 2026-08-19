@@ -30,7 +30,7 @@ def test_v1_distribution_metadata_declares_supported_runtime() -> None:
     assert package["License-Expression"] == "AGPL-3.0-or-later"
     assert set(package["Requires-Python"].split(",")) == {">=3.12", "<3.15"}
     assert {
-        "Development Status :: 4 - Beta",
+        "Development Status :: 5 - Production/Stable",
         "Programming Language :: Python :: 3.12",
         "Programming Language :: Python :: 3.13",
         "Programming Language :: Python :: 3.14",
