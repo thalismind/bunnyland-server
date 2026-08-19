@@ -9,7 +9,7 @@ import bunnyland
 
 
 def test_runtime_version_comes_from_distribution_metadata() -> None:
-    assert bunnyland.__version__ == version("bunnyland") == "1.0.0rc2"
+    assert bunnyland.__version__ == version("bunnyland") == "1.0.0"
 
 
 def test_runtime_version_has_source_tree_fallback(monkeypatch) -> None:

@@ -362,7 +362,7 @@ wheels = [
 
 [[package]]
 name = "bunnyland"
-version = "1.0.0rc2"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "pwdlib", extra = ["argon2"] },
