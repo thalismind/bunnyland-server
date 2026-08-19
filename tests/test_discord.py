@@ -3487,9 +3487,11 @@ async def test_discord_registered_events_route_messages_and_errors(
     )
 
     assert "Discord command failed: RuntimeError('boom')" in capsys.readouterr().out
-    assert ctx.sent[-1] == "Command failed: boom"
+    assert ctx.sent[-1] == "Command failed. Try `!help` for available commands."
+    assert "boom" not in ctx.sent[-1]
 
     await bot.client.events["on_command_error"](ctx, RuntimeError("plain boom"))
 
     assert "Discord command failed: RuntimeError('plain boom')" in capsys.readouterr().out
-    assert ctx.sent[-1] == "Command failed: plain boom"
+    assert ctx.sent[-1] == "Command failed. Try `!help` for available commands."
+    assert "plain boom" not in ctx.sent[-1]

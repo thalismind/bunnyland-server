@@ -1590,7 +1590,7 @@ class DiscordBot:
                 return
             cause = error.original if isinstance(error, commands.CommandInvokeError) else error
             print(f"Discord command failed: {cause!r}", flush=True)
-            await ctx.send(f"Command failed: {cause}")
+            await ctx.send("Command failed. Try `!help` for available commands.")
 
     def run(self) -> None:
         self.client.run(self.token)
