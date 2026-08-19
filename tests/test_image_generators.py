@@ -87,6 +87,7 @@ def _media_config(
     openrouter_image_model: str = "",
     openrouter_api_key: str = "",
     openrouter_server_url: str = "",
+    openrouter_result_origins: tuple[str, ...] = (),
 ) -> MediaGenConfig:
     return MediaGenConfig(
         comfyui=ComfyUIConfig(server_url=server_url),
@@ -96,6 +97,7 @@ def _media_config(
             openrouter_image_model=openrouter_image_model,
             openrouter_api_key=openrouter_api_key,
             openrouter_server_url=openrouter_server_url,
+            openrouter_result_origins=openrouter_result_origins,
         ),
         media_root=media_root,
     )
@@ -482,6 +484,7 @@ def test_wiring_constructs_selected_openrouter(monkeypatch, tmp_path):
         openrouter_image_model="example/image",
         openrouter_api_key="secret",
         openrouter_server_url="https://router.example",
+        openrouter_result_origins=("https://cdn.example",),
         media_root=str(tmp_path),
     )
     service = build_media_services(build_scenario().actor, config).image
@@ -491,6 +494,7 @@ def test_wiring_constructs_selected_openrouter(monkeypatch, tmp_path):
         "model": "example/image",
         "api_key": "secret",
         "server_url": "https://router.example",
+        "allowed_result_origins": ("https://cdn.example",),
     }
 
 
@@ -856,9 +860,24 @@ def test_openrouter_reports_missing_sdk(monkeypatch):
 
 class _HttpResponse:
     content = _png(color=(90, 80, 70))
+    headers: dict[str, str] = {}
+
+    def __init__(self, *, chunks=None, headers=None) -> None:
+        self._chunks = list(chunks) if chunks is not None else [self.content]
+        self.headers = headers or {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
 
     def raise_for_status(self):
         return None
+
+    async def aiter_bytes(self):
+        for chunk in self._chunks:
+            yield chunk
 
 
 class _Http:
@@ -871,7 +890,8 @@ class _Http:
     async def __aexit__(self, *args):
         return False
 
-    async def get(self, url):
+    def stream(self, method, url):
+        assert method == "GET"
         self.urls.append(url)
         return _HttpResponse()
 
@@ -883,6 +903,7 @@ async def test_openrouter_fetches_https_and_normalizes_png():
         api_key="secret",
         client=SimpleNamespace(chat=_Chat(_openrouter_response("https://cdn.example/image"))),
         http_factory=lambda: http,
+        allowed_result_origins=("https://cdn.example",),
     )
     assert (await generator.generate(_request())).startswith(b"\x89PNG")
     assert http.urls == ["https://cdn.example/image"]
@@ -901,9 +922,96 @@ async def test_openrouter_uses_default_http_client(monkeypatch):
         model="example/image",
         api_key="secret",
         client=SimpleNamespace(chat=_Chat(_openrouter_response("https://cdn.example/image"))),
+        allowed_result_origins=("https://cdn.example",),
     )
     await generator.generate(_request())
     assert timeouts == [120.0]
+
+
+async def test_openrouter_rejects_private_result_addresses():
+    generator = OpenRouterImageGenerator(
+        model="example/image",
+        api_key="secret",
+        client=SimpleNamespace(
+            chat=_Chat(_openrouter_response("https://127.0.0.1/private.png"))
+        ),
+        http_factory=_Http,
+        allowed_result_origins=("https://127.0.0.1",),
+    )
+
+    with pytest.raises(RuntimeError, match="non-public address"):
+        await generator.generate(_request())
+
+
+async def test_openrouter_rejects_https_origins_that_are_not_allowlisted():
+    generator = OpenRouterImageGenerator(
+        model="example/image",
+        api_key="secret",
+        client=SimpleNamespace(chat=_Chat(_openrouter_response("https://other.example/image"))),
+        http_factory=_Http,
+        allowed_result_origins=("https://cdn.example",),
+    )
+
+    with pytest.raises(RuntimeError, match="origin is not explicitly allowed"):
+        await generator.generate(_request())
+
+
+async def test_openrouter_bounds_data_and_https_results(monkeypatch):
+    import bunnyland.imagegen.openrouter as openrouter_module
+
+    monkeypatch.setattr(openrouter_module, "MAX_OPENROUTER_IMAGE_BYTES", 2)
+    encoded = base64.b64encode(b"oversized").decode()
+    data_generator = OpenRouterImageGenerator(
+        model="example/image",
+        api_key="secret",
+        client=SimpleNamespace(
+            chat=_Chat(_openrouter_response(f"data:image/png;base64,{encoded}"))
+        ),
+    )
+    with pytest.raises(RuntimeError, match="malformed image data URL"):
+        await data_generator.generate(_request())
+
+    https_generator = OpenRouterImageGenerator(
+        model="example/image",
+        api_key="secret",
+        client=SimpleNamespace(chat=_Chat(_openrouter_response("https://cdn.example/image"))),
+        http_factory=_Http,
+        allowed_result_origins=("https://cdn.example",),
+    )
+    with pytest.raises(RuntimeError, match="exceeds 20 MiB"):
+        await https_generator.generate(_request())
+
+
+async def test_openrouter_bounds_decoded_data_and_declared_https_length(monkeypatch):
+    import bunnyland.imagegen.openrouter as module
+
+    monkeypatch.setattr(module, "MAX_OPENROUTER_IMAGE_BYTES", 4)
+    encoded = base64.b64encode(b"12345").decode()
+    data_generator = OpenRouterImageGenerator(
+        model="example/image",
+        api_key="secret",
+        client=SimpleNamespace(
+            chat=_Chat(_openrouter_response(f"data:image/png;base64,{encoded}"))
+        ),
+    )
+    with pytest.raises(RuntimeError, match="malformed image data URL"):
+        await data_generator.generate(_request())
+
+    class LengthHttp(_Http):
+        def stream(self, method, url):
+            assert method == "GET"
+            self.urls.append(url)
+            return _HttpResponse(headers={"content-length": "5"}, chunks=[])
+
+    https_generator = OpenRouterImageGenerator(
+        model="example/image",
+        api_key="secret",
+        client=SimpleNamespace(chat=_Chat(_openrouter_response("https://cdn.example/image"))),
+        http_factory=LengthHttp,
+        allowed_result_origins=("https://cdn.example",),
+    )
+    with pytest.raises(RuntimeError, match="exceeds 20 MiB"):
+        await https_generator.generate(_request())
 
 
 @pytest.mark.parametrize(
@@ -952,7 +1060,7 @@ async def test_openrouter_wraps_sdk_errors():
 
 async def test_openrouter_wraps_https_errors():
     class FailedHttp(_Http):
-        async def get(self, url):
+        def stream(self, method, url):
             raise OSError("cdn down")
 
     generator = OpenRouterImageGenerator(
@@ -960,6 +1068,7 @@ async def test_openrouter_wraps_https_errors():
         api_key="secret",
         client=SimpleNamespace(chat=_Chat(_openrouter_response("https://cdn.example/image"))),
         http_factory=FailedHttp,
+        allowed_result_origins=("https://cdn.example",),
     )
     with pytest.raises(RuntimeError, match="failed to fetch.*cdn down"):
         await generator.generate(_request())
@@ -980,6 +1089,41 @@ def test_openrouter_rejects_invalid_raster():
 
     with pytest.raises(RuntimeError, match="invalid raster image data"):
         module._normalize_png(b"not an image")
+
+
+def test_openrouter_validates_result_hosts_origins_and_content_lengths():
+    import bunnyland.imagegen.openrouter as module
+
+    with pytest.raises(RuntimeError, match="no hostname"):
+        module._reject_nonpublic_literal_host("https:///image.png")
+    module._reject_nonpublic_literal_host("https://8.8.8.8/image.png")
+
+    for origin in ("http://cdn.example", "https:///image.png"):
+        with pytest.raises(ValueError, match="must be HTTPS"):
+            module._https_origin(origin)
+    with pytest.raises(ValueError, match="must not contain credentials"):
+        module._https_origin("https://user:secret@cdn.example")
+    with pytest.raises(ValueError, match="invalid port"):
+        module._https_origin("https://cdn.example:not-a-port")
+    assert module._https_origin("https://[2001:4860:4860::8888]:443/path") == (
+        "https://[2001:4860:4860::8888]"
+    )
+    assert module._https_origin("https://cdn.example:8443/path") == (
+        "https://cdn.example:8443"
+    )
+
+    assert module._content_length({}) is None
+    assert module._content_length({"Content-Length": "12"}) == 12
+    assert module._content_length({"content-length": "invalid"}) is None
+    assert module._content_length({"content-length": "-1"}) == 0
+
+
+def test_openrouter_rejects_excessive_pixel_dimensions(monkeypatch):
+    import bunnyland.imagegen.openrouter as module
+
+    monkeypatch.setattr(module, "MAX_OPENROUTER_IMAGE_PIXELS", 1)
+    with pytest.raises(RuntimeError, match="invalid raster image data"):
+        module._normalize_png(_png())
 
 
 async def test_openrouter_propagates_normalization_worker_failure(monkeypatch):
@@ -1028,6 +1172,9 @@ def test_config_environment_activation_and_overrides():
             "BUNNYLAND_IMAGE_GENERATOR_SPRITE": "in-memory",
             "BUNNYLAND_IMAGE_GENERATOR_EVENT": "openrouter",
             "BUNNYLAND_IMAGE_OPENROUTER_MODEL": "example/image",
+            "BUNNYLAND_IMAGE_OPENROUTER_RESULT_ORIGINS": (
+                "https://cdn-a.example, https://cdn-b.example"
+            ),
             "OPENROUTER_API_KEY": "secret",
         }
     )
@@ -1038,3 +1185,7 @@ def test_config_environment_activation_and_overrides():
     assert config.image.generator_for("event") == "openrouter"
     assert config.image.openrouter_image_model == "example/image"
     assert config.image.openrouter_api_key == "secret"
+    assert config.image.openrouter_result_origins == (
+        "https://cdn-a.example",
+        "https://cdn-b.example",
+    )

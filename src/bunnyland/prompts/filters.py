@@ -122,6 +122,7 @@ class PromptFilterRuntime:
         prompt: PromptContext,
         epoch: int = 0,
         include_automatic: bool = True,
+        excluded_definition_ids: frozenset[str] = frozenset(),
     ) -> str:
         from bunnyland.foundation.prompt_filters.mechanics import PromptFilterBinding
 
@@ -146,6 +147,8 @@ class PromptFilterRuntime:
                 )
                 continue
             component_type, definition = matches[0]
+            if definition.id in excluded_definition_ids:
+                continue
             explicitly_bound.add(definition.id)
             component = filter_entity.get_component(component_type)
             current = await self._apply_definition(
@@ -162,6 +165,8 @@ class PromptFilterRuntime:
             )
 
         for automatic in self.actor.automatic_prompt_filters if include_automatic else ():
+            if automatic.definition_id in excluded_definition_ids:
+                continue
             if automatic.definition_id in explicitly_bound:
                 continue
             if not character.has_component(automatic.required_component):
@@ -265,6 +270,7 @@ async def apply_prompt_filters(
     context: PromptContext,
     epoch: int = 0,
     include_automatic: bool = True,
+    excluded_definition_ids: frozenset[str] = frozenset(),
 ) -> str:
     """Apply the configured stack, or return raw compiled text when none is configured."""
 
@@ -276,6 +282,7 @@ async def apply_prompt_filters(
         prompt=context,
         epoch=epoch,
         include_automatic=include_automatic,
+        excluded_definition_ids=excluded_definition_ids,
     )
 
 

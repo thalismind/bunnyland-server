@@ -2940,6 +2940,50 @@ def test_fastapi_command_endpoint_reports_insufficient_points(scenario):
     assert queued.json()["status"] == "queued"
 
 
+def test_fastapi_command_endpoint_reports_queue_backpressure(scenario):
+    testclient = pytest.importorskip("fastapi.testclient")
+    app = create_app(scenario.actor)
+    client = testclient.TestClient(app)
+    claimed_response = client.post(
+        "/v1/play/claims",
+        headers={CLIENT_ID_HEADER: "client-a"},
+        json={"character_id": str(scenario.character)},
+    )
+    claim_headers = {
+        CLIENT_ID_HEADER: "client-a",
+        "X-Bunnyland-Claim-Secret": claimed_response.headers[
+            "X-Bunnyland-Claim-Secret"
+        ],
+    }
+    path = f"/v1/play/claims/{claimed_response.json()['id']}/commands"
+    scenario.actor._command_capacity = 1
+
+    accepted = client.post(
+        path,
+        headers=claim_headers,
+        json={
+            "id": "first",
+            "command_type": "move",
+            "payload": {"direction": "north"},
+        },
+    )
+    rejected = client.post(
+        path,
+        headers=claim_headers,
+        json={
+            "id": "second",
+            "command_type": "move",
+            "payload": {"direction": "north"},
+        },
+    )
+
+    assert accepted.status_code == 202
+    assert rejected.status_code == 429
+    assert rejected.headers["content-type"].startswith("application/problem+json")
+    assert rejected.json()["code"] == "queue_full"
+    assert rejected.json()["detail"] == "command queue is full"
+
+
 def test_fastapi_command_endpoint_refuses_a_disagreeing_cost_or_lane(scenario):
     # cost and lane are server-owned. A client may omit them entirely; if it states them it
     # is asserting which action it believes it is taking, so a disagreement is refused

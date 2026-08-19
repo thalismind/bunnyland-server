@@ -545,7 +545,7 @@ class LLMControllerComponent(Component):
     temperature: float
     max_tokens: int
     system_style: str = "in_character"
-    tool_policy: str = "character_actions"
+    tool_policy: Literal["character_actions"] = "character_actions"
 
 
 @dataclass(frozen=True)

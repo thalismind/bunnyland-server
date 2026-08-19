@@ -7,6 +7,8 @@ linked by the ``ControlledBy`` edge. Every control change increments the edge's
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic.dataclasses import dataclass
 from relics import Component
 
@@ -69,7 +71,7 @@ class LLMControllerComponent(Component):
     temperature: float = 0.7
     max_tokens: int = 1024
     system_style: str = "in_character"
-    tool_policy: str = "character_actions"
+    tool_policy: Literal["character_actions"] = "character_actions"
     #: Only let this controller act once every N dispatch ticks (>=1). Higher values make
     #: the character take fewer turns, letting environmental systems run faster than it.
     act_every_ticks: int = 1

@@ -12,9 +12,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from bunnyland.server.jobs import JobRegistry
+from bunnyland.foundation.media import MediaService
+from bunnyland.server.app import _delete_ephemeral_job_media
+from bunnyland.server.jobs import JobRecord, JobRegistry
 from bunnyland.server.rate_limit import ConcurrencyLimiter, FixedWindowRateLimiter
-from bunnyland.server.v1_models import JobResource, _json_depth
+from bunnyland.server.v1_models import ImageJobResult, JobResource, _json_depth
 
 
 class _Clock:
@@ -51,6 +53,115 @@ def test_registry_expires_jobs_past_their_ttl():
     clock.advance(61.0)
     assert registry.get("a", owner="client-a") is None
     assert len(registry) == 0
+
+
+def test_registry_reports_evicted_records_to_cleanup_callback():
+    evicted = []
+    registry = JobRegistry(max_per_owner=1, on_evict=evicted.append)
+    registry.put(_job("old"), owner="client-a")
+    registry.put(_job("new"), owner="client-a")
+
+    assert [record.job.id for record in evicted] == ["old"]
+
+    removed = registry.discard_matching(owner="client-a")
+
+    assert removed == {"new"}
+    assert [record.job.id for record in evicted] == ["old", "new"]
+
+
+def test_registry_logs_cleanup_failures_without_breaking_eviction(caplog):
+    def fail(_record):
+        raise OSError("disk unavailable")
+
+    registry = JobRegistry(max_per_owner=1, on_evict=fail)
+    registry.put(_job("old"), owner="client-a")
+    registry.put(_job("new"), owner="client-a")
+
+    assert registry.get("new", owner="client-a") is not None
+    assert "job eviction cleanup failed for old" in caplog.text
+
+
+def test_registry_can_list_and_discard_one_job():
+    registry = JobRegistry()
+    registry.put(_job("first"), owner="client-a")
+    registry.put(_job("second"), owner="client-b")
+
+    assert [job.id for job in registry.list_all()] == ["first", "second"]
+    assert registry.discard("first") is True
+    assert registry.discard("first") is False
+    assert [job.id for job in registry.list_all()] == ["second"]
+
+
+def test_ephemeral_job_eviction_deletes_only_valid_media_urls(tmp_path, caplog):
+    media = MediaService(tmp_path)
+    media.write("events", "image.png", b"image")
+    media.write("alpha", "mask.png", b"mask")
+    job = _job("media").model_copy(
+        update={
+            "kind": "chat_image",
+            "status": "succeeded",
+            "result": ImageJobResult(
+                world_epoch=1,
+                job_id="media",
+                status="succeeded",
+                entity_id="entity_1",
+                purpose="event",
+                url="/v1/public/media/events/image.png",
+                alpha_url="/public/media/alpha/mask.png",
+            ),
+        }
+    )
+
+    _delete_ephemeral_job_media(media, JobRecord(job=job, owner="client-a"))
+
+    assert not media.path_for("events", "image.png").exists()
+    assert not media.path_for("alpha", "mask.png").exists()
+
+    _delete_ephemeral_job_media(media, JobRecord(job=_job("chat"), owner="client-a"))
+    malformed = job.model_copy(
+        update={
+            "result": job.result.model_copy(
+                update={"url": "/v1/public/media/bad%20namespace/image.png", "alpha_url": ""}
+            )
+        }
+    )
+    _delete_ephemeral_job_media(media, JobRecord(job=malformed, owner="client-a"))
+    nested = job.model_copy(
+        update={
+            "result": job.result.model_copy(
+                update={"url": "/v1/public/media/events/nested/image.png", "alpha_url": ""}
+            )
+        }
+    )
+    _delete_ephemeral_job_media(media, JobRecord(job=nested, owner="client-a"))
+    assert "refused invalid ephemeral media URL" in caplog.text
+
+
+def test_ephemeral_media_cleanup_logs_filesystem_failures(tmp_path, monkeypatch, caplog):
+    media = MediaService(tmp_path)
+    job = _job("media-error").model_copy(
+        update={
+            "kind": "chat_image",
+            "status": "succeeded",
+            "result": ImageJobResult(
+                world_epoch=1,
+                job_id="media-error",
+                status="succeeded",
+                entity_id="entity_1",
+                purpose="event",
+                url="/v1/public/media/events/image.png",
+            ),
+        }
+    )
+
+    def fail_delete(_namespace, _name):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(media, "delete", fail_delete)
+
+    _delete_ephemeral_job_media(media, JobRecord(job=job, owner="client-a"))
+
+    assert "failed to delete ephemeral media URL" in caplog.text
 
 
 def test_registry_caps_jobs_per_owner_and_drops_the_oldest():

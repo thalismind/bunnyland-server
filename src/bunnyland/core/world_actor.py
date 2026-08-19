@@ -184,7 +184,18 @@ class WorldActor:
         *,
         rng: random.Random | None = None,
         receipt_cache_size: int = 1000,
+        command_capacity: int = 512,
+        focus_lane_capacity: int = 128,
+        world_lane_capacity: int = 128,
+        ingestion_batch_size: int = 64,
     ) -> None:
+        if min(
+            command_capacity,
+            focus_lane_capacity,
+            world_lane_capacity,
+            ingestion_batch_size,
+        ) < 1:
+            raise ValueError("command queue limits must be positive")
         self.world = world or World()
         ensure_blank_prefab(self.world)
         self.bus = EventBus()
@@ -206,7 +217,15 @@ class WorldActor:
         self._after_tick: list[AfterTickHook] = []
         #: Lazily-built ``command_type -> merged definition`` map for submit validation.
         self._definition_cache: dict[str, ActionDefinition] | None = None
-        self._inbox: asyncio.Queue[SubmittedCommand] = asyncio.Queue()
+        self._inbox: asyncio.Queue[SubmittedCommand] = asyncio.Queue(
+            maxsize=command_capacity
+        )
+        self._command_capacity = command_capacity
+        self._lane_capacities = {
+            Lane.FOCUS: focus_lane_capacity,
+            Lane.WORLD: world_lane_capacity,
+        }
+        self._ingestion_batch_size = ingestion_batch_size
         self._rng = rng or random.Random()
         self._submission_sequence = 0
         self._receipt_cache_size = receipt_cache_size
@@ -420,7 +439,18 @@ class WorldActor:
                     return SubmissionOutcome(
                         accepted=False, command_id=command.command_id, reason=reason
                     )
-                await self._inbox.put(command)
+                overload_reason = self._queue_overload_reason(command)
+                if overload_reason is not None:
+                    span.set_attribute("command.accepted", False)
+                    span.set_attribute("command.reject_reason_text", overload_reason)
+                    telemetry.mark_span_error(overload_reason, span)
+                    await self._reject(command, overload_reason)
+                    return SubmissionOutcome(
+                        accepted=False,
+                        command_id=command.command_id,
+                        reason=overload_reason,
+                    )
+                self._inbox.put_nowait(command)
                 span.set_attribute("command.accepted", True)
                 telemetry.mark_span_ok(span)
                 return SubmissionOutcome(accepted=True, command_id=command.command_id)
@@ -428,6 +458,21 @@ class WorldActor:
                 span.record_exception(exc)
                 telemetry.mark_span_error(str(exc), span)
                 raise
+
+    def _queue_overload_reason(self, command: SubmittedCommand) -> str | None:
+        """Reject work before accepted backlog can exceed its fixed memory budget."""
+
+        queued_depth = sum(self.queues.depths().values())
+        if queued_depth + self._inbox.qsize() >= self._command_capacity:
+            return "command queue is full"
+        inbox_lane_depth = sum(
+            pending.character_id == command.character_id and pending.lane is command.lane
+            for pending in self.pending_submissions()
+        )
+        lane_depth = len(self.queues.pending(command.character_id, command.lane))
+        if inbox_lane_depth + lane_depth >= self._lane_capacities[command.lane]:
+            return f"{command.lane.value} command queue is full"
+        return None
 
     def _command_pending(self, character_id: str, command_id: str) -> bool:
         """Report whether one character already has this command id in flight.
@@ -868,8 +913,10 @@ class WorldActor:
                 await result
 
     async def _ingest(self) -> None:
-        while not self._inbox.empty():
+        ingested = 0
+        while not self._inbox.empty() and ingested < self._ingestion_batch_size:
             command = self._inbox.get_nowait()
+            ingested += 1
             self._record_controller_activity(command)
             self.queues.enqueue(command)
             telemetry.record_command_submitted(command.command_type)

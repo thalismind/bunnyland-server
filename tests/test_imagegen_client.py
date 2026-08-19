@@ -13,6 +13,7 @@ from bunnyland.imagegen.client import (
     ComfyTimeoutError,
     HttpComfyClient,
     WebSocketComfyClient,
+    _content_length,
     _extract_media_ref,
     _fetch_view,
     _is_completion,
@@ -49,6 +50,7 @@ def test_config_from_env_reads_all_fields():
             "COMFYUI_POLL_INTERVAL_SECONDS": "2.5",
             "COMFYUI_TIMEOUT_SECONDS": "30",
             "BUNNYLAND_MEDIA_DIR": "/srv/media",
+            "BUNNYLAND_MEDIA_CAPACITY_BYTES": "1048576",
             "BUNNYLAND_PUBLIC_BASE_URL": "https://play.example/",
             "BUNNYLAND_MEDIA_TEMPLATES": "/srv/templates.json",
             "BUNNYLAND_VIDEO_GENERATOR": "comfyui",
@@ -69,6 +71,7 @@ def test_config_from_env_reads_all_fields():
     assert config.comfyui.poll_interval_seconds == 2.5
     assert config.comfyui.timeout_seconds == 30.0
     assert config.media_root == "/srv/media"
+    assert config.media_capacity_bytes == 1_048_576
     assert config.public_base_url == "https://play.example"
     assert config.video.profile == "event-video"
     assert config.comfyui.workflows == "anima-my-server"
@@ -97,10 +100,20 @@ def test_config_from_env_defaults():
 
 
 class _Response:
-    def __init__(self, payload=None, content=b"", status_error=None):
+    def __init__(
+        self, payload=None, content=b"", status_error=None, *, headers=None, chunks=None
+    ):
         self._payload = payload
         self.content = content
         self._status_error = status_error
+        self.headers = headers or {}
+        self._chunks = list(chunks) if chunks is not None else [content]
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
 
     def raise_for_status(self):
         if self._status_error is not None:
@@ -108,6 +121,10 @@ class _Response:
 
     def json(self):
         return self._payload
+
+    async def aiter_bytes(self):
+        for chunk in self._chunks:
+            yield chunk
 
 
 class _FakeHttp:
@@ -132,6 +149,12 @@ class _FakeHttp:
     async def get(self, path, *, params=None):
         if path.startswith("/history/"):
             return _Response(payload=self._history_sequence.pop(0))
+        self.view_params.append(params)
+        return _Response(content=self._image_bytes)
+
+    def stream(self, method, path, *, params=None):
+        assert method == "GET"
+        assert path == "/view"
         self.view_params.append(params)
         return _Response(content=self._image_bytes)
 
@@ -260,6 +283,44 @@ def test_extract_media_ref_tolerates_malformed_outputs_and_native_video_refs():
 async def test_fetch_view_requires_a_filename():
     with pytest.raises(ComfyError, match="did not include a filename"):
         await _fetch_view(_FakeHttp(history_sequence=[]), {})
+
+
+async def test_fetch_view_rejects_oversized_provider_output(monkeypatch):
+    import bunnyland.imagegen.client as client_module
+
+    monkeypatch.setattr(client_module, "MAX_COMFY_MEDIA_BYTES", 2)
+    http = _FakeHttp(history_sequence=[], image_bytes=b"large")
+
+    with pytest.raises(ComfyError, match="exceeds 256 MiB"):
+        await _fetch_view(http, {"filename": "out.png"})
+
+
+async def test_fetch_view_rejects_content_length_before_streaming(monkeypatch):
+    import bunnyland.imagegen.client as client_module
+
+    monkeypatch.setattr(client_module, "MAX_COMFY_MEDIA_BYTES", 2)
+    response = _Response(headers={"Content-Length": "3"}, chunks=[b"not-read"])
+
+    class _LengthHttp(_FakeHttp):
+        def stream(self, method, path, *, params=None):
+            return response
+
+    with pytest.raises(ComfyError, match="exceeds 256 MiB"):
+        await _fetch_view(_LengthHttp(history_sequence=[]), {"filename": "out.png"})
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({}, None),
+        ({"content-length": "7"}, 7),
+        ({"Content-Length": "8"}, 8),
+        ({"content-length": "invalid"}, None),
+        ({"content-length": "-1"}, 0),
+    ],
+)
+def test_content_length_tolerates_http_header_variants(headers, expected):
+    assert _content_length(headers) == expected
 
 
 async def test_http_client_default_factory_imports_httpx(monkeypatch):

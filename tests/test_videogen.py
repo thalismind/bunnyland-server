@@ -22,6 +22,7 @@ from bunnyland.core import (
 from bunnyland.core.events import SpeechSaidEvent
 from bunnyland.foundation.history.mechanics import record_world_history
 from bunnyland.foundation.media.service import sniff_video_extension
+from bunnyland.imagegen import video_service as video_service_module
 from bunnyland.imagegen.comfyui import ComfyUIGenerator
 from bunnyland.imagegen.components import EventImageComponent, EventVideoComponent
 from bunnyland.imagegen.config import (
@@ -207,17 +208,20 @@ async def test_ephemeral_chat_media_uses_one_pipeline_without_mutating_world(tmp
         scenario.actor, video, scenario.character
     )
 
+    completed = []
     image_job = await image.start_ephemeral(
         str(scenario.character),
         subject=image_subject,
         scene=image_scene,
         extra="Visual focus: Juniper. Fictional scene action: Juniper dances.",
+        on_complete=completed.append,
     )
     video_job = await video.start_ephemeral(
         str(scenario.character),
         subject=video_subject,
         scene=video_scene,
         extra="Visual focus: Juniper. Fictional scene action: Juniper dances.",
+        on_complete=completed.append,
     )
     await image.wait_idle()
     await video.wait_idle()
@@ -230,6 +234,7 @@ async def test_ephemeral_chat_media_uses_one_pipeline_without_mutating_world(tmp
     assert len(list(scenario.actor.world.query().execute_entities())) == entity_count
     assert image_job.source_event_id == ""
     assert video_job.source_event_id == ""
+    assert {job.job_id for job in completed} == {image_job.job_id, video_job.job_id}
     await image.aclose()
     await video.aclose()
 
@@ -298,6 +303,54 @@ async def test_video_jobs_reject_invalid_requests_and_report_invalid_output(tmp_
     assert job.error == "video generator returned an unsupported container"
     assert failed_events[0].reason == job.error
     await enabled.aclose()
+
+
+async def test_video_service_rejects_oversized_provider_output(tmp_path, monkeypatch):
+    scenario = build_scenario()
+    monkeypatch.setattr(video_service_module, "MAX_GENERATED_VIDEO_BYTES", 4)
+    service = _service(scenario.actor, tmp_path, video=True)
+
+    job = await request_scene_video(
+        scenario.actor,
+        service,
+        character_id=scenario.character,
+    )
+    assert job is not None
+    await service.wait_idle()
+
+    assert job.status == "failed"
+    assert job.error == "video generator output exceeds 256 MiB"
+    await service.aclose()
+
+
+async def test_ephemeral_video_callback_failure_does_not_stop_worker(tmp_path, caplog):
+    scenario = build_scenario()
+    service = _service(scenario.actor, tmp_path, video=True)
+    subject, scene = await capture_chat_media_scene(
+        scenario.actor, service, scenario.character
+    )
+
+    def fail_callback(_job):
+        raise RuntimeError("reporting failed")
+
+    first = await service.start_ephemeral(
+        str(scenario.character),
+        subject=subject,
+        scene=scene,
+        on_complete=fail_callback,
+    )
+    await service.wait_idle()
+    second = await service.start_ephemeral(
+        str(scenario.character),
+        subject=subject,
+        scene=scene,
+    )
+    await service.wait_idle()
+
+    assert first.status == "succeeded"
+    assert second.status == "succeeded"
+    assert "ephemeral video completion callback failed" in caplog.text
+    await service.aclose()
 
 
 async def test_video_service_guards_duplicate_force_lookup_and_restart(tmp_path):
@@ -814,6 +867,37 @@ async def test_player_chat_image_and_video_share_private_media_job_pipeline(
         )
     assert unavailable.status_code == 404
     assert unavailable.json()["detail"] == "character chat is not enabled"
+
+
+async def test_unpolled_chat_media_expires_and_deletes_its_file(tmp_path, monkeypatch):
+    scenario = build_scenario()
+    image = _image_service(scenario.actor, tmp_path)
+    monkeypatch.setattr(server_app, "JOB_TTL_SECONDS", 0.01)
+
+    class ChatService:
+        allow_sleeping_character_chat = False
+
+    app = create_app(
+        scenario.actor,
+        imagegen=image,
+        character_chat=ChatService(),
+        allow_unauthenticated_embedding=True,
+    )
+    async with _client(app) as client:
+        response = await client.post(
+            f"/v1/chat/characters/{scenario.character}/media-jobs",
+            json={"kind": "chat_image", "focus": "Juniper"},
+        )
+        await image.wait_idle()
+        generated = image.job(response.json()["id"])
+        assert generated is not None
+        name = generated.url.rsplit("/", 1)[-1]
+        assert image.media.path_for("events", name).exists()
+        await asyncio.sleep(0.02)
+        missing = await client.get(response.headers["Location"])
+
+    assert missing.status_code == 404
+    assert not image.media.path_for("events", name).exists()
 
 
 async def test_chat_media_context_validation_bounding_and_ephemeral_job_guards(

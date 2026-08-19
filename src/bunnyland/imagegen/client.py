@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from types import TracebackType
 from typing import Protocol, Self, cast
 
@@ -25,6 +25,7 @@ from .config import ComfyUIConfig
 logger = logging.getLogger("bunnyland.imagegen")
 
 DEFAULT_CLIENT_ID = "bunnyland"
+MAX_COMFY_MEDIA_BYTES = 256 * 1024 * 1024
 
 
 class ComfyError(RuntimeError):
@@ -45,10 +46,24 @@ class ComfyClient(Protocol):
 
 class _HttpResponse(Protocol):
     content: bytes
+    headers: Mapping[str, str]
 
     def raise_for_status(self) -> None: ...
 
     def json(self) -> object: ...
+
+    def aiter_bytes(self) -> AsyncIterator[bytes]: ...
+
+
+class _HttpStreamContext(Protocol):
+    async def __aenter__(self) -> _HttpResponse: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
 
 
 class _HttpClient(Protocol):
@@ -66,6 +81,10 @@ class _HttpClient(Protocol):
     async def get(
         self, url: str, *, params: dict[str, str] | None = None
     ) -> _HttpResponse: ...
+
+    def stream(
+        self, method: str, url: str, *, params: dict[str, str] | None = None
+    ) -> _HttpStreamContext: ...
 
 
 class _WebSocketConnection(Protocol):
@@ -145,9 +164,30 @@ async def _fetch_view(http: _HttpClient, media_ref: dict[str, JsonValue]) -> byt
         "subfolder": subfolder if isinstance(subfolder, str) else "",
         "type": output_type if isinstance(output_type, str) else "output",
     }
-    response = await http.get("/view", params=params)
-    response.raise_for_status()
-    return response.content
+    async with http.stream("GET", "/view", params=params) as response:
+        response.raise_for_status()
+        content_length = _content_length(response.headers)
+        if content_length is not None and content_length > MAX_COMFY_MEDIA_BYTES:
+            raise ComfyError("comfyui output exceeds 256 MiB")
+        output = bytearray()
+        async for chunk in response.aiter_bytes():
+            if len(output) + len(chunk) > MAX_COMFY_MEDIA_BYTES:
+                raise ComfyError("comfyui output exceeds 256 MiB")
+            output.extend(chunk)
+        return bytes(output)
+
+
+def _content_length(headers: Mapping[str, str]) -> int | None:
+    value = headers.get("content-length")
+    if value is None:
+        value = headers.get("Content-Length")
+    if value is None:
+        return None
+    try:
+        length = int(value)
+    except ValueError:
+        return None
+    return max(0, length)
 
 
 def _ws_url(server_url: str, client_id: str) -> str:

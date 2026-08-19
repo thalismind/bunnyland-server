@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 from .v1_models import JobResource
+
+logger = logging.getLogger("bunnyland.server.jobs")
 
 #: A caller polls a job for as long as it is running and then stops. An hour is far longer
 #: than any chat reply, scene render, or world generation takes, so expiry never truncates a
@@ -50,11 +53,13 @@ class JobRegistry:
         max_per_owner: int = MAX_JOBS_PER_OWNER,
         max_total: int = MAX_JOBS_TOTAL,
         clock: Callable[[], float] = time.monotonic,
+        on_evict: Callable[[JobRecord], None] | None = None,
     ) -> None:
         self.ttl_seconds = max(1.0, float(ttl_seconds))
         self.max_per_owner = max(1, int(max_per_owner))
         self.max_total = max(1, int(max_total))
         self._clock = clock
+        self._on_evict = on_evict
         self._records: OrderedDict[str, JobRecord] = OrderedDict()
 
     def __len__(self) -> int:
@@ -63,22 +68,32 @@ class JobRegistry:
     def _expired(self, record: JobRecord, now: float) -> bool:
         return now - record.created_at >= self.ttl_seconds
 
+    def _remove(self, job_id: str) -> JobRecord:
+        record = self._records.pop(job_id)
+        if self._on_evict is not None:
+            try:
+                self._on_evict(record)
+            except Exception:  # noqa: BLE001 - cleanup must not break bounded eviction
+                logger.exception("job eviction cleanup failed for %s", record.job.id)
+        return record
+
     def _expire(self, now: float) -> None:
         for job_id in [
             job_id for job_id, record in self._records.items() if self._expired(record, now)
         ]:
-            del self._records[job_id]
+            self._remove(job_id)
 
     def _trim_owner(self, owner: str) -> None:
         owned = [job_id for job_id, record in self._records.items() if record.owner == owner]
         for job_id in owned[: max(0, len(owned) - self.max_per_owner)]:
-            del self._records[job_id]
+            self._remove(job_id)
 
     def _trim_total(self) -> None:
         # Runs after insertion, and the new record sits at the end, so the backstop drops
         # the oldest records rather than the one just stored.
         while len(self._records) > self.max_total:
-            self._records.popitem(last=False)
+            oldest = next(iter(self._records))
+            self._remove(oldest)
 
     def put(
         self,
@@ -131,7 +146,7 @@ class JobRegistry:
         if record is None:
             return None
         if self._expired(record, self._clock()):
-            del self._records[job_id]
+            self._remove(job_id)
             return None
         if owner is not None and record.owner != owner:
             return None
@@ -145,6 +160,20 @@ class JobRegistry:
 
         self._expire(self._clock())
         return [record.job for record in self._records.values() if record.owner == owner]
+
+    def list_all(self) -> list[JobResource]:
+        """Return all unexpired jobs, oldest first, for process-lifecycle cleanup."""
+
+        self._expire(self._clock())
+        return [record.job for record in self._records.values()]
+
+    def discard(self, job_id: str) -> bool:
+        """Remove one job, invoking its cleanup callback when present."""
+
+        if job_id not in self._records:
+            return False
+        self._remove(job_id)
+        return True
 
     def discard_matching(
         self,
@@ -162,7 +191,7 @@ class JobRegistry:
                 record.attributes.get(key) != value for key, value in (attributes or {}).items()
             ):
                 continue
-            del self._records[job_id]
+            self._remove(job_id)
             removed.add(job_id)
         return removed
 

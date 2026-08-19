@@ -51,7 +51,14 @@ from ..core.world_actor import WorldActor
 from ..narration.projection import event_salience, event_summary, event_visible_to
 from ..prompts.builder import PerceivedPromptEvent, PromptBuilder, PromptContext, render_prompt
 from ..prompts.filters import PromptFilterRuntime, apply_prompt_filters
-from .agent import AgentDecision, CharacterAgent, InvalidAgentResponse, ScriptedAgent
+from .agent import (
+    AgentDecision,
+    CharacterAgent,
+    InvalidAgentResponse,
+    LLMRequestSettings,
+    ScriptedAgent,
+    llm_request_settings,
+)
 from .behavior_tree import BehaviorTree, BehaviorTreeAgent, resolve_behavior_tree
 from .scripts import resolve_script
 from .tools import (
@@ -112,6 +119,8 @@ AutonomousController = object
 
 DEFAULT_MAX_BUFFERED_EVENTS = 100
 DEFAULT_MAX_BUFFERED_EVENT_CHARS = 8_000
+DEFAULT_INTERACTIVE_DECISION_TIMEOUT_SECONDS = 120.0
+DEFAULT_MAX_CONCURRENT_LLM_DECISIONS = 4
 
 
 def _autonomous_controller_kind(component: AutonomousController) -> str:
@@ -389,6 +398,7 @@ class _PromptProjection:
     prompted: bool
     controller_kind: str
     started_at: float
+    request_settings: LLMRequestSettings
 
 
 @dataclass
@@ -494,6 +504,10 @@ class ControllerDispatch:
         script_resolver: Callable[[str], tuple[ToolCall, ...]] = resolve_script,
         max_buffered_events: int = DEFAULT_MAX_BUFFERED_EVENTS,
         max_buffered_event_chars: int = DEFAULT_MAX_BUFFERED_EVENT_CHARS,
+        interactive_decision_timeout_seconds: float = (
+            DEFAULT_INTERACTIVE_DECISION_TIMEOUT_SECONDS
+        ),
+        max_concurrent_llm_decisions: int = DEFAULT_MAX_CONCURRENT_LLM_DECISIONS,
     ) -> None:
         self.actor = actor
         self.builder = builder
@@ -506,6 +520,10 @@ class ControllerDispatch:
         self._script_resolver = script_resolver
         self._max_buffered_events = max(1, max_buffered_events)
         self._max_buffered_event_chars = max(1, max_buffered_event_chars)
+        self._interactive_decision_timeout_seconds = max(
+            0.001, interactive_decision_timeout_seconds
+        )
+        self._llm_decision_slots = asyncio.Semaphore(max(1, max_concurrent_llm_decisions))
         # character_id -> a "did you mean..." note to surface on its next prompt, so an
         # agent that named something unreachable gets the same guidance a human does.
         self._feedback: dict[str, str] = {}
@@ -782,6 +800,22 @@ class ControllerDispatch:
             telemetry.span("agent.prompt.build", {"character.id": cid}),
         ):
             context = self.builder.build(character_id, epoch=self.actor.epoch)
+            policy = self.actor.memory_recall_policy
+            store = self.actor.memory_store
+            if policy is not None and store is not None:
+                try:
+                    context = self.builder.with_memory(
+                        context,
+                        character_id,
+                        store=store,
+                        limit=policy.limit,
+                        min_score=policy.min_score,
+                    )
+                except Exception:  # noqa: BLE001 - memory backend failure is fail-soft.
+                    logger.exception(
+                        "memory context failed for character %s; omitting private memory",
+                        character_id,
+                    )
             pending = self._feedback.get(cid)
             if pending is not None:
                 context = replace(context, warnings=(*context.warnings, pending))
@@ -819,6 +853,16 @@ class ControllerDispatch:
             prompted=prompted,
             controller_kind=controller_kind,
             started_at=started_at,
+            request_settings=(
+                LLMRequestSettings(
+                    temperature=controller_component.temperature,
+                    max_output_tokens=controller_component.max_tokens,
+                    system_style=controller_component.system_style,
+                    tool_policy=controller_component.tool_policy,
+                )
+                if isinstance(controller_component, LLMControllerComponent)
+                else LLMRequestSettings()
+            ),
         )
 
     def _launch_projection(
@@ -884,6 +928,7 @@ class ControllerDispatch:
                 event_batch,
                 projection.controller_kind,
                 projection.started_at,
+                projection.request_settings,
             )
         )
         self._inflight[cid] = task
@@ -911,42 +956,67 @@ class ControllerDispatch:
         event_batch: _EventBatch,
         controller_kind: str,
         started_at: float,
+        request_settings: LLMRequestSettings,
     ) -> Decision:
         """Await one character decision and finalize it without blocking other characters."""
         cid = str(character_id)
+
+        async def filter_prompt() -> str:
+            with (
+                telemetry.record_duration(
+                    telemetry.record_prompt_filter,
+                    {"controller_kind": controller_kind},
+                ),
+                telemetry.span("agent.prompt.filter", {"character.id": cid}),
+            ):
+                return await apply_prompt_filters(
+                    prompt,
+                    runtime=self.prompt_filter_runtime,
+                    character=self.actor.world.get_entity(character_id),
+                    context=context,
+                    epoch=input_epoch,
+                    include_automatic=controller_kind == "llm",
+                )
+
         try:
             self.actor.world.get_entity(character_id)
             with (
                 telemetry.record_duration(telemetry.record_llm_decision, metric_attrs),
                 telemetry.span("agent.decide", span_attrs) as dspan,
             ):
-                with (
-                    telemetry.record_duration(
-                        telemetry.record_prompt_filter,
-                        {"controller_kind": controller_kind},
-                    ),
-                    telemetry.span("agent.prompt.filter", {"character.id": cid}),
-                ):
-                    prompt = await apply_prompt_filters(
+                if controller_kind == "llm":
+                    async with asyncio.timeout(self._interactive_decision_timeout_seconds):
+                        prompt = await filter_prompt()
+                        if telemetry.enabled():
+                            dspan.set_attribute("decision.prompt_chars", len(prompt))
+                            if telemetry.content_capture_enabled():
+                                dspan.set_attribute(
+                                    "decision.prompt", telemetry.attr_text(prompt)
+                                )
+                        async with self._llm_decision_slots:
+                            with llm_request_settings(request_settings):
+                                call = await agent.decide(
+                                    prompt,
+                                    context,
+                                    character_id=cid,
+                                    model=model,
+                                    provider=provider,
+                                    tools=tools,
+                                )
+                else:
+                    prompt = await filter_prompt()
+                    if telemetry.enabled():
+                        dspan.set_attribute("decision.prompt_chars", len(prompt))
+                        if telemetry.content_capture_enabled():
+                            dspan.set_attribute("decision.prompt", telemetry.attr_text(prompt))
+                    call = await agent.decide(
                         prompt,
-                        runtime=self.prompt_filter_runtime,
-                        character=self.actor.world.get_entity(character_id),
-                        context=context,
-                        epoch=input_epoch,
-                        include_automatic=controller_kind == "llm",
+                        context,
+                        character_id=cid,
+                        model=model,
+                        provider=provider,
+                        tools=tools,
                     )
-                if telemetry.enabled():
-                    dspan.set_attribute("decision.prompt_chars", len(prompt))
-                    if telemetry.content_capture_enabled():
-                        dspan.set_attribute("decision.prompt", telemetry.attr_text(prompt))
-                call = await agent.decide(
-                    prompt,
-                    context,
-                    character_id=cid,
-                    model=model,
-                    provider=provider,
-                    tools=tools,
-                )
                 self._annotate_decision_span(dspan, call)
             decision = await self._finalize_decision(
                 character_id, controller_id, generation, context, call
@@ -954,6 +1024,17 @@ class ControllerDispatch:
         except EntityNotFoundError:
             logger.debug("character %s removed before its decision applied", character_id)
             decision = Decision(cid, None, "skipped: removed before decision applied")
+        except TimeoutError:
+            logger.warning("character %s decision timed out", character_id)
+            self._restore_event_batch(cid, event_batch)
+            decision = Decision(
+                cid,
+                None,
+                "error: decision timed out",
+                policy_rejections=("decision_timeout",),
+                receipt_status="policy_rejected",
+                receipt_reason="the provider did not return before the interactive deadline",
+            )
         except Exception:  # noqa: BLE001 - a background task must not crash the game loop
             logger.exception("character %s decision task failed", character_id)
             self._restore_event_batch(cid, event_batch)

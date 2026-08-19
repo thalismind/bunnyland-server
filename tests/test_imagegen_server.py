@@ -6,10 +6,12 @@ import asyncio
 import json
 import sys
 import types
+from io import BytesIO
 
 import httpx
 import pytest
 from conftest import build_scenario
+from PIL import Image
 
 from bunnyland.claims import ClaimSecretRegistry, add_claim
 from bunnyland.core import (
@@ -43,7 +45,9 @@ ADMIN = {CLIENT_ID_HEADER: "admin-client"}
 
 #: Real container signatures. The upload route validates the bytes rather than trusting the
 #: caller-declared multipart content type, so placeholder strings no longer pass.
-PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"payload"
+_png_buffer = BytesIO()
+Image.new("RGB", (2, 2), (12, 34, 56)).save(_png_buffer, format="PNG")
+PNG_BYTES = _png_buffer.getvalue()
 WEBP_BYTES = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"payload"
 
 

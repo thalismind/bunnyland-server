@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
 import itertools
 import logging
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
@@ -68,6 +70,9 @@ _SEGMENT_BY_PURPOSE: dict[ImagePurpose, str] = {
 #: Players' event requests outrank bulk portrait/sprite backfill.
 _EVENT_PRIORITY = 0
 _BACKFILL_PRIORITY = 1
+MAX_GENERATED_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_GENERATED_IMAGE_DIMENSION = 8192
+MAX_GENERATED_IMAGE_PIXELS = 50_000_000
 
 
 @dataclass
@@ -142,6 +147,7 @@ class ImageGenService:
         self._jobs: dict[str, ImageGenJob] = {}
         self._extras: dict[str, str] = {}
         self._ephemeral_inputs: dict[str, _EphemeralImageInput] = {}
+        self._ephemeral_callbacks: dict[str, Callable[[ImageGenJob], None]] = {}
         self._alpha_jobs: set[str] = set()
         self._parent_contexts: dict[str, object] = {}
         self._worker: asyncio.Task[None] | None = None
@@ -253,6 +259,7 @@ class ImageGenService:
         template_name: str = "",
         requested_by: str = "",
         extra: str = "",
+        on_complete: Callable[[ImageGenJob], None] | None = None,
     ) -> ImageGenJob:
         """Queue chat-owned event media without attaching state to the ECS entity.
 
@@ -285,6 +292,8 @@ class ImageGenService:
             subject=subject,
             scene=scene,
         )
+        if on_complete is not None:
+            self._ephemeral_callbacks[job.job_id] = on_complete
         await self._publish_started(job)
         parent_context = telemetry.capture_context()
         if parent_context is not None:
@@ -318,6 +327,14 @@ class ImageGenService:
             try:
                 await self._process(job)
             finally:
+                callback = self._ephemeral_callbacks.pop(job.job_id, None)
+                if callback is not None:
+                    try:
+                        callback(job)
+                    except Exception:  # noqa: BLE001 - reporting must not stop the worker
+                        logger.exception(
+                            "ephemeral image completion callback failed for %s", job.job_id
+                        )
                 self._busy = False
                 self._queue.task_done()
 
@@ -488,6 +505,7 @@ class ImageGenService:
         The alpha pass is CPU-heavy, so it runs in a worker thread, never on the event loop.
         Sprites become the transparent image directly; other purposes keep both variants.
         """
+        await asyncio.to_thread(_validate_image_output, data)
         segment = _SEGMENT_BY_PURPOSE[purpose]
         if not do_alpha:
             telemetry.set_span_attributes(
@@ -495,6 +513,7 @@ class ImageGenService:
             )
             return self._write(segment, data), ""
         alpha_bytes = await asyncio.to_thread(self._alpha, data)
+        await asyncio.to_thread(_validate_image_output, alpha_bytes)
         telemetry.set_span_attributes(
             {
                 "image.output.bytes": len(data),
@@ -543,7 +562,6 @@ class ImageGenService:
             prompt_model=profile.prompt_model,
         )
         return await self._enhancer.enhance_image(request, examples=examples)
-
     def _attach(
         self,
         entity: Entity,
@@ -658,6 +676,29 @@ class ImageGenService:
 
 class ImageGenError(RuntimeError):
     """A generation job could not be completed."""
+
+
+def _validate_image_output(data: bytes) -> None:
+    """Reject unsafe provider output before persistence or expensive transforms."""
+
+    if len(data) > MAX_GENERATED_IMAGE_BYTES:
+        raise ImageGenError("image generator output exceeds 20 MiB")
+    try:
+        from PIL import Image
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as image:
+                width, height = image.size
+                if width > MAX_GENERATED_IMAGE_DIMENSION or height > MAX_GENERATED_IMAGE_DIMENSION:
+                    raise ImageGenError("image generator output dimensions exceed 8192 pixels")
+                if width * height > MAX_GENERATED_IMAGE_PIXELS:
+                    raise ImageGenError("image generator output exceeds 50 megapixels")
+                image.verify()
+    except ImageGenError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - Pillow exposes several decode exceptions
+        raise ImageGenError("image generator returned invalid raster image data") from exc
 
 
 def _existing_image_url(entity: Entity, purpose: ImagePurpose) -> str:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from uuid import uuid4
@@ -38,6 +39,7 @@ from .spec import GeneratedPrompt, ImagePurpose, MediaKind, PromptStyle
 from .subject import subject_for_event
 
 logger = logging.getLogger("bunnyland.videogen")
+MAX_GENERATED_VIDEO_BYTES = 256 * 1024 * 1024
 
 
 @dataclass
@@ -97,6 +99,7 @@ class VideoGenService:
         self._jobs: dict[str, VideoGenJob] = {}
         self._extras: dict[str, str] = {}
         self._ephemeral_inputs: dict[str, _EphemeralVideoInput] = {}
+        self._ephemeral_callbacks: dict[str, Callable[[VideoGenJob], None]] = {}
         self._parent_contexts: dict[str, object] = {}
         self._worker: asyncio.Task[None] | None = None
         self._busy = False
@@ -180,6 +183,7 @@ class VideoGenService:
         template_name: str = "",
         requested_by: str = "",
         extra: str = "",
+        on_complete: Callable[[VideoGenJob], None] | None = None,
     ) -> VideoGenJob:
         """Queue chat-owned video without attaching state to the ECS entity."""
 
@@ -206,6 +210,8 @@ class VideoGenService:
             subject=subject,
             scene=scene,
         )
+        if on_complete is not None:
+            self._ephemeral_callbacks[job.job_id] = on_complete
         await self._publish_started(job)
         parent_context = telemetry.capture_context()
         if parent_context is not None:
@@ -235,6 +241,14 @@ class VideoGenService:
             try:
                 await self._process(job)
             finally:
+                callback = self._ephemeral_callbacks.pop(job.job_id, None)
+                if callback is not None:
+                    try:
+                        callback(job)
+                    except Exception:  # noqa: BLE001 - reporting must not stop the worker
+                        logger.exception(
+                            "ephemeral video completion callback failed for %s", job.job_id
+                        )
                 self._busy = False
                 self._queue.task_done()
 
@@ -302,6 +316,8 @@ class VideoGenService:
                         profile_name=profile.name,
                     )
                 )
+                if len(data) > MAX_GENERATED_VIDEO_BYTES:
+                    raise VideoGenError("video generator output exceeds 256 MiB")
                 extension = sniff_video_extension(data)
                 if extension is None:
                     raise VideoGenError("video generator returned an unsupported container")

@@ -166,6 +166,7 @@ def build_media_services(
             model=config.image.openrouter_image_model,
             api_key=config.image.openrouter_api_key,
             server_url=config.image.openrouter_server_url,
+            allowed_result_origins=config.image.openrouter_result_origins,
         )
 
     unknown_images = sorted(image_names - image_registry.keys())
@@ -174,7 +175,7 @@ def build_media_services(
     if video_name and video_name not in video_registry:
         raise ValueError(f"unknown video generator {video_name!r}")
 
-    media = MediaStore(config.media_root)
+    media = MediaStore(config.media_root, capacity_bytes=config.media_capacity_bytes)
     actor.media_service = media
     enhancer = select_enhancer(config, plugins)
     image_enhancer = (

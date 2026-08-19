@@ -14,10 +14,12 @@ import socket
 import sqlite3
 import sys
 import types
+from io import BytesIO
 
 import httpx
 import pytest
 from conftest import build_scenario
+from PIL import Image
 
 from bunnyland import telemetry
 from bunnyland.core import (
@@ -662,8 +664,9 @@ async def test_terminal_command_receipt_is_traced_and_reconciles_decision(otel_c
 
 
 @pytestmark_otel
-async def test_behavior_controller_traces_evaluated_tree_nodes(otel_capture):
+async def test_behavior_controller_traces_evaluated_tree_nodes(otel_capture, monkeypatch):
     span_exporter, _reader = otel_capture
+    monkeypatch.setenv("BUNNYLAND_OTEL_CAPTURE_CONTENT", "true")
     scenario = build_scenario()
     controller = spawn_entity(
         scenario.actor.world, [BehaviorControllerComponent(behavior_name="forager")]
@@ -687,6 +690,7 @@ async def test_behavior_controller_traces_evaluated_tree_nodes(otel_capture):
     by_id = {span.context.span_id: span for span in spans}
 
     assert decide.attributes["behavior_tree.name"] == "forager"
+    assert decide.attributes["decision.prompt"].startswith("[REDACTED sha256:")
     assert tree.attributes["behavior_tree.name"] == "forager"
     assert tree.attributes["character.id"] == str(scenario.character)
     assert tree.attributes["decision.tool"] == "move"
@@ -716,6 +720,28 @@ async def test_behavior_controller_traces_evaluated_tree_nodes(otel_capture):
     assert by_id[sequence.parent.span_id] is root
     assert by_id[condition.parent.span_id] is sequence
     assert by_id[move.parent.span_id] is root
+
+
+@pytestmark_otel
+async def test_behavior_controller_omits_prompt_content_without_opt_in(otel_capture):
+    span_exporter, _reader = otel_capture
+    scenario = build_scenario()
+    controller = spawn_entity(
+        scenario.actor.world, [BehaviorControllerComponent(behavior_name="forager")]
+    )
+    scenario.actor.assign_controller(scenario.character, controller.id)
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        ScriptedAgent([]),
+    )
+
+    await dispatch.run_once()
+    await dispatch.await_pending()
+
+    decide = _spans_by_name(span_exporter)["agent.decide"]
+    assert decide.attributes["decision.prompt_chars"] > 0
+    assert "decision.prompt" not in decide.attributes
 
 
 @pytestmark_otel
@@ -2050,7 +2076,10 @@ class _TelemetryImageGenerator:
             await self.gate.wait()
         if self.error is not None:
             raise self.error
-        return b"private-image-bytes"
+        image = Image.new("RGB", (8, 6), (12, 34, 56))
+        output = BytesIO()
+        image.save(output, format="PNG")
+        return output.getvalue()
 
 
 def _telemetry_image_service(actor, tmp_path, generator, *, enhancer=None, alpha=None):
@@ -2091,7 +2120,7 @@ async def test_image_jobs_keep_each_submitting_trace_and_emit_child_spans(
     )
     generator = _TelemetryImageGenerator()
     service = _telemetry_image_service(
-        scenario.actor, tmp_path, generator, alpha=lambda _data: b"alpha-bytes"
+        scenario.actor, tmp_path, generator, alpha=lambda data: data
     )
 
     with telemetry.span("submit.one"):
@@ -2136,7 +2165,10 @@ async def test_image_jobs_keep_each_submitting_trace_and_emit_child_spans(
     assert generations[first.job_id].attributes["image.outcome"] == "succeeded"
     postprocess = next(span for span in children if span.name == "image.postprocess")
     assert postprocess.attributes["image.alpha.applied"] is True
-    assert postprocess.attributes["image.alpha.output.bytes"] == len(b"alpha-bytes")
+    assert (
+        postprocess.attributes["image.alpha.output.bytes"]
+        == postprocess.attributes["image.input.bytes"]
+    )
     assert _span_status_name(generations[first.job_id]) == "OK"
 
 

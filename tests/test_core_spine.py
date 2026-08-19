@@ -43,6 +43,7 @@ from bunnyland.core import (
     OnInsufficientPoints,
     SetComponent,
     SuspendedComponent,
+    WorldActor,
     WorldClockComponent,
     build_submitted_command,
     entity_name,
@@ -135,6 +136,52 @@ def test_get_or_none_and_nowait_submission_cover_absent_paths():
     command = move_command(scenario)
     scenario.actor.submit_nowait(command)
     assert scenario.actor._inbox.get_nowait() is command
+
+
+def test_world_actor_rejects_non_positive_command_queue_limits():
+    with pytest.raises(ValueError, match="command queue limits must be positive"):
+        WorldActor(world_lane_capacity=0)
+
+
+async def test_submission_rejects_full_character_lane_and_global_queue():
+    lane_limited = build_scenario()
+    lane_limited.actor._lane_capacities[Lane.WORLD] = 1
+
+    first = await lane_limited.actor.submit(
+        replace(move_command(lane_limited), command_id="lane-first")
+    )
+    second = await lane_limited.actor.submit(
+        replace(move_command(lane_limited), command_id="lane-second")
+    )
+
+    assert first.accepted is True
+    assert second.accepted is False
+    assert second.reason == "world command queue is full"
+
+    globally_limited = build_scenario()
+    globally_limited.actor._command_capacity = 1
+    accepted = await globally_limited.actor.submit(
+        replace(move_command(globally_limited), command_id="global-first")
+    )
+    rejected = await globally_limited.actor.submit(
+        replace(move_command(globally_limited), command_id="global-second")
+    )
+
+    assert accepted.accepted is True
+    assert rejected.accepted is False
+    assert rejected.reason == "command queue is full"
+
+
+async def test_ingestion_batch_leaves_excess_submissions_for_later_ticks():
+    scenario = build_scenario()
+    scenario.actor._ingestion_batch_size = 1
+    await scenario.actor.submit(replace(move_command(scenario), command_id="first"))
+    await scenario.actor.submit(replace(move_command(scenario), command_id="second"))
+
+    await scenario.actor._ingest()
+
+    assert scenario.actor._inbox.qsize() == 1
+    assert scenario.actor.queues.depths()[Lane.WORLD] == 1
 
 
 def test_event_base_defaults_visibility_only_when_requested():

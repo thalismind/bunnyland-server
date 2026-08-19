@@ -96,7 +96,15 @@ model and API key so a deployment cannot accidentally select an unsuitable or ex
 BUNNYLAND_IMAGE_GENERATOR=openrouter
 BUNNYLAND_IMAGE_OPENROUTER_MODEL=google/gemini-3.1-flash-lite-image
 OPENROUTER_API_KEY=sk-or-...
+# Optional, comma-separated exact HTTPS origins for providers that return URLs instead of data:
+# BUNNYLAND_IMAGE_OPENROUTER_RESULT_ORIGINS=https://trusted-cdn.example
 ```
+
+OpenRouter's normal inline `data:` image results need no additional setting. HTTPS result
+URLs are rejected unless their exact origin appears in
+`BUNNYLAND_IMAGE_OPENROUTER_RESULT_ORIGINS`; redirects do not expand that allowlist. This
+prevents a model/provider response from turning the media fetcher into an arbitrary URL or
+private-network client.
 
 For a hosted service, prefer
 `OPENROUTER_API_KEY_FILE=/etc/bunnyland/openrouter.key` over a literal variable. Keep the

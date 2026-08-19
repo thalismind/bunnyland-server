@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from io import BytesIO
+
 import pytest
 from conftest import build_scenario
+from PIL import Image
 from test_discord import _bot_for_scenario, _DiscordObject, _install_fake_discord
 
 from bunnyland.core import (
@@ -48,7 +51,9 @@ from bunnyland.imagegen.video_service import VideoGenService
 
 class _FakeClient:
     async def generate(self, graph, *, output_node_id=""):
-        return b"PNG"
+        output = BytesIO()
+        Image.new("RGB", (2, 2), (12, 34, 56)).save(output, format="PNG")
+        return output.getvalue()
 
 
 class _VideoClient:

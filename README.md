@@ -134,7 +134,10 @@ have characters actually *think*, add an LLM (see below):
 
 ```bash
 uv sync --extra llm
-echo 'OLLAMA_CLOUD_API_KEY=sk-...' > .env
+read -rsp 'Ollama Cloud API key: ' OLLAMA_CLOUD_API_KEY && echo
+install -m 0600 /dev/null .env
+printf 'OLLAMA_CLOUD_API_KEY=%s\n' "$OLLAMA_CLOUD_API_KEY" >> .env
+unset OLLAMA_CLOUD_API_KEY
 uv run bunnyland serve --llm --generator recursive --ticks 20
 ```
 

@@ -54,6 +54,7 @@ from bunnyland.plugins import (
 from bunnyland.plugins.ids import MCP, WORLDGEN
 from bunnyland.server.app import create_app
 from bunnyland.server.auth import WORLD_ADMIN_SCOPE, WORLD_PLAY_SCOPE, TokenPrincipal, TokenStore
+from bunnyland.server.character_chat import CharacterChatAccess
 from bunnyland.server.client_ids import CLIENT_ID_HEADER
 from bunnyland.server.models import (
     CharacterChatResponse,
@@ -2672,7 +2673,8 @@ async def test_curated_mcp_player_and_admin_workflows(monkeypatch, scenario):
             self.paused = False
             return self._published()
 
-    async def chat(character_id, request):
+    async def chat(character_id, request, *, access):
+        assert access is CharacterChatAccess.CONTROLLER
         if request.message == "bad":
             raise ValueError("bad chat")
         assert request.message == "Hello"

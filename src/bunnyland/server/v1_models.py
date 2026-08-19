@@ -357,6 +357,7 @@ class EventCollection(WorldResource):
 
 class ChatJobRequest(V1Request):
     kind: Literal["chat"]
+    claim_id: str | None = Field(default=None, max_length=128)
     message: str = Field(min_length=1, max_length=4000)
     history_summary: str = Field(default="", max_length=12000)
     history: list[CharacterChatHistoryMessage] = Field(default_factory=list, max_length=24)

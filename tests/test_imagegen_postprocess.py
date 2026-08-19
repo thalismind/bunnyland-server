@@ -109,11 +109,12 @@ def _service(actor, tmp_path, *, alpha):
 
 class _StaticClient:
     async def generate(self, graph, *, output_node_id=""):
-        return b"RAW"
+        return _png([[R]])
 
 
 def _fake_alpha(data: bytes) -> bytes:
-    return b"ALPHA:" + data
+    del data
+    return _png([[T]])
 
 
 async def test_portrait_alpha_writes_both_variants(tmp_path):
@@ -127,7 +128,7 @@ async def test_portrait_alpha_writes_both_variants(tmp_path):
     assert portrait.url.startswith("/v1/public/media/portraits/")
     assert portrait.alpha_url.startswith("/v1/public/media/alpha/")
     alpha_name = portrait.alpha_url.split("/")[-1]
-    assert MediaStore(tmp_path).read(SEGMENT_ALPHA, alpha_name) == b"ALPHA:RAW"
+    assert MediaStore(tmp_path).read(SEGMENT_ALPHA, alpha_name) == _png([[T]])
     await service.aclose()
 
 
@@ -141,7 +142,7 @@ async def test_sprite_alpha_is_the_sprite(tmp_path):
     await service.wait_idle()
     sprite = scenario.actor.world.get_entity(scenario.character).get_component(SpriteImageComponent)
     name = sprite.url.split("/")[-1]
-    assert MediaStore(tmp_path).read(SEGMENT_SPRITES, name) == b"ALPHA:RAW"
+    assert MediaStore(tmp_path).read(SEGMENT_SPRITES, name) == _png([[T]])
     await service.aclose()
 
 

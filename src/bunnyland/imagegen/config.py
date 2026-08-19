@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from ..credentials import read_credential
+from ..foundation.media.service import DEFAULT_MEDIA_CAPACITY_BYTES
 from ..llm_agents.agent import DEFAULT_MODEL
 
 
@@ -22,6 +23,13 @@ def _env_float(environ: Mapping[str, str], name: str, default: float) -> float:
     if value is None or value.strip() == "":
         return default
     return float(value)
+
+
+def _env_int(environ: Mapping[str, str], name: str, default: int) -> int:
+    value = environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    return int(value)
 
 
 @dataclass(frozen=True)
@@ -45,6 +53,7 @@ class ImageGenConfig:
     openrouter_image_model: str = ""
     openrouter_api_key: str = ""
     openrouter_server_url: str = ""
+    openrouter_result_origins: tuple[str, ...] = ()
     backfill_interval_seconds: float = 5.0
     prompt_enhancer: str = ""
 
@@ -69,6 +78,7 @@ class MediaGenConfig:
     image: ImageGenConfig = field(default_factory=ImageGenConfig)
     video: VideoGenConfig = field(default_factory=VideoGenConfig)
     media_root: str = "media"
+    media_capacity_bytes: int = DEFAULT_MEDIA_CAPACITY_BYTES
     public_base_url: str = ""
     prompt_style: str = ""
     enhancer: str = ""
@@ -114,6 +124,13 @@ class MediaGenConfig:
                 ).strip(),
                 openrouter_api_key=read_credential("OPENROUTER_API_KEY", environ=environ),
                 openrouter_server_url=environ.get("OPENROUTER_SERVER_URL", "").strip(),
+                openrouter_result_origins=tuple(
+                    origin.strip()
+                    for origin in environ.get(
+                        "BUNNYLAND_IMAGE_OPENROUTER_RESULT_ORIGINS", ""
+                    ).split(",")
+                    if origin.strip()
+                ),
                 backfill_interval_seconds=_env_float(
                     environ, "BUNNYLAND_IMAGE_BACKFILL_SECONDS", 5.0
                 ),
@@ -129,6 +146,11 @@ class MediaGenConfig:
                 ).strip(),
             ),
             media_root=environ.get("BUNNYLAND_MEDIA_DIR", "media").strip(),
+            media_capacity_bytes=_env_int(
+                environ,
+                "BUNNYLAND_MEDIA_CAPACITY_BYTES",
+                DEFAULT_MEDIA_CAPACITY_BYTES,
+            ),
             public_base_url=environ.get("BUNNYLAND_PUBLIC_BASE_URL", "")
             .strip()
             .rstrip("/"),

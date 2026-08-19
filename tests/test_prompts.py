@@ -41,6 +41,7 @@ from bunnyland.foundation.persona.mechanics import (
 )
 from bunnyland.foundation.policy.mechanics import BoundaryTag, CharacterBoundaryComponent
 from bunnyland.foundation.social.mechanics import SocialBond
+from bunnyland.memory import InMemoryStore
 from bunnyland.plugins import bunnyland_plugins, collect_persona_fragments
 from bunnyland.projections import RecentContextProjection, RoomSummaryProjection
 from bunnyland.projections.perception import PerceivedEntity
@@ -1238,3 +1239,29 @@ def test_prompt_builder_leaves_recall_empty_even_when_character_has_memory():
 
     assert ctx.location_title == ""
     assert ctx.recall == ()
+
+
+def test_prompt_builder_bounds_and_normalizes_long_structured_memory():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(MemoryProfileComponent(vector_collection="juniper"))
+    store = InMemoryStore()
+    store.add(
+        "juniper",
+        text="Mosslit\nBurrow " + ("important detail " * 40),
+        source="manual",
+    )
+    builder = PromptBuilder(scenario.actor.world)
+
+    context = builder.with_memory(
+        builder.build(scenario.character),
+        scenario.character,
+        store=store,
+        limit=1,
+        min_score=0.0,
+    )
+
+    recalled_text = context.recall[0].split('"', maxsplit=2)[1]
+    assert len(recalled_text) == 240
+    assert recalled_text.endswith("...")
+    assert "\n" not in recalled_text

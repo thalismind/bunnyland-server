@@ -12,27 +12,40 @@ from ...plugins.model import (
     PluginPlacement,
     RuntimeContribution,
 )
-from .service import MediaError, MediaService, content_type_for
+from .service import (
+    DEFAULT_MEDIA_CAPACITY_BYTES,
+    MediaError,
+    MediaService,
+    content_type_for,
+)
 
 
 def _install_service(actor) -> None:
     if getattr(actor, "media_service", None) is None:
         root = os.environ.get("BUNNYLAND_MEDIA_DIR", "media").strip() or "media"
-        actor.media_service = MediaService(root)
+        capacity = int(
+            os.environ.get(
+                "BUNNYLAND_MEDIA_CAPACITY_BYTES", str(DEFAULT_MEDIA_CAPACITY_BYTES)
+            )
+        )
+        actor.media_service = MediaService(root, capacity_bytes=capacity)
 
 
 def _install_routes(router, actor, **_context) -> None:
-    from fastapi import HTTPException, Response
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
 
     @router.get("/media/{namespace}/{name}")
     async def get_media(namespace: str, name: str):
         try:
-            data = actor.media_service.read(namespace, name)
+            path = actor.media_service.path_for(namespace, name)
+            if not path.is_file():
+                raise MediaError(f"media not found: {namespace}/{name}")
             content_type = content_type_for(name)
         except MediaError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return Response(
-            content=data,
+        return FileResponse(
+            path,
             media_type=content_type,
             headers={
                 "Cache-Control": "public, max-age=31536000, immutable",

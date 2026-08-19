@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +20,7 @@ from bunnyland.core.components import DescriptionComponent, IdentityComponent
 from bunnyland.core.ecs import container_of
 from bunnyland.core.events import DomainEvent, SpeechSaidEvent
 from bunnyland.foundation.history.mechanics import HistoryLocation, record_world_history
+from bunnyland.imagegen import service as image_service_module
 from bunnyland.imagegen.backfill import (
     ImageBackfillScheduler,
     _first_missing_portrait,
@@ -40,6 +42,7 @@ from bunnyland.imagegen.generators import ImageGeneratorProfile
 from bunnyland.imagegen.media import SEGMENT_PORTRAITS, MediaStore
 from bunnyland.imagegen.prompt import CatalogExampleSource, StubPromptEnhancer
 from bunnyland.imagegen.scene import request_scene_image
+from bunnyland.imagegen.scene_models import MediaRoomSnapshot, MediaSceneSnapshot
 from bunnyland.imagegen.service import (
     ImageGenService,
     _clear_request,
@@ -54,9 +57,17 @@ from bunnyland.plugins import PluginRegistry, bunnyland_plugins
 from bunnyland.simpacks.toonsim.mechanics import SpriteImageComponent
 
 
+def _png() -> bytes:
+    from PIL import Image
+
+    output = io.BytesIO()
+    Image.new("RGB", (2, 2), (120, 80, 40)).save(output, format="PNG")
+    return output.getvalue()
+
+
 class _FakeClient:
-    def __init__(self, *, data=b"PNG", error=None):
-        self.data = data
+    def __init__(self, *, data: bytes | None = None, error=None):
+        self.data = _png() if data is None else data
         self.error = error
         self.graphs: list[dict] = []
 
@@ -237,7 +248,8 @@ def test_subject_for_event_without_location():
 async def test_start_generates_and_attaches_portrait(tmp_path):
     scenario = build_scenario()
     events = _capture(scenario.actor)
-    client = _FakeClient(data=b"PORTRAIT")
+    image_bytes = _png()
+    client = _FakeClient(data=image_bytes)
     service = _service(scenario.actor, tmp_path, client=client)
 
     job = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
@@ -251,7 +263,7 @@ async def test_start_generates_and_attaches_portrait(tmp_path):
     assert not entity.has_component(ImageRequestComponent)  # cleared
     # File written and a completion event emitted.
     segment, name = portrait.url.split("/")[-2:]
-    assert MediaStore(tmp_path).read(SEGMENT_PORTRAITS, name) == b"PORTRAIT"
+    assert MediaStore(tmp_path).read(SEGMENT_PORTRAITS, name) == image_bytes
     assert any(isinstance(e, ImageGenerationCompletedEvent) for e in events)
     await service.aclose()
 
@@ -531,6 +543,94 @@ async def test_unknown_template_fails(tmp_path):
     await service.aclose()
 
 
+async def test_image_service_rejects_oversized_provider_output(tmp_path, monkeypatch):
+    scenario = build_scenario()
+    monkeypatch.setattr(image_service_module, "MAX_GENERATED_IMAGE_BYTES", 2)
+    service = _service(scenario.actor, tmp_path)
+
+    job = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
+    await service.wait_idle()
+
+    assert job.status == "failed"
+    assert job.error == "image generator output exceeds 20 MiB"
+    assert not scenario.actor.world.get_entity(scenario.character).has_component(
+        PortraitImageComponent
+    )
+    await service.aclose()
+
+
+async def test_ephemeral_image_callback_failure_does_not_stop_worker(tmp_path, caplog):
+    scenario = build_scenario()
+    service = _service(scenario.actor, tmp_path)
+    scene = MediaSceneSnapshot(
+        captured_at_epoch=scenario.actor.epoch,
+        viewer_id=str(scenario.character),
+        room=MediaRoomSnapshot(id="room", title="Mosslit Burrow"),
+    )
+
+    def fail_callback(_job):
+        raise RuntimeError("reporting failed")
+
+    first = await service.start_ephemeral(
+        str(scenario.character),
+        subject="Juniper",
+        scene=scene,
+        on_complete=fail_callback,
+    )
+    await service.wait_idle()
+    second = await service.start_ephemeral(
+        str(scenario.character),
+        subject="Juniper",
+        scene=scene,
+    )
+    await service.wait_idle()
+
+    assert first.status == "succeeded"
+    assert second.status == "succeeded"
+    assert "ephemeral image completion callback failed" in caplog.text
+    await service.aclose()
+
+
+async def test_image_service_rejects_dimensions_before_alpha_transform(
+    tmp_path, monkeypatch
+):
+    scenario = build_scenario()
+    monkeypatch.setattr(image_service_module, "MAX_GENERATED_IMAGE_DIMENSION", 1)
+    alpha_inputs: list[bytes] = []
+    service = _service(scenario.actor, tmp_path)
+    service._alpha = lambda data: alpha_inputs.append(data) or data
+
+    job = await service.start(
+        str(scenario.character), ImagePurpose.PORTRAIT, alpha=True
+    )
+    await service.wait_idle()
+
+    assert job.status == "failed"
+    assert job.error == "image generator output dimensions exceed 8192 pixels"
+    assert alpha_inputs == []
+    await service.aclose()
+
+
+async def test_image_service_rejects_excessive_pixels_and_invalid_rasters(
+    tmp_path, monkeypatch
+):
+    scenario = build_scenario()
+    monkeypatch.setattr(image_service_module, "MAX_GENERATED_IMAGE_PIXELS", 1)
+    service = _service(scenario.actor, tmp_path)
+
+    pixels = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
+    await service.wait_idle()
+    assert pixels.error == "image generator output exceeds 50 megapixels"
+    await service.aclose()
+
+    scenario = build_scenario()
+    service = _service(scenario.actor, tmp_path / "invalid", client=_FakeClient(data=b"PNG"))
+    invalid = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
+    await service.wait_idle()
+    assert invalid.error == "image generator returned invalid raster image data"
+    await service.aclose()
+
+
 async def test_no_template_for_purpose_fails(tmp_path):
     scenario = build_scenario()
     service = ImageGenService(
@@ -607,7 +707,7 @@ async def test_entity_vanishes_after_generation_before_image_attach(tmp_path):
             del graph, output_node_id
             generating.set()
             await release.wait()
-            return b"PNG"
+            return _png()
 
     service = _service(scenario.actor, tmp_path, client=_BlockingClient())
     job = await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
@@ -645,7 +745,7 @@ async def test_enqueue_one_missing_returns_none_when_busy(tmp_path):
     class _BlockingClient:
         async def generate(self, graph, *, output_node_id=""):
             await gate.wait()
-            return b"PNG"
+            return _png()
 
     service = _service(scenario.actor, tmp_path, client=_BlockingClient())
     await service.start(str(scenario.character), ImagePurpose.PORTRAIT)
@@ -729,7 +829,7 @@ async def test_image_service_captures_parent_context(tmp_path, monkeypatch):
         async def generate(self, request):
             del request
             await gate.wait()
-            return b"PNG"
+            return _png()
 
     generator = Generator()
     service = ImageGenService(

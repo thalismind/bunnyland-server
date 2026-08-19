@@ -24,6 +24,7 @@ from bunnyland.core import (
     Contains,
     IdentityComponent,
     Lane,
+    LLMControllerComponent,
     PortableComponent,
     SayHandler,
     TakeHandler,
@@ -88,6 +89,7 @@ from bunnyland.llm_agents.agent import (
     PROSE_REPLY_CORRECTION_PROMPT,
     TEXT_REPLY_CORRECTION_PROMPT,
     TEXT_TOOL_CALL_CORRECTION_PROMPT,
+    LLMRequestSettings,
     OllamaAgent,
     _AutonomySignals,
     _call_provider_with_retries,
@@ -98,6 +100,7 @@ from bunnyland.llm_agents.agent import (
     _openrouter_response_json,
     _openrouter_usage,
     contains_text_tool_call,
+    llm_request_settings,
     normalize_model,
 )
 from bunnyland.llm_agents.dispatch import (
@@ -107,6 +110,7 @@ from bunnyland.llm_agents.dispatch import (
     _memory_ids,
     _PerceivedEventBuffer,
 )
+from bunnyland.memory import InMemoryStore, configure_memory_recall, install_memory
 from bunnyland.plugins import PluginRegistry, bunnyland_plugins, collect_persona_fragments
 from bunnyland.plugins.ids import CORE_VERBS
 from bunnyland.prompts import PerceivedPromptEvent
@@ -1637,6 +1641,95 @@ async def test_ollama_agent_sends_configured_thinking_and_temperature(monkeypatc
     ]
 
 
+@pytest.mark.parametrize(
+    ("system_style", "expected_style"),
+    [
+        ("concise", "concise and direct"),
+        ("expressive", "vivid but grounded"),
+        ("unknown", None),
+    ],
+)
+async def test_ollama_agent_applies_task_local_controller_settings(
+    monkeypatch, system_style, expected_style
+):
+    class ControllerSettingsClient(_FakeOllamaClient):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.settings: list[dict[str, float | int]] = []
+
+        async def chat(self, *, model, messages, tools, options):
+            self.settings.append(options)
+            return await super().chat(model=model, messages=messages, tools=tools)
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = ControllerSettingsClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+    agent = OllamaAgent(model="reasoner", temperature=1.0, max_output_tokens=8192)
+
+    with llm_request_settings(
+        LLMRequestSettings(
+            temperature=0.25,
+            max_output_tokens=256,
+            system_style=system_style,
+        )
+    ):
+        await agent.decide("turn one", None, character_id="hazel")
+
+    assert agent._client.settings == [{"temperature": 0.25, "num_predict": 256}]
+    system = agent._client.calls[0][0]["content"]
+    if expected_style is None:
+        assert system == CHARACTER_SYSTEM_PROMPT
+    else:
+        assert expected_style in system
+
+
+async def test_ollama_agent_limits_concurrent_provider_requests(monkeypatch):
+    release = asyncio.Event()
+
+    class LimitedClient(_FakeOllamaClient):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.active = 0
+            self.maximum = 0
+
+        async def chat(self, *, model, messages, tools):
+            self.active += 1
+            self.maximum = max(self.maximum, self.active)
+            try:
+                await release.wait()
+                return await super().chat(model=model, messages=messages, tools=tools)
+            finally:
+                self.active -= 1
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = LimitedClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+    agent = OllamaAgent(max_concurrent_requests=1)
+    tasks = [
+        asyncio.create_task(
+            agent.chat([{"role": "user", "content": "hello"}], character_id=str(index))
+        )
+        for index in range(3)
+    ]
+
+    await asyncio.sleep(0)
+    assert agent._client.maximum == 1
+    release.set()
+    await asyncio.gather(*tasks)
+
+    assert agent._client.maximum == 1
+
+
+def test_ollama_agent_clamps_provider_concurrency_to_one(monkeypatch):
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = _FakeOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    agent = OllamaAgent(max_concurrent_requests=0)
+
+    assert agent._request_slots._value == 1
+
+
 async def test_ollama_agent_configures_provider_request_timeout(monkeypatch):
     configured: list[tuple[str, str, float]] = []
     closed: list[bool] = []
@@ -2404,6 +2497,16 @@ class _FakeOpenRouterClient:
         self.chat = _FakeOpenRouterChat()
 
 
+def test_openrouter_agent_clamps_provider_concurrency_to_one(monkeypatch):
+    fake_module = types.ModuleType("openrouter")
+    fake_module.OpenRouter = _FakeOpenRouterClient
+    monkeypatch.setitem(sys.modules, "openrouter", fake_module)
+
+    agent = OpenRouterAgent(max_concurrent_requests=0)
+
+    assert agent._request_slots._value == 1
+
+
 async def test_openrouter_agent_closes_sdk_http_clients(monkeypatch):
     closed: list[str] = []
 
@@ -2610,6 +2713,15 @@ async def test_openrouter_agent_passes_reasoning_options_and_observes_response(
         "reasoning": {"effort": "medium"},
         "temperature": 0.4,
         "max_completion_tokens": 4096,
+    }
+    with llm_request_settings(
+        LLMRequestSettings(temperature=0.2, max_output_tokens=256)
+    ):
+        await agent.decide("turn one", None, character_id="bramble")
+    assert agent._client.chat.options == {
+        "reasoning": {"effort": "medium"},
+        "temperature": 0.2,
+        "max_completion_tokens": 256,
     }
     assert responses[0]["choices"][0]["message"]["reasoning"] == "private trace"
     sanitized = _openrouter_response_json(
@@ -3633,6 +3745,167 @@ async def test_dispatch_uses_controller_provider_for_character_decision():
     await dispatch.await_pending()
 
     assert agent.providers == ["openrouter"]
+
+
+async def test_dispatch_populates_structured_memory_for_autonomy_and_telemetry():
+    from bunnyland.core import MemoryProfileComponent
+
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(MemoryProfileComponent(vector_collection="juniper-private"))
+    store = install_memory(scenario.actor, InMemoryStore())
+    configure_memory_recall(scenario.actor, limit=2, min_score=0.0)
+    memory = store.add(
+        "juniper-private",
+        text="The Mosslit Burrow north tunnel is the goal.",
+        source="manual",
+    )
+
+    class ContextAgent:
+        contexts: list[PromptContext] = []
+
+        async def decide(
+            self, prompt, context, *, character_id, model=None, provider=None, tools=None
+        ):
+            del prompt, character_id, model, provider, tools
+            self.contexts.append(context)
+            return None
+
+    agent = ContextAgent()
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    await dispatch.run_once()
+    decisions = await dispatch.await_pending()
+
+    assert agent.contexts[0].notes
+    assert agent.contexts[0].recall
+    assert decisions[0].memory_ids == (memory.id,)
+
+
+async def test_dispatch_omits_private_memory_when_recall_backend_fails(caplog):
+    from bunnyland.core import MemoryProfileComponent
+
+    class FailingStore(InMemoryStore):
+        def search(self, collection, *, query=None, mode="recent", limit=5):
+            del collection, query, mode, limit
+            raise RuntimeError("private backend detail")
+
+    class ContextAgent:
+        contexts: list[PromptContext] = []
+
+        async def decide(
+            self, prompt, context, *, character_id, model=None, provider=None, tools=None
+        ):
+            del prompt, character_id, model, provider, tools
+            self.contexts.append(context)
+            return None
+
+    scenario = build_scenario()
+    scenario.actor.world.get_entity(scenario.character).add_component(
+        MemoryProfileComponent(vector_collection="juniper-private")
+    )
+    install_memory(scenario.actor, FailingStore())
+    configure_memory_recall(scenario.actor, limit=2, min_score=0.0)
+    agent = ContextAgent()
+    dispatch = ControllerDispatch(scenario.actor, PromptBuilder(scenario.actor.world), agent)
+
+    await dispatch.run_once()
+    decisions = await dispatch.await_pending()
+
+    assert decisions[0].tool is None
+    assert agent.contexts[0].notes == ()
+    assert agent.contexts[0].recall == ()
+    assert "memory context failed" in caplog.text
+
+
+async def test_dispatch_times_out_and_cancels_a_stuck_provider_decision():
+    cancelled = asyncio.Event()
+
+    class StuckAgent:
+        async def decide(
+            self, prompt, context, *, character_id, model=None, provider=None, tools=None
+        ):
+            del prompt, context, character_id, model, provider, tools
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.set()
+
+    scenario = build_scenario()
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        StuckAgent(),
+        interactive_decision_timeout_seconds=0.01,
+    )
+
+    await dispatch.run_once()
+    decisions = await dispatch.await_pending()
+
+    assert cancelled.is_set()
+    assert decisions[0].summary == "error: decision timed out"
+    assert decisions[0].policy_rejections == ("decision_timeout",)
+
+
+async def test_dispatch_deadline_includes_semaphore_admission():
+    class ContextAgent:
+        def __init__(self):
+            self.contexts = []
+
+        async def decide(
+            self, prompt, context, *, character_id, model=None, provider=None, tools=None
+        ):
+            del prompt, character_id, model, provider, tools
+            self.contexts.append(context)
+            return None
+
+    scenario = build_scenario()
+    agent = ContextAgent()
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        agent,
+        interactive_decision_timeout_seconds=0.01,
+        max_concurrent_llm_decisions=1,
+    )
+
+    await dispatch.run_once()
+    await dispatch.await_pending()
+    await scenario.actor.bus.publish(
+        _PromptMessageEvent(
+            **event_base(
+                scenario.actor.epoch,
+                event_id="retry-after-admission-timeout",
+                visibility=EventVisibility.ROOM,
+                room_id=str(scenario.room_a),
+            ),
+            message="Keep this event while provider capacity is unavailable.",
+        )
+    )
+    await dispatch._llm_decision_slots.acquire()
+
+    await dispatch.run_once()
+    decisions = await dispatch.await_pending()
+
+    assert decisions[0].summary == "error: decision timed out"
+    assert decisions[0].policy_rejections == ("decision_timeout",)
+
+    dispatch._llm_decision_slots.release()
+    await dispatch.run_once()
+    await dispatch.await_pending()
+
+    assert [event.event_id for event in agent.contexts[-1].perceived_events] == [
+        "retry-after-admission-timeout"
+    ]
+
+
+def test_llm_controller_rejects_unknown_tool_policy():
+    with pytest.raises(ValueError, match="tool_policy"):
+        LLMControllerComponent(
+            profile_name="invalid",
+            model="model",
+            tool_policy="unrestricted",
+        )
 
 
 def test_persona_contradiction_guard_flags_name_relationship_and_status_claims():

@@ -5,9 +5,11 @@ from __future__ import annotations
 import re
 from hashlib import sha256
 from pathlib import Path
+from threading import Lock
 from uuid import uuid4
 
 ALLOWED_EXTENSIONS = frozenset({"png", "jpg", "webp", "mp4", "webm", "glb"})
+DEFAULT_MEDIA_CAPACITY_BYTES = 20 * 1024 * 1024 * 1024
 _CONTENT_TYPES = {
     "png": "image/png",
     "jpg": "image/jpeg",
@@ -21,6 +23,10 @@ _SEGMENT = re.compile(r"^[a-z0-9]+$")
 
 class MediaError(ValueError):
     """A media path or extension failed validation, or a file was missing."""
+
+
+class MediaQuotaError(MediaError):
+    """A media write would exceed the configured durable-storage budget."""
 
 
 def _check_segment(segment: str) -> str:
@@ -46,8 +52,28 @@ def _check_name(name: str) -> tuple[str, str]:
 class MediaService:
     """Read and write immutable media beneath a fixed root."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        capacity_bytes: int = DEFAULT_MEDIA_CAPACITY_BYTES,
+    ) -> None:
+        if capacity_bytes < 1:
+            raise ValueError("media capacity must be positive")
         self.root = Path(root)
+        self.capacity_bytes = capacity_bytes
+        self._write_lock = Lock()
+
+    def _total_bytes_unlocked(self) -> int:
+        if not self.root.exists():
+            return 0
+        return sum(path.stat().st_size for path in self.root.rglob("*") if path.is_file())
+
+    def total_bytes(self) -> int:
+        """Return bytes currently stored beneath the fixed media root."""
+
+        with self._write_lock:
+            return self._total_bytes_unlocked()
 
     def new_name(self, extension: str) -> str:
         _check_extension(extension)
@@ -65,9 +91,30 @@ class MediaService:
 
     def write(self, namespace: str, name: str, data: bytes) -> Path:
         path = self.path_for(namespace, name)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        with self._write_lock:
+            previous_size = path.stat().st_size if path.exists() else 0
+            projected = self._total_bytes_unlocked() - previous_size + len(data)
+            if projected > self.capacity_bytes:
+                raise MediaQuotaError("media storage quota exceeded")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+            try:
+                temporary.write_bytes(data)
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)
         return path
+
+    def delete(self, namespace: str, name: str) -> bool:
+        """Delete one validated media object, returning whether it existed."""
+
+        path = self.path_for(namespace, name)
+        with self._write_lock:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                return False
+            return True
 
     def put_content(self, namespace: str, data: bytes, extension: str) -> tuple[str, Path]:
         name = self.content_name(data, extension)
@@ -144,7 +191,9 @@ def require_media_service(actor) -> MediaService:
 
 __all__ = [
     "ALLOWED_EXTENSIONS",
+    "DEFAULT_MEDIA_CAPACITY_BYTES",
     "MediaError",
+    "MediaQuotaError",
     "MediaService",
     "MediaStore",
     "content_type_for",

@@ -4,6 +4,7 @@ from .plugin import bunnyland_plugins, plugin
 from .service import (
     ALLOWED_EXTENSIONS,
     MediaError,
+    MediaQuotaError,
     MediaService,
     MediaStore,
     content_type_for,
@@ -14,6 +15,7 @@ from .service import (
 __all__ = [
     "ALLOWED_EXTENSIONS",
     "MediaError",
+    "MediaQuotaError",
     "MediaService",
     "MediaStore",
     "bunnyland_plugins",

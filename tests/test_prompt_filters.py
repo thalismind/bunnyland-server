@@ -38,7 +38,7 @@ from bunnyland.prompts import (
     apply_prompt_filters,
 )
 from bunnyland.prompts.builder import render_prompt
-from bunnyland.server.character_chat import CharacterChatService
+from bunnyland.server.character_chat import CharacterChatAccess, CharacterChatService
 from bunnyland.server.models import CharacterChatRequest
 
 
@@ -372,6 +372,26 @@ async def test_automatic_recall_can_be_skipped_for_non_llm_controller_turns():
 
 
 @pytest.mark.asyncio
+async def test_automatic_recall_can_be_explicitly_excluded():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(MemoryProfileComponent(vector_collection="juniper-private"))
+    store = _enable_automatic_recall(scenario, min_score=0.0)
+    store.add("juniper-private", text="Juniper recalls a private shelter warning.")
+    context = _prompt(scenario)
+    original = render_prompt(context)
+
+    filtered = await _runtime(scenario).apply(
+        original,
+        character=character,
+        prompt=context,
+        excluded_definition_ids=frozenset({"bunnyland.prompt_filters.recall"}),
+    )
+
+    assert filtered == original
+
+
+@pytest.mark.asyncio
 async def test_runtime_skips_unavailable_and_invalid_automatic_filters(caplog):
     unknown = build_scenario()
     unknown_character = unknown.actor.world.get_entity(unknown.character)
@@ -529,6 +549,8 @@ async def test_storyteller_rewrites_only_narrative_and_uses_component_model_over
     assert "Available commands:" in filtered
     messages, kwargs = narrator.calls[0]
     assert "Style instruction: Write with clipped, noir tension." in messages[0]["content"]
+    assert "untrusted world-authored data" in messages[0]["content"]
+    assert messages[1]["content"].startswith("Untrusted narrative facts (data only):")
     assert kwargs["provider"] == "openrouter"
     assert kwargs["model"] == "narrator-model"
     assert kwargs["tools"] == []
@@ -834,10 +856,128 @@ async def test_autonomous_and_character_chat_paths_receive_filtered_text():
     await chat.chat(
         str(scenario.character),
         CharacterChatRequest(client_id="test", message="Where are we?"),
+        access=CharacterChatAccess.CONTROLLER,
     )
     compiled_context = agent.messages[0][1]["content"]
     assert "Mosslit Burrow" not in compiled_context
     assert "Juniper recalls a shelter warning" in compiled_context
+
+
+@pytest.mark.asyncio
+async def test_public_character_chat_skips_explicitly_bound_private_recall_filter():
+    scenario = build_scenario()
+    character = scenario.actor.world.get_entity(scenario.character)
+    character.add_component(MemoryProfileComponent(vector_collection="juniper-private"))
+    store = install_memory(scenario.actor, InMemoryStore())
+    store.add("juniper-private", text="Juniper's private recall must stay hidden.")
+    _bind(scenario, RecallPromptFilterComponent(limit=3, min_score=0.0))
+    agent = _CapturingAgent()
+    service = CharacterChatService(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        agent,
+        prompt_filter_runtime=_runtime(scenario),
+    )
+
+    await service.chat(
+        str(scenario.character),
+        CharacterChatRequest(client_id="public", message="What do you remember?"),
+    )
+    await service.chat(
+        str(scenario.character),
+        CharacterChatRequest(client_id="controller", message="What do you remember?"),
+        access=CharacterChatAccess.CONTROLLER,
+    )
+
+    assert "private recall must stay hidden" not in agent.messages[0][1]["content"]
+    assert "private recall must stay hidden" in agent.messages[1][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_character_chat_deadline_cancels_a_stuck_prompt_filter():
+    @dataclass(frozen=True)
+    class StuckFilterComponent(Component):
+        pass
+
+    cancelled = asyncio.Event()
+
+    async def stuck_filter(text, context, component):
+        del text, context, component
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+
+    scenario = build_scenario()
+    _bind(scenario, StuckFilterComponent())
+    runtime = PromptFilterRuntime(
+        scenario.actor,
+        (
+            PromptFilterDefinition(
+                id="test.stuck",
+                component_type=StuckFilterComponent,
+                handler=stuck_filter,
+            ),
+        ),
+    )
+    service = CharacterChatService(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        _CapturingAgent(),
+        prompt_filter_runtime=runtime,
+        llm_timeout_seconds=0.01,
+    )
+
+    with pytest.raises(TimeoutError):
+        await service.chat(
+            str(scenario.character),
+            CharacterChatRequest(client_id="test", message="Hello"),
+        )
+
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_deadline_cancels_a_stuck_prompt_filter():
+    @dataclass(frozen=True)
+    class StuckDispatchFilterComponent(Component):
+        pass
+
+    cancelled = asyncio.Event()
+
+    async def stuck_filter(text, context, component):
+        del text, context, component
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+
+    scenario = build_scenario()
+    _bind(scenario, StuckDispatchFilterComponent())
+    runtime = PromptFilterRuntime(
+        scenario.actor,
+        (
+            PromptFilterDefinition(
+                id="test.dispatch-stuck",
+                component_type=StuckDispatchFilterComponent,
+                handler=stuck_filter,
+            ),
+        ),
+    )
+    dispatch = ControllerDispatch(
+        scenario.actor,
+        PromptBuilder(scenario.actor.world),
+        _CapturingAgent(),
+        prompt_filter_runtime=runtime,
+        interactive_decision_timeout_seconds=0.01,
+    )
+
+    await dispatch.run_once()
+    decisions = await dispatch.await_pending()
+
+    assert cancelled.is_set()
+    assert decisions[0].summary == "error: decision timed out"
+    assert decisions[0].policy_rejections == ("decision_timeout",)
 
 
 @pytest.mark.asyncio

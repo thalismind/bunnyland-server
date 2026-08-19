@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import urlsplit
@@ -69,7 +70,11 @@ from ..core.events import (
 )
 from ..core.perspective import PerspectiveQueryResult
 from ..core.world_actor import CONTROL_COMMANDS, CommandExpectationError, WorldActor
-from ..foundation.media.service import sniff_image_extension
+from ..foundation.media.service import (
+    DEFAULT_MEDIA_CAPACITY_BYTES,
+    MediaError,
+    sniff_image_extension,
+)
 from ..imagegen.components import PortraitImageComponent
 from ..imagegen.media import (
     SEGMENT_PORTRAITS,
@@ -118,7 +123,7 @@ from .auth import (
     scope_granted,
 )
 from .body_limit import MaxBodySizeMiddleware
-from .character_chat import CharacterChatService, ChatOnlyTool
+from .character_chat import CharacterChatAccess, CharacterChatService, ChatOnlyTool
 from .chat_media import (
     capture_chat_media_scene,
     chat_media_prompt_context,
@@ -131,7 +136,7 @@ from .client_ids import (
     configured_client_id_allowlist,
     require_allowed_client_id,
 )
-from .jobs import JobRegistry
+from .jobs import JOB_TTL_SECONDS, JobRecord, JobRegistry
 from .models import (
     IDENTIFIER_MAX_LENGTH,
     CharacterChatActionResult,
@@ -218,6 +223,7 @@ from .v1_models import (
     EventCollection,
     GenerationJobRequest,
     GeneratorCollection,
+    ImageJobResult,
     JobResource,
     JobResult,
     ModerationActionCollection,
@@ -264,6 +270,39 @@ UPLOAD_IMAGE_TYPES = {
 }
 MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024
 JOB_RESULT_ADAPTER = TypeAdapter(JobResult)
+
+
+def _delete_ephemeral_job_media(media_store: MediaStore, record: JobRecord) -> None:
+    """Remove completed chat-only media when its owner-scoped job record expires."""
+
+    result = record.job.result
+    if not isinstance(result, ImageJobResult):
+        return
+    _delete_ephemeral_media_urls(media_store, result.url, result.alpha_url)
+
+
+def _delete_ephemeral_media_urls(
+    media_store: MediaStore, url: str, alpha_url: str = ""
+) -> None:
+    """Best-effort cleanup for generated chat media that has no durable owner."""
+
+    for media_url in (url, alpha_url):
+        if not media_url:
+            continue
+        path = urlsplit(media_url).path
+        for prefix in ("/v1/public/media/", "/public/media/"):
+            if not path.startswith(prefix):
+                continue
+            relative = path.removeprefix(prefix)
+            parts = relative.split("/")
+            if len(parts) != 2:
+                continue
+            try:
+                media_store.delete(parts[0], parts[1])
+            except MediaError:
+                logger.warning("refused invalid ephemeral media URL %s", media_url)
+            except OSError:
+                logger.exception("failed to delete ephemeral media URL %s", media_url)
 
 if TYPE_CHECKING:
     from ..engine import GameLoop
@@ -596,6 +635,7 @@ def create_app(
     mcp_event_bridge = None
     chat_tasks: set[asyncio.Task[None]] = set()
     chat_tasks_by_job: dict[str, asyncio.Task[None]] = {}
+    chat_media_cleanup_tasks: set[asyncio.Task[None]] = set()
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -619,6 +659,10 @@ def create_app(
                 task.cancel()
             if chat_tasks:
                 await asyncio.gather(*chat_tasks, return_exceptions=True)
+            for task in chat_media_cleanup_tasks:
+                task.cancel()
+            if chat_media_cleanup_tasks:
+                await asyncio.gather(*chat_media_cleanup_tasks, return_exceptions=True)
             if mcp_session_context is not None:
                 await mcp_session_context.__aexit__(None, None, None)
             if mcp_event_bridge is not None:
@@ -629,6 +673,9 @@ def create_app(
                 await imagegen.aclose()
             if videogen is not None:
                 await videogen.aclose()
+            for job in chat_media_job_registry.list_all():
+                chat_media_job_registry.update(_refresh_media_job_v1(job))
+            chat_media_job_registry.discard_matching()
 
     trusted_origins = _configured_cors_origins(cors_origins)
     app = FastAPI(
@@ -811,7 +858,6 @@ def create_app(
     # Chat records carry the authenticated subject that created them, so a reader cannot
     # fetch another account's job by guessing its id and spoofing the client-id header.
     character_chat_job_registry = JobRegistry()
-    chat_media_job_registry = JobRegistry()
     generation_job_registry = JobRegistry()
 
     async def _cancel_moderated_identity(identity: ModerationIdentity) -> None:
@@ -840,9 +886,38 @@ def create_app(
         (getattr(imagegen, "media", None) if imagegen is not None else None)
         or (getattr(videogen, "media", None) if videogen is not None else None)
         or getattr(actor, "media_service", None)
-        or MediaStore(os.environ.get("BUNNYLAND_MEDIA_DIR", "media").strip() or "media")
+        or MediaStore(
+            os.environ.get("BUNNYLAND_MEDIA_DIR", "media").strip() or "media",
+            capacity_bytes=int(
+                os.environ.get(
+                    "BUNNYLAND_MEDIA_CAPACITY_BYTES",
+                    str(DEFAULT_MEDIA_CAPACITY_BYTES),
+                )
+            ),
+        )
     )
     actor.media_service = media_store
+
+    chat_media_job_registry = JobRegistry(
+        on_evict=partial(_delete_ephemeral_job_media, media_store)
+    )
+
+    async def _expire_chat_media_job(job_id: str) -> None:
+        await asyncio.sleep(JOB_TTL_SECONDS)
+        chat_media_job_registry.discard(job_id)
+
+    def _chat_media_job_completed(generated: ImageGenJob | VideoGenJob) -> None:
+        stored = chat_media_job_registry.get(generated.job_id)
+        if stored is None:
+            _delete_ephemeral_media_urls(media_store, generated.url, generated.alpha_url)
+            return
+        chat_media_job_registry.update(_refresh_media_job_v1(stored))
+        task = asyncio.create_task(
+            _expire_chat_media_job(generated.job_id),
+            name=f"chat-media-expiry-{generated.job_id}",
+        )
+        chat_media_cleanup_tasks.add(task)
+        task.add_done_callback(chat_media_cleanup_tasks.discard)
     # Editor-loaded scripted/behavioral controller definitions: register any already on disk
     # so a restarted server keeps the scripts and behavior trees the editor previously saved.
     definition_store = ControllerDefinitionStore(
@@ -1405,15 +1480,22 @@ def create_app(
         request: CharacterChatRequest,
         *,
         chat_tools: tuple[ChatOnlyTool, ...] = (),
+        access: CharacterChatAccess = CharacterChatAccess.PUBLIC,
     ) -> CharacterChatResponse:
         try:
             with telemetry.span("character.chat", {"character.id": id}) as span:
                 try:
-                    response = (
-                        await service.chat(id, request, chat_tools=chat_tools)
-                        if chat_tools
-                        else await service.chat(id, request)
-                    )
+                    if chat_tools:
+                        response = await service.chat(
+                            id,
+                            request,
+                            chat_tools=chat_tools,
+                            access=access,
+                        )
+                    elif access is CharacterChatAccess.PUBLIC:
+                        response = await service.chat(id, request)
+                    else:
+                        response = await service.chat(id, request, access=access)
                 except Exception as exc:
                     span.record_exception(exc)
                     telemetry.mark_span_error(str(exc), span)
@@ -2452,6 +2534,7 @@ def create_app(
                 scene=scene,
                 requested_by=requested_by,
                 extra=extra,
+                on_complete=_chat_media_job_completed,
             )
         else:
             generated = await service.start_ephemeral(
@@ -2460,6 +2543,7 @@ def create_app(
                 scene=scene,
                 requested_by=requested_by,
                 extra=extra,
+                on_complete=_chat_media_job_completed,
             )
         now = datetime.now(UTC)
         job = JobResource(
@@ -2583,6 +2667,7 @@ def create_app(
         body: ChatJobRequest,
         client_id: str,
         subject: str | None,
+        access: CharacterChatAccess,
     ) -> None:
         def _patch_job(**update) -> None:
             current = _chat_job(job_id)
@@ -2598,6 +2683,7 @@ def create_app(
                 character_id,
                 CharacterChatRequest(
                     client_id=client_id,
+                    claim_id=body.claim_id,
                     message=body.message,
                     history_summary=body.history_summary,
                     history=body.history,
@@ -2609,6 +2695,7 @@ def create_app(
                     client_id=client_id,
                     subject=subject,
                 ),
+                access=access,
             )
         except Exception as exc:
             detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
@@ -2663,6 +2750,7 @@ def create_app(
         response: Response,
         request: Request,
         client_id: str = Header(alias=CLIENT_ID_HEADER),
+        claim_secret: str | None = Header(default=None, alias="X-Bunnyland-Claim-Secret"),
     ) -> JobResource:
         if character_chat is None:
             raise HTTPException(
@@ -2696,6 +2784,24 @@ def create_app(
                 detail="suspended character must be activated before chatting",
             )
         normalized_client_id = _required_client_id(client_id)
+        principal = getattr(request.state, "auth_principal", None)
+        access = (
+            CharacterChatAccess.ADMIN
+            if isinstance(principal, TokenPrincipal)
+            and WORLD_ADMIN_SCOPE in principal.scopes
+            else CharacterChatAccess.PUBLIC
+        )
+        if body.claim_id is not None and access is CharacterChatAccess.PUBLIC:
+            claim_secret = _request_claim_secret(request, claim_secret)
+            claimed_character, _claimed_controller, _edge, _claim = _claim_context_v1(
+                body.claim_id,
+                claim_secret,
+                normalized_client_id,
+                _claim_owner_for_request(request, normalized_client_id),
+            )
+            if claimed_character.id != parsed:
+                raise HTTPException(status_code=403, detail="claim controls another character")
+            access = CharacterChatAccess.CONTROLLER
         # Cap chat submissions per authenticated caller (falling back to client id when the
         # server runs unauthenticated). Chat is the most abuse-prone mutation because it
         # drives model inference or pages a human controller.
@@ -2740,6 +2846,7 @@ def create_app(
                         body,
                         normalized_client_id,
                         subject,
+                        access,
                     )
                 )
                 chat_tasks.add(task)
@@ -3159,7 +3266,11 @@ def create_app(
                     "`cost_mismatch`/`lane_mismatch` when the client's stated cost or lane "
                     "disagrees with the action definition, `command_rejected` otherwise."
                 ),
-            }
+            },
+            429: {
+                "model": ProblemDetails,
+                "description": "The bounded command queue is full; retry later.",
+            },
         },
     )
     async def v1_submit_command(
@@ -3211,14 +3322,19 @@ def create_app(
             # policy gate -- look like success to any client that reads the HTTP status
             # rather than the body. The reason keeps its own problem code so a client can
             # tell "you cannot afford this" from "that verb does not exist".
+            overloaded = result.reason.endswith("command queue is full")
             return _problem_response(
                 http_request,
-                409,
+                429 if overloaded else 409,
                 result.reason or "command rejected",
                 code=(
-                    "insufficient_points"
-                    if result.reason == "insufficient points"
-                    else "command_rejected"
+                    "queue_full"
+                    if overloaded
+                    else (
+                        "insufficient_points"
+                        if result.reason == "insufficient points"
+                        else "command_rejected"
+                    )
                 ),
             )
         onboarding.command_submitted(claim_id, result.command_id, body.command_type)
@@ -4113,7 +4229,11 @@ def create_app(
         claim_secret: str | None,
     ) -> dict:
         del claim_secret
-        response = await character_chat.chat(character_id, request)
+        response = await character_chat.chat(
+            character_id,
+            request,
+            access=CharacterChatAccess.CONTROLLER,
+        )
         return _without_preview_fields(response)
 
     if mcp_enabled(plugins):
