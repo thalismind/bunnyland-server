@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import builtins
 import io
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -1135,6 +1137,28 @@ async def test_openrouter_propagates_normalization_worker_failure(monkeypatch):
     monkeypatch.setattr(module, "_normalize_png", fail)
     with pytest.raises(RuntimeError, match="normalize failed"):
         await module._normalize_off_loop(b"data")
+
+
+async def test_openrouter_normalization_waits_for_worker_without_blocking_loop(monkeypatch):
+    import bunnyland.imagegen.openrouter as module
+
+    started = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def normalize(data: bytes) -> bytes:
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(timeout=1)
+        return data + b"-normalized"
+
+    monkeypatch.setattr(module, "_normalize_png", normalize)
+    task = asyncio.create_task(module._normalize_off_loop(b"data"))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+    finally:
+        release.set()
+
+    assert await task == b"data-normalized"
 
 
 def test_openrouter_reports_missing_pillow(monkeypatch):
