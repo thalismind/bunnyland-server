@@ -33,8 +33,8 @@ from ..llm_agents.agent import (
     TEXT_REPLY_CORRECTION_PROMPT,
     ChatAgentReply,
     LLMRequestSettings,
+    call_with_llm_request_settings,
     contains_text_tool_call,
-    llm_request_settings,
 )
 from ..llm_agents.dispatch import did_you_mean, name_candidates, resolve_reference_args
 from ..llm_agents.tools import ToolCall, command_from_tool_call, reference_arg_keys
@@ -685,14 +685,15 @@ class CharacterChatService:
                 raise RuntimeError("configured LLM agent does not support character chat")
             async with asyncio.timeout(self.llm_timeout_seconds):
                 async with self._llm_slots:
-                    with llm_request_settings(request_settings):
-                        reply = await chat(
-                            messages,
-                            character_id=character_id,
-                            model=model,
-                            provider=provider,
-                            tools=tools,
-                        )
+                    reply = await call_with_llm_request_settings(
+                        request_settings,
+                        chat,
+                        messages,
+                        character_id=character_id,
+                        model=model,
+                        provider=provider,
+                        tools=tools,
+                    )
             span.set_attribute("chat.reply_chars", len(reply.content or ""))
             span.set_attribute("chat.tool.called", reply.tool_call is not None)
             if telemetry.content_capture_enabled():

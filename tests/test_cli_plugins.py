@@ -1016,6 +1016,11 @@ def test_cli_llm_credential_validation(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("OLLAMA_CLOUD_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(
+        cli,
+        "_build_provider_agent",
+        lambda *_args: cli.ScriptedAgent([]),
+    )
 
     with pytest.raises(SystemExit, match="--llm-provider ollama needs OLLAMA_CLOUD_API_KEY"):
         main(["serve", "--llm", "--generator", "empty", "--ticks", "1"])

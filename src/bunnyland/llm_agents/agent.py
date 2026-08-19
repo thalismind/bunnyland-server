@@ -17,7 +17,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from collections.abc import Mapping as MappingABC
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -127,6 +127,21 @@ def llm_request_settings(settings: LLMRequestSettings):
     token = _REQUEST_SETTINGS.set(settings)
     try:
         yield
+    finally:
+        _REQUEST_SETTINGS.reset(token)
+
+
+async def call_with_llm_request_settings[**RequestArgs, RequestResult](
+    settings: LLMRequestSettings,
+    call: Callable[RequestArgs, Awaitable[RequestResult]],
+    *args: RequestArgs.args,
+    **kwargs: RequestArgs.kwargs,
+) -> RequestResult:
+    """Await one provider call with task-local controller settings."""
+
+    token = _REQUEST_SETTINGS.set(settings)
+    try:
+        return await call(*args, **kwargs)
     finally:
         _REQUEST_SETTINGS.reset(token)
 
@@ -1886,6 +1901,7 @@ __all__ = [
     "OllamaAgent",
     "ProviderRouterAgent",
     "ScriptedAgent",
+    "call_with_llm_request_settings",
     "llm_request_settings",
     "normalize_model",
 ]

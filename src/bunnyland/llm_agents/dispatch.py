@@ -57,7 +57,7 @@ from .agent import (
     InvalidAgentResponse,
     LLMRequestSettings,
     ScriptedAgent,
-    llm_request_settings,
+    call_with_llm_request_settings,
 )
 from .behavior_tree import BehaviorTree, BehaviorTreeAgent, resolve_behavior_tree
 from .scripts import resolve_script
@@ -994,15 +994,16 @@ class ControllerDispatch:
                                     "decision.prompt", telemetry.attr_text(prompt)
                                 )
                         async with self._llm_decision_slots:
-                            with llm_request_settings(request_settings):
-                                call = await agent.decide(
-                                    prompt,
-                                    context,
-                                    character_id=cid,
-                                    model=model,
-                                    provider=provider,
-                                    tools=tools,
-                                )
+                            call = await call_with_llm_request_settings(
+                                request_settings,
+                                agent.decide,
+                                prompt,
+                                context,
+                                character_id=cid,
+                                model=model,
+                                provider=provider,
+                                tools=tools,
+                            )
                 else:
                     prompt = await filter_prompt()
                     if telemetry.enabled():

@@ -1775,6 +1775,26 @@ async def test_ollama_agent_configures_timeout_without_host(monkeypatch):
     assert configured == [600]
 
 
+async def test_ollama_agent_configures_host_without_timeout(monkeypatch):
+    configured: list[tuple[str, str]] = []
+
+    class HostedOllamaClient:
+        def __init__(self, *, host, headers):
+            configured.append((host, headers["Authorization"]))
+
+    fake_module = types.ModuleType("ollama")
+    fake_module.AsyncClient = HostedOllamaClient
+    monkeypatch.setitem(sys.modules, "ollama", fake_module)
+
+    OllamaAgent(
+        model="reasoner",
+        host="https://ollama.example",
+        api_key="cloud-secret",
+    )
+
+    assert configured == [("https://ollama.example", "Bearer cloud-secret")]
+
+
 async def test_ollama_agent_observes_full_response_and_optionally_thinking(monkeypatch):
     class ThinkingOllamaClient(_FakeOllamaClient):
         async def chat(self, *, model, messages, tools):
