@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,13 @@ class AddonMediaCapability:
     async def request_character_scene_video(
         self, character_id: str, *, requested_by: str, event_id: str = ""
     ) -> AddonMediaJob | None:
+        raise NotImplementedError
+
+    def get_character_scene_media_job(
+        self, job_id: str, *, kind: Literal["image", "video"]
+    ) -> AddonMediaJob | None:
+        """Return current bounded job state without exposing a generation service."""
+
         raise NotImplementedError
 
 

@@ -444,6 +444,51 @@ async def test_addon_media_facade_preserves_empty_scene_result(monkeypatch):
     )
 
 
+def test_addon_media_facade_reads_bounded_job_state():
+    image_job = ImageGenJob(
+        job_id="image-job",
+        entity_id="event_1",
+        purpose=ImagePurpose.EVENT,
+        status="succeeded",
+        source_event_id="arrival",
+        url="/media/image.png",
+    )
+    video_job = VideoGenJob(
+        job_id="video-job",
+        entity_id="event_2",
+        status="running",
+        source_event_id="breakdown",
+    )
+
+    class ImageJobs:
+        def job(self, job_id: str) -> ImageGenJob | None:
+            return image_job if job_id == image_job.job_id else None
+
+    class VideoJobs:
+        def job(self, job_id: str) -> VideoGenJob | None:
+            return video_job if job_id == video_job.job_id else None
+
+    facade = AddonMediaFacade(
+        WorldActor(), image_service=ImageJobs(), video_service=VideoJobs()
+    )
+
+    image = facade.get_character_scene_media_job("image-job", kind="image")
+    video = facade.get_character_scene_media_job("video-job", kind="video")
+
+    assert image is not None and image.status == "succeeded" and image.url.endswith(".png")
+    assert video is not None and video.status == "running" and video.kind == "video"
+    assert facade.get_character_scene_media_job("missing", kind="image") is None
+
+
+def test_addon_media_facade_job_lookup_handles_unavailable_and_invalid_kind():
+    facade = AddonMediaFacade(WorldActor())
+
+    assert facade.get_character_scene_media_job("image-job", kind="image") is None
+    assert facade.get_character_scene_media_job("video-job", kind="video") is None
+    with pytest.raises(ValueError, match="unsupported addon media kind"):
+        facade.get_character_scene_media_job("job", kind="audio")
+
+
 def test_control_claim_guard_rejects_invalid_contract_and_ignores_blank_reasons():
     actor = WorldActor()
     character = spawn_entity(

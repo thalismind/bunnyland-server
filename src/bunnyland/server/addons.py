@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 from fastapi import HTTPException
 
@@ -103,6 +103,19 @@ class AddonMediaFacade(AddonMediaCapability):
             event_id=event_id,
         )
         return self._job(job, "video")
+
+    def get_character_scene_media_job(
+        self, job_id: str, *, kind: Literal["image", "video"]
+    ) -> AddonMediaJob | None:
+        if kind == "image":
+            if self._image_service is None:
+                return None
+            return self._job(self._image_service.job(job_id), kind)
+        if kind == "video":
+            if self._video_service is None:
+                return None
+            return self._job(self._video_service.job(job_id), kind)
+        raise ValueError(f"unsupported addon media kind: {kind}")
 
     @staticmethod
     def _job(job: ImageGenJob | VideoGenJob | None, kind: str) -> AddonMediaJob | None:
