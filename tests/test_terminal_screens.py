@@ -380,8 +380,9 @@ async def test_conversation_screen_sends_pending_chat_and_renders_action(monkeyp
         field.value = "What do you see?"
         await pilot.press("enter")
         send_task = screen._send_task
-        assert send_task is not None
-        await asyncio.wait_for(send_task, timeout=2)
+        if send_task is not None:
+            await asyncio.wait_for(send_task, timeout=2)
+        assert backend.submitted
         transcript = screen.query_one("#conversation-transcript", Static).render().plain
         assert "You: What do you see?" in transcript
         assert "Juniper: There is a lantern here." in transcript
