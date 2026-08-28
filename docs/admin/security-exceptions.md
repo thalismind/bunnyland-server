@@ -39,3 +39,7 @@ Review history:
   rule matches by advisory and package rather than by image digest, so the suppression
   follows rebuilt images; `image_ref` records the digest the reachability assessment was
   performed against, not a scan filter.
+- 2026-08-28: GitHub Advisory Database and NVD still report no patched ChromaDB release.
+  The vulnerable pre-authentication HTTP collection-creation path remains unreachable:
+  Bunnyland uses only embedded clients, exposes no Chroma HTTP server, and never enables
+  remote embedding code. The matching scanner rule and guard test remain unchanged.
