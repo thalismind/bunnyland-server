@@ -489,6 +489,28 @@ def test_addon_media_facade_job_lookup_handles_unavailable_and_invalid_kind():
         facade.get_character_scene_media_job("job", kind="audio")
 
 
+def test_addon_media_facade_qualifies_only_durable_scene_media_urls():
+    facade = AddonMediaFacade(WorldActor(), public_base_url="https://play.example/api/")
+
+    assert (
+        facade.resolve_character_scene_media_url("/v1/public/media/events/image.png")
+        == "https://play.example/api/v1/public/media/events/image.png"
+    )
+    assert (
+        facade.resolve_character_scene_media_url(
+            "/v1/public/media/events/image.png?download=1#scene"
+        )
+        == "https://play.example/api/v1/public/media/events/image.png?download=1#scene"
+    )
+    assert (
+        facade.resolve_character_scene_media_url("https://cdn.example/image.png")
+        == "https://cdn.example/image.png"
+    )
+    assert (
+        facade.resolve_character_scene_media_url("/unrelated/image.png") == "/unrelated/image.png"
+    )
+
+
 def test_control_claim_guard_rejects_invalid_contract_and_ignores_blank_reasons():
     actor = WorldActor()
     character = spawn_entity(

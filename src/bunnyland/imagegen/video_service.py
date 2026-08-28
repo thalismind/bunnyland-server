@@ -109,6 +109,10 @@ class VideoGenService:
         return self._media
 
     @property
+    def public_base_url(self) -> str:
+        return self._config.public_base_url
+
+    @property
     def scene_projection(self) -> MediaSceneProjection:
         return self._scene_projection
 
@@ -323,7 +327,9 @@ class VideoGenService:
                     raise VideoGenError("video generator returned an unsupported container")
                 name = self._media.new_name(extension)
                 self._media.write(SEGMENT_VIDEOS, name, data)
-                url = self._media.url_for(SEGMENT_VIDEOS, name)
+                url = self._media.public_url_for(
+                    SEGMENT_VIDEOS, name, base_url=self._config.public_base_url
+                )
                 if ephemeral is None:
                     async with self._actor._lock:
                         if parsed is None or not self._actor.world.has_entity(parsed):

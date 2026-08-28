@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast, runtime_checkable
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -344,6 +344,12 @@ except ImportError:
 
 
 logger = logging.getLogger("bunnyland.server")
+
+
+@runtime_checkable
+class _PublicMediaConfiguration(Protocol):
+    @property
+    def public_base_url(self) -> str: ...
 RATE_LIMIT_REQUESTS_ENV = "BUNNYLAND_HTTP_RATE_LIMIT_REQUESTS"
 RATE_LIMIT_WINDOW_ENV = "BUNNYLAND_HTTP_RATE_LIMIT_WINDOW_SECONDS"
 # The general request limiter used to default to 0, which FixedWindowRateLimiter reads as
@@ -855,6 +861,13 @@ def create_app(
         actor,
         image_service=imagegen,
         video_service=videogen,
+        public_base_url=(
+            imagegen.public_base_url
+            if isinstance(imagegen, _PublicMediaConfiguration)
+            else videogen.public_base_url
+            if isinstance(videogen, _PublicMediaConfiguration)
+            else ""
+        ),
     )
     play_websocket_auth = PlayWebSocketAuthenticator(
         authenticator,

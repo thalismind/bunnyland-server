@@ -163,6 +163,10 @@ class ImageGenService:
         return self._media
 
     @property
+    def public_base_url(self) -> str:
+        return self._config.public_base_url
+
+    @property
     def scene_projection(self) -> MediaSceneProjection:
         return self._scene_projection
 
@@ -527,7 +531,9 @@ class ImageGenService:
     def _write(self, segment: str, data: bytes, extension: str = "png") -> str:
         name = self._media.new_name(extension)
         self._media.write(segment, name, data)
-        return self._media.url_for(segment, name)
+        return self._media.public_url_for(
+            segment, name, base_url=self._config.public_base_url
+        )
 
     def _subject_for(self, entity: Entity, purpose: ImagePurpose) -> str:
         if purpose is ImagePurpose.EVENT:

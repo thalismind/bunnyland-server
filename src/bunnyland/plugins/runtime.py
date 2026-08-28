@@ -46,6 +46,11 @@ class AddonMediaCapability:
 
         raise NotImplementedError
 
+    def resolve_character_scene_media_url(self, url: str) -> str:
+        """Qualify a durable scene-media URL for the configured public deployment."""
+
+        raise NotImplementedError
+
 
 class PlayWebSocketAuthSessionCapability:
     """Authenticated play identity whose credentials can be periodically rechecked."""

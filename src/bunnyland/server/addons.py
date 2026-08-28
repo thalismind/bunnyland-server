@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 
@@ -55,10 +56,12 @@ class AddonMediaFacade(AddonMediaCapability):
         *,
         image_service: ImageGenService | None = None,
         video_service: VideoGenService | None = None,
+        public_base_url: str = "",
     ) -> None:
         self._actor = actor
         self._image_service = image_service
         self._video_service = video_service
+        self._public_base_url = public_base_url.rstrip("/")
 
     @property
     def image_available(self) -> bool:
@@ -116,6 +119,16 @@ class AddonMediaFacade(AddonMediaCapability):
                 return None
             return self._job(self._video_service.job(job_id), kind)
         raise ValueError(f"unsupported addon media kind: {kind}")
+
+    def resolve_character_scene_media_url(self, url: str) -> str:
+        parsed = urlsplit(url)
+        if parsed.scheme or parsed.netloc or not self._public_base_url:
+            return url
+        if not parsed.path.startswith("/v1/public/media/"):
+            return url
+        suffix = f"?{parsed.query}" if parsed.query else ""
+        fragment = f"#{parsed.fragment}" if parsed.fragment else ""
+        return f"{self._public_base_url}{parsed.path}{suffix}{fragment}"
 
     @staticmethod
     def _job(job: ImageGenJob | VideoGenJob | None, kind: str) -> AddonMediaJob | None:
