@@ -251,7 +251,8 @@ def collect_container_selection_context(
     )
 
 
-def _builder(options: GenOptions):
+def build_world_agent(options: GenOptions):
+    """Construct the configured proposal-only world agent for addon generation work."""
     if options.llm:
         if options.provider == "openrouter":
             from ..worldgen import OpenRouterWorldAgent
@@ -567,7 +568,7 @@ async def generate_room_patch(
     with telemetry.span("world.generate.room", {"door.id": request.door_entity_id}):
         context = collect_room_expansion_context(actor, request)
         options = options or GenOptions()
-        builder = _builder(options)
+        builder = build_world_agent(options)
         schema_context = _dm_schema_context(actor, options)
         door = DoorProposal(
             direction=context.direction,
@@ -604,7 +605,7 @@ async def generate_character_patch(
     with telemetry.span("world.generate.character", {"room.id": request.room_entity_id}):
         context = collect_room_selection_context(actor, request)
         options = options or GenOptions()
-        builder = _builder(options)
+        builder = build_world_agent(options)
         character = await builder.propose_character(
             context.room,
             prompt=context.prompt,
@@ -623,7 +624,7 @@ async def generate_item_patch(
     with telemetry.span("world.generate.item", {"container.id": request.container_entity_id}):
         context = collect_container_selection_context(actor, request)
         options = options or GenOptions()
-        builder = _builder(options)
+        builder = build_world_agent(options)
         item = await builder.propose_item(
             container_name=context.container_name,
             container_kind=context.container_kind,
@@ -643,7 +644,7 @@ async def generate_event_patch(
     with telemetry.span("world.generate.event", {"room.id": request.room_entity_id}):
         context = collect_room_selection_context(actor, request)
         options = options or GenOptions()
-        builder = _builder(options)
+        builder = build_world_agent(options)
         event = await builder.propose_event(
             context.room,
             prompt=context.prompt,
@@ -656,6 +657,7 @@ async def generate_event_patch(
 __all__ = [
     "RoomExpansionContext",
     "RoomSelectionContext",
+    "build_world_agent",
     "build_room_generation_response",
     "build_character_generation_response",
     "build_event_generation_response",

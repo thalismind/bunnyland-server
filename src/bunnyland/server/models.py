@@ -688,6 +688,7 @@ class WorldGenerateRequest(BaseModel):
     seed: str | None = None
     generator: str | None = None
     max_rooms: int | None = Field(default=None, ge=1)
+    generator_config: dict[str, JsonValue] = Field(default_factory=dict)
     confirm_reset: bool = False
     save: bool = False
 

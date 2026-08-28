@@ -1822,6 +1822,16 @@ def test_repair_world_proposal_keeps_valid_references_without_warning(caplog):
 def test_generation_options_default_to_pro_worldgen_model():
     assert GenOptions(llm=True).model == "deepseek-v4-pro"
     assert GenOptions(llm=True).provider == "ollama"
+    assert GenOptions().generator_config == {}
+
+
+def test_generation_options_do_not_share_generator_config():
+    first = GenOptions()
+    second = GenOptions()
+
+    first.generator_config["origin"] = "Chicago"
+
+    assert second.generator_config == {}
 
 
 async def test_waiting_room_generator_builds_single_white_room_with_red_chair():

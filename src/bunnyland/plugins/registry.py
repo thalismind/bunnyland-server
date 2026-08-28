@@ -57,6 +57,7 @@ class PluginRegistry:
         self._prompt_filters: dict[str, tuple[str, object]] = {}
         self._prompt_filter_components: dict[type, tuple[str, object]] = {}
         self._integrations: dict[tuple[str, str], object] = {}
+        self._character_control_claim_guards: dict[str, tuple[str, object]] = {}
         self._boundary_tags: set[str] = set()
         self._normalizers: list[tuple[str, object]] = []
         from ..core.generation import CoreGenerationEnricher
@@ -154,6 +155,10 @@ class PluginRegistry:
         return MappingProxyType(self._integrations)
 
     @property
+    def character_control_claim_guards(self) -> tuple[tuple[str, object], ...]:
+        return tuple(self._character_control_claim_guards.values())
+
+    @property
     def boundary_tags(self) -> frozenset[str]:
         return frozenset(self._boundary_tags)
 
@@ -220,6 +225,23 @@ class PluginRegistry:
             raise PluginError(f"duplicate plugin id {plugin.id!r}")
         self._plugins[plugin.id] = plugin
         self._boundary_tags.update(plugin.policy.boundary_tags)
+
+        for guard in plugin.policy.character_control_claim_guards:
+            guard_id = _public_name(guard)
+            if not guard_id.startswith(f"{plugin.id}."):
+                from .loader import PluginError
+
+                raise PluginError(
+                    f"character control claim guard {guard_id!r} must be namespaced "
+                    f"by {plugin.id!r}"
+                )
+            self._global(
+                self._character_control_claim_guards,
+                guard_id,
+                plugin.id,
+                guard,
+                "character control claim guard",
+            )
 
         for event_type in plugin.commands.typed_events:
             if self._event_owners.get(event_type, (None,))[0] == "bunnyland.core":

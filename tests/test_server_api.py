@@ -5800,7 +5800,7 @@ async def test_worldgen_passes_live_schema_context_to_dm_entity_generation(scena
             captured["event"] = schema_context
             return StoryEventProposal(title="Schema Event")
 
-    monkeypatch.setattr(server_worldgen, "_builder", lambda options: CapturingBuilder())
+    monkeypatch.setattr(server_worldgen, "build_world_agent", lambda options: CapturingBuilder())
 
     door = spawn_entity(
         scenario.actor.world,
@@ -5853,7 +5853,7 @@ def test_worldgen_builder_selects_openrouter_world_agent(monkeypatch):
 
     monkeypatch.setattr(worldgen, "OpenRouterWorldAgent", FakeOpenRouterWorldAgent)
 
-    builder = server_worldgen._builder(
+    builder = server_worldgen.build_world_agent(
         GenOptions(
             llm=True,
             provider="openrouter",
@@ -5883,7 +5883,7 @@ def test_worldgen_builder_selects_ollama_world_agent(monkeypatch):
 
     monkeypatch.setattr(worldgen, "OllamaWorldAgent", FakeOllamaWorldAgent)
 
-    builder = server_worldgen._builder(
+    builder = server_worldgen.build_world_agent(
         GenOptions(
             llm=True,
             provider="ollama",

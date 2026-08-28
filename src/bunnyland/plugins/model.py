@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from ..core.action_overrides import EntityActionCallbackDefinition
 from .policy import BoundaryScope
+from .runtime import AddonMediaCapability, PlayWebSocketAuthCapability
 
 
 class EcsContribution(BaseModel):
@@ -108,6 +109,8 @@ class PolicyContribution(BaseModel):
     boundary_tags: frozenset[BoundaryScope] = Field(default_factory=frozenset)
     world_defaults: dict[str, JsonValue] = Field(default_factory=dict)
     config_schema: type | None = None
+    #: Addon-owned eligibility checks that can veto player controller claims.
+    character_control_claim_guards: tuple[object, ...] = ()
 
 
 class ConfigContribution(BaseModel):
@@ -178,6 +181,8 @@ class PluginRuntimeContext(BaseModel):
     plugin_config: dict[str, object] = Field(default_factory=dict)
     addon_config: dict[str, object] = Field(default_factory=dict)
     plugins: object | None = None
+    addon_media: AddonMediaCapability | None = None
+    play_websocket_auth: PlayWebSocketAuthCapability | None = None
 
     def config_for(self, plugin_id: str, default: object = None) -> object:
         return self.plugin_config.get(plugin_id, default)

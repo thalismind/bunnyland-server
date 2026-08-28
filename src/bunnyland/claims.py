@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from hashlib import sha256
 from time import time
+from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from relics import Component, Entity, EntityId, World
@@ -58,6 +59,15 @@ class ClaimOwner:
 class ClaimCredential:
     owner: ClaimOwner
     secret_digest: bytes
+
+
+@runtime_checkable
+class CharacterControlClaimGuard(Protocol):
+    """Plugin policy that can make one character ineligible for direct control."""
+
+    id: str
+
+    def rejection_reason(self, actor: ActorContext, character: EntityLike) -> str | None: ...
 
 
 class ClaimSecretRegistry:
@@ -184,8 +194,37 @@ def claimable_characters(
             character.has_component(SuspendedComponent) or not character_has_claim(actor, character)
         )
         and (allow_child_claims or not is_child_character(character))
+        and character_control_claim_rejection(actor, character) is None
     ]
     return sorted(claimable, key=lambda character: not character.has_component(SuspendedComponent))
+
+
+def character_control_claim_rejection(
+    actor: ActorContext,
+    character: EntityLike,
+) -> str | None:
+    """Return the first contributed reason that forbids direct player control."""
+
+    registry = getattr(actor, "plugins", None)
+    entries = getattr(registry, "character_control_claim_guards", ())
+    for _owner, candidate in entries:
+        if not isinstance(candidate, CharacterControlClaimGuard):
+            raise TypeError("character control claim guards must implement the public protocol")
+        reason = candidate.rejection_reason(actor, character)
+        if reason is not None and reason.strip():
+            return reason.strip()
+    return None
+
+
+def ensure_character_control_claim_allowed(
+    actor: ActorContext,
+    character: EntityLike,
+) -> None:
+    """Raise with an addon-supplied reason when direct player control is forbidden."""
+
+    reason = character_control_claim_rejection(actor, character)
+    if reason is not None:
+        raise RuntimeError(reason)
 
 
 def controller_claim(controller: EntityLike) -> ClaimedComponent | None:
@@ -422,10 +461,12 @@ __all__ = [
     "CLIENT_KIND_MCP",
     "CLIENT_KIND_WEB",
     "ClaimCredential",
+    "CharacterControlClaimGuard",
     "ClaimOwner",
     "ClaimSecretRegistry",
     "add_claim",
     "claim_client_matches",
+    "character_control_claim_rejection",
     "claim_matches",
     "claimable_characters",
     "claimed_character_for",
@@ -433,6 +474,7 @@ __all__ = [
     "controlled_character",
     "current_controller",
     "ensure_claim_secret",
+    "ensure_character_control_claim_allowed",
     "is_child_character",
     "match_character_by_name",
     "matching_controller",

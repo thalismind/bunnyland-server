@@ -34,6 +34,12 @@ from .model import (
     RuntimeContribution,
 )
 from .registry import PluginRegistry
+from .runtime import (
+    AddonMediaCapability,
+    AddonMediaJob,
+    PlayWebSocketAuthCapability,
+    PlayWebSocketAuthSessionCapability,
+)
 
 
 def bunnyland_plugins():
@@ -42,6 +48,8 @@ def bunnyland_plugins():
 
 
 __all__ = [
+    "AddonMediaCapability",
+    "AddonMediaJob",
     "CommandContribution",
     "ConfigContribution",
     "ContentContribution",
@@ -55,6 +63,8 @@ __all__ = [
     "PluginPlacement",
     "PluginRegistry",
     "PluginRuntimeContext",
+    "PlayWebSocketAuthCapability",
+    "PlayWebSocketAuthSessionCapability",
     "PolicyContribution",
     "RuntimeContribution",
     "apply_plugin",

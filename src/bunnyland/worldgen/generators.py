@@ -13,8 +13,10 @@ builtins include ``empty`` (only the world clock), seasonal deterministic demos,
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+from pydantic import JsonValue
 
 from .. import telemetry
 from .builder import StubWorldBuilder
@@ -39,6 +41,7 @@ class GenOptions:
     api_key: str | None = None
     server_url: str | None = None
     max_rooms: int = 6
+    generator_config: dict[str, JsonValue] = field(default_factory=dict)
 
 
 GenerateFn = Callable[["WorldActor", str, GenOptions], Awaitable[InstantiatedWorld]]

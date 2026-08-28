@@ -28,6 +28,7 @@ from ..claims import (
     claimed_character_for,
     controlled_character,
     controller_claim,
+    ensure_character_control_claim_allowed,
     ensure_claim_secret,
     is_child_character,
     match_character_by_name,
@@ -427,6 +428,7 @@ def assign_mcp_controller(
     if _is_child_character(character) and not allow_child_claims:
         name = character.get_component(IdentityComponent).name
         raise RuntimeError(f"{name} is a child character and cannot be claimed on this server")
+    ensure_character_control_claim_allowed(actor, character)
 
     active_controller = None
     for _edge, controller_id in character.get_relationships(ControlledBy):

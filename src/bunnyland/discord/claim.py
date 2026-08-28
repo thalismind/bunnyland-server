@@ -14,6 +14,7 @@ from ..claims import (
     claimed_character_for,
     controller_claim,
     current_controller,
+    ensure_character_control_claim_allowed,
     ensure_claim_secret,
     is_child_character,
     match_character_by_name,
@@ -163,6 +164,8 @@ def assign_discord_controller(
         if not suspended:
             raise RuntimeError("no suspended claimable character exists in the world")
         character = suspended[0]
+
+    ensure_character_control_claim_allowed(actor, character)
 
     active = current_controller(actor, character)
     active_controller = active[0] if active is not None else None

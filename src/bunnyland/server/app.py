@@ -31,6 +31,7 @@ from ..claims import (
     claim_client_matches,
     controller_claim,
     current_controller,
+    ensure_character_control_claim_allowed,
     ensure_claim_secret,
     matching_controller,
     normalize_claimed_controllers_without_secrets,
@@ -106,6 +107,7 @@ from ..moderation import (
 from ..persistence import WorldMeta
 from ..plugins import collect_persona_fragments, collect_prompt_fragments
 from ..worldgen import GenOptions, collect_generators
+from .addons import AddonMediaFacade, PlayWebSocketAuthenticator
 from .admin import idle_generation_status, save_configured_world, start_world_generation
 from .auth import (
     AUTH_COOKIE_NAME,
@@ -849,6 +851,20 @@ def create_app(
     allowed_admin_client_ids = configured_client_id_allowlist(
         admin_client_ids, ADMIN_CLIENT_IDS_ENV
     )
+    addon_media = AddonMediaFacade(
+        actor,
+        image_service=imagegen,
+        video_service=videogen,
+    )
+    play_websocket_auth = PlayWebSocketAuthenticator(
+        authenticator,
+        moderation_service,
+        allowed_client_ids=allowed_player_client_ids,
+    )
+    plugin_context = actor.persistence.plugin_context
+    if plugin_context is not None:
+        plugin_context.addon_media = addon_media
+        plugin_context.play_websocket_auth = play_websocket_auth
     generator_registry = collect_generators(plugins or ())
     generation_job = None
     # One bounded registry per job family, replacing plain dicts that nothing evicted. Chat
@@ -1319,6 +1335,8 @@ def create_app(
                     worldgen_options=worldgen_options,
                     plugins=plugins or (),
                     media_store=media_store,
+                    addon_media=addon_media,
+                    play_websocket_auth=play_websocket_auth,
                 )
             for route in router.routes:
                 local_path = route.path.removeprefix(prefix)
@@ -1698,6 +1716,10 @@ def create_app(
         character = actor.world.get_entity(character_id)
         if not character.has_component(CharacterComponent):
             raise HTTPException(status_code=400, detail="entity is not a character")
+        try:
+            ensure_character_control_claim_allowed(actor, character)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         client_id = request.client_id.strip()
         _require_allowed_player_client_id(client_id)
@@ -2104,6 +2126,7 @@ def create_app(
             )
 
         options = worldgen_options or GenOptions()
+        options = replace(options, generator_config=dict(request.generator_config))
         if request.max_rooms is not None:
             options = replace(options, max_rooms=request.max_rooms)
         if generator.uses_seed:
