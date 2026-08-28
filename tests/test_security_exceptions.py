@@ -41,7 +41,13 @@ def test_repository_exception_manifest_is_current_and_narrow() -> None:
         ROOT / ".scanner-exceptions.yaml", today=date(2026, 8, 9)
     )
     assert [(entry.advisory, entry.package, entry.image_ref) for entry in entries] == [
-        ("CVE-2026-45829", "chromadb", IMAGE)
+        (advisory, "chromadb", IMAGE)
+        for advisory in (
+            "CVE-2026-45829",
+            "CVE-2026-45830",
+            "CVE-2026-45831",
+            "CVE-2026-45833",
+        )
     ]
 
 

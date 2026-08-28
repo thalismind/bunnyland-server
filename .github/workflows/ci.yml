@@ -101,6 +101,9 @@ jobs:
             --format requirements-txt --output-file "${RUNNER_TEMP}/requirements.locked.txt"
           uv run --with pip-audit pip-audit \
             --ignore-vuln PYSEC-2026-311 \
+            --ignore-vuln CVE-2026-45830 \
+            --ignore-vuln CVE-2026-45831 \
+            --ignore-vuln CVE-2026-45833 \
             --requirement "${RUNNER_TEMP}/requirements.locked.txt"
 
       - name: Lint

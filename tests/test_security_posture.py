@@ -50,20 +50,35 @@ def test_container_bases_are_immutable_debian_images() -> None:
     assert "bunnyland-server@${{ needs.container.outputs.digest }}" in workflow
 
 
-def test_only_documented_chroma_advisory_is_ignored() -> None:
+def test_only_documented_chroma_advisories_are_ignored() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     grype = (ROOT / ".grype.yaml").read_text()
     scanner_exceptions = (ROOT / ".scanner-exceptions.yaml").read_text()
     exceptions = (ROOT / "docs/admin/security-exceptions.md").read_text()
 
-    assert workflow.count("--ignore-vuln") == 1
-    assert "--ignore-vuln PYSEC-2026-311" in workflow
+    assert workflow.count("--ignore-vuln") == 4
+    for advisory in (
+        "PYSEC-2026-311",
+        "CVE-2026-45830",
+        "CVE-2026-45831",
+        "CVE-2026-45833",
+    ):
+        assert f"--ignore-vuln {advisory}" in workflow
     assert "anchore/scan-action@v7.4.0" in workflow
     assert "anchore/sbom-action@v0.24.0" in workflow
     assert "scripts/check-grype-findings bunnyland-server.grype.json" in workflow
     assert "only-fixed: false" in workflow
-    assert "vulnerability: CVE-2026-45829" in grype
+    for advisory in (
+        "CVE-2026-45829",
+        "CVE-2026-45830",
+        "CVE-2026-45831",
+        "CVE-2026-45833",
+    ):
+        assert f"vulnerability: {advisory}" in grype
     assert "scanner: grype" in scanner_exceptions
     assert "package: chromadb" in scanner_exceptions
     assert "ghcr.io/thalismind/bunnyland-server@sha256:" in scanner_exceptions
     assert "`CVE-2026-45829` (`PYSEC-2026-311` in pip-audit)" in exceptions
+    assert "`CVE-2026-45830`" in exceptions
+    assert "`CVE-2026-45831`" in exceptions
+    assert "`CVE-2026-45833`" in exceptions

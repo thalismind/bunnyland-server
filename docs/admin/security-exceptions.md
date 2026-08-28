@@ -2,7 +2,8 @@
 
 ## SEC-2026-001
 
-- Advisory: `CVE-2026-45829` (`PYSEC-2026-311` in pip-audit)
+- Advisories: `CVE-2026-45829` (`PYSEC-2026-311` in pip-audit),
+  `CVE-2026-45830`, `CVE-2026-45831`, and `CVE-2026-45833`
 - Component: embedded ChromaDB
 - Owner: Bunnyland release operator
 - Approved: 2026-07-29
@@ -43,3 +44,10 @@ Review history:
   The vulnerable pre-authentication HTTP collection-creation path remains unreachable:
   Bunnyland uses only embedded clients, exposes no Chroma HTTP server, and never enables
   remote embedding code. The matching scanner rule and guard test remain unchanged.
+- 2026-08-28: The audit database added `CVE-2026-45830`, `CVE-2026-45831`, and
+  `CVE-2026-45833`. The first two require Chroma's networked multi-tenant authorization
+  surfaces; the third requires authenticated collection updates with a caller-selected
+  remote embedding function. Bunnyland runs one embedded in-process tenant, does not enable
+  Chroma RBAC or HTTP routes, never accepts embedding-function configuration, and never sets
+  `trust_remote_code`. No upstream fix exists. Each advisory now has its own narrow scanner
+  entry under this exception's existing expiry and weekly review cadence.

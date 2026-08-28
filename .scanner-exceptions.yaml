@@ -10,3 +10,36 @@ vulnerabilities:
     last_reviewed_at: 2026-08-28
     review_interval_days: 7
     tracking_issue: docs/admin/security-exceptions.md#sec-2026-001
+  - id: CVE-2026-45830
+    scanner: grype
+    package: chromadb
+    image_ref: ghcr.io/thalismind/bunnyland-server@sha256:29d32c3ab5a3c7b9adc973b6eecc0804e6c5feb98938b1532a48dc936fb43aad
+    statement: >-
+      SEC-2026-001 permits embedded ChromaDB only. Bunnyland has one in-process tenant and
+      exposes no Chroma authentication, tenant, database, collection, or HTTP API.
+    expired_at: 2026-09-18
+    last_reviewed_at: 2026-08-28
+    review_interval_days: 7
+    tracking_issue: docs/admin/security-exceptions.md#sec-2026-001
+  - id: CVE-2026-45831
+    scanner: grype
+    package: chromadb
+    image_ref: ghcr.io/thalismind/bunnyland-server@sha256:29d32c3ab5a3c7b9adc973b6eecc0804e6c5feb98938b1532a48dc936fb43aad
+    statement: >-
+      SEC-2026-001 permits embedded ChromaDB only. Bunnyland never enables Chroma's
+      SimpleRBACAuthorizationProvider and exposes no multi-tenant Chroma service.
+    expired_at: 2026-09-18
+    last_reviewed_at: 2026-08-28
+    review_interval_days: 7
+    tracking_issue: docs/admin/security-exceptions.md#sec-2026-001
+  - id: CVE-2026-45833
+    scanner: grype
+    package: chromadb
+    image_ref: ghcr.io/thalismind/bunnyland-server@sha256:29d32c3ab5a3c7b9adc973b6eecc0804e6c5feb98938b1532a48dc936fb43aad
+    statement: >-
+      SEC-2026-001 permits embedded ChromaDB only. Bunnyland exposes no Chroma collection
+      update endpoint and never accepts remote embedding functions or trust_remote_code.
+    expired_at: 2026-09-18
+    last_reviewed_at: 2026-08-28
+    review_interval_days: 7
+    tracking_issue: docs/admin/security-exceptions.md#sec-2026-001

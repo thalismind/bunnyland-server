@@ -2,3 +2,12 @@ ignore:
   - vulnerability: CVE-2026-45829
     package:
       name: chromadb
+  - vulnerability: CVE-2026-45830
+    package:
+      name: chromadb
+  - vulnerability: CVE-2026-45831
+    package:
+      name: chromadb
+  - vulnerability: CVE-2026-45833
+    package:
+      name: chromadb
